@@ -159,6 +159,14 @@ fn rejection_wires() -> [Vec<u8>; 5] {
     [control, source, mu, empty, unknown]
 }
 
+// Capability denial uses the same pre-activity budget and retirement path.
+fn transport_rejections() -> impl Iterator<Item = (Vec<u8>, Vec<u8>)> {
+    rejection_wires().into_iter().zip(expected_naks()).chain([(
+        vec![2, 0, 0x22, 0x33],
+        vec![0, 0, 0x22, 0x33, 2, 1, 0, 0, 7, 0, 45],
+    )])
+}
+
 async fn started(
     transport: &mut ScTransport<GateSocket>,
     hub: &LoopbackWebSocket,
@@ -198,7 +206,7 @@ async fn abort_and_join(transport: &mut ScTransport<GateSocket>) {
 
 #[tokio::test]
 async fn rejection_deadline_held_naks_disconnect_and_drop_future() {
-    for wire in rejection_wires() {
+    for (wire, _) in transport_rejections() {
         let (client, hub, observed) = GateSocket::pair();
         let mut transport = ScTransport::new(client, [1; 6])
             .with_device_uuid([1; 16])
@@ -234,7 +242,7 @@ async fn rejection_deadline_held_naks_disconnect_and_drop_future() {
 
 #[tokio::test]
 async fn rejection_deadline_late_naks_share_original_budget_not_per_frame() {
-    for (wire, nak) in rejection_wires().into_iter().zip(expected_naks()) {
+    for (wire, nak) in transport_rejections() {
         let (client, hub, observed) = GateSocket::pair();
         let mut transport = ScTransport::new(client, [1; 6])
             .with_device_uuid([1; 16])
@@ -275,7 +283,7 @@ async fn rejection_deadline_late_naks_share_original_budget_not_per_frame() {
 #[tokio::test]
 async fn rejection_deadline_timely_completion_and_immediate_error_preserve_pending_ack() {
     for fail in [false, true] {
-        for (wire, nak) in rejection_wires().into_iter().zip(expected_naks()) {
+        for (wire, nak) in transport_rejections() {
             let (client, hub, observed) = GateSocket::pair();
             let mut transport = ScTransport::new(client, [1; 6])
                 .with_device_uuid([1; 16])
@@ -357,7 +365,7 @@ async fn rejection_deadline_huge_valid_timeout_does_not_overflow() {
         .with_device_uuid([1; 16])
         .with_heartbeat_timeout_ms(u64::MAX);
     let _rx = started(&mut transport, &hub).await;
-    for (wire, nak) in rejection_wires().into_iter().zip(expected_naks()) {
+    for (wire, nak) in transport_rejections() {
         hub.send(&wire).await.unwrap();
         assert_eq!(recv_function(&hub, 0).await, nak);
     }

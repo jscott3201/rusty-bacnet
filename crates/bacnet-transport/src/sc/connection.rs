@@ -465,7 +465,7 @@ impl ScConnection {
                         if result_for != ScFunction::EncapsulatedNpdu {
                             // Discovery negatives relayed from a target node
                             // (origin present) are normal: the peer does not
-                            // support direct connections or knows no URIs.
+                            // accept direct connections (an empty ACK instead means no known URIs).
                             // Stay connected so the sender can fall back to
                             // hub delivery. Hub-peer NAKs (origin absent)
                             // keep the existing fatal policy.

@@ -32,9 +32,21 @@ class UnknownFunctionNodeTests(mtls.MtlsFixture):
                     cases.append((bytes([raw, 8]) + message_id + origin, None))
                 for destination in (b"\xff" * 6, local, b"\x44" * 6, b"\0" * 6):
                     cases.append((bytes([raw, 12]) + message_id + source + destination, None))
-        # Known-but-unhandled functions are not newly classified as Unknown.
-        for raw in (2, 3, 4, 5, 6, 7, 12):
-            cases.append((bytes([raw, 0, 0x22, 0x33]), None))
+        # Known families keep their own admission and response semantics.
+        # This native node has no accepting direct listener, regardless of URI knowledge.
+        cases.append((b"\x02\0\x22\x33", b"\0\0\x22\x33\x02\1\0\0\7\0\x2d"))
+        # Empty Advertisement and Proprietary requests require payloads.
+        for raw in (4, 12):
+            cases.append((bytes([raw, 0, 0x22, 0x33]),
+                          bytes([0, 0, 0x22, 0x33, raw, 1, 0, 0, 7, 0, 149])))
+        # Well-formed Advertisement, ACK and established-state Connect messages
+        # are genuinely silent controls. Solicitation owns a positive response;
+        # it is intentionally excluded from this silence matrix.
+        cases.append((b"\x04\0\x22\x33\1\0\x16\x49\x05\xc4", None))
+        cases.append((b"\x03\0\x22\x33", None))
+        for raw in (6, 7):
+            cases.append((bytes([raw, 0, 0x22, 0x33]) + mtls.HUB_VMAC +
+                          mtls.HUB_UUID + b"\x16\x49\x05\xc4", None))
         # ResultFor unknown is not an unknown outer function (ACK stays healthy).
         cases.append((b"\0\0\x22\x33\x42\0", None))
         cases.append((b"\x0a\0\x22\x33", b"\x0b\0\x22\x33"))

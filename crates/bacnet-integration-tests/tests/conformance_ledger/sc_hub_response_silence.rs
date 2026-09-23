@@ -2,6 +2,43 @@
 use super::*;
 
 #[test]
+fn node_resolution_capability_evidence_keeps_live_policy_and_uri_knowledge_distinct() {
+    let data = ledger();
+    let rows = rows_by_id(&data);
+    let row = rows["BACNET-AB-SC-CONNECTION-STATE"];
+    assert_eq!(
+        row["status"],
+        "implementation-present-needs-state-machine-audit"
+    );
+    let policy = row["address_resolution_accepting_capability"]
+        .as_str()
+        .unwrap();
+    for phrase in [
+        "AB.3.3",
+        "7/45",
+        "URI configuration alone",
+        "local policy",
+        "RejectionBudget",
+        "best-effort",
+        "No new URI discovery",
+    ] {
+        assert!(policy.contains(phrase), "{phrase}");
+    }
+    for (field, anchor) in [
+        ("positive_tests", "crates/bacnet-transport/src/sc/address_resolution_capability_tests.rs::live_listener_ack_preserves_empty_and_known_uris_ids_and_addresses"),
+        ("negative_tests", "crates/bacnet-transport/src/sc/address_resolution_tests.rs::absent_listener_refuses_regardless_of_configured_uris"),
+        ("negative_tests", "crates/bacnet-transport/src/sc/address_resolution_capability_tests.rs::capability_tracks_identity_application_intake_and_listener_lifecycle"),
+    ] {
+        assert!(row[field].as_array().unwrap().iter().any(|value| value == anchor));
+        let (file, name) = anchor.split_once("::").unwrap();
+        assert!(read_repo_file(file).contains(&format!("fn {name}(")));
+    }
+    assert!(STANDARD_LEDGER.contains("## Node Address-Resolution accepting capability"));
+    assert!(read_repo_file("docs/rust-api.md")
+        .contains("#node-address-resolution-accepting-capability"));
+}
+
+#[test]
 fn hub_response_silence_has_scoped_policy_and_executable_anchors() {
     let data = ledger();
     let rows = rows_by_id(&data);
@@ -236,7 +273,7 @@ fn hub_resolution_transit_is_unicast_hub_only_with_executable_evidence() {
         "relays ResultFor2 and ResultFor3",
         "192 preregistered and 168 registered",
         "192 preregistered and 192 registered",
-        "native NODE answers valid AR-Requests with its configured-or-empty ACK",
+        "native NODE answers valid AR-Requests with its configured-or-empty ACK only while accepting direct connections",
         "#519 remains open/partial",
     ] {
         assert!(section.contains(phrase), "{phrase}");

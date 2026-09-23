@@ -13,6 +13,36 @@
 - Addenda/errata status: ASHRAE 135-2020 Errata Summary 2024-04-29 (v1) reviewed for the supported subset. Item 7 (Clause 21.6, p. 886): successful-actions-only corrected from BOOLEAN (struck through, removed) to BACnetSuccessFilter (italic, added), tags [7]/[4]. Item 8 (Clause 21.2.3, p. 865): start-at-sequence-number corrected from Unsigned32 (struck through, removed) to Unsigned64 (italic, added), tag [2] OPTIONAL. Both items visually verified from the rendered errata p. 3 (strikeout = removed, italics = added per the p. 1 convention); not inferred from concatenated text extraction. The implementation still encodes the uncorrected Boolean/u32 contract, so `BACNET-13-AUDIT-WIRE-MODELS` stays below supported status pending the RB-02 codec migration.
 - PR-0808 evidence row: `BACNET-12-ALERT-ENROLLMENT-TABLE-12-61` is `supported-with-clause-evidence` for the served object model only; it is not an Alert evaluator or notification-generation claim.
 
+## Node Address-Resolution accepting capability
+
+Scoped correction to `BACNET-AB-SC-CONNECTION-STATE` (Refs #733). Base
+135-2020 AB.3.3 (printed 1395 / PDF 1397) requires
+COMMUNICATION/OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED (`7/45`) when the node does
+not support accepting direct connections. An accepting node may ACK an empty
+URI list. The 2024-04-29 errata makes no relevant correction.
+
+[Node admission](../../crates/bacnet-transport/src/sc/address_resolution.rs)
+uses the same current-live capability as Advertisement: registered listener,
+matching VMAC/UUID, running listener and open direct/application NPDU intakes.
+Using current availability for stopped listeners is **local policy**, not an
+additional normative unsupported-implementation rule. URI configuration alone
+never grants capability; a later stop cannot recall an already-built ACK.
+Replies retain copied IDs, origin-addressed/peer-addressed envelopes and response
+silence. Denial precedes activity refresh/probe clear and uses the existing
+remaining heartbeat rejection budget and expiry retirement. Positive ACK sends
+retain their existing best-effort behavior.
+
+[Real listener tests](../../crates/bacnet-transport/src/sc/address_resolution_capability_tests.rs)
+cover empty/known URIs, IDs, addressing, identity mismatch and stopped/dropped
+listener or application intake. Raw no-listener, malformed and response-silence
+matrices remain separate. Direct discovery interoperability now registers real
+accepting listeners. Existing held/late/immediate-error rejection tests include
+capability denial. [Installed-native vectors](../../crates/rusty-bacnet/tests/test_sc_unknown_function.py)
+retain exact replies, strict invalid-heartbeat ordering barriers and independent
+later ReadProperty/heartbeat controls. No full AB.3.3/Annex AB/PICS/BTL or
+platform/OS-backpressure qualification is claimed; row status and immutable
+baseline provenance remain unchanged.
+
 ## Hub Address-Resolution transit
 
 Current-dev scoped supplement to `BACNET-AB-SC-CONNECTION-STATE` (Refs #519).
@@ -40,7 +70,7 @@ Their NODE and other known-family exclusions remain, including Advertisement
 - **Installed native DEV:** [public native hub + raw mTLS A/B](../../crates/rusty-bacnet/tests/test_sc_hub_resolution_transit.py)
   checks Request→ACK (including empty URI list), ResultFor2 ACK/NAK, exact origin
   bytes, silence/caps and real native third-peer ReadProperty before/after. Raw B
-  owns AR endpoint semantics; the native NODE answers valid AR-Requests with its configured-or-empty ACK (Refs #615 PR2).
+  owns AR endpoint semantics; the native NODE answers valid AR-Requests with its configured-or-empty ACK only while accepting direct connections; otherwise it returns 7/45 (Refs #733).
 - **Excluded:** AB.3.3 node URI response/unsupported-optionality semantics and
   AB.4.1 direct connections (PDF1396–1397 / printed1394–1395), URI discovery,
   validation, dialing, general known-function
