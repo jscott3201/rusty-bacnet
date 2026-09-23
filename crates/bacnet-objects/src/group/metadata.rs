@@ -409,8 +409,8 @@ mod tests {
                 // Description and Out_Of_Service reject mistyped values
                 // without changing state.
                 for (p, value) in [
-                    (P::DESCRIPTION, PropertyValue::Null),
-                    (P::OUT_OF_SERVICE, PropertyValue::Null),
+                    (P::DESCRIPTION, PropertyValue::Unsigned(1)),
+                    (P::OUT_OF_SERVICE, PropertyValue::Unsigned(1)),
                 ] {
                     assert_error(
                         object.write_property(p, None, value, None).unwrap_err(),

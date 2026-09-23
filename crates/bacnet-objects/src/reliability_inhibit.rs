@@ -21,6 +21,15 @@ pub(crate) struct ReliabilityInhibitState {
     oos_client_reliability_override: bool,
 }
 
+/// Whether an Out_Of_Service write may trigger object-owned follow-up work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OutOfServiceWrite {
+    /// A Boolean write was applied, including an accepted same-value write.
+    Applied,
+    /// NULL relinquishment succeeded without changing state or ownership.
+    Relinquished,
+}
+
 impl ReliabilityInhibitState {
     #[inline]
     pub(crate) fn enabled(self) -> bool {
@@ -60,8 +69,8 @@ impl ReliabilityInhibitState {
         Some(Ok(()))
     }
 
-    /// Apply target-object OOS sequencing without changing the generic helper
-    /// retained by Loop, Schedule, and unrelated object types.
+    /// Apply OOS sequencing. A relinquishment must not trigger reevaluation
+    /// or change saved/client Reliability ownership in the calling object.
     #[inline]
     pub(crate) fn write_out_of_service(
         &mut self,
@@ -70,9 +79,12 @@ impl ReliabilityInhibitState {
         saved_reliability: &mut Option<u32>,
         property: PropertyIdentifier,
         value: &PropertyValue,
-    ) -> Option<Result<(), Error>> {
+    ) -> Option<Result<OutOfServiceWrite, Error>> {
         if property != PropertyIdentifier::OUT_OF_SERVICE {
             return None;
+        }
+        if *value == PropertyValue::Null {
+            return Some(Ok(OutOfServiceWrite::Relinquished));
         }
         let PropertyValue::Boolean(enabled) = value else {
             return Some(Err(invalid_data_type_error()));
@@ -94,7 +106,7 @@ impl ReliabilityInhibitState {
             };
         }
         *out_of_service = *enabled;
-        Some(Ok(()))
+        Some(Ok(OutOfServiceWrite::Applied))
     }
 
     /// Apply the OOS-only client Reliability route and record successful

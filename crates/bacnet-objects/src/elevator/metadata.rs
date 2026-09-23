@@ -470,8 +470,11 @@ mod tests {
                 (P::GROUP_ID, PropertyValue::Enumerated(47)),
                 (P::GROUP_MODE, PropertyValue::Unsigned(2)),
                 (P::LANDING_CALL_CONTROL, PropertyValue::Unsigned(1)),
-                (P::DESCRIPTION, PropertyValue::Null),
-                (P::OUT_OF_SERVICE, PropertyValue::Null),
+                (P::DESCRIPTION, PropertyValue::Unsigned(1)),
+                (
+                    P::OUT_OF_SERVICE,
+                    PropertyValue::CharacterString("invalid".into()),
+                ),
             ] {
                 assert_error(
                     object.write_property(p, None, value, None).unwrap_err(),
@@ -701,8 +704,11 @@ mod tests {
                 (P::CAR_POSITION, PropertyValue::Enumerated(2)),
                 (P::CAR_MOVING_DIRECTION, PropertyValue::Unsigned(2)),
                 (P::CAR_LOAD, PropertyValue::Real(50.0)),
-                (P::DESCRIPTION, PropertyValue::Null),
-                (P::OUT_OF_SERVICE, PropertyValue::Null),
+                (P::DESCRIPTION, PropertyValue::Unsigned(1)),
+                (
+                    P::OUT_OF_SERVICE,
+                    PropertyValue::CharacterString("invalid".into()),
+                ),
             ] {
                 assert_error(
                     object.write_property(p, None, value, None).unwrap_err(),

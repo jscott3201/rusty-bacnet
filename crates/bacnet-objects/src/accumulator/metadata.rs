@@ -576,8 +576,8 @@ mod tests {
                 (P::MAX_PRES_VALUE, PropertyValue::Real(1.0)),
                 (P::PULSE_RATE, PropertyValue::Unsigned(1)),
                 (P::LIMIT_MONITORING_INTERVAL, PropertyValue::Enumerated(60)),
-                (P::DESCRIPTION, PropertyValue::Null),
-                (P::OUT_OF_SERVICE, PropertyValue::Null),
+                (P::DESCRIPTION, PropertyValue::Unsigned(1)),
+                (P::OUT_OF_SERVICE, PropertyValue::Unsigned(1)),
             ] {
                 assert_error(
                     object.write_property(p, None, value, None).unwrap_err(),
@@ -693,8 +693,8 @@ mod tests {
                 (P::ADJUST_VALUE, PropertyValue::Unsigned(1)),
                 (P::COV_INCREMENT, PropertyValue::Null),
                 (P::INPUT_REFERENCE, PropertyValue::Unsigned(1)),
-                (P::DESCRIPTION, PropertyValue::Null),
-                (P::OUT_OF_SERVICE, PropertyValue::Null),
+                (P::DESCRIPTION, PropertyValue::Unsigned(1)),
+                (P::OUT_OF_SERVICE, PropertyValue::Unsigned(1)),
             ] {
                 assert_error(
                     object.write_property(p, None, value, None).unwrap_err(),

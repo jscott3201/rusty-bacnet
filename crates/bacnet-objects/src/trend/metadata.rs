@@ -249,6 +249,21 @@ mod tests {
                                 ErrorCode::WRITE_ACCESS_DENIED,
                             );
                         }
+                        let before = object.read_property(p, None).unwrap();
+                        if capability == Always && matches!(p, P::DESCRIPTION | P::OUT_OF_SERVICE) {
+                            object
+                                .write_property(p, None, PropertyValue::Null, None)
+                                .unwrap();
+                            assert_eq!(object.read_property(p, None).unwrap(), before);
+                            assert_error(
+                                object
+                                    .write_property(p, None, PropertyValue::Unsigned(1), None)
+                                    .unwrap_err(),
+                                ErrorClass::PROPERTY,
+                                ErrorCode::INVALID_DATA_TYPE,
+                            );
+                            continue;
+                        }
                         assert_error(
                             object
                                 .write_property(p, None, PropertyValue::Null, None)
