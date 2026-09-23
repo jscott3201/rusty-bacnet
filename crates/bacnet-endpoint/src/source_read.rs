@@ -27,7 +27,11 @@ use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue}
 use bacnet_types::MacAddr;
 use tokio::sync::{oneshot, RwLock, Semaphore};
 
-use crate::bip::StaticSourceAuditRecipient;
+#[path = "source_recipient.rs"]
+pub(crate) mod recipient;
+use bacnet_objects::database::AuditOwnership;
+use bacnet_objects::device::AuditRecipientChangeSink;
+use recipient::{SourceRecipient, SourceRoutes};
 
 #[path = "source_read_delivery.rs"]
 mod delivery;
@@ -37,44 +41,79 @@ mod failures;
 pub(crate) struct SourceRead {
     db: Arc<RwLock<ObjectDatabase>>,
     selected: ObjectIdentifier,
-    recipient: StaticSourceAuditRecipient,
+    device: ObjectIdentifier,
+    runtime: Weak<SourceRecipient>,
     broadcast: Ipv4Addr,
     egress: EndpointEgress,
     notifications: Weak<NotificationTransactions>,
     operations: Arc<Semaphore>,
     max_apdu: u16,
-    failures: AuditFailureQueue<MacAddr>,
+    failures: Arc<AuditFailureQueue<MacAddr>>,
 }
 
 impl SourceRead {
     pub(crate) fn new(
         db: Arc<RwLock<ObjectDatabase>>,
         selected: ObjectIdentifier,
-        recipient: StaticSourceAuditRecipient,
+        routes: SourceRoutes,
         broadcast: Ipv4Addr,
         egress: EndpointEgress,
         notifications: &Arc<NotificationTransactions>,
         max_apdu: u16,
-    ) -> Arc<Self> {
-        if let Some(reporter) = db
-            .try_read()
-            .expect("unshared startup database")
+    ) -> Result<(Arc<Self>, Arc<SourceRecipient>), Error> {
+        let mut database = db.try_write().expect("unshared startup database");
+        let device = database.find_by_type(ObjectType::DEVICE)[0];
+        let status = database
             .get(&selected)
             .and_then(|object| object.audit_reporter_internal())
-        {
-            reporter.status_internal().set_configured(true);
-        }
-        Arc::new(Self {
-            db,
+            .expect("preflight Reporter")
+            .status_internal();
+        let initial = database
+            .get_mut(&device)
+            .and_then(|object| object.device_authority_internal())
+            .and_then(|authority| authority.provisioned_audit_recipient().cloned())
+            .expect("preflight recipient");
+        routes.validate_initial(&initial)?;
+        status.set_configured(routes.resolve(&initial).is_some());
+        let failures = Arc::new(AuditFailureQueue::default());
+        let runtime = Arc::new(SourceRecipient {
+            device,
+            status,
+            routes,
+            owner: AuditOwnership::new(device, selected),
+            sequence: database.event_sequence_internal(),
+            egress: egress.clone(),
+            notifications: Arc::downgrade(notifications),
+            max_apdu,
+            failures: Arc::clone(&failures),
+        });
+        let source = Arc::new(Self {
+            db: Arc::clone(&db),
             selected,
-            recipient,
+            device,
+            runtime: Arc::downgrade(&runtime),
             broadcast,
             egress,
             notifications: Arc::downgrade(notifications),
             operations: Arc::new(Semaphore::new(64)),
             max_apdu,
-            failures: AuditFailureQueue::default(),
-        })
+            failures,
+        });
+        database
+            .with_object_adapter(&selected, |slot| {
+                crate::session::source_reporter::install(slot, &runtime.owner)
+            })?
+            .expect("preflight Reporter")?;
+        let sink: Arc<dyn AuditRecipientChangeSink> = runtime.clone();
+        database
+            .get_mut(&device)
+            .unwrap()
+            .device_authority_internal()
+            .unwrap()
+            .install_audit_recipient(&sink)?;
+        database.protect_audit_internal(&runtime.owner)?;
+        notifications.set_audit_owner(&runtime.owner);
+        Ok((source, runtime))
     }
 
     #[cfg(test)]
@@ -83,6 +122,9 @@ impl SourceRead {
     }
 
     pub(crate) fn close(&self) {
+        if let Some(runtime) = self.runtime.upgrade() {
+            runtime.seal();
+        }
         self.operations.close();
     }
 
@@ -104,6 +146,11 @@ impl SourceRead {
         if self.operations.is_closed() {
             return Err(Error::Encoding("endpoint shutdown".into()));
         }
+        let runtime = self
+            .runtime
+            .upgrade()
+            .filter(|runtime| runtime.owner.is_active())
+            .ok_or_else(|| Error::Encoding("endpoint shutdown".into()))?;
         let reporter = db
             .get(&self.selected)
             .and_then(|object| object.audit_reporter_internal())
@@ -133,6 +180,7 @@ impl SourceRead {
             || (level == AuditLevel::AUDIT_CONFIG && property == PropertyIdentifier::PRESENT_VALUE)
         {
             drop(db);
+            drop(runtime);
             drop(permit);
             return requester
                 .read_property_with_destination(destination, attributes, object, property, index)
@@ -140,6 +188,31 @@ impl SourceRead {
         }
         let status = reporter.status_internal();
         let confirmed = reporter.confirmed_internal();
+        let route = db
+            .get(&self.device)
+            .and_then(|object| {
+                object
+                    .read_property(PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT, None)
+                    .ok()
+            })
+            .and_then(|value| match value {
+                PropertyValue::ApplicationData(bytes) => {
+                    bacnet_encoding::constructed::decode_recipient(&bytes, 0)
+                        .ok()
+                        .map(|(value, _)| value)
+                }
+                _ => None,
+            })
+            .and_then(|value| runtime.routes.resolve(&value));
+        status.set_configured(route.is_some());
+        let Some(route) = route else {
+            drop(db);
+            drop(runtime);
+            drop(permit);
+            return requester
+                .read_property_with_destination(destination, attributes, object, property, index)
+                .await;
+        };
         let EndpointApduDestination::Direct { destination_mac } = &destination else {
             return Err(Error::Encoding(
                 "audited READ requires direct B/IP IPv4 unicast".into(),
@@ -180,17 +253,13 @@ impl SourceRead {
             None => BACnetTimeStamp::SequenceNumber(db.next_event_sequence_number()),
         };
         let failure = status.auditing_failure_epoch().and_then(|epoch| {
-            let mac = MacAddr::from_slice(&bacnet_transport::bvll::encode_bip_mac(
-                self.recipient.address.ip().octets(),
-                self.recipient.address.port(),
-            ));
             self.failures.observe(AuditFailureContext {
                 status: Arc::clone(&status),
                 epoch,
                 device: devices[0],
                 confirmed,
-                peer: CanonicalPeer::direct(mac.as_slice()),
-                route: mac,
+                peer: CanonicalPeer::direct(route.as_slice()),
+                route: route.clone(),
                 max_apdu: u32::from(self.max_apdu),
             })
         });
@@ -222,6 +291,7 @@ impl SourceRead {
         };
         status.set_configured(true);
         drop(db);
+        drop(runtime);
         let owner = self
             .notifications
             .upgrade()
@@ -241,9 +311,9 @@ impl SourceRead {
                         &source,
                         &owner,
                         confirmed,
+                        route,
                         notification,
-                        status,
-                        completion,
+                        delivery::Completion::new(status, completion),
                         failure,
                     );
                 }

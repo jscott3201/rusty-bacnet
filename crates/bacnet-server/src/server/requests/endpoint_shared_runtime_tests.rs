@@ -89,6 +89,7 @@ async fn loopback_shared_runtime_routes_same_invoke_id_by_admitted_role() {
         terminal_or_segment: mut terminal_rx,
         policy_outcomes: mut policy_rx,
         egress,
+        ..
     } = endpoint.start().await.unwrap();
     assert!(endpoint.start().await.is_err());
 

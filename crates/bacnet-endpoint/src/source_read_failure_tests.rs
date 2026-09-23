@@ -6,7 +6,7 @@ fn failure_flags() -> AuditOperationFlags {
     flags.insert(AuditOperation::AUDITING_FAILURE);
     flags
 }
-fn failure_database(confirmed: bool) -> ObjectDatabase {
+pub(super) fn failure_database(confirmed: bool) -> ObjectDatabase {
     let mut db = database(confirmed);
     db.get_mut(&selected())
         .unwrap()
@@ -44,7 +44,7 @@ fn expected_summary(count: u64, timestamp: BACnetTimeStamp) -> BACnetAuditNotifi
         result: None,
     }
 }
-async fn complete_read(
+pub(super) async fn complete_read(
     session: &EndpointSession<BipTransport>,
     peer: &NetworkLayer<BipTransport>,
     requests: &mut mpsc::Receiver<ReceivedApdu>,
@@ -130,14 +130,7 @@ async fn source_failure_permit_losses_wire_shape_reverse_completion_and_sequence
 async fn source_failure_pending_context_invalidates_without_another_read() {
     let (mut peer, mut requests) = network().await;
     let (mut sink, mut records) = network().await;
-    for change in [
-        "mode-aba",
-        "level-aba",
-        "filter-aba",
-        "replacement",
-        "removal",
-        "device",
-    ] {
+    for change in ["mode-aba", "level-aba", "filter-aba"] {
         let mut session = session(failure_database(true), SessionRole::ClientOnly, &sink);
         session.start().await.unwrap();
         let permits: Vec<_> = (0..64)
@@ -160,51 +153,35 @@ async fn source_failure_pending_context_invalidates_without_another_read() {
                 .audit_reporter_internal()
                 .unwrap()
                 .status_internal();
-            match change {
-                "replacement" => {
-                    db.add(Box::new(
-                        AuditReporterObject::new(1, "Replacement").unwrap(),
-                    ))
-                    .unwrap();
-                }
-                "removal" => {
-                    db.remove(&selected()).unwrap().unwrap();
-                }
-                "device" => {
-                    db.remove(&oid(ObjectType::DEVICE, 123)).unwrap().unwrap();
-                }
-                _ => {
-                    let object = db.get_mut(&selected()).unwrap();
-                    let (level, flags, confirmed) = match change {
-                        "mode-aba" => (AuditLevel::AUDIT_ALL, failure_flags(), false),
-                        "level-aba" => (AuditLevel::NONE, failure_flags(), true),
-                        "filter-aba" => (
-                            AuditLevel::AUDIT_ALL,
-                            AuditOperationFlags::from_bits(1).unwrap(),
-                            true,
-                        ),
-                        _ => unreachable!(),
-                    };
-                    object
-                        .configure_audit_reporter_internal(
-                            level,
-                            flags,
-                            confirmed,
-                            None,
-                            BACnetPriorityFilter::empty(),
-                        )
-                        .unwrap();
-                    object
-                        .configure_audit_reporter_internal(
-                            AuditLevel::AUDIT_ALL,
-                            failure_flags(),
-                            true,
-                            None,
-                            BACnetPriorityFilter::empty(),
-                        )
-                        .unwrap();
-                }
-            }
+            let object = db.get_mut(&selected()).unwrap();
+            let (level, flags, confirmed) = match change {
+                "mode-aba" => (AuditLevel::AUDIT_ALL, failure_flags(), false),
+                "level-aba" => (AuditLevel::NONE, failure_flags(), true),
+                "filter-aba" => (
+                    AuditLevel::AUDIT_ALL,
+                    AuditOperationFlags::from_bits(1).unwrap(),
+                    true,
+                ),
+                _ => unreachable!(),
+            };
+            object
+                .configure_audit_reporter_internal(
+                    level,
+                    flags,
+                    confirmed,
+                    None,
+                    BACnetPriorityFilter::empty(),
+                )
+                .unwrap();
+            object
+                .configure_audit_reporter_internal(
+                    AuditLevel::AUDIT_ALL,
+                    failure_flags(),
+                    true,
+                    None,
+                    BACnetPriorityFilter::empty(),
+                )
+                .unwrap();
         }
         drop(permits);
         assert!(

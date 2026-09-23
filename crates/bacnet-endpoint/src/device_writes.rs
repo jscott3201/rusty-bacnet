@@ -10,14 +10,14 @@ const SERVICES: &[ServiceSupported] = &[
 ];
 
 impl<T: TransportPort + 'static> EndpointSession<T> {
-    /// Enables authorized writes to the local Device's `Description` only.
+    /// Enables authorized writes to the local Device's `Description` and installed Audit recipient.
     ///
     /// The callback is mandatory and receives the existing redacted mutation
     /// context. A refusal or panic denies the request before mutation. It must
     /// be fast, nonblocking and side-effect-free; see [`MutationAuthorizer`].
     /// Other objects/properties and WritePropertyMultiple remain unsupported.
     /// An authorized NULL relinquishment succeeds without changing Description.
-    /// This grants no Audit Reporting or recipient-change capability.
+    /// Recipient writes require the complete source runtime installed by source selection.
     ///
     /// Startup requires a server role and exactly one concrete built-in Device
     /// in the attached database. A composed identity must match that Device and

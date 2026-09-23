@@ -29,9 +29,11 @@ that the general filter text unambiguously settles precedence.
 Evidence includes [recipient runtime tests](../../crates/bacnet-server/src/server/audit_recipient_tests.rs),
 [real B/IP delivery](../../crates/bacnet-integration-tests/tests/audit_reporter/device_recipient.rs),
 and [installed Python contracts](../../crates/rusty-bacnet/tests/test_audit_api.py).
-The row status and global review pin remain unchanged. Source endpoint migration,
-other Address/link choices, durable delivery and broader Audit review remain open;
-this does not close #728 or #345.
+Endpoint source evidence includes [public local recipient delivery](../../crates/bacnet-endpoint/tests/source_recipient_public.rs)
+and [startup cleanup cancellation](../../crates/bacnet-endpoint/src/source_start_cleanup_tests.rs).
+The target and endpoint source migrations complete the bounded #728 recipient
+contract. Row status and the global review pin remain unchanged. Other Address/link
+choices, durable delivery and broader Audit review remain open under #345.
 
 ## Node Address-Resolution accepting capability
 

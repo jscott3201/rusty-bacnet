@@ -62,8 +62,12 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
 use tokio::task::JoinHandle;
 
+#[path = "source_profile.rs"]
+mod source_profile;
 #[path = "source_reporter.rs"]
-mod source_reporter;
+pub(crate) mod source_reporter;
+#[path = "session_start.rs"]
+mod startup;
 
 #[path = "device_writes.rs"]
 mod device_writes;
@@ -82,6 +86,7 @@ enum Lifecycle {
     Ready = 0,
     Running = 1,
     Stopped = 2,
+    Stopping = 3,
 }
 
 /// Which roles the session composes.
@@ -229,8 +234,9 @@ pub struct EndpointSession<T: TransportPort + 'static> {
     database: Option<Arc<RwLock<ObjectDatabase>>>,
     source_audit_reporter: Option<ObjectIdentifier>,
     source_read: Option<Arc<crate::source_read::SourceRead>>,
-    source_broadcast: std::net::Ipv4Addr,
-    static_source_audit_recipient: Option<crate::bip::StaticSourceAuditRecipient>,
+    pub(crate) source_audit_bindings: Vec<(ObjectIdentifier, std::net::SocketAddrV4)>,
+    source_recipient: Option<Arc<crate::source_read::recipient::SourceRecipient>>,
+    stop_exit: Option<Result<SessionExit, Error>>,
     identity: Option<crate::identity::DeviceIdentity>,
     device_write_authorizer: Option<bacnet_server::mutation::MutationAuthorizer>,
     egress: Option<bacnet_endpoint_core::endpoint_ingress::EndpointEgress>,
@@ -312,8 +318,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             database: None,
             source_audit_reporter: None,
             source_read: None,
-            source_broadcast: std::net::Ipv4Addr::BROADCAST,
-            static_source_audit_recipient: None,
+            source_audit_bindings: Vec::new(),
+            source_recipient: None,
+            stop_exit: None,
             identity: None,
             device_write_authorizer: None,
             egress: None,
@@ -341,40 +348,47 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
 
     /// Select the sole source Audit Reporter in the attached local database.
     ///
-    /// Without a static recipient this establishes ownership only and emits no
-    /// records. A B/IP builder's static recipient enables bounded source READ
-    /// reporting; its profile requires absent Monitored_Objects. Standalone
-    /// `BACnetClient` source ownership
-    /// and source emission remain unsupported. Target Reporter behavior is
-    /// unchanged. Repeated calls before start replace the selection.
+    /// Activates bounded source READ reporting on direct IPv4 B/IP. The built-in
+    /// Device must have a typed Audit recipient provision, even at Audit_Level
+    /// NONE. Device choices use immutable builder route bindings; direct Address
+    /// choices need no binding. Monitored_Objects must be absent. `Both` requires
+    /// an explicit [`with_device_writes`](Self::with_device_writes) authorizer;
+    /// `ClientOnly` permits trusted local changes and `ServerOnly` is rejected.
+    /// Standalone BACnetClient source reporting remains unsupported.
     ///
-    /// [`start`](Self::start) requires a client role, an attached database with
-    /// exactly one local Device (matching the composed identity, if present),
-    /// and the selected Audit Reporter capability with no other source Reporter.
-    /// Validation failure changes no flags and leaves configuration retryable.
-    /// Success makes the selected Reporter's source property true and prevents
-    /// its deletion; other Reporters remain targets.
-    /// The adapter and its construction are private to this endpoint owner;
-    /// the wrapped object's Reporter configuration capability remains unchanged.
+    /// [`start`](Self::start) requires exactly one concrete local built-in Device
+    /// matching the optional identity, and one selected Reporter capability with
+    /// no conflicting source Reporter. Preflight validation changes no source flags
+    /// and leaves configuration retryable; post-ingress failure joins terminal cleanup.
+    /// Successful startup installs the Device
+    /// recipient mutation owner and source projection without sending traffic.
+    /// Device/Reporter membership is protected until owned frames quiesce. The
+    /// private adapter forwards the original object behavior when sealed/released.
+    /// Repeated calls before start replace the selection.
     ///
     /// ```compile_fail,E0603
     /// use bacnet_endpoint::session::source_reporter::SourceReporter;
     /// ```
     ///
     /// ```no_run
-    /// use bacnet_endpoint::{identity::DeviceIdentity, session::{EndpointSession, SessionConfig, SessionRole}};
+    /// use std::net::{Ipv4Addr, SocketAddrV4};
+    /// use bacnet_endpoint::{bip::BipEndpointBuilder, DeviceIdentity, SessionRole};
     /// use bacnet_objects::{audit::AuditReporterObject, traits::BACnetObject};
-    /// use bacnet_transport::loopback::LoopbackTransport;
+    /// use bacnet_types::{constructed::BACnetRecipient, enums::ObjectType, primitives::ObjectIdentifier};
     /// # async fn example() -> Result<(), bacnet_types::error::Error> {
     /// let identity = DeviceIdentity::new(123, 42)?;
     /// let mut db = identity.build_database()?;
+    /// let logger = ObjectIdentifier::new(ObjectType::DEVICE, 999)?;
+    /// db.get_mut(&identity.device_oid()).unwrap().device_authority_internal().unwrap()
+    ///     .provision_audit_recipient(BACnetRecipient::Device(logger))?;
     /// let reporter = AuditReporterObject::new(1, "Source configuration")?;
     /// let reporter_oid = reporter.object_identifier();
     /// db.add(Box::new(reporter))?;
-    /// let (transport, _peer) = LoopbackTransport::pair(vec![1], vec![2]);
-    /// let mut session = EndpointSession::new(transport, SessionRole::ClientOnly, SessionConfig::default())?
-    ///     .with_database(db).with_identity(identity).with_source_audit_reporter(reporter_oid);
-    /// session.start().await?; // Establishes ownership only; emits no audit traffic.
+    /// let mut session = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
+    ///     .role(SessionRole::ClientOnly).database(db).identity(identity)
+    ///     .source_audit_device_binding(logger, SocketAddrV4::new(Ipv4Addr::LOCALHOST, 47808))
+    ///     .build_session()?.with_source_audit_reporter(reporter_oid);
+    /// session.start().await?; // Startup emits no audit traffic.
     /// session.stop().await?;
     /// # Ok(())
     /// # }
@@ -415,96 +429,6 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         );
     }
 
-    fn prepare_source_audit_reporter(&mut self) -> Result<(), Error> {
-        let Some(selected) = self.source_audit_reporter else {
-            if self.static_source_audit_recipient.is_some() {
-                return Err(Error::Encoding(
-                    "static source audit recipient requires a selected source Audit Reporter"
-                        .into(),
-                ));
-            }
-            return Ok(());
-        };
-        if self.role == SessionRole::ServerOnly {
-            return Err(Error::Encoding(
-                "source Audit Reporter requires a client role".into(),
-            ));
-        }
-        let db = self.database.as_mut().ok_or_else(|| {
-            Error::Encoding("source Audit Reporter requires an attached local database".into())
-        })?;
-        // Ready sessions have not shared the Arc with a responder. Synchronous,
-        // exclusive validation has no await/cancellation or concurrent mutation.
-        let db = Arc::get_mut(db)
-            .expect("database is unshared before startup")
-            .get_mut();
-        let devices = db.find_by_type(ObjectType::DEVICE);
-        if devices.len() != 1 {
-            return Err(Error::Encoding(
-                "source Audit Reporter requires exactly one local Device".into(),
-            ));
-        }
-        if self
-            .identity
-            .as_ref()
-            .is_some_and(|identity| devices[0].instance_number() != identity.instance())
-        {
-            return Err(Error::Encoding(
-                "source Audit Reporter local Device does not match session identity".into(),
-            ));
-        }
-        if selected.object_type() != ObjectType::AUDIT_REPORTER {
-            return Err(Error::Encoding(
-                "source selection must be an Audit Reporter".into(),
-            ));
-        }
-        let object = db.get(&selected).ok_or_else(|| {
-            Error::Encoding("selected source Audit Reporter is absent from the database".into())
-        })?;
-        if !object
-            .audit_reporter_internal()
-            .is_some_and(|reporter| reporter.object_identifier() == selected)
-        {
-            return Err(Error::Encoding(
-                "selected object lacks the Audit Reporter capability".into(),
-            ));
-        }
-        if self.static_source_audit_recipient.is_some()
-            && object.audit_reporter_internal().is_some_and(|reporter| {
-                reporter
-                    .property_list()
-                    .contains(&PropertyIdentifier::MONITORED_OBJECTS)
-            })
-        {
-            return Err(Error::Encoding(
-                "source READ does not support Monitored_Objects".into(),
-            ));
-        }
-        for (oid, object) in db.iter_objects() {
-            if oid != selected && oid.object_type() == ObjectType::AUDIT_REPORTER {
-                match object.read_property(PropertyIdentifier::AUDIT_SOURCE_REPORTER, None) {
-                    Ok(PropertyValue::Boolean(false)) => {}
-                    Ok(PropertyValue::Boolean(true)) => {
-                        return Err(Error::Encoding(
-                            "database already contains a conflicting source Audit Reporter".into(),
-                        ))
-                    }
-                    _ => {
-                        return Err(Error::Encoding(
-                            "cannot determine another Audit Reporter's source ownership".into(),
-                        ))
-                    }
-                }
-            }
-        }
-        // Only this fully validated owner can install the private adapter. The
-        // existing slot is wrapped in place: no remove/add, rebind or index churn.
-        db.with_object_adapter(&selected, |slot| {
-            source_reporter::install(slot, self.static_source_audit_recipient.is_some())
-        })?
-        .expect("selected Reporter was validated")
-    }
-
     /// Starts ingress, roles and the single dispatch consumer once.
     ///
     /// Start-once: a second call returns
@@ -512,6 +436,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// binding again. Takes `&mut self` so only the owner can start.
     /// Source-profile validation runs before lifecycle consumption or ingress
     /// startup; its errors leave the session ready for correction and retry.
+    /// Profile initialization errors after ingress starts cancel and join ingress
+    /// before returning, leaving the session terminal. Canceling that cleanup
+    /// leaves a stopping session whose teardown can resume with [`stop`](Self::stop).
     pub async fn start(&mut self) -> Result<(), Error> {
         if self.lifecycle.load(Ordering::Acquire) != Lifecycle::Ready as u8 {
             return Err(Error::Encoding(
@@ -519,7 +446,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             ));
         }
         let device_write_target = self.validate_device_writes()?;
-        self.prepare_source_audit_reporter()?;
+        let source_routes = self.prepare_source_audit_reporter()?;
         self.commit_device_write_profile(device_write_target);
         if self.lifecycle.compare_exchange(
             Lifecycle::Ready as u8,
@@ -537,151 +464,86 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             .as_mut()
             .ok_or_else(|| Error::Encoding("endpoint session ingress owner is missing".into()))?;
         let receivers = ingress.start().await?;
-        let egress = receivers.egress.clone();
-
-        // Role registration shares ONE coordinator + ONE egress. No second
-        // demultiplexer, no role-side Invoke-ID allocation: the requester and
-        // notification pool reserve from `self.coordinator`; the responder
-        // reuses the wire invoke ID directly.
-        let notifications = (matches!(self.role, SessionRole::ServerOnly | SessionRole::Both)
-            || self.static_source_audit_recipient.is_some())
-        .then(|| NotificationTransactions::with_coordinator(Arc::clone(&self.coordinator)));
-        let source_read = self.static_source_audit_recipient.map(|recipient| {
-            crate::source_read::SourceRead::new(
-                Arc::clone(self.database.as_ref().expect("validated source database")),
-                self.source_audit_reporter
-                    .expect("validated source Reporter"),
-                recipient,
-                self.source_broadcast,
-                egress.clone(),
-                notifications.as_ref().expect("source worker owner"),
-                self.client_config.max_apdu_length,
-            )
-        });
-        let (requester, client_handle) =
-            if matches!(self.role, SessionRole::ClientOnly | SessionRole::Both) {
-                let requester = EndpointRequester::new(
-                    egress.clone(),
-                    Arc::clone(&self.coordinator),
-                    self.client_config.clone(),
-                )?;
-                let mut handle = ClientRoleHandle::new(&self.shared.token, requester.clone());
-                if let Some(source) = &source_read {
-                    handle = handle.with_source_read(source);
-                }
-                (Some(requester), Some(handle))
-            } else {
-                (None, None)
-            };
-        let (responder, server_handle) =
-            if matches!(self.role, SessionRole::ServerOnly | SessionRole::Both) {
-                let db = self
-                    .database
-                    .get_or_insert_with(|| Arc::new(RwLock::new(ObjectDatabase::new())));
-                let mut responder = EndpointResponder::new(Arc::clone(db), egress.clone());
-                if let Some(device) = device_write_target {
-                    responder = responder.with_device_writes(
-                        device,
-                        self.device_write_authorizer
-                            .clone()
-                            .expect("validated authorizer"),
-                    );
-                }
-                let responder = Arc::new(responder);
-                let handle = ServerRoleHandle::new(
-                    &self.shared.token,
-                    Arc::clone(&responder),
-                    Arc::clone(notifications.as_ref().expect("server worker owner")),
-                );
-                (Some(responder), Some(handle))
-            } else {
-                (None, None)
-            };
-
-        let (cancel_tx, cancel_rx) = oneshot::channel();
-        let dispatch = DispatchParts {
-            inbound: receivers.inbound_requests,
-            terminal: receivers.terminal_or_segment,
-            policy: receivers.policy_outcomes,
-            requester: requester.clone(),
-            responder: responder.clone(),
-            notifications: notifications.clone(),
-            coordinator: Arc::clone(&self.coordinator),
-            shared: Arc::clone(&self.shared),
-        };
-        let task = tokio::spawn(dispatch_loop(dispatch, cancel_rx));
-
-        // Dispatch owns the three ingress receivers (single consumer); the
-        // session retains one egress clone for the identity I-Am path while
-        // the receiver halves move into dispatch. No second demultiplexer.
-        self.egress = Some(egress);
-        self.source_read = source_read;
-        self.requester = requester;
-        self.responder = responder;
-        self.notifications = notifications;
-        self.client_handle = client_handle;
-        self.server_handle = server_handle;
-        self.dispatch_task = Some(task);
-        self.cancel_tx = Some(cancel_tx);
+        if let Err(error) = self.start_roles(receivers, source_routes, device_write_target) {
+            // Keep cleanup ownership in self before awaiting. Cancellation leaves
+            // Stopping plus intact joins; stop/Drop can still finish teardown.
+            let _ = self.stop().await;
+            return Err(error);
+        }
         Ok(())
     }
 
     /// Stops dispatch, roles and ingress once; joins termination.
     ///
-    /// Stop-once: returns the dispatch [`SessionExit`]. Calling before
+    /// Returns the dispatch [`SessionExit`]. A canceled stop retains its joins
+    /// and sealed membership protection; a later call finishes teardown. Calling before
     /// `start()` or twice returns
     /// [`Error::Encoding`](bacnet_types::error::Error::Encoding). Takes
     /// `&mut self` so only the owner can stop; cloned role handles observe
     /// shutdown and fail closed.
     pub async fn stop(&mut self) -> Result<SessionExit, Error> {
-        if self.lifecycle.compare_exchange(
-            Lifecycle::Running as u8,
-            Lifecycle::Stopped as u8,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        ) != Ok(Lifecycle::Running as u8)
-        {
+        let state = self.lifecycle.load(Ordering::Acquire);
+        if state != Lifecycle::Running as u8 && state != Lifecycle::Stopping as u8 {
             return Err(Error::Encoding("endpoint session is not running".into()));
         }
+        self.lifecycle
+            .store(Lifecycle::Stopping as u8, Ordering::Release);
         self.shared.token.shutdown();
-        if let Some(source) = self.source_read.take() {
+        if let Some(source) = &self.source_read {
             source.close();
         }
-        if let Some(requester) = self.requester.take() {
+        if let Some(requester) = &self.requester {
             requester.close();
         }
-        if let Some(responder) = self.responder.take() {
+        if let Some(responder) = &self.responder {
             responder.close();
         }
-        let notifications = self.notifications.take();
-        if let Some(notifications) = &notifications {
+        if let Some(notifications) = &self.notifications {
             notifications.close();
         }
         if let Some(cancel) = self.cancel_tx.take() {
             let _ = cancel.send(());
         }
-        let exit = match self.dispatch_task.take() {
-            Some(task) => task
-                .await
-                .map_err(|e| Error::Encoding(format!("endpoint session dispatch failed: {e}"))),
-            None => Ok(SessionExit::ReceiversClosed),
-        };
-        if let Some(notifications) = notifications {
+        if self.stop_exit.is_none() {
+            self.stop_exit = Some(match self.dispatch_task.as_mut() {
+                Some(task) => task.await.map_err(|error| {
+                    Error::Encoding(format!("endpoint session dispatch failed: {error}"))
+                }),
+                None => Ok(SessionExit::ReceiversClosed),
+            });
+            self.dispatch_task.take();
+        }
+        if let Some(notifications) = &self.notifications {
             while let Some(result) = notifications.join_next().await {
                 NotificationTransactions::observe(Some(result));
             }
         }
         if let Some(ingress) = self.ingress.as_mut() {
-            // Ingress stop reports its classifier exit; session exit above
-            // already owns termination, so a closed ingress here is expected.
             let _ = ingress.stop().await;
         }
-        // Dispatch owned the ingress receivers (single consumer); dropping
-        // the task + ingress ends them with no detached queue outliving
-        // termination.
+        // The owner remains in the session through every await. The DB barrier
+        // observes completed synchronous commits; queued source readers recheck
+        // the sealed weak sink after taking this guard and cannot reenter it.
+        if let Some(runtime) = &self.source_recipient {
+            runtime.uninstall(
+                &mut *self
+                    .database
+                    .as_ref()
+                    .expect("source database")
+                    .write()
+                    .await,
+            );
+        }
+        self.source_recipient.take();
+        self.source_read.take();
+        self.notifications.take();
+        self.requester.take();
+        self.responder.take();
         self.client_handle = None;
         self.server_handle = None;
-        exit
+        self.lifecycle
+            .store(Lifecycle::Stopped as u8, Ordering::Release);
+        self.stop_exit.take().expect("joined dispatch")
     }
 
     /// Borrows the client role (`None` when not composed).
@@ -798,21 +660,6 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                 Vec::new(),
             )
             .await
-    }
-}
-
-impl EndpointSession<bacnet_transport::bip::BipTransport> {
-    // Only the concrete B/IP builder supplies this validated value. No public
-    // setter, runtime update, or transport-neutral recipient API is exposed.
-    pub(crate) fn with_static_source_audit_recipient(
-        mut self,
-        recipient: crate::bip::StaticSourceAuditRecipient,
-        broadcast: std::net::Ipv4Addr,
-    ) -> Self {
-        self.assert_configurable();
-        self.static_source_audit_recipient = Some(recipient);
-        self.source_broadcast = broadcast;
-        self
     }
 }
 

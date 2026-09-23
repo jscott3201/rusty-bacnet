@@ -27,7 +27,9 @@ fn intrinsic_proposals_and_commit_results_survive_wrapping() {
         ] {
             object.write_property(property, None, value, None).unwrap();
         }
-        source_reporter::install(&mut object, false).unwrap();
+        let owner =
+            bacnet_objects::database::AuditOwnership::new(oid(ObjectType::DEVICE, 123), selected());
+        source_reporter::install(&mut object, &owner).unwrap();
         let evaluated = object.evaluate_intrinsic_reporting();
         let proposal = if delay == 0 {
             evaluated.unwrap()

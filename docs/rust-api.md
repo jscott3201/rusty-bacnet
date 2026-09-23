@@ -1777,7 +1777,8 @@ do not expect identical administration across data links.
 
 `EndpointSession::with_device_writes(authorizer)` or
 `BipEndpointBuilder::device_writes(authorizer)` enables WriteProperty for the
-one local Device's `Description`. Supply a mandatory Rust
+one local Device's `Description` and, with a complete source profile,
+`Audit_Notification_Recipient`. Supply a mandatory Rust
 `bacnet_server::mutation::MutationAuthorizer`; its decoded context retains the
 immediate peer, claimed routed source, transport provenance and invoke ID.
 The callback must be fast, nonblocking and side-effect-free. Refusal or panic
@@ -1802,16 +1803,19 @@ Deterministic request/reply tests cover authorization, framing, routing,
 reply channels, group silence, segmentation and shutdown; a B/IP loopback test
 covers an authorized write and service-profile readback. Evidence is tracked
 in `BACNET-15-ENDPOINT-DEVICE-WRITE` (in progress). This is not general endpoint
-mutation parity, inbound replay suppression, or Audit_Notification_Recipient
-storage/change-notification support.
+mutation parity or inbound replay suppression. The source recipient extension
+is described below and in the [Device recipient contract](device-audit-recipient.md).
 
 ### Bounded endpoint source ReadProperty reporting
 
-On direct B/IP IPv4, combine `BipEndpointBuilder::static_source_audit_recipient`
-with `EndpointSession::with_source_audit_reporter`. The local database must have
-one Device and the selected Audit Reporter. Configure the Reporter's READ bit
+On direct B/IP IPv4, provision the typed recipient on the built-in Device and
+select `EndpointSession::with_source_audit_reporter`. Device recipient choices
+resolve through immutable `BipEndpointBuilder::source_audit_device_binding` entries;
+a direct Address choice needs no binding. The local database must have exactly
+one concrete built-in Device and the selected Audit Reporter. Configure the Reporter's READ bit
 and audit level before startup; both `ClientOnly` and `Both` sessions support
-confirmed and unconfirmed notifications. Startup itself emits nothing.
+confirmed and unconfirmed notifications. `Both` additionally requires an explicit
+Device write authorizer. Startup itself emits nothing.
 
 ```rust
 use std::net::{Ipv4Addr, SocketAddrV4};
@@ -1820,6 +1824,10 @@ use bacnet_objects::{audit::AuditReporterObject, traits::BACnetObject};
 use bacnet_types::{bitstring::AuditOperationFlags, enums::{AuditLevel, AuditOperation, ObjectType}, primitives::ObjectIdentifier};
 # async fn example() -> Result<(), bacnet_types::error::Error> {
 let mut db = DeviceIdentity::new(123, 42)?.build_database()?;
+let local_device = ObjectIdentifier::new(ObjectType::DEVICE, 123)?;
+let logger = ObjectIdentifier::new(ObjectType::DEVICE, 999)?;
+db.get_mut(&local_device).unwrap().device_authority_internal().unwrap()
+    .provision_audit_recipient(bacnet_types::constructed::BACnetRecipient::Device(logger))?;
 let mut reporter = AuditReporterObject::new(1, "Source READ")?;
 reporter.set_audit_level(AuditLevel::AUDIT_ALL)?;
 let mut operations = AuditOperationFlags::empty();
@@ -1830,22 +1838,27 @@ let source = reporter.object_identifier();
 db.add(Box::new(reporter))?;
 let mut session = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
     .role(SessionRole::ClientOnly).database(db)
-    .static_source_audit_recipient(
+    .source_audit_device_binding(
         ObjectIdentifier::new(ObjectType::DEVICE, 999)?,
         SocketAddrV4::new(Ipv4Addr::LOCALHOST, 47808),
     ).build_session()?.with_source_audit_reporter(source);
 session.start().await?;
 // Use session.client().unwrap().read_property(...) for a direct IPv4 target.
+// Trusted runtime writes use the same Device owner; None relinquishes unchanged.
+session.write_audit_recipient(None).await?;
 session.stop().await?;
 # Ok(())
 # }
 ```
 
 `Monitored_Objects` must be absent for this profile: empty and NULL-only lists
-are also rejected, atomically before startup consumes the transport. Ownership
-without a static recipient remains valid with selectors and emits no source
-records. Source policy is checked and sampled before each admitted READ; a later
-configuration change does not rewrite an in-flight request's record. The local
+are also rejected, atomically before startup consumes the transport. Selecting
+a source requires typed Device provision even at NONE; the removed ownership-only
+mode and static recipient selector have no compatibility aliases. Unresolved
+Device bindings expose CONFIGURATION_ERROR and suppress ordinary records without
+changing READ results or consuming an audit sequence. Source policy and the
+Device recipient route are sampled before each admitted READ; a later change
+does not rewrite an in-flight request's record or destination. The local
 `AUDIT_CONFIG` classification excludes `Present_Value` and includes other
 properties. Priority filters do not filter READ. Requests selected for source
 reporting reject routed, broadcast, or non-IPv4 destinations before traffic.
@@ -1853,7 +1866,7 @@ reporting reject routed, broadcast, or non-IPv4 destinations before traffic.
 A record contains the local source Device, one request-time timestamp, the actual
 ReadProperty invoke ID shared across retries, and the requested object/property/
 array index. With no remote Device cache, its target is the exact direct BACnet
-address, including the UDP port. The configured Device identifies the logger
+address, including the UDP port. The selected Device recipient or Address identifies the logger
 sink; it is never substituted for the operation target. Unknown user, source
 object, remote timestamp, priority and property values are omitted. Independent
 source and target reports may both arrive; address-based source target identity
@@ -1900,17 +1913,20 @@ capacity; requester-only releases also wake it. Further losses coalesce into
 sequential batches, without queuing or replaying ordinary records. Each batch
 belongs to one immutable Reporter instance, configuration generation, delivery
 mode and destination. Changes discard incompatible pending counts, including
-A-to-B-to-A changes and removal/replacement without another READ. A new context
+A-to-B-to-A changes without another READ. Active Device/Reporter removal and
+replacement are denied. A new context
 can supersede the single pending slot; stale completions cannot transfer their
 counts into it. This bounded discard policy also applies to target resource-loss
 summaries. Admitted notifications retain the three-second total deadline and
 no retries.
 
 `stop()` seals admission, cancels operations and notifications, and joins owned
-workers; drop cancels synchronously. Shutdown and context changes can lose
+workers before uninstalling under the DB guard. Canceled stop retains sealed
+protection and join handles for a later stop; Drop cancels and retains structural
+protection only until owned task frames quiesce. Source projection and configuration
+restrictions deactivate on sealing. Shutdown and context changes can lose
 undelivered records and pending counts. This is not a durable delivery promise
-or full Audit Reporting/BIBB/BTL conformance. Device
-`Audit_Notification_Recipient`, other source operations, multiple Reporters,
+or full Audit Reporting/BIBB/BTL conformance. Other source operations, multiple Reporters,
 selector semantics, batching/send delay, standalone source ownership and other
 transports remain outside this subset.
 
@@ -1921,4 +1937,5 @@ initial state and `AuditReporterConfig { reporter }` for selection. Active local
 and authorized network recipient writes share atomic old/new delivery admission.
 See the [Device recipient contract](device-audit-recipient.md) for supported routes,
 metadata, failure semantics and shutdown ownership. The endpoint source profile
-retains its separate static setting until its subsequent migration.
+uses the same typed Device value and a source-owned paired delivery path; it has
+the narrower role, route and service boundaries described above.

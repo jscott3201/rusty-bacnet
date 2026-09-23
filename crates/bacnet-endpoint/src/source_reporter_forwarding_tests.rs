@@ -20,7 +20,9 @@ fn typed_device_authority_is_forwarded_without_copying() {
         .device_authority_internal()
         .unwrap()
         .object_identifier();
-    source_reporter::install(&mut object, false).unwrap();
+    let owner =
+        bacnet_objects::database::AuditOwnership::new(oid(ObjectType::DEVICE, 123), selected());
+    source_reporter::install(&mut object, &owner).unwrap();
     let mut forwarded = object.device_authority_internal().unwrap();
     assert_eq!(forwarded.object_identifier(), original);
     forwarded
@@ -51,7 +53,7 @@ fn denied(result: Result<(), Error>) {
 async fn built_in_configuration_identity_metadata_and_writes_survive_wrapping() {
     let (session, _peer, _) = session(SessionRole::Both);
     let mut db = database();
-    let selectors = Some(vec![BACnetObjectSelector::Object(target())]);
+    let selectors: Option<Vec<BACnetObjectSelector>> = None;
     let priorities = BACnetPriorityFilter::from_bits(1 << 7);
     let operations = AuditOperationFlags::from_bits(1 << 1).unwrap();
     let original = db.get_mut(&selected()).unwrap();
@@ -122,15 +124,11 @@ async fn built_in_configuration_identity_metadata_and_writes_survive_wrapping() 
             PropertyValue::Boolean(false),
             None,
         ));
-        assert!(object.is_array_property(PropertyIdentifier::MONITORED_OBJECTS));
-        assert_eq!(
-            object
-                .read_property(PropertyIdentifier::MONITORED_OBJECTS, Some(0))
-                .unwrap(),
-            PropertyValue::Unsigned(1)
-        );
+        assert!(!object
+            .property_list()
+            .contains(&PropertyIdentifier::MONITORED_OBJECTS));
         assert!(object
-            .read_property(PropertyIdentifier::MONITORED_OBJECTS, Some(2))
+            .read_property(PropertyIdentifier::MONITORED_OBJECTS, None)
             .is_err());
         object
             .write_property(
@@ -182,7 +180,7 @@ async fn built_in_configuration_identity_metadata_and_writes_survive_wrapping() 
                 AuditLevel::NONE,
                 operations,
                 true,
-                Some(vec![]),
+                None,
                 BACnetPriorityFilter::empty(),
             )
             .unwrap();
@@ -514,14 +512,13 @@ async fn custom_capabilities_clocks_indexes_and_private_state_are_retained() {
             .unwrap();
         assert_eq!(read(object, CUSTOM), PropertyValue::Unsigned(7));
         let operations = AuditOperationFlags::from_bits((1 << 1) | (1 << 63)).unwrap();
-        let selectors = vec![BACnetObjectSelector::Object(target())];
         let priorities = BACnetPriorityFilter::from_bits(1 << 7);
         object
             .configure_audit_reporter_internal(
                 AuditLevel::AUDIT_ALL,
                 operations,
                 true,
-                Some(selectors.clone()),
+                None,
                 priorities,
             )
             .unwrap();

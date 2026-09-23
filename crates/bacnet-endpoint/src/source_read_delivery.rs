@@ -7,7 +7,6 @@ use bacnet_server::server::{
     __endpoint_run_notification_worker as run_notification_worker,
 };
 use bacnet_services::audit::AuditNotificationRequest;
-use bacnet_transport::bvll::encode_bip_mac;
 use bacnet_types::enums::{
     ConfirmedServiceChoice, ErrorClass, ErrorCode, NetworkPriority, UnconfirmedServiceChoice,
 };
@@ -23,6 +22,17 @@ pub(super) struct Completion {
     finished: bool,
 }
 impl Completion {
+    pub(super) fn new(
+        status: Arc<AuditReporterStatus>,
+        epoch: bacnet_objects::audit::AuditDeliveryToken,
+    ) -> Self {
+        Self {
+            status,
+            epoch,
+            finished: false,
+        }
+    }
+
     pub(super) fn auditing_failure(
         status: Arc<AuditReporterStatus>,
         expected: u64,
@@ -51,16 +61,11 @@ pub(super) fn admit(
     source: &Arc<SourceRead>,
     owner: &NotificationTransactions,
     confirmed: bool,
+    mac: MacAddr,
     notification: BACnetAuditNotification,
-    status: Arc<AuditReporterStatus>,
-    epoch: bacnet_objects::audit::AuditDeliveryToken,
+    completion: Completion,
     failure: Option<AuditFailureTicket<MacAddr>>,
 ) {
-    let completion = Completion {
-        status,
-        epoch,
-        finished: false,
-    };
     // Invalid/oversized records are not resource losses, even at saturation.
     let Some(mut encoded) = encode(&notification, confirmed, source.max_apdu, 0) else {
         return;
@@ -77,10 +82,6 @@ pub(super) fn admit(
         }
         Err(tokio::sync::TryAcquireError::Closed) => return,
     };
-    let mac = MacAddr::from_slice(&encode_bip_mac(
-        source.recipient.address.ip().octets(),
-        source.recipient.address.port(),
-    ));
     let reserved = if confirmed {
         match owner.reserve(
             CanonicalPeer::direct(mac.as_slice()),

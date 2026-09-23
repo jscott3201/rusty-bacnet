@@ -63,18 +63,29 @@ fn address(network: &NetworkLayer<BipTransport>) -> SocketAddrV4 {
     SocketAddrV4::new(ip.into(), port)
 }
 fn session(
-    db: ObjectDatabase,
+    mut db: ObjectDatabase,
     role: SessionRole,
     sink: &NetworkLayer<BipTransport>,
 ) -> EndpointSession<BipTransport> {
-    BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
+    db.get_mut(&oid(ObjectType::DEVICE, 123))
+        .unwrap()
+        .device_authority_internal()
+        .unwrap()
+        .provision_audit_recipient(BACnetRecipient::Device(oid(ObjectType::DEVICE, 999)))
+        .unwrap();
+    let session = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
         .role(role)
         .database(db)
         .client_timers(100, 0)
-        .static_source_audit_recipient(oid(ObjectType::DEVICE, 999), address(sink))
+        .source_audit_device_binding(oid(ObjectType::DEVICE, 999), address(sink))
         .build_session()
         .unwrap()
-        .with_source_audit_reporter(selected())
+        .with_source_audit_reporter(selected());
+    if role == SessionRole::Both {
+        session.with_device_writes(Arc::new(|_| true))
+    } else {
+        session
+    }
 }
 async fn receive(receiver: &mut mpsc::Receiver<ReceivedApdu>) -> ReceivedApdu {
     timeout(WAIT, receiver.recv()).await.unwrap().unwrap()
@@ -449,3 +460,6 @@ mod queued;
 
 #[path = "source_read_failure_tests.rs"]
 mod failures;
+
+#[path = "source_recipient_tests.rs"]
+mod recipient_changes;
