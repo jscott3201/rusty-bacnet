@@ -321,3 +321,120 @@ async fn audit_target_routes_revalidate_generic_next_hops_after_startup() {
         }
     }
 }
+
+#[tokio::test]
+async fn audit_source_correlation_uses_post_start_generic_route_eligibility() {
+    use bacnet_objects::{
+        binary::BinaryValueObject,
+        device::{DeviceConfig, DeviceObject},
+    };
+    for routed in [false, true] {
+        let logger = oid(ObjectType::DEVICE, 20);
+        let bad = oid(ObjectType::DEVICE, 30);
+        let healthy = oid(ObjectType::DEVICE, 31);
+        let observed = oid(ObjectType::DEVICE, 32);
+        let mut db = ObjectDatabase::new();
+        let mut device = DeviceObject::new(DeviceConfig {
+            instance: 10,
+            ..Default::default()
+        })
+        .unwrap();
+        device
+            .provision_audit_recipient(BACnetRecipient::Device(logger))
+            .unwrap();
+        db.add(Box::new(device)).unwrap();
+        db.add(Box::new(reporter())).unwrap();
+        db.add(Box::new(BinaryValueObject::new(1, "value").unwrap()))
+            .unwrap();
+        let mut transport = CaptureTransport::default();
+        transport.learned_broadcast = Some(MacAddr::from_slice(&[0x42]));
+        let mut server = BACnetServer::start_with_clock_mode_and_bindings(
+            ServerConfig {
+                audit_reporter: Some(AuditReporterConfig {
+                    reporter: oid(ObjectType::AUDIT_REPORTER, 1),
+                }),
+                ..Default::default()
+            },
+            db,
+            transport.clone(),
+            None,
+            vec![
+                DeviceBinding::local(logger, LOGGER).unwrap(),
+                if routed {
+                    DeviceBinding::routed(bad, 200, [9], [0x42]).unwrap()
+                } else {
+                    DeviceBinding::local(bad, [0x42]).unwrap()
+                },
+                if routed {
+                    DeviceBinding::routed(healthy, 200, [10], SOURCE).unwrap()
+                } else {
+                    DeviceBinding::local(healthy, SOURCE).unwrap()
+                },
+            ],
+        )
+        .await
+        .unwrap();
+        let remote = |mac| {
+            routed.then(|| NpduAddress {
+                network: 200,
+                mac_address: MacAddr::from_slice(&[mac]),
+            })
+        };
+        let observed_remote = remote(11);
+        server.device_bindings.write().await.observe_i_am_at(
+            observed,
+            &[0x44],
+            observed_remote.as_ref(),
+            Instant::now(),
+            |mac| transport.is_broadcast_mac(mac),
+        );
+        let callbacks = transport.route_callbacks.load(Ordering::Acquire);
+        transport
+            .reject_route_callbacks
+            .store(true, Ordering::Release);
+        for (index, (immediate, source, expected)) in [
+            (
+                &[0x42][..],
+                remote(9),
+                BACnetRecipient::Address(BACnetAddress {
+                    network_number: if routed { 200 } else { 0 },
+                    mac_address: MacAddr::from_slice(if routed { &[9] } else { &[0x42] }),
+                }),
+            ),
+            (SOURCE, remote(10), BACnetRecipient::Device(healthy)),
+            (
+                &[0x44][..],
+                observed_remote,
+                BACnetRecipient::Device(observed),
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let response = dispatch_from(
+                &server,
+                ConfirmedServiceChoice::WRITE_PROPERTY,
+                wp(
+                    oid(ObjectType::BINARY_VALUE, 1),
+                    PropertyIdentifier::PRESENT_VALUE,
+                    vec![0x91, 1],
+                    None,
+                ),
+                immediate,
+                source,
+            )
+            .await
+            .unwrap();
+            assert!(matches!(response, Apdu::SimpleAck(_)));
+            settle().await;
+            let records = notifications(&transport.sent);
+            assert_eq!(records.len(), index + 1);
+            assert_eq!(
+                records[index].notifications[0].source_device, expected,
+                "routed={routed}, source case={index}"
+            );
+        }
+        assert_eq!(transport.route_callbacks.load(Ordering::Acquire), callbacks);
+        server.stop().await.unwrap();
+    }
+}

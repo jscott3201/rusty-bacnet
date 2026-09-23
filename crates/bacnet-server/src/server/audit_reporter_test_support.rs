@@ -275,6 +275,16 @@ pub(super) async fn dispatch_optional(
     service: ConfirmedServiceChoice,
     data: Bytes,
 ) -> Option<Apdu> {
+    dispatch_from(server, service, data, SOURCE, None).await
+}
+
+pub(super) async fn dispatch_from(
+    server: &BACnetServer<CaptureTransport>,
+    service: ConfirmedServiceChoice,
+    data: Bytes,
+    source_mac: &[u8],
+    source_network: Option<NpduAddress>,
+) -> Option<Apdu> {
     let (tx, rx) = oneshot::channel();
     let invoke_id = 77u8.wrapping_add(
         server
@@ -298,8 +308,8 @@ pub(super) async fn dispatch_optional(
         &server.dcc_timer,
         &server.config,
         &server.request_tasks.spawner(),
-        SOURCE,
-        None,
+        source_mac,
+        source_network,
         ConfirmedRequestPdu {
             segmented: false,
             more_follows: false,

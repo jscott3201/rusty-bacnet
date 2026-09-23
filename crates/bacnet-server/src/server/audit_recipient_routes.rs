@@ -7,6 +7,7 @@ use bacnet_types::constructed::BACnetRecipient;
 pub(super) struct AuditRoutes {
     devices: HashMap<ObjectIdentifier, Arc<ConfirmedRecipientRoute>>,
     bip_broadcast: Option<std::net::SocketAddrV4>,
+    configured_broadcasts: std::collections::HashSet<MacAddr>,
 }
 
 impl AuditRoutes {
@@ -21,6 +22,7 @@ impl AuditRoutes {
                 })
                 .collect(),
             bip_broadcast: transport.bip_broadcast_endpoint(),
+            configured_broadcasts: Default::default(),
         }
     }
 
@@ -53,7 +55,16 @@ impl AuditRoutes {
             // mutation under shared DB/admission locks. Invalid Device routes
             // become unresolved rather than rejecting the whole server.
             self.devices.retain(|_, route| {
-                local_next_hop(route).is_some_and(|mac| !network.transport().is_broadcast_mac(mac))
+                local_next_hop(route).is_some_and(|mac| {
+                    if network.transport().is_broadcast_mac(mac) {
+                        // Retain the fact as well as pruning delivery: source
+                        // correlation uses the same post-start eligibility.
+                        self.configured_broadcasts.insert(mac.clone());
+                        false
+                    } else {
+                        true
+                    }
+                })
             });
             if let Err(error) = super::audit_recipient::validate(db, config, &self) {
                 let _ = network.stop().await;
@@ -64,11 +75,12 @@ impl AuditRoutes {
     }
 
     pub(super) fn is_broadcast(&self, mac: &[u8]) -> bool {
-        self.bip_broadcast.is_some_and(|broadcast| {
-            mac.len() == 6
-                && mac[..4] == broadcast.ip().octets()
-                && mac[4..] == broadcast.port().to_be_bytes()
-        })
+        self.configured_broadcasts.contains(mac)
+            || self.bip_broadcast.is_some_and(|broadcast| {
+                mac.len() == 6
+                    && mac[..4] == broadcast.ip().octets()
+                    && mac[4..] == broadcast.port().to_be_bytes()
+            })
     }
 
     /// Pure lookup/byte validation: no transport, caller code, locks or clocks.
