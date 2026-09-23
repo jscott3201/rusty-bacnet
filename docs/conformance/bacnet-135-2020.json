@@ -446,7 +446,7 @@
   },
   {
    "id": "BACNET-12-LOG-STATUS-LIFECYCLE",
-   "standard_anchor": "Clause 12.25 Trend Log (pp. 319-336); Clause 12.27 Event Log (pp. 337-346); Clause 12.30 Trend Log Multiple (pp. 361-378); Clause 21.6 BACnetLogStatus (p. 914); Clause 12.25 Log_Buffer acquisition timestamps (printed p. 320); Clauses 20.2.12-20.2.13 local actual Date/Time (printed p. 849)",
+   "standard_anchor": "Clause 12.25 Trend Log (pp. 319-336); Clause 12.27 Event Log (pp. 337-346); Clause 12.30 Trend Log Multiple (pp. 361-378); Clause 21.6 BACnetLogStatus (p. 914); Clause 12.25 Log_Buffer acquisition timestamps (PDF p. 320 / printed p. 318); Clause 20.2.12 local actual Date (PDF p. 848 / printed p. 846); Clause 20.2.13 local actual Time (PDF p. 849 / printed p. 847)",
    "priority": "P1",
    "requirement_summary": "Event Log, Trend Log, and Trend Log Multiple append mandatory BUFFER_PURGED and LOG_DISABLED lifecycle records with object-local Date/Time, deterministic Stop_When_Full ordering, non-recursive forced insertion, stable total-record identity, zero-capacity count-only behavior, and atomic clock/error handling.",
    "status": "in-progress",
