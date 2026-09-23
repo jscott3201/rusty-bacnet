@@ -65,6 +65,12 @@ impl StaticSourceAuditRecipient {
                 "static source audit recipient must identify a Device".into(),
             ));
         }
+        if self.device.instance_number() == ObjectIdentifier::WILDCARD_INSTANCE {
+            return Err(Error::Encoding(
+                "static source audit recipient must identify a concrete addressable Device, not a wildcard instance"
+                    .into(),
+            ));
+        }
         let ip = self.address.ip();
         if ip.is_unspecified()
             || ip.is_multicast()
@@ -179,9 +185,10 @@ impl BipEndpointBuilder {
     /// establish Audit Reporting support/conformance. It sends nothing, creates
     /// no source records, and changes no Reporter Reliability/configured status.
     ///
-    /// Direct B/IP IPv4 only: `device` must identify a Device and `address` must
-    /// have a nonzero UDP port. Unspecified, multicast, limited broadcast and
-    /// this builder's configured broadcast IP are rejected. No routed, IPv6,
+    /// Direct B/IP IPv4 only: `device` must identify a concrete addressable Device
+    /// (no wildcard instance), and `address` must have a nonzero UDP port.
+    /// Unspecified, multicast, limited broadcast and this builder's configured
+    /// broadcast IP are rejected. No routed, IPv6,
     /// SC, MS/TP, discovery or BBMD-distribution semantics are provided.
     /// The exact IPv4 address and UDP port are retained, not resolved/refreshed.
     ///
@@ -208,7 +215,7 @@ impl BipEndpointBuilder {
     /// let mut session = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
     ///     .role(SessionRole::ClientOnly).database(db).identity(identity)
     ///     .static_source_audit_recipient(
-    ///         ObjectIdentifier::new(ObjectType::DEVICE, 456)?,
+    ///         ObjectIdentifier::new_addressable(ObjectType::DEVICE, 456)?,
     ///         SocketAddrV4::new(Ipv4Addr::LOCALHOST, 47809),
     ///     )
     ///     .build_session()?.with_source_audit_reporter(source);

@@ -48,6 +48,11 @@ fn invalid_destinations_fail_at_build_before_any_session_or_transport_start() {
     for (device, address, expected) in [
         (selected(), address(), "must identify a Device"),
         (
+            oid(ObjectType::DEVICE, ObjectIdentifier::WILDCARD_INSTANCE),
+            address(),
+            "concrete addressable Device, not a wildcard instance",
+        ),
+        (
             destination(),
             SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 47808),
             "direct unicast IPv4",
@@ -82,6 +87,24 @@ fn invalid_destinations_fail_at_build_before_any_session_or_transport_start() {
             builder().static_source_audit_recipient(device, address).build_session(),
             Err(Error::Encoding(message)) if message.contains(expected)
         ));
+    }
+}
+
+#[test]
+fn concrete_device_instance_boundaries_are_retained() {
+    for instance in [0, ObjectIdentifier::MAX_ADDRESSABLE_INSTANCE] {
+        let device = oid(ObjectType::DEVICE, instance);
+        let session = builder()
+            .static_source_audit_recipient(device, address())
+            .build_session()
+            .unwrap();
+        assert_eq!(
+            session.static_source_audit_recipient,
+            Some(StaticSourceAuditRecipient {
+                device,
+                address: address()
+            })
+        );
     }
 }
 
