@@ -482,8 +482,8 @@ impl BipTransport {
 }
 
 impl TransportPort for BipTransport {
-    fn is_bip_ipv4(&self) -> bool {
-        true
+    fn bip_broadcast_endpoint(&self) -> Option<SocketAddrV4> {
+        Some(SocketAddrV4::new(self.broadcast_address, self.port))
     }
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
         if self.recv_task.is_some() {

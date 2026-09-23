@@ -46,7 +46,7 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         let device = local_device(db);
         let route = device
             .and_then(|device| recipient(db, device))
-            .and_then(|value| resolve_recipient(&value, &self.bindings, self.network.transport()));
+            .and_then(|value| self.transactions.audit_routes.get()?.resolve(&value));
         let status = reporter.status_internal();
         status.set_configured(device.is_some() && route.is_some());
         let device = device?;

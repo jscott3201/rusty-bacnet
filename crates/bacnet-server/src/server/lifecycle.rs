@@ -2,7 +2,7 @@ use super::*;
 
 #[path = "lifecycle_period.rs"]
 mod period;
-use super::audit_recipient::spawn_owned;
+use super::{audit_recipient::spawn_owned, audit_recipient_routes::AuditRoutes};
 pub(super) use period::event_enrollment_period;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
@@ -18,7 +18,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let is_broadcast = |mac: &[u8]| transport.is_broadcast_mac(mac);
         let device_bindings =
             DeviceBindingTable::from_configured(configured_device_bindings, is_broadcast)?;
-        super::audit_recipient::validate(&mut db, &config, &device_bindings, &transport)?;
+        let audit_routes = AuditRoutes::prepare(&mut db, &config, &device_bindings, &transport)?;
         super::audit_forwarder::initialize(&db, &config, &device_bindings, &transport);
         let transport_max = transport.max_apdu_length() as u32;
         config.max_apdu_length = config.max_apdu_length.min(transport_max);
@@ -48,6 +48,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
         let mut network = NetworkLayer::new(transport);
         let mut apdu_rx = network.start().await?;
+        let audit_routes = audit_routes.finish(&mut db, &config, &mut network).await?;
         let local_mac = MacAddr::from_slice(network.local_mac());
 
         let network = Arc::new(network);
@@ -98,7 +99,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let target_audit = super::audit_recipient::TargetAudit::install(
             &mut *db.write().await,
             &config,
-            &*device_bindings.read().await,
+            audit_routes,
             &network,
             &notification_transactions,
             &comm_state,

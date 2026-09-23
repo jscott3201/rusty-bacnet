@@ -1,5 +1,4 @@
-use super::device_bindings::BindingFreshness;
-use super::event_recipient_route::{ConfirmedRecipientRoute, RecipientRoute};
+use super::event_recipient_route::ConfirmedRecipientRoute;
 use super::notification_transactions::{
     AuditFailureContext, AuditFailureTicket, NotificationReservation, NotificationReserveError,
 };
@@ -148,37 +147,6 @@ fn local_device(db: &ObjectDatabase) -> Option<ObjectIdentifier> {
     devices.next().is_none().then_some(device)
 }
 
-pub(super) fn resolve_recipient<T: TransportPort + 'static>(
-    recipient: &BACnetRecipient,
-    bindings: &DeviceBindingTable,
-    transport: &T,
-) -> Option<Arc<ConfirmedRecipientRoute>> {
-    let route = match recipient {
-        BACnetRecipient::Device(device) => {
-            let route = RecipientRoute::from_device_resolution(bindings.resolve_at(
-                device,
-                Instant::now(),
-                |mac| transport.is_broadcast_mac(mac),
-            ))
-            .into_confirmed()?;
-            if route.freshness != Some(BindingFreshness::Configured) {
-                return None;
-            }
-            route
-        }
-        BACnetRecipient::Address(address) => {
-            if !transport.is_bip_ipv4()
-                || !valid_bip_audit_address(address)
-                || transport.is_broadcast_mac(&address.mac_address)
-            {
-                return None;
-            }
-            RecipientRoute::LocalUnicast(address.mac_address.clone()).into_confirmed()?
-        }
-    };
-    Some(Arc::new(route))
-}
-
 /// Validate the supported direct unicast IPv4 Audit address shape. Link-kind
 /// and interface-specific broadcast checks remain the runtime owner's duty.
 #[doc(hidden)]
@@ -214,7 +182,6 @@ pub(super) struct WriteAudit<'a, T: TransportPort> {
     network: &'a Arc<NetworkLayer<T>>,
     transactions: &'a Arc<NotificationTransactions>,
     comm_state: &'a Arc<AtomicU8>,
-    bindings: DeviceBindingTable,
     source: BACnetRecipient,
     invoke_id: u8,
     pending: Option<PendingWrite>,
@@ -248,16 +215,20 @@ impl<'a, T: TransportPort + 'static> WriteAudit<'a, T> {
         source_network: Option<&NpduAddress>,
         invoke_id: u8,
     ) -> Self {
-        let (snapshot, known_source) = if config.audit_reporter.is_some() {
-            let bindings = bindings.read().await;
-            (
-                bindings.clone(),
-                bindings.source_device(source_mac, source_network, |mac| {
-                    network.transport().is_broadcast_mac(mac)
-                }),
-            )
+        // Entries were checked against the concrete link at configuration or
+        // observation admission. Correlation needs no caller code under locks.
+        let known_source = if config.audit_reporter.is_some() {
+            bindings
+                .read()
+                .await
+                .source_device(source_mac, source_network, |mac| {
+                    transactions
+                        .audit_routes
+                        .get()
+                        .is_some_and(|routes| routes.is_broadcast(mac))
+                })
         } else {
-            (DeviceBindingTable::new(), None)
+            None
         };
         let source = known_source
             .map(BACnetRecipient::Device)
@@ -275,7 +246,6 @@ impl<'a, T: TransportPort + 'static> WriteAudit<'a, T> {
             network,
             transactions,
             comm_state,
-            bindings: snapshot,
             source,
             invoke_id,
             pending: None,
@@ -298,7 +268,7 @@ impl<T: TransportPort + 'static> WriteCommitObserver for WriteAudit<'_, T> {
         let device = local_device(db);
         let route = device
             .and_then(|device| recipient(db, device))
-            .and_then(|value| resolve_recipient(&value, &self.bindings, self.network.transport()));
+            .and_then(|value| self.transactions.audit_routes.get()?.resolve(&value));
         let status = reporter.status_internal();
         status.set_configured(device.is_some() && route.is_some());
         let Some(device) = device else { return };
@@ -404,7 +374,7 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         let device = local_device(db);
         let route = device
             .and_then(|device| recipient(db, device))
-            .and_then(|value| resolve_recipient(&value, &self.bindings, self.network.transport()));
+            .and_then(|value| self.transactions.audit_routes.get()?.resolve(&value));
         let status = reporter.status_internal();
         status.set_configured(device.is_some() && route.is_some());
         let Some(device) = device else { return };
@@ -487,7 +457,7 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         let device = local_device(db);
         let route = device
             .and_then(|device| recipient(db, device))
-            .and_then(|value| resolve_recipient(&value, &self.bindings, self.network.transport()));
+            .and_then(|value| self.transactions.audit_routes.get()?.resolve(&value));
         let status = reporter.status_internal();
         status.set_configured(device.is_some() && route.is_some());
         let Some(device) = device else { return };
@@ -568,7 +538,7 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         let device = local_device(db);
         let route = device
             .and_then(|device| recipient(db, device))
-            .and_then(|value| resolve_recipient(&value, &self.bindings, self.network.transport()));
+            .and_then(|value| self.transactions.audit_routes.get()?.resolve(&value));
         let status = reporter.status_internal();
         status.set_configured(device.is_some() && route.is_some());
         let Some(device) = device else { return };

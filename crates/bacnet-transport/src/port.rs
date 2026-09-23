@@ -248,10 +248,12 @@ impl std::fmt::Debug for ReceivedNpdu {
 /// Implementations handle the data-link framing (e.g., BVLL for BACnet/IP)
 /// and expose a simple send/receive interface for NPDU bytes.
 pub trait TransportPort: Send + Sync {
-    /// Whether this link uses the six-octet IPv4-address/UDP-port BACnet/IP MAC.
-    /// Wrappers must report their actual underlying link, never infer it from length.
-    fn is_bip_ipv4(&self) -> bool {
-        false
+    /// Configured broadcast endpoint when this link uses IPv4 BACnet/IP.
+    /// `None` means the link does not expose that capability. Wrappers must
+    /// forward the underlying value. After `start`, the port is the actual
+    /// bound UDP port, including when configuration requested port zero.
+    fn bip_broadcast_endpoint(&self) -> Option<std::net::SocketAddrV4> {
+        None
     }
 
     /// Start the transport. Returns a receiver for incoming NPDUs.

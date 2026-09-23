@@ -25,6 +25,8 @@ pub(super) const SOURCE: &[u8] = &[3];
 #[derive(Clone, Default)]
 pub(super) struct CaptureTransport {
     pub(super) six_byte_mac: bool,
+    pub(super) reject_route_callbacks: Arc<AtomicBool>,
+    pub(super) route_callbacks: Arc<AtomicUsize>,
     pub(super) started: Arc<AtomicBool>,
     pub(super) sent: Arc<StdMutex<Vec<Bytes>>>,
     pub(super) destinations: Arc<StdMutex<Vec<Vec<u8>>>>,
@@ -36,7 +38,26 @@ pub(super) struct CaptureTransport {
     requests: Arc<AtomicU8>,
 }
 
+impl CaptureTransport {
+    fn route_callback(&self) {
+        self.route_callbacks.fetch_add(1, Ordering::AcqRel);
+        assert!(
+            !self.reject_route_callbacks.load(Ordering::Acquire),
+            "target route callback after startup"
+        );
+    }
+}
+
 impl TransportPort for CaptureTransport {
+    fn bip_broadcast_endpoint(&self) -> Option<std::net::SocketAddrV4> {
+        self.route_callback();
+        None
+    }
+    fn is_broadcast_mac(&self, _: &[u8]) -> bool {
+        self.route_callback();
+        false
+    }
+
     async fn start(
         &mut self,
     ) -> Result<mpsc::Receiver<bacnet_transport::port::ReceivedNpdu>, Error> {

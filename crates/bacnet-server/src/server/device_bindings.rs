@@ -204,6 +204,16 @@ impl DeviceBindingTable {
         Ok(table)
     }
 
+    /// Immutable configured routes, already validated against the concrete link.
+    pub(super) fn configured_resolutions(
+        &self,
+    ) -> impl Iterator<Item = (ObjectIdentifier, DeviceResolution)> + '_ {
+        self.entries
+            .iter()
+            .filter(|(_, entry)| matches!(entry, BindingEntry::Configured(_)))
+            .map(|(device, _)| (*device, self.resolve_at(device, Instant::now(), |_| false)))
+    }
+
     #[cfg(test)]
     pub(super) fn len(&self) -> usize {
         self.entries.len()

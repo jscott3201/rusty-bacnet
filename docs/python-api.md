@@ -1491,9 +1491,11 @@ child.add_device_binding(9, await parent.local_address())
   options reset to catch-all/all priorities rather than retaining previous filters.
   Selecting another Reporter raises `ValueError`, even after selecting level NONE;
   other registered Reporters remain inert. Failed calls preserve settings and registrations.
-- Binding and Reporter configuration may occur in either order. Destinations use
-  only existing configured direct B/IP IPv4 bindings: no discovery, routed, IPv6,
-  SC or MS/TP destinations. An unresolved recipient does not fail configuration or
+- Binding and Reporter configuration may occur in either order. Device choices use
+  existing configured direct B/IP IPv4 `add_device_binding()` routes. Address
+  choices need no binding and use the direct unicast B/IP IPv4 subset described
+  above. Neither choice adds discovery, routed, IPv6, SC or MS/TP destinations to
+  this Python profile. An unresolved Device recipient does not fail configuration or
   startup: an enabled Reporter exposes `RELIABILITY=CONFIGURATION_ERROR` (`10`)
   and the fault bit in `STATUS_FLAGS`, without emitting or queuing ordinary records.
   Use existing `read_property()` on these properties; there is no separate status API.
@@ -1512,7 +1514,7 @@ their existing operation boundaries. Normal operations require their operation
 bit; enabled external Reporter property writes retain the core filter bypass.
 Success omits Result; known execution errors include the response-mapped Error.
 The existing optional AUDITING_FAILURE resource-admission summary remains bounded
-and memory-only when its bit is enabled. No new producer source is introduced.
+and memory-only when its bit is enabled. No new ordinary producer source is introduced.
 
 Delivery retains 64 shared immediate Audit permits, one total three-second deadline,
 no ordinary-record queue/retry or outbound segmentation, object-owned health and

@@ -1,5 +1,5 @@
 //! Complete target recipient mutation owner: preparation, commit and owned delivery.
-use super::audit_reporter::{deliver, encode_notification, resolve_recipient, DeliveryCompletion};
+use super::audit_reporter::{deliver, encode_notification, DeliveryCompletion};
 use super::*;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_objects::{
@@ -15,7 +15,7 @@ pub(super) struct TargetAudit<T: TransportPort> {
     pub(super) owner: Arc<AuditOwnership>,
     pub(super) device: ObjectIdentifier,
     status: Arc<AuditReporterStatus>,
-    bindings: DeviceBindingTable,
+    routes: Arc<super::audit_recipient_routes::AuditRoutes>,
     sequence: Arc<EventSequence>,
     network: Arc<NetworkLayer<T>>,
     transactions: Arc<NotificationTransactions>,
@@ -31,11 +31,10 @@ fn denied() -> Error {
 }
 
 /// Validate before transport startup and before installing any capability.
-pub(super) fn validate<T: TransportPort + 'static>(
+pub(super) fn validate(
     db: &mut ObjectDatabase,
     config: &ServerConfig,
-    bindings: &DeviceBindingTable,
-    transport: &T,
+    routes: &super::audit_recipient_routes::AuditRoutes,
 ) -> Result<(), Error> {
     let Some(profile) = &config.audit_reporter else {
         return Ok(());
@@ -58,7 +57,7 @@ pub(super) fn validate<T: TransportPort + 'static>(
     let reporter = db.get(&profile.reporter).and_then(|object| object.audit_reporter_internal())
         .filter(|object| object.object_identifier() == profile.reporter)
         .ok_or_else(|| Error::Encoding(format!("invalid audit reporter: selected object {:?} is absent or lacks the Audit Reporter capability", profile.reporter)))?;
-    let route = resolve_recipient(&value, bindings, transport);
+    let route = routes.resolve(&value);
     // A Device may be provisioned before its route is available. Address choices
     // must belong to this runtime's explicit direct-unicast B/IP subset.
     if matches!(value, BACnetRecipient::Address(_)) && route.is_none() {
@@ -72,7 +71,7 @@ impl<T: TransportPort + 'static> TargetAudit<T> {
     pub(super) fn install(
         db: &mut ObjectDatabase,
         config: &ServerConfig,
-        bindings: &DeviceBindingTable,
+        routes: Arc<super::audit_recipient_routes::AuditRoutes>,
         network: &Arc<NetworkLayer<T>>,
         transactions: &Arc<NotificationTransactions>,
         comm_state: &Arc<AtomicU8>,
@@ -91,7 +90,7 @@ impl<T: TransportPort + 'static> TargetAudit<T> {
             owner: AuditOwnership::new(device, profile.reporter),
             device,
             status,
-            bindings: bindings.clone(),
+            routes: Arc::clone(&routes),
             sequence: db.event_sequence_internal(),
             network: Arc::clone(network),
             transactions: Arc::clone(transactions),
@@ -105,6 +104,7 @@ impl<T: TransportPort + 'static> TargetAudit<T> {
             .unwrap()
             .install_audit_recipient(&sink)?;
         db.protect_audit_internal(&runtime.owner)?;
+        assert!(transactions.audit_routes.set(routes).is_ok());
         transactions.set_audit_owner(&runtime.owner);
         Ok(Some(runtime))
     }
@@ -131,10 +131,8 @@ impl<T: TransportPort + 'static> TargetAudit<T> {
             if !self.owner.is_active() || self.comm_state.load(Ordering::Acquire) != 0 {
                 return Err(denied());
             }
-            let old_route = resolve_recipient(current, &self.bindings, self.network.transport())
-                .ok_or_else(denied)?;
-            let new_route = resolve_recipient(&new, &self.bindings, self.network.transport())
-                .ok_or_else(denied)?;
+            let old_route = self.routes.resolve(current).ok_or_else(denied)?;
+            let new_route = self.routes.resolve(&new).ok_or_else(denied)?;
             let mut old_value = BytesMut::new();
             let mut new_value = BytesMut::new();
             bacnet_encoding::constructed::encode_recipient(&mut old_value, current);

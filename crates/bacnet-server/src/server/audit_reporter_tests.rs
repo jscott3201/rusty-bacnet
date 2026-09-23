@@ -16,6 +16,9 @@ use std::sync::Mutex as StdMutex;
 mod support;
 use support::*;
 
+#[path = "audit_recipient_routes_tests.rs"]
+mod recipient_routes;
+
 #[path = "audit_recipient_tests.rs"]
 mod recipient_changes;
 

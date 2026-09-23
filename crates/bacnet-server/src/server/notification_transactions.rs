@@ -61,6 +61,7 @@ struct NotificationState {
 
 #[doc(hidden)]
 pub struct NotificationTransactions {
+    pub(super) audit_routes: std::sync::OnceLock<Arc<super::audit_recipient_routes::AuditRoutes>>,
     core: Arc<NotificationCore>,
     workers: Mutex<NotificationWorkers>,
     audit_permits: Arc<tokio::sync::Semaphore>,
@@ -107,6 +108,7 @@ impl NotificationTransactions {
     #[doc(hidden)]
     pub fn with_coordinator(coordinator: Arc<OutboundTransactionCoordinator>) -> Arc<Self> {
         Arc::new(Self {
+            audit_routes: std::sync::OnceLock::new(),
             core: Arc::new(NotificationCore {
                 coordinator,
                 state: Mutex::new(NotificationState {

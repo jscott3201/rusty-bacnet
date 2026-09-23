@@ -283,6 +283,7 @@ mod audit_forwarder;
 #[cfg(test)]
 mod audit_forwarder_tests;
 mod audit_recipient;
+mod audit_recipient_routes;
 mod audit_reporter;
 pub use audit_reporter::{valid_bip_audit_address, AuditReporterConfig};
 #[cfg(test)]
