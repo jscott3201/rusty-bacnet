@@ -174,7 +174,7 @@ impl LiveClient {
 }
 
 pub(super) fn clients() -> Clients {
-    Arc::new(Mutex::new(HashMap::new()))
+    Arc::new(super::client::ClientRegistry::default())
 }
 
 pub(super) fn frame(function: ScFunction, message_id: u16) -> ScMessage {

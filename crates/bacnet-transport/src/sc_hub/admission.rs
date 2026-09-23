@@ -254,6 +254,8 @@ pub struct ScHubStatus {
     pub admin_denied: u64,
     /// Lifetime broadcast-relay drop counters (saturating).
     pub broadcast_drops: super::ScHubBroadcastDropCounts,
+    /// Lifetime decision outcomes (saturating, independently sampled).
+    pub outcomes: super::ScHubOutcomeCounts,
 }
 
 /// Per-hub admission runtime: validated limits, optional shared policy,
@@ -465,13 +467,14 @@ mod tests {
                 sender_exhausted: 4,
                 global_exhausted: 5,
             },
+            outcomes: super::super::ScHubOutcomeCounts::default(),
         };
         // Exact-match: any future identity field breaks this on purpose.
         assert_eq!(
             format!("{status:?}"),
             "ScHubStatus { listening: true, limits: ScHubAdmissionLimits { max_clients: 256, max_handshakes: 256 }, \
              client_count: 1, handshake_count: 2, admin_denied: 3, \
-             broadcast_drops: ScHubBroadcastDropCounts { sender_exhausted: 4, global_exhausted: 5 } }"
+             broadcast_drops: ScHubBroadcastDropCounts { sender_exhausted: 4, global_exhausted: 5 }, outcomes: ScHubOutcomeCounts { uuid_replacements: 0, vmac_collision_rejections: 0, registered_capacity_rejections: 0, total_active_accept_drops: 0, handshake_accept_drops: 0, tls_timeouts: 0, websocket_timeouts: 0, connect_timeouts: 0, unicast_no_target: 0, unicast_target_limit: 0, unicast_send_timeout: 0, unicast_send_error: 0, heartbeat_retirements: 0 } }"
         );
     }
 

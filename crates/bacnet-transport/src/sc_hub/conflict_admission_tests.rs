@@ -1,5 +1,6 @@
 //! Conflict policy observes the exact locked registration decision over mTLS.
 use super::*;
+use crate::sc_hub::ScHubOutcomeCounts;
 use crate::sc_hub::ScHubRegistrationKind as Kind;
 
 fn refuse_replacement(kind: Kind) -> ScHubAdmissionDecision {
@@ -82,6 +83,14 @@ async fn locked_classification_preserves_incumbent_and_standard_collision_capaci
             Kind::ConflictingVmac,
             Kind::Initial
         ]
+    );
+    assert_eq!(
+        clients.outcomes.snapshot(),
+        ScHubOutcomeCounts {
+            vmac_collision_rejections: 1,
+            registered_capacity_rejections: 1,
+            ..ScHubOutcomeCounts::default()
+        }
     );
     incumbent
         .ws

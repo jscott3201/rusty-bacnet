@@ -3,7 +3,7 @@
 use super::admission::{
     channel_provenance, connect_denied_nak, ScHubAdmissionDecision, ScHubAdmissionInput,
 };
-use super::relay_send::{send, SocketIo};
+use super::relay_send::SocketIo;
 use super::*;
 use crate::sc::diagnostic_throttle::DiagnosticThrottle;
 
@@ -402,17 +402,9 @@ pub(super) async fn run(
                         break;
                     }
                     ConnectRequestVmacDisposition::Nak(error_class, error_code) => {
+                        super::outcomes::increment(&clients.outcomes.vmac_collision_rejections);
                         warn!("Hub: VMAC collision for {vmac:02x?} from {peer_addr}");
-                        let error_result = build_bvlc_result_nak(
-                            sc_msg.message_id,
-                            ScFunction::ConnectRequest,
-                            error_class,
-                            error_code,
-                        );
-                        let mut buf = BytesMut::new();
-                        encode_sc_message(&mut buf, &error_result);
-                        let mut w = write.lock().await;
-                        let _ = w.send(Message::Binary(buf.to_vec().into())).await;
+                        send_connect_nak(&write, sc_msg.message_id, error_class, error_code).await;
                         break;
                     }
                 }
@@ -479,38 +471,37 @@ pub(super) async fn run(
                                 );
                             }
                             if let Some(client) = old_client {
+                                super::outcomes::increment(&clients.outcomes.uuid_replacements);
                                 client.closed.store(true, Ordering::Release);
                                 super::retirement::wake(&client.close_notify);
                             }
                         }
                         HubClientRegistrationDecision::NakDuplicateVmac => {
+                            super::outcomes::increment(&clients.outcomes.vmac_collision_rejections);
                             warn!("Hub: VMAC collision for {vmac:02x?} from {peer_addr}");
                             drop(map); // release lock before sending
-                            let error_result = build_bvlc_result_nak(
+                            send_connect_nak(
+                                &write,
                                 sc_msg.message_id,
-                                ScFunction::ConnectRequest,
                                 ErrorClass::COMMUNICATION,
                                 ErrorCode::NODE_DUPLICATE_VMAC,
-                            );
-                            let mut buf = BytesMut::new();
-                            encode_sc_message(&mut buf, &error_result);
-                            let mut w = write.lock().await;
-                            let _ = w.send(Message::Binary(buf.to_vec().into())).await;
+                            )
+                            .await;
                             break;
                         }
                         HubClientRegistrationDecision::NakMaxClients => {
+                            super::outcomes::increment(
+                                &clients.outcomes.registered_capacity_rejections,
+                            );
                             warn!("SC Hub: max clients reached, rejecting connection");
                             drop(map);
-                            let error_result = build_bvlc_result_nak(
+                            send_connect_nak(
+                                &write,
                                 sc_msg.message_id,
-                                ScFunction::ConnectRequest,
                                 ErrorClass::RESOURCES,
                                 ErrorCode::OTHER,
-                            );
-                            let mut buf = BytesMut::new();
-                            encode_sc_message(&mut buf, &error_result);
-                            let mut w = write.lock().await;
-                            let _ = w.send(Message::Binary(buf.to_vec().into())).await;
+                            )
+                            .await;
                             break;
                         }
                     };
@@ -750,20 +741,22 @@ pub(super) async fn run(
                     if let Some((target, max_npdu, max_bvlc)) = target {
                         match relay_limit_decision(npdu_len, relay_len, max_npdu, max_bvlc) {
                             RelayLimitDecision::Send => {
-                                // Bound this source's inline attempt, including sink
-                                // acquisition. Timeout neither retires nor retries;
-                                // already buffered bytes cannot be retracted.
-                                let frame = Message::Binary(relay_bytes.into());
-                                if let Err(_) | Ok(Err(_)) = tokio::time::timeout(
+                                super::relay_send::unicast(
+                                    registered_vmac,
+                                    &target,
+                                    &clients,
+                                    Message::Binary(relay_bytes.into()),
                                     timing.unicast_send_budget,
-                                    send(&target, &clients, frame, &SocketIo),
+                                    &SocketIo,
                                 )
-                                .await
-                                {
-                                    warn!("Hub: unicast relay failed or timed out to {dest:02x?}");
-                                }
+                                .await;
                             }
                             RelayLimitDecision::DropMaxNpdu => {
+                                if dest != registered_vmac {
+                                    super::outcomes::increment(
+                                        &clients.outcomes.unicast_target_limit,
+                                    );
+                                }
                                 super::malformed_diag::unicast_npdu_drop(
                                     &mut malformed_diag,
                                     npdu_len,
@@ -772,6 +765,11 @@ pub(super) async fn run(
                                 );
                             }
                             RelayLimitDecision::DropMaxBvlc => {
+                                if dest != registered_vmac {
+                                    super::outcomes::increment(
+                                        &clients.outcomes.unicast_target_limit,
+                                    );
+                                }
                                 super::malformed_diag::unicast_bvlc_drop(
                                     &mut malformed_diag,
                                     relay_len,
@@ -781,6 +779,9 @@ pub(super) async fn run(
                             }
                         }
                     } else {
+                        if dest != registered_vmac {
+                            super::outcomes::increment(&clients.outcomes.unicast_no_target);
+                        }
                         super::malformed_diag::no_unicast_target(&mut malformed_diag, dest);
                     }
                 }

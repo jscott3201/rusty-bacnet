@@ -135,6 +135,7 @@ pub(super) async fn reserve(
         // Never recycle a local generation within this registration.
         let notify = retire_locked(
             &mut map,
+            &clients.outcomes,
             &attempt,
             Retirement::GenerationExhausted,
             now,
@@ -223,7 +224,14 @@ pub(super) async fn retire(
 ) -> bool {
     let notify = {
         let mut map = clients.lock().await;
-        retire_locked(&mut map, attempt, reason, io.now_ms(), io.policy())
+        retire_locked(
+            &mut map,
+            &clients.outcomes,
+            attempt,
+            reason,
+            io.now_ms(),
+            io.policy(),
+        )
     };
     if let Some(notify) = notify {
         // Wake the owning dispatch and every sender targeting this identity.
@@ -238,6 +246,7 @@ pub(super) async fn retire(
 
 fn retire_locked(
     map: &mut HashMap<Vmac, HubClient>,
+    outcomes: &super::outcomes::OutcomeCounters,
     attempt: &Attempt,
     reason: Retirement,
     now: u64,
@@ -253,6 +262,7 @@ fn retire_locked(
         }
     }
     let mut client = map.remove(&attempt.vmac)?;
+    super::outcomes::increment(&outcomes.heartbeat_retirements);
     client.heartbeat.pending = None;
     client.closed.store(true, Ordering::Release);
     Some(client.close_notify)

@@ -19,6 +19,11 @@ pub(super) async fn relay(
         if !registered_client_matches_sink_in_map(&map, source, source_sink) {
             return ResultRelayDisposition::CloseSource;
         }
+        if let HubRelayTarget::Unicast(destination) = target {
+            if destination != source && !map.contains_key(&destination) {
+                super::outcomes::increment(&clients.outcomes.unicast_no_target);
+            }
+        }
         hub_relay_recipient_vmacs(target, source, map.keys().copied())
             .into_iter()
             .filter(|vmac| *vmac != source)
@@ -27,20 +32,30 @@ pub(super) async fn relay(
                 // The body is opaque, not an NPDU. Only the final encoded BVLC
                 // length applies, including the added broadcast origin address.
                 if frame.len() > usize::from(client.max_bvlc) {
+                    if matches!(target, HubRelayTarget::Unicast(_)) {
+                        super::outcomes::increment(&clients.outcomes.unicast_target_limit);
+                    }
                     return None;
                 }
                 Some(HubRelaySink::capture(vmac, client))
             })
             .collect()
     };
-    let budget = if matches!(target, HubRelayTarget::Unicast(_)) {
-        unicast_send_budget
-    } else {
-        std::time::Duration::from_secs(5)
-    };
     let sends = sinks.into_iter().map(|sink| {
         let frame = frame.clone();
         async move {
+            if matches!(target, HubRelayTarget::Unicast(_)) {
+                super::relay_send::unicast(
+                    source,
+                    &sink,
+                    clients,
+                    Message::Binary(frame),
+                    unicast_send_budget,
+                    &super::relay_send::SocketIo,
+                )
+                .await;
+                return;
+            }
             let send = super::relay_send::send(
                 &sink,
                 clients,
@@ -50,7 +65,7 @@ pub(super) async fn relay(
             // Each destination gets one bounded attempt, including sink lock
             // acquisition. Timeout does not retire, retry or roll back bytes
             // already buffered by the WebSocket; liveness remains independent.
-            match tokio::time::timeout(budget, send).await {
+            match tokio::time::timeout(std::time::Duration::from_secs(5), send).await {
                 Ok(Ok(())) => {}
                 Ok(Err(error)) => {
                     warn!("Hub: opaque relay failed to {:02x?}: {error}", sink.vmac);

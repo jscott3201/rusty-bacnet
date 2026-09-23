@@ -116,6 +116,9 @@ pub(super) async fn serve(
             _ = &mut handler => deadline.expired(),
         }
     }; // An expired, unregistered handler is dropped before cleanup I/O.
+    if expired {
+        super::outcomes::increment(&clients.outcomes.connect_timeouts);
+    }
     if lease.vmac.is_some() {
         #[cfg(test)]
         deadline.close_started.store(true, Ordering::Release);

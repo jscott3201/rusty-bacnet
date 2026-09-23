@@ -88,6 +88,7 @@ pub(super) async fn accept_loop_with_counter(
         // Reject when the total active accepted-connection cap is reached
         let current = active_connections.load(std::sync::atomic::Ordering::Relaxed);
         if current >= total_active {
+            super::outcomes::increment(&clients.outcomes.total_active_accept_drops);
             warn!("Hub: rejecting connection from {peer_addr} — max active connections ({total_active}) reached");
             drop(tcp_stream);
             continue;
@@ -98,6 +99,7 @@ pub(super) async fn accept_loop_with_counter(
         // concurrent accepts, not transactional guarantees.
         let registered = clients.lock().await.len();
         if current.saturating_sub(registered) >= limits.max_handshakes {
+            super::outcomes::increment(&clients.outcomes.handshake_accept_drops);
             warn!(
                 "Hub: rejecting connection from {peer_addr} — max handshakes ({}) reached",
                 limits.max_handshakes
@@ -200,6 +202,7 @@ pub(super) async fn serve_connection(
             return;
         }
         Err(()) => {
+            super::outcomes::increment(&clients.outcomes.tls_timeouts);
             debug!("Hub TLS handshake deadline expired for {peer_addr}");
             return;
         }
@@ -248,6 +251,7 @@ pub(super) async fn serve_connection(
             return;
         }
         Err(()) => {
+            super::outcomes::increment(&clients.outcomes.websocket_timeouts);
             debug!("Hub WebSocket upgrade deadline expired for {peer_addr}");
             return;
         }

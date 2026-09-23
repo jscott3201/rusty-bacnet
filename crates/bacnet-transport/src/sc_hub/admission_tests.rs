@@ -277,6 +277,13 @@ async fn same_uuid_replacement_wins_over_capacity_without_deny_count() {
         .unwrap();
     second.accept().await;
     assert!(closed.load(Ordering::Acquire));
+    assert_eq!(
+        clients.outcomes.snapshot(),
+        ScHubOutcomeCounts {
+            uuid_replacements: 1,
+            ..ScHubOutcomeCounts::default()
+        }
+    );
     {
         let map = clients.lock().await;
         assert_eq!(map.len(), 1);

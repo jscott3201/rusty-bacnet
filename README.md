@@ -361,6 +361,11 @@ Annex AB security profile or qualification of your credential provisioning.
   it is not a hard closure deadline or a replacement for node keepalive.
   See [Hub operator policy](docs/conformance/standard-135-2020-ledger.md#hub-operator-timing-and-broadcast-policy).
 
+- Rust and Python Hub status expose fixed, saturating per-start outcome counters
+  for admission, handshake deadlines, eligible unicast drops/failures, and actual
+  heartbeat retirement. Counts describe decisions, not delivery acknowledgments;
+  they contain no peer identities. See [Hub outcome status](docs/conformance/standard-135-2020-ledger.md#hub-outcome-status).
+
 - After TLS/WebSocket establishment, an all-zero peer UUID in Connect-Request is
   rejected before registration/replacement; eligible Requests receive
   `COMMUNICATION/PARAMETER_OUT_OF_RANGE` (7/80), not a duplicate-VMAC error.

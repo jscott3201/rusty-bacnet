@@ -4,6 +4,7 @@ import asyncio
 from rusty_bacnet import ScHub
 import test_sc_hub_mtls as mtls
 import test_sc_peer_uuid as peer
+from test_sc_hub_lifecycle import OUTCOME_KEYS
 
 
 class HubConflictAdmissionTests(mtls.MtlsFixture):
@@ -67,6 +68,36 @@ class HubConflictAdmissionTests(mtls.MtlsFixture):
                     self.assertEqual(set(status), {
                         "listening", "max_clients", "max_handshakes", "client_count",
                         "handshake_count", "admin_denied", "broadcast_sender_exhausted",
-                        "broadcast_global_exhausted",
+                        "broadcast_global_exhausted", "outcomes",
                     })
+                    expected = dict.fromkeys(OUTCOME_KEYS, 0)
+                    expected["uuid_replacements"] = int(policy == "allow_all")
+                    expected["vmac_collision_rejections"] = 1
+                    self.assertEqual(status["outcomes"], expected)
+                    self.assertTrue(all(type(value) is int for value in status["outcomes"].values()))
                     await self.stop_hub(hub)
+
+    async def test_unicast_outcomes_count_actual_missing_and_oversized_destinations(self):
+        hub = ScHub("127.0.0.1:0", self.path("hub.pem"), self.path("hub.key"),
+                    mtls.HUB_VMAC, ca_cert=self.path("site.pem"), device_uuid=mtls.HUB_UUID)
+        self.addAsyncCleanup(self.stop_hub, hub)
+        await asyncio.wait_for(hub.start(), 3)
+        source = await self.open_peer(await hub.address())
+        target = await self.open_peer(await hub.address())
+        self.addAsyncCleanup(self.close_peer, source)
+        self.addAsyncCleanup(self.close_peer, target)
+        for endpoint, identity in ((source, 0x21), (target, 0x22)):
+            # Advertise small, concrete limits so the independent short-frame
+            # WebSocket encoder can exercise an oversized native relay request.
+            await self.send(endpoint[1], b"\x06\0\x22\x33" + bytes([identity]) * 6
+                            + bytes([identity]) * 16 + b"\0\x10\0\x10")
+            self.assertEqual((await self.binary(endpoint[0]))[:4], b"\x07\0\x22\x33")
+        for function in (1, 13):
+            await self.send(source[1], bytes([function, 4, 0, 1]) + b"\x23" * 6 + b"\x01\0")
+            await self.send(source[1], bytes([function, 4, 0, 2]) + b"\x22" * 6 + b"\x01" * 20)
+        # Ordered response proves all four earlier requests were dispatched.
+        await self.send(source[1], b"\x0a\0\x66\x77")
+        self.assertEqual(await self.binary(source[0]), b"\x0b\0\x66\x77")
+        expected = dict.fromkeys(OUTCOME_KEYS, 0)
+        expected.update(unicast_no_target=2, unicast_target_limit=2)
+        self.assertEqual((await hub.status())["outcomes"], expected)

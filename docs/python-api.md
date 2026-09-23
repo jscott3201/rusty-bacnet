@@ -2068,8 +2068,26 @@ VMAC maps, or payloads. Raises `RuntimeError` before start and after stop.
 status = await hub.status()
 # {"listening": True, "max_clients": 256, "max_handshakes": 256,
 #  "client_count": 1, "handshake_count": 0, "admin_denied": 0,
-#  "broadcast_sender_exhausted": 0, "broadcast_global_exhausted": 0}
+#  "broadcast_sender_exhausted": 0, "broadcast_global_exhausted": 0,
+#  "outcomes": {...}}
+print(status["outcomes"]["unicast_no_target"])
 ```
+
+The nested `ScHubOutcomeCounts` typed dictionary has thirteen integer fields:
+`uuid_replacements`, `vmac_collision_rejections`,
+`registered_capacity_rejections`, `total_active_accept_drops`,
+`handshake_accept_drops`, `tls_timeouts`, `websocket_timeouts`, `connect_timeouts`,
+`unicast_no_target`, `unicast_target_limit`, `unicast_send_timeout`,
+`unicast_send_error`, and `heartbeat_retirements`.
+All saturate at `u64::MAX` and are independent for each started Hub. Refusals
+count selected decisions, not delivered NAKs; a later Connect timeout may also
+count. Unicast outcomes aggregate eligible NPDU and addressed opaque traffic;
+malformed, pre-registration, stale-source, self/local, broadcast, and forwarded
+Result paths are excluded. Only actual committed replacement or matching-generation
+heartbeat removal counts. No send-success inference, payloads, peer identifiers,
+or raw errors are retained. Fields are sampled independently and never drive
+policy. Existing admin/broadcast counters and Python status lifecycle are unchanged.
+See [scoped evidence](conformance/standard-135-2020-ledger.md#hub-outcome-status).
 
 #### Context manager
 

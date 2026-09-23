@@ -13,6 +13,30 @@
 - Addenda/errata status: ASHRAE 135-2020 Errata Summary 2024-04-29 (v1) reviewed for the supported subset. Item 7 (Clause 21.6, p. 886): successful-actions-only corrected from BOOLEAN (struck through, removed) to BACnetSuccessFilter (italic, added), tags [7]/[4]. Item 8 (Clause 21.2.3, p. 865): start-at-sequence-number corrected from Unsigned32 (struck through, removed) to Unsigned64 (italic, added), tag [2] OPTIONAL. Both items visually verified from the rendered errata p. 3 (strikeout = removed, italics = added per the p. 1 convention); not inferred from concatenated text extraction. The implementation encodes the corrected BACnetSuccessFilter/u64 contract after the RB-02 codec and RB-20 runtime/Python migrations; `BACNET-13-AUDIT-WIRE-MODELS` remains `implementation-present-needs-source-review` pending broader Audit review.
 - PR-0808 evidence row: `BACNET-12-ALERT-ENROLLMENT-TABLE-12-61` is `supported-with-clause-evidence` for the served object model only; it is not an Alert evaluator or notification-generation claim.
 
+## Hub outcome status
+
+Scoped `BACNET-AB-SC-CONNECTION-STATE` evidence, Refs #770 under #476.
+Rust and Python expose one fixed, redacted, saturating per-start outcome snapshot.
+Registration counts selected collision/capacity refusals and committed UUID
+replacement; ordered accept limits and TLS/WebSocket/Connect timeouts count at
+their actual decision points. Eligible NPDU/opaque unicast counts missing targets,
+length limits, send timeout/error; malformed, pre-registration, stale-source,
+self/local, broadcast and forwarded Result paths are excluded. There is no
+successful-send inference from retired-sink skips. Heartbeat counts only actual
+matching-registration removal, including generation exhaustion. Counters do not
+affect policy and independent field reads are not transactional.
+
+Evidence: [TLS outcome cases](../../crates/bacnet-transport/src/sc_hub/outcome_tests.rs),
+[deadline/admission ordering](../../crates/bacnet-transport/src/sc_hub/deadline_commit_tests.rs),
+[heartbeat races](../../crates/bacnet-transport/src/sc_hub/heartbeat_generation_tests.rs),
+[actual established-peer same-address/config restart](../../crates/bacnet-transport/src/sc_hub/graceful_tests.rs),
+and [installed Python outcomes](../../crates/rusty-bacnet/tests/test_sc_hub_conflict_admission.py).
+Existing stress/cleanup coverage and Rust post-stop snapshots remain. Python
+status still raises before start/after stop; no new lifecycle or shutdown count
+is implied. Global review pins and row status remain unchanged. #476 remains
+open for the separately tracked relay-budget coverage in #774; no broader
+conformance or certificate-principal authorization claim is added.
+
 ## Hub operator timing and broadcast policy
 
 Refs #769 under #476. The accepting Hub's optional outbound probe is a local
@@ -39,7 +63,7 @@ generation, and replacement regressions remain. [Installed Python tests](../../c
 observe custom probes and the existing native sender/global rate drops with exact
 wire/count reconciliation; constructor tests cover invalid bounds before I/O.
 Representation bounds are local policy, not BACnet-specified probe ranges.
-Global pins and row status remain unchanged; #476 outcome counters remain open.
+Global pins and row status remain unchanged; see the outcome evidence above. #476 remains open.
 
 ## Hub conflict-aware admission
 
@@ -61,7 +85,7 @@ retirement and shutdown ownership are retained.
 Evidence: [real TLS conflict and concurrent admission](../../crates/bacnet-transport/src/sc_hub/conflict_admission_tests.rs),
 [installed Python default/refusal modes](../../crates/rusty-bacnet/tests/test_sc_hub_conflict_admission.py),
 and [constructor rejection before I/O](../../crates/rusty-bacnet/tests/test_sc_hub_lifecycle.py).
-Global review pins and row status are unchanged. Fixed-shape outcome-counter work remains under #476; certificate-principal authorization and
+Global review pins and row status are unchanged. Fixed-shape outcomes are documented above; certificate-principal authorization and
 broader Annex AB qualification are not claimed.
 
 ## Target Device Audit recipient

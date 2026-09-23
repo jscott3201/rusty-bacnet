@@ -36,6 +36,10 @@ async fn ack_and_timeout_linearize_in_both_map_lock_orders() {
         drop(guard);
         let ((), removed) = tokio::join!(ack, timeout);
         assert_eq!(removed, !ack_first);
+        assert_eq!(
+            clients.outcomes.snapshot().heartbeat_retirements,
+            u64::from(!ack_first)
+        );
         if ack_first {
             let state = clients.lock().await.get(&live.vmac).unwrap().heartbeat;
             assert_eq!(state.generation, attempt.generation);
@@ -96,6 +100,7 @@ async fn stale_failure_and_timeout_preserve_new_pending_and_new_acked_generation
         assert_eq!(before.pending.is_none(), acked);
         for reason in [Retirement::SendFailed, Retirement::AckTimeout] {
             assert!(!retire(&clients, &old, reason, &ClockIo(AtomicU64::new(300_000))).await);
+            assert_eq!(clients.outcomes.snapshot().heartbeat_retirements, 0);
             let map = clients.lock().await;
             let c = map.get(&live.vmac).unwrap();
             assert_eq!(c.heartbeat, before);
@@ -233,5 +238,6 @@ async fn exhausted_local_generation_retires_instead_of_wrapping() {
     .await;
     assert!(!clients.lock().await.contains_key(&live.vmac));
     assert!(closed.load(Ordering::Acquire));
+    assert_eq!(clients.outcomes.snapshot().heartbeat_retirements, 1);
     live.expect_closed().await;
 }

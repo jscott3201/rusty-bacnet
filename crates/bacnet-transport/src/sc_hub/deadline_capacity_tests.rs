@@ -220,4 +220,12 @@ async fn hub_phase_error_upgrade_timeout_and_connect_timeout_release_slots() {
     ));
     until(|| hub.active.load(Ordering::Acquire) == 0).await;
     assert!(hub.clients.lock().await.is_empty());
+    assert_eq!(
+        hub.hub.status().await.outcomes,
+        ScHubOutcomeCounts {
+            websocket_timeouts: 1,
+            connect_timeouts: 1,
+            ..ScHubOutcomeCounts::default()
+        }
+    );
 }

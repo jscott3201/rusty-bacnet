@@ -82,6 +82,13 @@ async fn blocked_unicast(function: u8, budget: Duration) {
         raw(function, 25, Some([0x42; 6]), None, 0, &[1, 2])
     );
     poll_io(barrier(&mut blocked)).await;
+    assert_eq!(
+        hub.hub.status().await.outcomes,
+        ScHubOutcomeCounts {
+            unicast_send_timeout: 1,
+            ..ScHubOutcomeCounts::default()
+        }
+    );
     stopped(&mut hub).await;
     drop((source, blocked, healthy));
     assert!(

@@ -331,3 +331,55 @@ async fn replacement_before_graceful_still_graceful_for_current() {
     let _ = old.close(None).await;
     let _rebound = TcpListener::bind(address).await.unwrap();
 }
+
+#[tokio::test]
+async fn established_hub_restarts_same_address_config_with_independent_outcomes() {
+    let tls = TestTls::new();
+    let config = tls
+        .hub_config
+        .clone()
+        .with_graceful_timeouts(short_timeouts());
+    let mut first = ScHub::start("127.0.0.1:0", config.clone(), [0x10; 6], [0x10; 16])
+        .await
+        .unwrap();
+    let address = first.local_addr().unwrap();
+    let mut peer = register(&tls, address, 0x42).await;
+    let mut collision = tls.websocket(address).await;
+    collision
+        .send(request([0x10; 6], [0x43; 16]))
+        .await
+        .unwrap();
+    assert!(
+        matches!(poll_io(collision.next()).await, Some(Ok(Message::Binary(data))) if data[0] == 0)
+    );
+    drop(collision);
+    let (outcome, ()) = tokio::join!(first.shutdown_gracefully(), reciprocal(&mut peer));
+    assert_eq!(outcome, ScHubShutdownOutcome::Graceful);
+    let stopped = first.status().await;
+    assert!(!stopped.listening);
+    assert_eq!((stopped.client_count, stopped.handshake_count), (0, 0));
+    assert_eq!(
+        stopped.outcomes,
+        ScHubOutcomeCounts {
+            vmac_collision_rejections: 1,
+            ..ScHubOutcomeCounts::default()
+        }
+    );
+    let mut second = ScHub::start(&address.to_string(), config, [0x10; 6], [0x10; 16])
+        .await
+        .unwrap();
+    assert_eq!(second.local_addr(), Some(address));
+    assert_eq!(
+        second.status().await.outcomes,
+        ScHubOutcomeCounts::default()
+    );
+    let mut peer = register(&tls, address, 0x42).await;
+    assert_eq!(second.status().await.client_count, 1);
+    let (outcome, ()) = tokio::join!(second.shutdown_gracefully(), reciprocal(&mut peer));
+    assert_eq!(outcome, ScHubShutdownOutcome::Graceful);
+    assert_eq!(
+        second.status().await.outcomes,
+        ScHubOutcomeCounts::default()
+    );
+    assert_eq!(first.status().await, stopped);
+}

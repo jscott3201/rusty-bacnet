@@ -428,6 +428,42 @@ impl PyScHub {
                     "broadcast_global_exhausted",
                     snapshot.broadcast_drops.global_exhausted,
                 )?;
+                let outcomes = PyDict::new(py);
+                outcomes.set_item("uuid_replacements", snapshot.outcomes.uuid_replacements)?;
+                outcomes.set_item(
+                    "vmac_collision_rejections",
+                    snapshot.outcomes.vmac_collision_rejections,
+                )?;
+                outcomes.set_item(
+                    "registered_capacity_rejections",
+                    snapshot.outcomes.registered_capacity_rejections,
+                )?;
+                outcomes.set_item(
+                    "total_active_accept_drops",
+                    snapshot.outcomes.total_active_accept_drops,
+                )?;
+                outcomes.set_item(
+                    "handshake_accept_drops",
+                    snapshot.outcomes.handshake_accept_drops,
+                )?;
+                outcomes.set_item("tls_timeouts", snapshot.outcomes.tls_timeouts)?;
+                outcomes.set_item("websocket_timeouts", snapshot.outcomes.websocket_timeouts)?;
+                outcomes.set_item("connect_timeouts", snapshot.outcomes.connect_timeouts)?;
+                outcomes.set_item("unicast_no_target", snapshot.outcomes.unicast_no_target)?;
+                outcomes.set_item(
+                    "unicast_target_limit",
+                    snapshot.outcomes.unicast_target_limit,
+                )?;
+                outcomes.set_item(
+                    "unicast_send_timeout",
+                    snapshot.outcomes.unicast_send_timeout,
+                )?;
+                outcomes.set_item("unicast_send_error", snapshot.outcomes.unicast_send_error)?;
+                outcomes.set_item(
+                    "heartbeat_retirements",
+                    snapshot.outcomes.heartbeat_retirements,
+                )?;
+                dict.set_item("outcomes", outcomes)?;
                 Ok(dict.into_any().unbind())
             })
         })

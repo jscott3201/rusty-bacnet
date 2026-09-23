@@ -40,3 +40,18 @@ impl HubClient {
         }
     }
 }
+
+/// One started Hub's registration and diagnostic lifetime.
+#[derive(Default)]
+pub(super) struct ClientRegistry {
+    entries: Mutex<std::collections::HashMap<super::Vmac, HubClient>>,
+    pub(super) outcomes: super::outcomes::OutcomeCounters,
+}
+
+impl ClientRegistry {
+    pub(super) async fn lock(
+        &self,
+    ) -> tokio::sync::MutexGuard<'_, std::collections::HashMap<super::Vmac, HubClient>> {
+        self.entries.lock().await
+    }
+}
