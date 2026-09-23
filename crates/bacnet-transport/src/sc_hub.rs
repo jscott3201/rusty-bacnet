@@ -566,6 +566,9 @@ mod task_tests;
 mod shutdown_blocked_tests;
 
 #[cfg(test)]
+mod unicast_deadline_tests;
+
+#[cfg(test)]
 mod retirement_tests;
 
 #[cfg(test)]

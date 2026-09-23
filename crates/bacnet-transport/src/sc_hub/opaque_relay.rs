@@ -41,19 +41,17 @@ pub(super) async fn relay(
                 Message::Binary(frame),
                 &super::relay_send::SocketIo,
             );
-            // Preserve NPDU relay ownership and waits: parallel, individually
-            // bounded broadcast; unicast interrupted by source/target retirement.
-            if target == HubRelayTarget::Broadcast {
-                if let Err(_) | Ok(Err(_)) =
-                    tokio::time::timeout(std::time::Duration::from_secs(5), send).await
-                {
-                    warn!("Hub: opaque broadcast relay failed to {:02x?}", sink.vmac);
+            // Each destination gets one bounded attempt, including sink lock
+            // acquisition. Timeout does not retire, retry or roll back bytes
+            // already buffered by the WebSocket; liveness remains independent.
+            match tokio::time::timeout(std::time::Duration::from_secs(5), send).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    warn!("Hub: opaque relay failed to {:02x?}: {error}", sink.vmac);
                 }
-            } else if let Err(error) = send.await {
-                warn!(
-                    "Hub: opaque unicast relay failed to {:02x?}: {error}",
-                    sink.vmac
-                );
+                Err(_) => {
+                    warn!("Hub: opaque relay timed out to {:02x?}", sink.vmac);
+                }
             }
         }
     });

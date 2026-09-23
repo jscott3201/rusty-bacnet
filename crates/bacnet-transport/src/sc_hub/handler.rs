@@ -3,6 +3,7 @@
 use super::admission::{
     channel_provenance, connect_denied_nak, ScHubAdmissionDecision, ScHubAdmissionInput,
 };
+use super::relay_send::{send, SocketIo};
 use super::*;
 use crate::sc::diagnostic_throttle::DiagnosticThrottle;
 
@@ -752,15 +753,17 @@ pub(super) async fn run(
                     if let Some((target, max_npdu, max_bvlc)) = target {
                         match relay_limit_decision(npdu_len, relay_len, max_npdu, max_bvlc) {
                             RelayLimitDecision::Send => {
-                                if let Err(e) = super::relay_send::send(
-                                    &target,
-                                    &clients,
-                                    Message::Binary(relay_bytes.into()),
-                                    &super::relay_send::SocketIo,
+                                // Bound this source's inline attempt, including sink
+                                // acquisition. Timeout neither retires nor retries;
+                                // already buffered bytes cannot be retracted.
+                                let frame = Message::Binary(relay_bytes.into());
+                                if let Err(_) | Ok(Err(_)) = tokio::time::timeout(
+                                    std::time::Duration::from_secs(5),
+                                    send(&target, &clients, frame, &SocketIo),
                                 )
                                 .await
                                 {
-                                    warn!("Hub: unicast relay error to {dest:02x?}: {e}");
+                                    warn!("Hub: unicast relay failed or timed out to {dest:02x?}");
                                 }
                             }
                             RelayLimitDecision::DropMaxNpdu => {
