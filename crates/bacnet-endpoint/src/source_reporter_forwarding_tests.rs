@@ -60,7 +60,7 @@ async fn built_in_configuration_identity_metadata_and_writes_survive_wrapping() 
     let values: Vec<_> = properties
         .iter()
         .filter(|&&p| p != PropertyIdentifier::AUDIT_SOURCE_REPORTER)
-        .map(|&p| (p, read(original.as_ref(), p)))
+        .map(|&p| (p, read(original, p)))
         .collect();
     let reporter_ptr = std::ptr::from_ref(original.audit_reporter_internal().unwrap());
     let status = original
@@ -80,7 +80,7 @@ async fn built_in_configuration_identity_metadata_and_writes_survive_wrapping() 
         assert_eq!(object.property_list().as_ref(), properties);
         assert_eq!(object.required_properties().as_ref(), required);
         for (property, expected) in values {
-            assert_eq!(read(object.as_ref(), property), expected);
+            assert_eq!(read(object, property), expected);
         }
         assert!(std::ptr::eq(
             reporter_ptr,
@@ -100,7 +100,7 @@ async fn built_in_configuration_identity_metadata_and_writes_survive_wrapping() 
             PropertyValue::Boolean(false)
         );
         assert_eq!(
-            read(object.as_ref(), PropertyIdentifier::AUDIT_SOURCE_REPORTER),
+            read(object, PropertyIdentifier::AUDIT_SOURCE_REPORTER),
             PropertyValue::Boolean(true)
         );
         assert!(!object.is_deleteable());
@@ -131,13 +131,13 @@ async fn built_in_configuration_identity_metadata_and_writes_survive_wrapping() 
             )
             .unwrap();
         assert_eq!(
-            read(object.as_ref(), PropertyIdentifier::DESCRIPTION),
+            read(object, PropertyIdentifier::DESCRIPTION),
             PropertyValue::CharacterString("kept".into())
         );
         let before = object
             .property_list()
             .iter()
-            .map(|&p| (p, read(object.as_ref(), p)))
+            .map(|&p| (p, read(object, p)))
             .collect::<Vec<_>>();
         assert!(object
             .configure_audit_reporter_internal(
@@ -149,7 +149,7 @@ async fn built_in_configuration_identity_metadata_and_writes_survive_wrapping() 
             )
             .is_err());
         for (property, expected) in before {
-            assert_eq!(read(object.as_ref(), property), expected);
+            assert_eq!(read(object, property), expected);
         }
         object
             .configure_audit_reporter_internal(
@@ -161,7 +161,7 @@ async fn built_in_configuration_identity_metadata_and_writes_survive_wrapping() 
             )
             .unwrap();
         assert_eq!(
-            read(object.as_ref(), PropertyIdentifier::AUDIT_LEVEL),
+            read(object, PropertyIdentifier::AUDIT_LEVEL),
             PropertyValue::Enumerated(AuditLevel::AUDIT_CONFIG.to_raw())
         );
         assert!(!object
@@ -177,11 +177,11 @@ async fn built_in_configuration_identity_metadata_and_writes_survive_wrapping() 
             )
             .unwrap();
         assert_eq!(
-            read(object.as_ref(), PropertyIdentifier::AUDIT_LEVEL),
+            read(object, PropertyIdentifier::AUDIT_LEVEL),
             PropertyValue::Enumerated(AuditLevel::NONE.to_raw())
         );
         assert_eq!(
-            read(object.as_ref(), PropertyIdentifier::AUDIT_SOURCE_REPORTER),
+            read(object, PropertyIdentifier::AUDIT_SOURCE_REPORTER),
             PropertyValue::Boolean(true)
         );
     }
@@ -494,15 +494,15 @@ async fn custom_capabilities_clocks_indexes_and_private_state_are_retained() {
         assert_eq!(object.required_properties().as_ref(), &[CUSTOM]);
         assert!(object.is_array_property(CUSTOM));
         assert!(object.is_writable_property(CUSTOM));
-        assert_eq!(read(object.as_ref(), CUSTOM), PropertyValue::Unsigned(7));
+        assert_eq!(read(object, CUSTOM), PropertyValue::Unsigned(7));
         object
             .write_property(CUSTOM, Some(3), PropertyValue::Unsigned(42), Some(7))
             .unwrap();
-        assert_eq!(read(object.as_ref(), CUSTOM), PropertyValue::Unsigned(42));
+        assert_eq!(read(object, CUSTOM), PropertyValue::Unsigned(42));
         object
             .write_property(CUSTOM, Some(3), PropertyValue::Unsigned(7), Some(7))
             .unwrap();
-        assert_eq!(read(object.as_ref(), CUSTOM), PropertyValue::Unsigned(7));
+        assert_eq!(read(object, CUSTOM), PropertyValue::Unsigned(7));
         let operations = AuditOperationFlags::from_bits((1 << 1) | (1 << 63)).unwrap();
         let selectors = vec![BACnetObjectSelector::Object(target())];
         let priorities = BACnetPriorityFilter::from_bits(1 << 7);
@@ -517,14 +517,11 @@ async fn custom_capabilities_clocks_indexes_and_private_state_are_retained() {
             .unwrap();
         assert_eq!(calls.configurations.load(Ordering::SeqCst), 1);
         assert_eq!(
-            read(object.as_ref(), PropertyIdentifier::AUDIT_LEVEL),
+            read(object, PropertyIdentifier::AUDIT_LEVEL),
             PropertyValue::Enumerated(AuditLevel::AUDIT_ALL.to_raw())
         );
         assert_eq!(
-            read(
-                object.as_ref(),
-                PropertyIdentifier::ISSUE_CONFIRMED_NOTIFICATIONS
-            ),
+            read(object, PropertyIdentifier::ISSUE_CONFIRMED_NOTIFICATIONS),
             PropertyValue::Boolean(true)
         );
         let reporter = object.audit_reporter_internal().unwrap();
@@ -538,7 +535,7 @@ async fn custom_capabilities_clocks_indexes_and_private_state_are_retained() {
         let before = object
             .property_list()
             .iter()
-            .map(|&p| (p, read(object.as_ref(), p)))
+            .map(|&p| (p, read(object, p)))
             .collect::<Vec<_>>();
         assert!(object
             .configure_audit_reporter_internal(
@@ -551,7 +548,7 @@ async fn custom_capabilities_clocks_indexes_and_private_state_are_retained() {
             .is_err());
         assert_eq!(calls.configurations.load(Ordering::SeqCst), 1);
         for (property, expected) in before {
-            assert_eq!(read(object.as_ref(), property), expected);
+            assert_eq!(read(object, property), expected);
         }
         object
             .configure_audit_reporter_internal(
@@ -567,7 +564,7 @@ async fn custom_capabilities_clocks_indexes_and_private_state_are_retained() {
             .property_list()
             .contains(&PropertyIdentifier::MONITORED_OBJECTS));
         assert_eq!(
-            read(object.as_ref(), PropertyIdentifier::AUDIT_SOURCE_REPORTER),
+            read(object, PropertyIdentifier::AUDIT_SOURCE_REPORTER),
             PropertyValue::Boolean(true)
         );
         assert!(object.supports_cov());
@@ -585,9 +582,9 @@ async fn custom_capabilities_clocks_indexes_and_private_state_are_retained() {
         );
         assert!(object.advance_time_internal(Duration::from_secs(5)));
         assert_eq!(calls.clock_reads.load(Ordering::SeqCst), 1);
-        assert_eq!(read(object.as_ref(), CUSTOM), PropertyValue::Unsigned(12));
+        assert_eq!(read(object, CUSTOM), PropertyValue::Unsigned(12));
         assert!(object.advance_monotonic_time_internal(Duration::from_secs(33)));
-        assert_eq!(read(object.as_ref(), CUSTOM), PropertyValue::Unsigned(33));
+        assert_eq!(read(object, CUSTOM), PropertyValue::Unsigned(33));
         object.bind_clock_internal(Some(calls.clone()));
         object.bind_monotonic_clock_internal(Some(Arc::new(|| Duration::from_secs(101))));
         assert_eq!(calls.clock_bindings.load(Ordering::SeqCst), clock_binds + 1);
@@ -664,16 +661,16 @@ async fn custom_capabilities_clocks_indexes_and_private_state_are_retained() {
             status_flags: None,
         };
         object.add_trend_record(record.clone()).unwrap();
-        assert_eq!(read(object.as_ref(), CUSTOM), PropertyValue::Unsigned(77));
+        assert_eq!(read(object, CUSTOM), PropertyValue::Unsigned(77));
         record.log_datum = LogDatum::NullValue;
         assert!(
             matches!(object.add_trend_record(record), Err(Error::Protocol { class, code })
             if class == ErrorClass::DEVICE.to_raw() as u32
                 && code == ErrorCode::OPERATIONAL_PROBLEM.to_raw() as u32)
         );
-        assert_eq!(read(object.as_ref(), CUSTOM), PropertyValue::Unsigned(77));
+        assert_eq!(read(object, CUSTOM), PropertyValue::Unsigned(77));
         assert_eq!(
-            read(object.as_ref(), PropertyIdentifier::AUDIT_SOURCE_REPORTER),
+            read(object, PropertyIdentifier::AUDIT_SOURCE_REPORTER),
             PropertyValue::Boolean(true)
         );
         assert!(!object.is_deleteable());

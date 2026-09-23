@@ -374,11 +374,11 @@ fn point_can_be_rearmed_through_the_local_trait_channel() {
         LifeSafetyOperationEffect::Applied
     );
     assert_eq!(
-        read_enumerated(object.as_ref(), PropertyIdentifier::OPERATION_EXPECTED),
+        read_enumerated(object, PropertyIdentifier::OPERATION_EXPECTED),
         LifeSafetyOperation::NONE.to_raw()
     );
     assert_eq!(
-        read_enumerated(object.as_ref(), PropertyIdentifier::SILENCED),
+        read_enumerated(object, PropertyIdentifier::SILENCED),
         SilencedState::UNSILENCED.to_raw()
     );
 }

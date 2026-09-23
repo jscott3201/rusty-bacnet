@@ -83,7 +83,6 @@ async fn ordinary_trend_poll_uses_synchronized_offset_and_dst_frame() {
     use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
     use bacnet_types::enums::PropertyIdentifier;
     use bacnet_types::primitives::PropertyValue;
-    use std::collections::HashMap;
     use std::sync::Arc;
 
     struct CapturingClock {
@@ -140,9 +139,9 @@ async fn ordinary_trend_poll_uses_synchronized_offset_and_dst_frame() {
     db.add(Box::new(target)).unwrap();
     db.add(Box::new(trend)).unwrap();
     db.set_clock_reader(Some(clock.clone()));
+    db.set_monotonic_clock_internal(Some(Arc::new(|| Duration::ZERO)));
     let db = Arc::new(tokio::sync::RwLock::new(db));
-    let state = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
-    crate::trend_log::poll_trend_logs(&db, &state).await;
+    crate::trend_log::poll_trend_logs(&db).await;
     let frame = clock.captured.lock().unwrap().unwrap();
     assert_eq!(
         frame.local_date,

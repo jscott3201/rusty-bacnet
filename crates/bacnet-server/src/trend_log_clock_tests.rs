@@ -4,7 +4,9 @@ use bacnet_objects::clock::{ClockFrame, ClockReader};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_objects::trend::TrendLogObject;
 use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
+use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::{Date, Time};
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use std::sync::Mutex;
 
 struct MutableClock(Mutex<Option<ClockFrame>>);
@@ -64,6 +66,10 @@ fn database(clock: Arc<dyn ClockReader>) -> (Arc<RwLock<ObjectDatabase>>, Object
     db.add(Box::new(target)).unwrap();
     db.add(Box::new(trend)).unwrap();
     db.set_clock_reader(Some(clock));
+    let origin = tokio::time::Instant::now();
+    db.set_monotonic_clock_internal(Some(Arc::new(move || {
+        tokio::time::Instant::now().duration_since(origin)
+    })));
     (Arc::new(RwLock::new(db)), oid)
 }
 
@@ -79,13 +85,12 @@ fn snapshot(db: &ObjectDatabase, oid: ObjectIdentifier) -> Vec<PropertyValue> {
     .to_vec()
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn ordinary_poll_uses_exact_device_local_timestamp_and_hundredths() {
     let expected = frame();
     let clock = Arc::new(MutableClock(Mutex::new(Some(expected))));
     let (db, oid) = database(clock.clone());
-    let state = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
-    poll_trend_logs(&db, &state).await;
+    poll_trend_logs(&db).await;
     let guard = db.read().await;
     let obj = guard.get(&oid).unwrap();
     let identities = obj.log_record_identities_internal().unwrap();
@@ -105,7 +110,6 @@ async fn ordinary_poll_uses_exact_device_local_timestamp_and_hundredths() {
     assert_eq!(record[1], PropertyValue::Time(expected.local_time));
     assert_eq!(record[2], PropertyValue::Real(42.5));
     drop(guard);
-    assert!(state.lock().await.contains_key(&oid));
 
     // The next due attempt samples the current frame rather than caching it.
     let next = ClockFrame {
@@ -116,11 +120,8 @@ async fn ordinary_poll_uses_exact_device_local_timestamp_and_hundredths() {
         ..expected
     };
     *clock.0.lock().unwrap() = Some(next);
-    state
-        .lock()
-        .await
-        .insert(oid, Instant::now() - std::time::Duration::from_secs(61));
-    poll_trend_logs(&db, &state).await;
+    tokio::time::advance(Duration::from_millis(600)).await;
+    poll_trend_logs(&db).await;
     let guard = db.read().await;
     let identities = guard
         .get(&oid)
@@ -131,7 +132,7 @@ async fn ordinary_poll_uses_exact_device_local_timestamp_and_hundredths() {
     assert_eq!(identities[1].time(), next.local_time);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn unusable_acquisition_clock_preserves_records_and_schedule_then_retries() {
     let good = frame();
     for bad in [
@@ -181,18 +182,16 @@ async fn unusable_acquisition_clock_preserves_records_and_schedule_then_retries(
     ] {
         let clock = Arc::new(MutableClock(Mutex::new(Some(good))));
         let (db, oid) = database(clock.clone());
-        let state = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
-        poll_trend_logs(&db, &state).await;
+        poll_trend_logs(&db).await;
         let before = snapshot(&*db.read().await, oid);
-        let last_success = Instant::now() - std::time::Duration::from_secs(61);
-        state.lock().await.insert(oid, last_success);
+        tokio::time::advance(Duration::from_millis(600)).await;
         *clock.0.lock().unwrap() = bad;
-        poll_trend_logs(&db, &state).await;
+        poll_trend_logs(&db).await;
         assert_eq!(snapshot(&*db.read().await, oid), before, "{bad:?}");
-        assert_eq!(state.lock().await.get(&oid), Some(&last_success), "{bad:?}");
 
         *clock.0.lock().unwrap() = Some(good);
-        poll_trend_logs(&db, &state).await;
+        tokio::time::advance(Duration::from_millis(100)).await;
+        poll_trend_logs(&db).await;
         let guard = db.read().await;
         assert_eq!(
             guard
@@ -202,20 +201,48 @@ async fn unusable_acquisition_clock_preserves_records_and_schedule_then_retries(
                 .unwrap(),
             PropertyValue::Unsigned(2)
         );
-        assert!(state.lock().await[&oid] > last_success);
     }
 
     // Absence of the shared reader has the same policy as an unavailable frame.
     let (db, oid) = database(Arc::new(MutableClock(Mutex::new(Some(good)))));
     db.write().await.set_clock_reader(None);
-    let state = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
     let before = snapshot(&*db.read().await, oid);
-    poll_trend_logs(&db, &state).await;
+    poll_trend_logs(&db).await;
     assert_eq!(snapshot(&*db.read().await, oid), before);
-    assert!(state.lock().await.is_empty());
     db.write()
         .await
         .set_clock_reader(Some(Arc::new(MutableClock(Mutex::new(Some(good))))));
-    poll_trend_logs(&db, &state).await;
-    assert!(state.lock().await.contains_key(&oid));
+    tokio::time::advance(Duration::from_millis(100)).await;
+    poll_trend_logs(&db).await;
 }
+
+#[tokio::test(start_paused = true)]
+async fn interval_fifty_is_half_a_second() {
+    let (db, oid) = database(Arc::new(MutableClock(Mutex::new(Some(frame())))));
+    db.write()
+        .await
+        .get_mut(&oid)
+        .unwrap()
+        .write_property(
+            PropertyIdentifier::LOG_INTERVAL,
+            None,
+            PropertyValue::Unsigned(50),
+            None,
+        )
+        .unwrap();
+    poll_trend_logs(&db).await;
+    tokio::time::advance(Duration::from_millis(500)).await;
+    poll_trend_logs(&db).await;
+    assert_eq!(
+        db.read()
+            .await
+            .get(&oid)
+            .unwrap()
+            .read_property(PropertyIdentifier::TOTAL_RECORD_COUNT, None)
+            .unwrap(),
+        PropertyValue::Unsigned(2)
+    );
+}
+
+#[path = "trend_poll_lifecycle_tests.rs"]
+mod lifecycle;

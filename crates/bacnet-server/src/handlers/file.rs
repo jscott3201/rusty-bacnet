@@ -420,7 +420,7 @@ fn execute_write_file(
         FileWriteAccessMethod::Stream { .. } => ObjectFileAccessMethod::STREAM_ACCESS,
         FileWriteAccessMethod::Record { .. } => ObjectFileAccessMethod::RECORD_ACCESS,
     };
-    validate_file_access_method(&**object, expected)?;
+    validate_file_access_method(object, expected)?;
 
     let storage = object
         .file_storage_internal_mut()
