@@ -446,3 +446,6 @@ mod lifecycle;
 
 #[path = "source_read_queue_tests.rs"]
 mod queued;
+
+#[path = "source_read_failure_tests.rs"]
+mod failures;

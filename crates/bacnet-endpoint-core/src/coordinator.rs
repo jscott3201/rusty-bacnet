@@ -339,6 +339,7 @@ impl CoordinatorState {
 /// await point.
 pub struct OutboundTransactionCoordinator {
     state: Mutex<CoordinatorState>,
+    released: tokio::sync::Notify,
 }
 
 impl Default for OutboundTransactionCoordinator {
@@ -352,6 +353,7 @@ impl OutboundTransactionCoordinator {
     pub fn new() -> Self {
         Self {
             state: Mutex::new(CoordinatorState::new()),
+            released: tokio::sync::Notify::new(),
         }
     }
 
@@ -447,10 +449,22 @@ impl OutboundTransactionCoordinator {
     }
 
     fn release_token(&self, token: LeaseToken) -> Result<ReleaseOutcome, CoordinatorError> {
-        self.state
+        let outcome = self
+            .state
             .lock()
             .map(|mut state| state.release_exact(token))
-            .map_err(|_| CoordinatorError::StatePoisoned)
+            .map_err(|_| CoordinatorError::StatePoisoned)?;
+        // Wake after releasing the state lock, and only for actual capacity.
+        if outcome == ReleaseOutcome::Released {
+            self.released.notify_waiters();
+        }
+        Ok(outcome)
+    }
+
+    /// Internal passive capacity wait. Register before checking reservation.
+    #[doc(hidden)]
+    pub fn released(&self) -> tokio::sync::futures::Notified<'_> {
+        self.released.notified()
     }
 }
 

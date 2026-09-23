@@ -120,7 +120,7 @@ fn audit_reporter_auditing_failure_filter_invalidates_pending_epoch() {
     let first = status.auditing_failure_epoch().unwrap();
     reporter.set_monitored_objects(Some(vec![]));
     reporter.set_audit_priority_filter(BACnetPriorityFilter::empty());
-    assert_eq!(status.auditing_failure_epoch(), Some(first));
+    assert_ne!(status.auditing_failure_epoch(), Some(first));
     reporter.set_audit_level(AuditLevel::NONE).unwrap();
     assert_eq!(status.auditing_failure_epoch(), None);
     reporter.set_audit_level(AuditLevel::AUDIT_ALL).unwrap();

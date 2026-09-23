@@ -39,7 +39,7 @@ pub use receipt::{
     CompletedAuditReceipt, ConfirmedAuditNotificationOutcome, MAX_AUDIT_RECEIPT_KEY_BYTES,
     MAX_COMPLETED_AUDIT_RECEIPTS,
 };
-pub use reporter_status::AuditReporterStatus;
+pub use reporter_status::{AuditDeliveryToken, AuditReporterStatus};
 
 /// One owned page returned by an object-level AuditLogQuery capability.
 #[derive(Debug, Clone, PartialEq)]
@@ -684,54 +684,6 @@ impl AuditReporterObject {
         self.description = desc.into();
     }
 
-    /// Set the locally managed audit level.
-    pub fn set_audit_level(&mut self, level: AuditLevel) -> Result<(), Error> {
-        if level == AuditLevel::DEFAULT {
-            return Err(Error::OutOfRange(
-                "Audit Reporter audit level must not be DEFAULT".into(),
-            ));
-        }
-        self.audit_level = level;
-        self.update_auditing_failure_filter();
-        Ok(())
-    }
-
-    /// Set the locally managed operation filter.
-    pub fn set_auditable_operations(&mut self, operations: AuditOperationFlags) {
-        self.auditable_operations = operations;
-        self.update_auditing_failure_filter();
-    }
-
-    fn update_auditing_failure_filter(&self) {
-        self.status.set_auditing_failure_enabled(
-            self.audit_level != AuditLevel::NONE
-                && self
-                    .auditable_operations
-                    .contains(bacnet_types::enums::AuditOperation::AUDITING_FAILURE),
-        );
-    }
-
-    /// Set the locally managed command-priority filter.
-    pub fn set_audit_priority_filter(&mut self, filter: BACnetPriorityFilter) {
-        self.audit_priority_filter = filter;
-    }
-
-    /// Select confirmed or unconfirmed target audit notifications.
-    pub fn set_issue_confirmed_notifications(&mut self, confirmed: bool) {
-        self.issue_confirmed_notifications = confirmed;
-    }
-
-    /// Configure the optional Monitored_Objects array locally (never over BACnet).
-    ///
-    /// `None` removes the property and preserves catch-all target reporting.
-    /// `Some(vec![])` or all NULL entries selects no ordinary targets. Object
-    /// identifiers match exactly; object types match every instance of that type.
-    /// Duplicates do not cause duplicate reports. Enabled external Reporter writes
-    /// bypass this selection. This does not enable multi-Reporter arbitration.
-    pub fn set_monitored_objects(&mut self, selectors: Option<Vec<BACnetObjectSelector>>) {
-        self.monitored_objects = selectors;
-    }
-
     /// Target selection for the single-Reporter profile, before record creation.
     #[doc(hidden)]
     pub fn monitors_object_internal(&self, target: ObjectIdentifier) -> bool {
@@ -840,3 +792,6 @@ mod receipt_tests;
 #[cfg(test)]
 #[path = "audit/persistence_receipt_tests.rs"]
 mod persistence_receipt_tests;
+
+#[path = "audit/reporter_configuration.rs"]
+mod reporter_configuration;

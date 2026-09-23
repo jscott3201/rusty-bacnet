@@ -1760,11 +1760,36 @@ already in progress may have reached the peer when cancellation wins.
 
 Overload, encoding, send and acknowledgment failures update the selected
 Reporter's instance-owned Reliability without replacing the ReadProperty result.
-Older successful deliveries cannot erase newer failures. `stop()` seals
-admission, cancels operations and notifications, and joins owned workers; drop
-cancels synchronously. Shutdown can lose undelivered records. This is not a
-durable delivery promise or full Audit Reporting/BIBB/BTL conformance. Source
-AUDITING_FAILURE summaries are deferred to #732. Device
+Completion authority includes the configuration generation: an old delivery
+cannot clear a newer failure or update health after configuration changes.
+
+Eligible, encodable READ records that fit the APDU but lose admission to the
+shared audit permit pool or confirmed invoke-ID pool contribute to one bounded,
+memory-only AUDITING_FAILURE batch. The local filtering policy requires a
+non-NONE Audit_Level and the AUDITING_FAILURE operation bit. The summary places
+the earliest lost record's source timestamp in Target_Timestamp, the local
+Device in both Source_Device and Target_Device, and a saturating application
+Unsigned count in Current_Value. Other optional fields are absent. Earliest
+means record admission order, including reversed completions, sequence wrap and
+changes of clock representation. Encoding/size errors, filtering, pre-send
+rejection, closed admission, transport/ACK failures and summary failures do not
+contribute. Failed summaries never recursively produce another summary.
+
+One owned worker waits passively for actual semaphore or shared coordinator
+capacity; requester-only releases also wake it. Further losses coalesce into
+sequential batches, without queuing or replaying ordinary records. Each batch
+belongs to one immutable Reporter instance, configuration generation, delivery
+mode and destination. Changes discard incompatible pending counts, including
+A-to-B-to-A changes and removal/replacement without another READ. A new context
+can supersede the single pending slot; stale completions cannot transfer their
+counts into it. This bounded discard policy also applies to target resource-loss
+summaries. Admitted notifications retain the three-second total deadline and
+no retries.
+
+`stop()` seals admission, cancels operations and notifications, and joins owned
+workers; drop cancels synchronously. Shutdown and context changes can lose
+undelivered records and pending counts. This is not a durable delivery promise
+or full Audit Reporting/BIBB/BTL conformance. Device
 `Audit_Notification_Recipient`, other source operations, multiple Reporters,
 selector semantics, batching/send delay, standalone source ownership and other
 transports remain outside this subset.

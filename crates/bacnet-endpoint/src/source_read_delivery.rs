@@ -15,23 +15,26 @@ use bacnet_types::MacAddr;
 use bytes::BytesMut;
 use tokio::time::{Duration, Instant};
 
-const DEADLINE: Duration = Duration::from_secs(3);
+pub(super) const DEADLINE: Duration = Duration::from_secs(3);
 
-struct Completion {
+pub(super) struct Completion {
     status: Arc<AuditReporterStatus>,
-    epoch: u64,
+    epoch: bacnet_objects::audit::AuditDeliveryToken,
     finished: bool,
 }
 impl Completion {
-    fn new(status: Arc<AuditReporterStatus>) -> Self {
-        let epoch = status.begin_delivery();
-        Self {
+    pub(super) fn auditing_failure(
+        status: Arc<AuditReporterStatus>,
+        expected: u64,
+    ) -> Option<Self> {
+        let epoch = status.begin_auditing_failure_delivery(expected)?;
+        Some(Self {
             status,
             epoch,
             finished: false,
-        }
+        })
     }
-    fn finish(mut self, delivered: bool) {
+    pub(super) fn finish(mut self, delivered: bool) {
         self.status.complete_delivery(self.epoch, delivered);
         self.finished = true;
     }
@@ -45,21 +48,38 @@ impl Drop for Completion {
 }
 
 pub(super) fn admit(
+    source: &Arc<SourceRead>,
     owner: &NotificationTransactions,
-    egress: EndpointEgress,
-    recipient: StaticSourceAuditRecipient,
-    max_apdu: u16,
     confirmed: bool,
     notification: BACnetAuditNotification,
     status: Arc<AuditReporterStatus>,
+    epoch: bacnet_objects::audit::AuditDeliveryToken,
+    failure: Option<AuditFailureTicket<MacAddr>>,
 ) {
-    let completion = Completion::new(status);
-    let Some(permit) = owner.try_admit_audit() else {
+    let completion = Completion {
+        status,
+        epoch,
+        finished: false,
+    };
+    // Invalid/oversized records are not resource losses, even at saturation.
+    let Some(mut encoded) = encode(&notification, confirmed, source.max_apdu, 0) else {
         return;
     };
+    let timestamp = notification
+        .source_timestamp
+        .clone()
+        .expect("source record timestamp");
+    let permit = match owner.try_admit_audit() {
+        Ok(permit) => permit,
+        Err(tokio::sync::TryAcquireError::NoPermits) => {
+            failures::record_drop(source, owner, failure, timestamp);
+            return;
+        }
+        Err(tokio::sync::TryAcquireError::Closed) => return,
+    };
     let mac = MacAddr::from_slice(&encode_bip_mac(
-        recipient.address.ip().octets(),
-        recipient.address.port(),
+        source.recipient.address.ip().octets(),
+        source.recipient.address.port(),
     ));
     let reserved = if confirmed {
         match owner.reserve(
@@ -67,28 +87,53 @@ pub(super) fn admit(
             ConfirmedServiceChoice::CONFIRMED_AUDIT_NOTIFICATION,
         ) {
             Ok(reserved) => Some(reserved),
+            Err(bacnet_server::server::__endpoint_NotificationReserveError::Coordinator(
+                bacnet_endpoint_core::coordinator::ReserveError::Exhausted,
+            )) => {
+                failures::record_drop(source, owner, failure, timestamp);
+                return;
+            }
             Err(_) => return,
         }
     } else {
         None
     };
-    let mut service = BytesMut::new();
-    if (AuditNotificationRequest {
-        notifications: vec![notification],
-    })
-    .try_encode(&mut service)
-    .is_err()
-    {
-        return;
+    if let Some((operation, _)) = &reserved {
+        let Some(bytes) = encode(&notification, true, source.max_apdu, operation.invoke_id())
+        else {
+            return;
+        };
+        encoded = bytes;
     }
-    let pdu = if let Some((operation, _)) = &reserved {
+    let deadline = Instant::now() + DEADLINE;
+    let egress = source.egress.clone();
+    owner.spawn(async move {
+        let _permit = permit;
+        let sent = admit_encoded(&egress, mac, encoded, confirmed, deadline);
+        completion.finish(finish_send(sent, reserved, deadline).await);
+    });
+}
+
+pub(super) fn encode(
+    notification: &BACnetAuditNotification,
+    confirmed: bool,
+    max_apdu: u16,
+    invoke_id: u8,
+) -> Option<Vec<u8>> {
+    let mut service = BytesMut::new();
+    AuditNotificationRequest {
+        notifications: vec![notification.clone()],
+    }
+    .try_encode(&mut service)
+    .ok()?;
+    let pdu = if confirmed {
         Apdu::ConfirmedRequest(ConfirmedRequest {
             segmented: false,
             more_follows: false,
             segmented_response_accepted: false,
             max_segments: None,
             max_apdu_length: max_apdu,
-            invoke_id: operation.invoke_id(),
+            invoke_id,
             sequence_number: None,
             proposed_window_size: None,
             service_choice: ConfirmedServiceChoice::CONFIRMED_AUDIT_NOTIFICATION,
@@ -101,40 +146,55 @@ pub(super) fn admit(
         })
     };
     let mut encoded = BytesMut::new();
-    if encode_apdu(&mut encoded, &pdu).is_err() || encoded.len() > usize::from(max_apdu) {
-        return;
-    }
-    let deadline = Instant::now() + DEADLINE;
-    owner.spawn(async move {
-        let _permit = permit;
-        let send = || async {
-            egress
-                .admit_apdu(
-                    encoded.to_vec(),
-                    EndpointApduDestination::Direct {
-                        destination_mac: mac.clone(),
-                    },
-                    confirmed,
-                    NetworkPriority::NORMAL,
-                    Vec::new(),
-                    Some(deadline),
-                )?
-                .complete()
-                .await
-                .result
-        };
-        let delivered = tokio::time::timeout_at(deadline, async {
-            if let Some((operation, receiver)) = reserved {
-                run_notification_worker(operation, receiver, DEADLINE, 0, |_| send()).await
-                    == NotificationWorkerResult::Ack
-            } else {
-                send().await.is_ok()
-            }
-        })
-        .await
-        .unwrap_or(false);
-        completion.finish(delivered);
-    });
+    encode_apdu(&mut encoded, &pdu).ok()?;
+    (encoded.len() <= usize::from(max_apdu)).then(|| encoded.to_vec())
+}
+
+pub(super) fn admit_encoded(
+    egress: &EndpointEgress,
+    mac: MacAddr,
+    encoded: Vec<u8>,
+    confirmed: bool,
+    deadline: Instant,
+) -> Result<bacnet_endpoint_core::endpoint_ingress::EndpointSend, Error> {
+    egress.admit_apdu(
+        encoded,
+        EndpointApduDestination::Direct {
+            destination_mac: mac,
+        },
+        confirmed,
+        NetworkPriority::NORMAL,
+        Vec::new(),
+        Some(deadline),
+    )
+}
+
+type Reservation = (
+    bacnet_server::server::__endpoint_NotificationOperation,
+    oneshot::Receiver<bacnet_server::server::CovAckResult>,
+);
+
+pub(super) async fn finish_send(
+    sent: Result<bacnet_endpoint_core::endpoint_ingress::EndpointSend, Error>,
+    reserved: Option<Reservation>,
+    deadline: Instant,
+) -> bool {
+    let mut sent = Some(sent);
+    let send = |_| {
+        let sent = sent.take().expect("notifications have no retries");
+        async move { sent?.complete().await.result }
+    };
+    tokio::time::timeout_at(deadline, async {
+        if let Some((operation, receiver)) = reserved {
+            run_notification_worker(operation, receiver, DEADLINE, 0, send).await
+                == NotificationWorkerResult::Ack
+        } else {
+            let mut send = send;
+            send(0).await.is_ok()
+        }
+    })
+    .await
+    .unwrap_or(false)
 }
 
 /// Clause 18.7 local record codes; never communication-class Error PDUs.

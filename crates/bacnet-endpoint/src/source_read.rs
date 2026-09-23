@@ -3,11 +3,17 @@ use std::net::Ipv4Addr;
 use std::sync::{Arc, Weak};
 
 use bacnet_client::EndpointRequester;
+use bacnet_endpoint_core::coordinator::CanonicalPeer;
 use bacnet_endpoint_core::endpoint_ingress::{EndpointApduDestination, EndpointEgress};
 use bacnet_objects::audit::AuditReporterStatus;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::traits::BACnetObject;
-use bacnet_server::server::__endpoint_NotificationTransactions as NotificationTransactions;
+use bacnet_server::server::{
+    __endpoint_AuditFailureContext as AuditFailureContext,
+    __endpoint_AuditFailureQueue as AuditFailureQueue,
+    __endpoint_AuditFailureTicket as AuditFailureTicket,
+    __endpoint_NotificationTransactions as NotificationTransactions,
+};
 use bacnet_services::read_property::ReadPropertyACK;
 use bacnet_transport::bvll::decode_bip_mac;
 use bacnet_transport::port::DataAttribute;
@@ -18,12 +24,15 @@ use bacnet_types::constructed::{
 use bacnet_types::enums::{AuditLevel, AuditOperation, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue};
+use bacnet_types::MacAddr;
 use tokio::sync::{oneshot, RwLock, Semaphore};
 
 use crate::bip::StaticSourceAuditRecipient;
 
 #[path = "source_read_delivery.rs"]
 mod delivery;
+#[path = "source_read_failures.rs"]
+mod failures;
 
 pub(crate) struct SourceRead {
     db: Arc<RwLock<ObjectDatabase>>,
@@ -34,6 +43,7 @@ pub(crate) struct SourceRead {
     notifications: Weak<NotificationTransactions>,
     operations: Arc<Semaphore>,
     max_apdu: u16,
+    failures: AuditFailureQueue<MacAddr>,
 }
 
 impl SourceRead {
@@ -63,6 +73,7 @@ impl SourceRead {
             notifications: Arc::downgrade(notifications),
             operations: Arc::new(Semaphore::new(64)),
             max_apdu,
+            failures: AuditFailureQueue::default(),
         })
     }
 
@@ -76,7 +87,7 @@ impl SourceRead {
     }
 
     pub(crate) async fn read(
-        &self,
+        self: &Arc<Self>,
         requester: &EndpointRequester,
         destination: EndpointApduDestination,
         attributes: Vec<DataAttribute>,
@@ -168,6 +179,22 @@ impl SourceRead {
             },
             None => BACnetTimeStamp::SequenceNumber(db.next_event_sequence_number()),
         };
+        let failure = status.auditing_failure_epoch().and_then(|epoch| {
+            let mac = MacAddr::from_slice(&bacnet_transport::bvll::encode_bip_mac(
+                self.recipient.address.ip().octets(),
+                self.recipient.address.port(),
+            ));
+            self.failures.observe(AuditFailureContext {
+                status: Arc::clone(&status),
+                epoch,
+                device: devices[0],
+                confirmed,
+                peer: CanonicalPeer::direct(mac.as_slice()),
+                route: mac,
+                max_apdu: u32::from(self.max_apdu),
+            })
+        });
+        let completion = status.begin_delivery();
         let mut notification = BACnetAuditNotification {
             source_timestamp: Some(timestamp),
             target_timestamp: None,
@@ -200,9 +227,7 @@ impl SourceRead {
             .upgrade()
             .ok_or_else(|| Error::Encoding("endpoint shutdown".into()))?;
         let weak_owner = Arc::downgrade(&owner);
-        let egress = self.egress.clone();
-        let recipient = self.recipient;
-        let max_apdu = self.max_apdu;
+        let source = Arc::clone(self);
         let (reply, response) = oneshot::channel();
         // Spawn/close are serialized by the same worker owner. A rejected spawn
         // drops the operation, permit and reply. The worker never retains owner.
@@ -213,13 +238,13 @@ impl SourceRead {
                 notification.result = delivery::result(&outcome.result);
                 if let Some(owner) = weak_owner.upgrade() {
                     delivery::admit(
+                        &source,
                         &owner,
-                        egress,
-                        recipient,
-                        max_apdu,
                         confirmed,
                         notification,
                         status,
+                        completion,
+                        failure,
                     );
                 }
             }
@@ -231,3 +256,7 @@ impl SourceRead {
             .map_err(|_| Error::Encoding("endpoint shutdown".into()))?
     }
 }
+
+#[cfg(test)]
+#[path = "source_read_failure_admission_tests.rs"]
+mod failure_admission_tests;

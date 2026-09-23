@@ -108,7 +108,7 @@ impl ForwardBatch {
         let completion = Completion::new(Arc::clone(&self.profile));
         let deadline = tokio::time::Instant::now() + DEADLINE;
         // No queue, waiting permit, retry, or AuditingFailure producer.
-        let Some(permit) = transactions.try_admit_audit() else {
+        let Ok(permit) = transactions.try_admit_audit() else {
             return;
         };
         // Resolve synchronously before spawn: contention is a failed best-effort
@@ -205,7 +205,7 @@ impl ForwardBatch {
 
 struct Completion {
     profile: Arc<AuditLogForwarding>,
-    epoch: u64,
+    epoch: bacnet_objects::audit::AuditDeliveryToken,
     finished: bool,
 }
 

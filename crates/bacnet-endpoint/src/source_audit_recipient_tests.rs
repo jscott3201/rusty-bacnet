@@ -364,6 +364,7 @@ async fn direct_bip_ipv4_client_only_and_both_start_stop_silently() {
                 .unwrap();
             let original = std::ptr::from_ref(reporter);
             let status = reporter.status_internal();
+            let initial_delivery = status.begin_delivery();
             let configuration_error =
                 PropertyValue::Enumerated(Reliability::CONFIGURATION_ERROR.to_raw());
             assert_eq!(reliability(reporter), configuration_error);
@@ -424,7 +425,7 @@ async fn direct_bip_ipv4_client_only_and_both_start_stop_silently() {
             assert!(
                 matches!(peer.try_recv_from(&mut bytes), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock)
             );
-            assert_eq!(status.begin_delivery(), 0);
+            assert_eq!(status.begin_delivery(), initial_delivery);
         }
     }
 }

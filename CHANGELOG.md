@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Bounded source resource-loss summaries (Refs #732, #345):** endpoint source
+  READ records lost to audit-permit or shared confirmed-transaction exhaustion
+  coalesce into one memory-only AUDITING_FAILURE batch. Both notification modes
+  retain the earliest admitted record's timestamp and a saturating Unsigned
+  count; local Device identity is used for both source and target. Actual
+  requester releases wake pending confirmed summaries. Encoding/size, shutdown,
+  transport/ACK and summary failures never increment the count or recurse.
+  Source and target batches now retain an immutable Reporter configuration and
+  discard incompatible counts on mutation, replacement or removal, including
+  A-to-B-to-A changes. Stale deliveries cannot change newer configuration health.
+  No ordinary-record queue, durable delivery or full Audit support is claimed.
+  Internal pre-1.0 delivery tokens now carry configuration and failure authority;
+  audit admission distinguishes exhaustion from closed ownership.
+
+
 - **SC Address-Resolution accepting capability (Refs #733):** nodes without a
   live matching direct listener now return `7/45` rather than an empty/configured
   URI ACK. A live listener can still ACK an empty URI list. Capability denial
@@ -26,8 +41,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   joined session shutdown bound retained work. Queue expiry prevents canceled
   notifications from being transmitted later; already-started sends remain
   ambiguous. Delivery failure updates Reporter health without changing the READ
-  result. Source loss summaries (#732), Device recipient properties and full
-  Audit Reporting conformance remain out of scope. See
+  result. Device recipient properties and full Audit Reporting conformance
+  remain out of scope. Source loss summaries are described above. See
   [endpoint source READ](docs/rust-api.md#bounded-endpoint-source-readproperty-reporting).
   **Pre-1.0 internal Rust API cleanup:** shared coordinator
   `LeaseOwner::ServerNotification` / `LeaseMetadata::server_notification` become
