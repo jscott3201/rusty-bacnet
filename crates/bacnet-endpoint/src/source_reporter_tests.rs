@@ -111,6 +111,9 @@ fn source(db: &ObjectDatabase, oid: ObjectIdentifier) -> bool {
 #[path = "source_reporter_forwarding_tests.rs"]
 mod forwarding;
 
+#[path = "source_audit_recipient_tests.rs"]
+mod recipient;
+
 async fn success(role: SessionRole) {
     let (session, peer, observed) = session(role);
     let mut session = session

@@ -38,15 +38,48 @@
 //! # }
 //! ```
 
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddrV4};
 
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_transport::bbmd::BdtEntry;
 use bacnet_transport::bbmd::ForeignDevicePolicy;
 use bacnet_transport::bip::{BipTransport, FanoutPolicy, ForeignDeviceConfig};
+use bacnet_types::enums::ObjectType;
 use bacnet_types::error::Error;
+use bacnet_types::primitives::ObjectIdentifier;
 
 use crate::session::{EndpointSession, SessionConfig, SessionRole};
+
+// Endpoint-private groundwork, not Device.Audit_Notification_Recipient. Keeping
+// the socket address intact retains all six future B/IP MAC octets (IP + port).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct StaticSourceAuditRecipient {
+    pub(crate) device: ObjectIdentifier,
+    pub(crate) address: SocketAddrV4,
+}
+
+impl StaticSourceAuditRecipient {
+    fn validate(&self, broadcast: Ipv4Addr) -> Result<(), Error> {
+        if self.device.object_type() != ObjectType::DEVICE {
+            return Err(Error::Encoding(
+                "static source audit recipient must identify a Device".into(),
+            ));
+        }
+        let ip = self.address.ip();
+        if ip.is_unspecified()
+            || ip.is_multicast()
+            || ip.is_broadcast()
+            || *ip == broadcast
+            || self.address.port() == 0
+        {
+            return Err(Error::Encoding(
+                "static source audit recipient requires direct unicast IPv4 and a nonzero UDP port"
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+}
 
 /// Concrete B/IP endpoint builder.
 ///
@@ -64,6 +97,7 @@ pub struct BipEndpointBuilder {
     session: SessionConfig,
     database: Option<ObjectDatabase>,
     identity: Option<crate::identity::DeviceIdentity>,
+    static_source_audit_recipient: Option<StaticSourceAuditRecipient>,
     bbmd_bdt: Option<Vec<BdtEntry>>,
     foreign_policy: Option<ForeignDevicePolicy>,
     management_acl: Option<Vec<[u8; 4]>>,
@@ -87,6 +121,7 @@ impl BipEndpointBuilder {
             session: SessionConfig::default(),
             database: None,
             identity: None,
+            static_source_audit_recipient: None,
             bbmd_bdt: None,
             foreign_policy: None,
             management_acl: None,
@@ -134,6 +169,86 @@ impl BipEndpointBuilder {
     /// role limits. No generation, no extra socket.
     pub fn identity(mut self, identity: crate::identity::DeviceIdentity) -> Self {
         self.identity = Some(identity);
+        self
+    }
+
+    /// Retains one static destination for the endpoint-owned source Reporter.
+    ///
+    /// **Non-conforming groundwork only**, private to the endpoint: this is not
+    /// the writable Device `Audit_Notification_Recipient` property and does not
+    /// establish Audit Reporting support/conformance. It sends nothing, creates
+    /// no source records, and changes no Reporter Reliability/configured status.
+    ///
+    /// Direct B/IP IPv4 only: `device` must identify a Device and `address` must
+    /// have a nonzero UDP port. Unspecified, multicast, limited broadcast and
+    /// this builder's configured broadcast IP are rejected. No routed, IPv6,
+    /// SC, MS/TP, discovery or BBMD-distribution semantics are provided.
+    /// The exact IPv4 address and UDP port are retained, not resolved/refreshed.
+    ///
+    /// Last pre-start call wins. [`build_session`](Self::build_session) validates
+    /// the final value; a build error consumes the builder (rebuild to correct).
+    /// The resulting session has no recipient setter. Select its source using
+    /// [`EndpointSession::with_source_audit_reporter`] before `start()`, which
+    /// atomically validates that selection, local database and client-capable
+    /// role before consuming lifecycle or starting transport. A linkage error
+    /// leaves the session ready for correction/retry via its existing setters.
+    /// Source ownership without a recipient remains supported.
+    ///
+    /// ```no_run
+    /// use std::net::{Ipv4Addr, SocketAddrV4};
+    /// use bacnet_endpoint::{bip::BipEndpointBuilder, identity::DeviceIdentity, session::SessionRole};
+    /// use bacnet_objects::{audit::AuditReporterObject, traits::BACnetObject};
+    /// use bacnet_types::{enums::ObjectType, primitives::ObjectIdentifier};
+    /// # async fn example() -> Result<(), bacnet_types::error::Error> {
+    /// let identity = DeviceIdentity::new(123, 42)?;
+    /// let mut db = identity.build_database()?;
+    /// let reporter = AuditReporterObject::new(1, "Source configuration")?;
+    /// let source = reporter.object_identifier();
+    /// db.add(Box::new(reporter))?;
+    /// let mut session = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
+    ///     .role(SessionRole::ClientOnly).database(db).identity(identity)
+    ///     .static_source_audit_recipient(
+    ///         ObjectIdentifier::new(ObjectType::DEVICE, 456)?,
+    ///         SocketAddrV4::new(Ipv4Addr::LOCALHOST, 47809),
+    ///     )
+    ///     .build_session()?.with_source_audit_reporter(source);
+    /// session.start().await?; // Ownership/static configuration only; no emission.
+    /// session.stop().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// This B/IP-only setting is deliberately absent from other builders and
+    /// generic sessions:
+    /// ```compile_fail,E0599
+    /// # use bacnet_endpoint::sc::ScEndpointBuilder;
+    /// # use bacnet_types::primitives::ObjectIdentifier;
+    /// # fn forbidden(b: ScEndpointBuilder, d: ObjectIdentifier, a: std::net::SocketAddrV4) {
+    /// b.static_source_audit_recipient(d, a);
+    /// # }
+    /// ```
+    /// ```compile_fail,E0599
+    /// # use bacnet_endpoint::mstp::MstpEndpointBuilder;
+    /// # use bacnet_transport::mstp::SerialPort;
+    /// # use bacnet_types::primitives::ObjectIdentifier;
+    /// # fn forbidden<S: SerialPort>(b: MstpEndpointBuilder<S>, d: ObjectIdentifier, a: std::net::SocketAddrV4) {
+    /// b.static_source_audit_recipient(d, a);
+    /// # }
+    /// ```
+    /// ```compile_fail,E0599
+    /// # use bacnet_endpoint::session::EndpointSession;
+    /// # use bacnet_transport::port::TransportPort;
+    /// # use bacnet_types::primitives::ObjectIdentifier;
+    /// # fn forbidden<T: TransportPort + 'static>(s: EndpointSession<T>, d: ObjectIdentifier, a: std::net::SocketAddrV4) {
+    /// s.static_source_audit_recipient(d, a);
+    /// # }
+    /// ```
+    pub fn static_source_audit_recipient(
+        mut self,
+        device: ObjectIdentifier,
+        address: SocketAddrV4,
+    ) -> Self {
+        self.static_source_audit_recipient = Some(StaticSourceAuditRecipient { device, address });
         self
     }
 
@@ -194,8 +309,15 @@ impl BipEndpointBuilder {
     ///
     /// Returns a typed [`Error::Encoding`](bacnet_types::error::Error::Encoding)
     /// when BBMD-dependent controls are set without
-    /// [`enable_bbmd`](Self::enable_bbmd).
+    /// [`enable_bbmd`](Self::enable_bbmd), or a static source audit recipient
+    /// is set (it requires [`build_session`](Self::build_session), not a bare
+    /// transport that would discard the endpoint-owned configuration).
     pub fn build_transport(self) -> Result<BipTransport, Error> {
+        if self.static_source_audit_recipient.is_some() {
+            return Err(Error::Encoding(
+                "static source audit recipient requires build_session()".into(),
+            ));
+        }
         let Self {
             interface,
             port,
@@ -241,6 +363,10 @@ impl BipEndpointBuilder {
     /// in [`EndpointSession`]. Bind-count proofs use a counting test double
     /// plus real-socket corroboration (single nonzero local MAC/port).
     pub fn build_session(mut self) -> Result<EndpointSession<BipTransport>, Error> {
+        let recipient = self.static_source_audit_recipient.take();
+        if let Some(recipient) = &recipient {
+            recipient.validate(self.broadcast_address)?;
+        }
         let role = self.role;
         let session = self.session.clone();
         let database = self.database.take();
@@ -252,6 +378,9 @@ impl BipEndpointBuilder {
         }
         if let Some(id) = identity {
             endpoint = endpoint.with_identity(id);
+        }
+        if let Some(recipient) = recipient {
+            endpoint = endpoint.with_static_source_audit_recipient(recipient);
         }
         Ok(endpoint)
     }

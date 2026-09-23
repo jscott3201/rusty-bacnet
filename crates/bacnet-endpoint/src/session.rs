@@ -224,6 +224,7 @@ pub struct EndpointSession<T: TransportPort + 'static> {
     client_config: ClientConfig,
     database: Option<Arc<RwLock<ObjectDatabase>>>,
     source_audit_reporter: Option<ObjectIdentifier>,
+    static_source_audit_recipient: Option<crate::bip::StaticSourceAuditRecipient>,
     identity: Option<crate::identity::DeviceIdentity>,
     egress: Option<bacnet_endpoint_core::endpoint_ingress::EndpointEgress>,
 }
@@ -303,6 +304,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             client_config,
             database: None,
             source_audit_reporter: None,
+            static_source_audit_recipient: None,
             identity: None,
             egress: None,
         })
@@ -403,6 +405,12 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
 
     fn prepare_source_audit_reporter(&mut self) -> Result<(), Error> {
         let Some(selected) = self.source_audit_reporter else {
+            if self.static_source_audit_recipient.is_some() {
+                return Err(Error::Encoding(
+                    "static source audit recipient requires a selected source Audit Reporter"
+                        .into(),
+                ));
+            }
             return Ok(());
         };
         if self.role == SessionRole::ServerOnly {
@@ -730,6 +738,19 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                 Vec::new(),
             )
             .await
+    }
+}
+
+impl EndpointSession<bacnet_transport::bip::BipTransport> {
+    // Only the concrete B/IP builder supplies this validated value. No public
+    // setter, runtime update, or transport-neutral recipient API is exposed.
+    pub(crate) fn with_static_source_audit_recipient(
+        mut self,
+        recipient: crate::bip::StaticSourceAuditRecipient,
+    ) -> Self {
+        self.assert_configurable();
+        self.static_source_audit_recipient = Some(recipient);
+        self
     }
 }
 
