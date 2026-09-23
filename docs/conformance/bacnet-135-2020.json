@@ -446,7 +446,7 @@
   },
   {
    "id": "BACNET-12-LOG-STATUS-LIFECYCLE",
-   "standard_anchor": "Clause 12.25 Trend Log (pp. 319-336); Clause 12.27 Event Log (pp. 337-346); Clause 12.30 Trend Log Multiple (pp. 361-378); Clause 21.6 BACnetLogStatus (p. 914)",
+   "standard_anchor": "Clause 12.25 Trend Log (pp. 319-336); Clause 12.27 Event Log (pp. 337-346); Clause 12.30 Trend Log Multiple (pp. 361-378); Clause 21.6 BACnetLogStatus (p. 914); Clause 12.25 Log_Buffer acquisition timestamps (printed p. 320); Clauses 20.2.12-20.2.13 local actual Date/Time (printed p. 849)",
    "priority": "P1",
    "requirement_summary": "Event Log, Trend Log, and Trend Log Multiple append mandatory BUFFER_PURGED and LOG_DISABLED lifecycle records with object-local Date/Time, deterministic Stop_When_Full ordering, non-recursive forced insertion, stable total-record identity, zero-capacity count-only behavior, and atomic clock/error handling.",
    "status": "in-progress",
@@ -460,6 +460,9 @@
     "crates/bacnet-server/src/trend_log.rs::poll_trend_logs"
    ],
    "positive_tests": [
+    "crates/bacnet-server/src/trend_log_clock_tests.rs::ordinary_poll_uses_exact_device_local_timestamp_and_hundredths",
+    "crates/bacnet-server/src/server/clock_vectors.rs::civil_frames_match_independent_calendar_vectors",
+    "crates/bacnet-server/src/server/clock_vectors.rs::ordinary_trend_poll_uses_synchronized_offset_and_dst_frame",
     "crates/bacnet-objects/src/log_status_tests.rs::purge_is_unconditional_initial_status_and_repeats_for_every_log_family",
     "crates/bacnet-objects/src/log_status_tests.rs::stop_before_full_omits_triggering_ordinary_and_clock_failure_is_atomic",
     "crates/bacnet-objects/src/log_status_tests.rs::enable_and_stop_when_full_transitions_emit_exactly_one_status",
@@ -468,6 +471,8 @@
     "crates/bacnet-server/src/pics/truth_source_tests.rs::pics_log_family_writability_comes_from_runtime_routes"
    ],
    "negative_tests": [
+    "crates/bacnet-server/src/trend_log_clock_tests.rs::unusable_acquisition_clock_preserves_records_and_schedule_then_retries",
+    "crates/bacnet-server/src/server/clock_vectors.rs::civil_frames_enforce_concrete_year_limits_after_local_adjustment",
     "crates/bacnet-objects/src/log_status_tests.rs::status_writes_require_a_valid_clock_before_mutation",
     "crates/bacnet-server/src/trend_log.rs::tests::poller_retries_when_mandatory_stop_status_has_no_clock",
     "crates/bacnet-objects/src/log_insertion_tests.rs::fallible_trend_hook_preserves_state_on_clock_error_and_retries",
@@ -476,7 +481,7 @@
    ],
    "benchmarks": [],
    "public_claims": [],
-    "notes": "Qualified PR-0702 evidence only; no full log-family support claim is made. The shared lifecycle covers explicit effective Enable transitions, Record_Count zero purges, Stop_When_Full activation/full behavior, and ordinary stop-before-full insertion. Refs #742: concrete EventLog/TrendLog/TrendLogMultiple add_record and the single BACnetObject::add_trend_record hook now return Result<(), Error>; the void hooks and compatibility adapter are removed. Missing/invalid clocks required by a status transition return DEVICE/OPERATIONAL_PROBLEM without mutation. Disabled ordinary logging and zero-capacity count-only operations remain successful without guaranteeing a resident ordinary record. Unsupported objects explicitly return OBJECT/OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. Poller insertion failures preserve last_log and can retry after clock repair; SourceReporter forwards results. Constructors, records() and raw clear() retain their behavior. ReadRange By Sequence and By Time can select the resident purge status identity under BACNET-15-READ-RANGE-LOG-BUFFER. Time-window Start_Time/Stop_Time transitions, LOG_INTERRUPTED, writable Log_DeviceObjectProperty purge paths, formal EventLog notification records, Trend Log Multiple polling, persistence/restart, and complete log conformance remain deferred."
+    "notes": "Qualified PR-0702 evidence only; no full log-family support claim is made. The shared lifecycle covers explicit effective Enable transitions, Record_Count zero purges, Stop_When_Full activation/full behavior, and ordinary stop-before-full insertion. Refs #742: concrete EventLog/TrendLog/TrendLogMultiple add_record and the single BACnetObject::add_trend_record hook now return Result<(), Error>; the void hooks and compatibility adapter are removed. Missing/invalid clocks required by a status transition return DEVICE/OPERATIONAL_PROBLEM without mutation. Disabled ordinary logging and zero-capacity count-only operations remain successful without guaranteeing a resident ordinary record. Unsupported objects explicitly return OBJECT/OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. Refs #750: ordinary TrendLog polling samples the shared Device clock before each acquisition and retains its exact local date, time and hundredths; the private host-clock calendar conversion is removed. Missing or invalid frames skip acquisition without changing records or last_log, then retry after repair. This skip/retry behavior is a local failure policy, distinct from the normative requirement for actual local acquisition timestamps. Poller insertion failures also preserve last_log and can retry after clock repair; SourceReporter forwards results. Constructors, records() and raw clear() retain their behavior. ReadRange By Sequence and By Time can select the resident purge status identity under BACNET-15-READ-RANGE-LOG-BUFFER. Time-window Start_Time/Stop_Time transitions, LOG_INTERRUPTED, writable Log_DeviceObjectProperty purge paths, formal EventLog notification records, Trend Log Multiple polling, persistence/restart, and complete log conformance remain deferred."
   },
   {
    "id": "BACNET-15-READ-RANGE-LOG-BUFFER",

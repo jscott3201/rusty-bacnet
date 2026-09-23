@@ -438,3 +438,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "clock_vectors.rs"]
+mod vectors;

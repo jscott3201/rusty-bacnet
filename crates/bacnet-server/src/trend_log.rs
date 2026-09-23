@@ -14,30 +14,8 @@ use tracing::warn;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_types::constructed::{BACnetLogRecord, LogDatum};
 
-/// Convert days since 1970-01-01 to (year_offset_from_1900, month, day, day_of_week).
-/// BACnet Date: year = offset from 1900, month = 1-12, day = 1-31, dow = 1(Mon)-7(Sun).
-fn days_to_date(total_days: u64) -> (u8, u8, u8, u8) {
-    // Day of week: 1970-01-01 was Thursday (4). BACnet: 1=Mon, 4=Thu.
-    let dow = ((total_days + 3) % 7) as u8 + 1; // 1=Mon..7=Sun
-
-    // Civil date from days since epoch (Euclidean affine algorithm)
-    let z = total_days as i64;
-    let era = z.div_euclid(146097);
-    let doe = z.rem_euclid(146097);
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe + era * 400 + 1970;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-
-    // BACnet year is offset from 1900
-    let year = (y - 1900).clamp(0, 255) as u8;
-    (year, m as u8, d as u8, dow)
-}
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
-use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, Time};
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 /// Shared polling state — tracks last log time per TrendLog object.
 /// Stored in the server struct (not a global static) for testability.
@@ -55,44 +33,13 @@ fn property_value_to_log_datum(pv: &PropertyValue) -> LogDatum {
     }
 }
 
-/// Create a `BACnetLogRecord` with the current wall-clock time.
-fn make_record(datum: LogDatum) -> BACnetLogRecord {
-    let now = {
-        let dur = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default();
-        let secs = dur.as_secs();
-        // Compute date from days since 1970-01-01
-        let total_days = secs / 86400;
-        let (year, month, day, dow) = days_to_date(total_days);
-        let hour = ((secs % 86400) / 3600) as u8;
-        let minute = ((secs % 3600) / 60) as u8;
-        let second = (secs % 60) as u8;
-        (year, month, day, dow, hour, minute, second)
-    };
-    BACnetLogRecord {
-        date: Date {
-            year: now.0,
-            month: now.1,
-            day: now.2,
-            day_of_week: now.3,
-        },
-        time: Time {
-            hour: now.4,
-            minute: now.5,
-            second: now.6,
-            hundredths: 0,
-        },
-        log_datum: datum,
-        status_flags: None,
-    }
-}
-
 /// Called every second by the server's trend-log polling task.
 ///
 /// For each TrendLog with `log_interval > 0` (polled mode), checks whether
 /// enough time has elapsed since the last log entry and, if so, reads the
-/// monitored property and adds a record.
+/// monitored property and adds a record using one actual Device-local clock
+/// frame sampled before acquisition. As a local failure policy, a missing or
+/// invalid frame skips the attempt without advancing its successful-log time.
 pub async fn poll_trend_logs(db: &Arc<RwLock<ObjectDatabase>>, state: &TrendLogState) {
     let mut last_log = state.lock().await;
     let now = Instant::now();
@@ -157,6 +104,12 @@ pub async fn poll_trend_logs(db: &Arc<RwLock<ObjectDatabase>>, state: &TrendLogS
 
     let mut db_write = db.write().await;
     for (trend_oid, _interval, target_oid, prop_id) in to_poll {
+        let Some(frame) = db_write
+            .clock_frame()
+            .filter(|frame| frame.is_valid_actual_datetime())
+        else {
+            continue;
+        };
         let datum = if let Some(target_obj) = db_write.get(&target_oid) {
             match target_obj.read_property(PropertyIdentifier::from_raw(prop_id), None) {
                 Ok(pv) => property_value_to_log_datum(&pv),
@@ -166,7 +119,12 @@ pub async fn poll_trend_logs(db: &Arc<RwLock<ObjectDatabase>>, state: &TrendLogS
             LogDatum::NullValue
         };
 
-        let record = make_record(datum);
+        let record = BACnetLogRecord {
+            date: frame.local_date,
+            time: frame.local_time,
+            log_datum: datum,
+            status_flags: None,
+        };
 
         if let Some(trend_obj) = db_write.get_mut(&trend_oid) {
             if let Err(error) = trend_obj.add_trend_record(record) {
@@ -187,6 +145,7 @@ mod tests {
     use bacnet_objects::traits::BACnetObject;
     use bacnet_objects::trend::TrendLogObject;
     use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
+    use bacnet_types::primitives::{Date, Time};
 
     struct FixedClock;
     impl ClockReader for FixedClock {
@@ -237,15 +196,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn make_record_has_valid_time() {
-        let record = make_record(LogDatum::RealValue(1.0));
-        // Time fields should be within valid ranges
-        assert!(record.time.hour < 24);
-        assert!(record.time.minute < 60);
-        assert!(record.time.second < 60);
-    }
-
     #[tokio::test]
     async fn poller_retries_when_mandatory_stop_status_has_no_clock() {
         let mut db = ObjectDatabase::new();
@@ -279,6 +229,20 @@ mod tests {
         let trend_oid = trend.object_identifier();
         db.add(Box::new(trend)).unwrap();
 
+        // Acquisition has a valid frame, but the later mandatory status
+        // transition cannot obtain its own frame. Insertion failure must still
+        // leave the polling deadline unchanged.
+        struct AcquisitionOnlyClock(std::sync::atomic::AtomicBool);
+        impl ClockReader for AcquisitionOnlyClock {
+            fn read_clock(&self) -> Option<ClockFrame> {
+                self.0
+                    .swap(false, std::sync::atomic::Ordering::SeqCst)
+                    .then(|| FixedClock.read_clock().unwrap())
+            }
+        }
+        db.set_clock_reader(Some(Arc::new(AcquisitionOnlyClock(
+            std::sync::atomic::AtomicBool::new(true),
+        ))));
         let db = Arc::new(RwLock::new(db));
         let state = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
         poll_trend_logs(&db, &state).await;
@@ -338,3 +302,7 @@ mod tests {
         assert!(state.lock().await.contains_key(&trend_oid));
     }
 }
+
+#[cfg(test)]
+#[path = "trend_log_clock_tests.rs"]
+mod clock_tests;
