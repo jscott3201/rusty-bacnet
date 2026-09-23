@@ -734,6 +734,24 @@ first failure, and leaves the remaining suffix unprocessed; it does not restore
 previous values. Built-in persistence and File resize candidates retain their
 existing commit boundaries. No replacement token API is needed.
 
+Intrinsic reporting uses one proposal/commit contract. The
+`evaluate_intrinsic_reporting` and `tick_intrinsic_reporting` hooks return a
+fire-ready `TransitionOutcome` while leaving event state, acknowledgment bits,
+history, and the ready proposal unchanged until commit succeeds. Implement
+`commit_event_transition_internal` to validate the supplied
+`EventTransitionCommit`, atomically apply all object-owned transition state, and
+return `EventTransitionCommitError` without mutation on failure. Custom objects
+can use these public types directly; the built-in private commit kernel is not
+required. Both server paths commit before distribution, even when Event_Enable,
+DCC, or an empty recipient list suppresses sending. The default commit hook
+returns `Unsupported`; it never authorizes an intrinsic notification.
+
+The pre-1.0 API removes `intrinsic_reporting_requires_atomic_commit` and the
+exported `impl_intrinsic_reporting!` macro. Migrate custom objects to the hooks
+above; there is no alternate immediate-commit path. Standalone detector
+`probe`/`tick` methods retain their own detector-local behavior. Executed evidence
+is recorded in `BACNET-13-INTRINSIC-PROPOSAL-COMMIT` in the conformance ledger.
+
 ### ObjectDatabase
 
 ```rust

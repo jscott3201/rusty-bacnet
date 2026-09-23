@@ -222,10 +222,6 @@ impl BACnetObject for SourceReporter {
         self.wrapped.tick_intrinsic_reporting()
     }
 
-    fn intrinsic_reporting_requires_atomic_commit(&self) -> bool {
-        self.wrapped.intrinsic_reporting_requires_atomic_commit()
-    }
-
     fn commit_event_transition_internal(
         &mut self,
         commit: EventTransitionCommit,

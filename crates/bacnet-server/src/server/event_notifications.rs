@@ -2,11 +2,11 @@ use super::event_message_policy::intrinsic_event_message_text;
 use super::event_notification_payload::{project_intrinsic_payload, CommittedNotificationPayload};
 #[path = "event_notification_profile.rs"]
 mod profile;
+pub(super) use self::profile::CommittedIntrinsicTransition;
 use self::profile::{
     CommittedHistorySnapshot, CommittedMessageProjection, NotificationConstruction,
     NotificationHistorySource, NotificationTransition,
 };
-pub(super) use self::profile::{CommittedIntrinsicTransition, ResolvedIntrinsicTransition};
 use super::event_recipient_route::{
     network_priority_for_event, system_utc_recipient_filter_time, ConfirmedRecipientRoute,
     RecipientRoute,
@@ -239,36 +239,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     ) {
         let resolved = {
             let mut db = db.write().await;
-            let (requires_atomic_commit, outcome) = match db.get_mut(oid) {
-                Some(object) => (
-                    object.intrinsic_reporting_requires_atomic_commit(),
-                    object.evaluate_intrinsic_reporting(),
-                ),
-                None => return,
-            };
-            outcome.and_then(|outcome| {
-                if requires_atomic_commit {
-                    Self::commit_intrinsic_transition(&mut db, oid, outcome)
-                        .map(ResolvedIntrinsicTransition::Committed)
-                } else {
-                    Some(ResolvedIntrinsicTransition::Legacy(outcome))
-                }
-            })
+            let outcome = db
+                .get_mut(oid)
+                .and_then(|object| object.evaluate_intrinsic_reporting());
+            outcome.and_then(|outcome| Self::commit_intrinsic_transition(&mut db, oid, outcome))
         };
 
-        // A successful built-in commit has already applied the local transition
-        // actions; a legacy object applied them during evaluation. Whatever
-        // Event_Enable says, only external distribution is gated here:
-        // Clause 12.12 defines Event_Enable as enabling and disabling the
-        // distribution of notifications, and Clause 13.2.5 places that gate
-        // inside the notification-distribution process — downstream of the
-        // transition actions, none of which it governs.
-        //
-        // The shared commit kernel has also stored the selected timestamp and
-        // updated Acked_Transitions from the Notification Class policy and
-        // stored the selected local message in the transition coordinate.
+        // Local transition actions commit before Event_Enable or DCC can suppress
+        // external distribution (Clauses 13.2.2.1.4 and 13.2.5).
         if let Some(resolved) = resolved {
-            if resolved.distribute() && resolved.can_emit() {
+            if resolved.distribute && resolved.event_values.is_some() {
                 Self::build_and_send_event_notification_with_bindings(
                     db,
                     network,

@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **One intrinsic proposal/commit contract (Refs #746, pre-1.0 API break):**
+  removed `BACnetObject::intrinsic_reporting_requires_atomic_commit` and the
+  exported `impl_intrinsic_reporting!` macro. Custom objects implement the
+  evaluate/tick proposal hooks and `commit_event_transition_internal` using the
+  public commit types and their own state. Both server paths require commit
+  success before notification distribution; unsupported or failed commits keep
+  proposals retryable without consuming an event sequence number. Standalone
+  detector `probe`/`tick` behavior is unchanged.
+
 - **Bounded source resource-loss summaries (Refs #732, #345):** endpoint source
   READ records lost to audit-permit or shared confirmed-transaction exhaustion
   coalesce into one memory-only AUDITING_FAILURE batch. Both notification modes

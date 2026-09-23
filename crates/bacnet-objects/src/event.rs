@@ -20,7 +20,7 @@ pub struct EventStateChange {
     pub to: EventState,
 }
 
-/// A transition that occurred, and whether it may be distributed.
+/// A fire-ready transition and its external distribution policy.
 ///
 /// ASHRAE 135-2020 Clause 13.2.2.1.4 mandates four actions on every transition:
 /// store the new `Event_State`, store the time in `Event_Time_Stamps`, store the
@@ -31,12 +31,15 @@ pub struct EventStateChange {
 /// suppress the first three actions, nor the alarm-acknowledgment half of the
 /// fourth.
 ///
-/// Separating the two answers keeps that distinction in the type: `None` from a
-/// detector means no transition occurred, while `distribute == false` means one
-/// occurred and must be recorded but not sent.
+/// The object intrinsic-reporting hooks return this value as an uncommitted
+/// proposal. The server commits object-owned state and history before considering
+/// distribution, including when `distribute == false`. A failed commit leaves the
+/// proposal retryable. The value alone does not prove a committed object transition.
+/// Standalone detector `probe` and `tick` methods may finalize detector-local state
+/// according to their own contracts; they do not commit object event history.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransitionOutcome {
-    /// The transition itself. Always recorded, whatever `distribute` says.
+    /// The proposed transition, to be committed regardless of `distribute`.
     pub change: EventStateChange,
     /// The Event Type selected by the detector's event algorithm, with the
     /// mandatory `CHANGE_OF_RELIABILITY` override for transitions to/from FAULT.
@@ -1025,68 +1028,6 @@ impl CommandFailureDetector {
 #[cfg(test)]
 pub(crate) use history::commit_test_proposal;
 pub(crate) use history::impl_builtin_intrinsic_reporting;
-
-/// Implement legacy immediate intrinsic-reporting detector delegation.
-///
-/// This exported macro preserves the downstream behavior in which detector
-/// `probe` and `tick` calls immediately update detector-local state.
-#[macro_export]
-macro_rules! impl_intrinsic_reporting {
-    (
-        $detector_field:ident,
-        $present_value_field:ident,
-        $feedback_value_field:ident,
-        $reliability_field:ident,
-        $event_detection_enable_field:ident
-    ) => {
-        fn evaluate_intrinsic_reporting(&mut self) -> Option<$crate::event::TransitionOutcome> {
-            if !self.$event_detection_enable_field {
-                return None;
-            }
-            self.$detector_field.probe(
-                self.$present_value_field,
-                self.$feedback_value_field,
-                self.$reliability_field,
-            )
-        }
-
-        fn tick_intrinsic_reporting(&mut self) -> Option<$crate::event::TransitionOutcome> {
-            if !self.$event_detection_enable_field {
-                return None;
-            }
-            self.$detector_field.tick(
-                self.$present_value_field,
-                self.$feedback_value_field,
-                self.$reliability_field,
-            )
-        }
-    };
-    // Gated two-input detector delegation for intrinsic-reporting object types without a
-    // feedback value.
-    (
-        $detector_field:ident,
-        $present_value_field:ident,
-        $reliability_field:ident,
-        $event_detection_enable_field:ident
-    ) => {
-        fn evaluate_intrinsic_reporting(&mut self) -> Option<$crate::event::TransitionOutcome> {
-            if !self.$event_detection_enable_field {
-                return None;
-            }
-            self.$detector_field
-                .probe(self.$present_value_field, self.$reliability_field)
-        }
-
-        fn tick_intrinsic_reporting(&mut self) -> Option<$crate::event::TransitionOutcome> {
-            if !self.$event_detection_enable_field {
-                return None;
-            }
-            self.$detector_field
-                .tick(self.$present_value_field, self.$reliability_field)
-        }
-    }; // There is deliberately no ungated arm. Exporting one would let downstream
-       // implementors wire event-state detection permanently on despite Clause 13.2.2.1.
-}
 
 #[cfg(test)]
 mod fault_tests;

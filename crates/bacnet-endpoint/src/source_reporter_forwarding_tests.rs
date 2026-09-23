@@ -677,3 +677,6 @@ async fn custom_capabilities_clocks_indexes_and_private_state_are_retained() {
     }
     session.stop().await.unwrap();
 }
+
+#[path = "source_reporter_intrinsic_tests.rs"]
+mod intrinsic;

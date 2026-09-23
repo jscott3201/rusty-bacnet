@@ -1,4 +1,4 @@
-//! Closed projection of committed built-in and Event Enrollment transitions.
+//! Closed projection of committed intrinsic and Event Enrollment transitions.
 //!
 //! Every value is selected explicitly from the evaluated source while the
 //! server still owns the database write guard. The resulting private wrapper
@@ -98,7 +98,7 @@ enum OptionalProjectionValue {
     Malformed,
 }
 
-/// Project a built-in intrinsic source after its transition commit.
+/// Project an intrinsic source after its transition commit.
 pub(crate) fn project_intrinsic_payload(
     object: &dyn BACnetObject,
     change: &EventStateChange,
