@@ -61,8 +61,13 @@ impl TrendLogObject {
     }
 
     /// Add a BACnetLogRecord to the trend log buffer.
-    pub fn add_record(&mut self, record: BACnetLogRecord) {
-        let _ = self.try_add_record_internal(record);
+    ///
+    /// Success does not guarantee a resident ordinary record: disabled logging
+    /// is ignored, zero-capacity logging may only count, and a stop-before-full
+    /// transition records status instead. Missing/invalid status clocks fail
+    /// atomically with DEVICE / OPERATIONAL_PROBLEM.
+    pub fn add_record(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
+        self.lifecycle().try_add_ordinary(record).map(|_| ())
     }
 
     /// Get the current buffer contents.
@@ -91,10 +96,6 @@ impl TrendLogObject {
     /// Set the logging type (0=polled, 1=cov, 2=triggered).
     pub fn set_logging_type(&mut self, logging_type: u32) {
         self.logging_type = logging_type;
-    }
-
-    fn try_add_record_internal(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
-        self.lifecycle().try_add_ordinary(record).map(|_| ())
     }
 
     fn lifecycle(&mut self) -> LogLifecycle<'_> {
@@ -314,12 +315,8 @@ impl BACnetObject for TrendLogObject {
         Some(self.log_buffer.identities())
     }
 
-    fn add_trend_record(&mut self, record: BACnetLogRecord) {
-        self.add_record(record);
-    }
-
-    fn try_add_trend_record_internal(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
-        self.try_add_record_internal(record)
+    fn add_trend_record(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
+        self.add_record(record)
     }
 }
 
@@ -371,8 +368,13 @@ impl TrendLogMultipleObject {
     }
 
     /// Add a BACnetLogRecord to the trend log buffer.
-    pub fn add_record(&mut self, record: BACnetLogRecord) {
-        let _ = self.try_add_record_internal(record);
+    ///
+    /// Success does not guarantee a resident ordinary record: disabled logging
+    /// is ignored, zero-capacity logging may only count, and a stop-before-full
+    /// transition records status instead. Missing/invalid status clocks fail
+    /// atomically with DEVICE / OPERATIONAL_PROBLEM.
+    pub fn add_record(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
+        self.lifecycle().try_add_ordinary(record).map(|_| ())
     }
 
     /// Add a property reference to the monitored list.
@@ -398,10 +400,6 @@ impl TrendLogMultipleObject {
     /// Set the logging type (0=polled, 1=cov, 2=triggered).
     pub fn set_logging_type(&mut self, logging_type: u32) {
         self.logging_type = logging_type;
-    }
-
-    fn try_add_record_internal(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
-        self.lifecycle().try_add_ordinary(record).map(|_| ())
     }
 
     fn lifecycle(&mut self) -> LogLifecycle<'_> {
@@ -606,12 +604,8 @@ impl BACnetObject for TrendLogMultipleObject {
         Some(self.log_buffer.identities())
     }
 
-    fn add_trend_record(&mut self, record: BACnetLogRecord) {
-        self.add_record(record);
-    }
-
-    fn try_add_trend_record_internal(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
-        self.try_add_record_internal(record)
+    fn add_trend_record(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
+        self.add_record(record)
     }
 }
 

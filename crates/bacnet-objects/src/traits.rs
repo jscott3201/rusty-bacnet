@@ -924,19 +924,17 @@ pub trait BACnetObject: Send + Sync {
         None
     }
 
-    /// Add a trend log record (only meaningful for TrendLog / TrendLogMultiple).
+    /// Submit a trend record to an object's log lifecycle.
     ///
-    /// Default is a no-op. TrendLog objects override to append to their buffer.
-    fn add_trend_record(&mut self, _record: BACnetLogRecord) {}
-
-    /// Fallible internal trend-record insertion used by the server poller.
-    ///
-    /// The default preserves source compatibility with existing implementors by
-    /// invoking the legacy void hook and reporting success. Built-in log objects
-    /// override this to surface mandatory status-timestamp failures atomically.
-    #[doc(hidden)]
-    fn try_add_trend_record_internal(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
-        self.add_trend_record(record);
-        Ok(())
+    /// `Ok(())` means the operation was accepted, not that an ordinary record
+    /// became resident: disabled logs ignore it and zero-capacity logs may only
+    /// increment their count. A required status transition can replace the
+    /// ordinary record. Timestamp failures return an error without mutation.
+    /// Objects without trend insertion return OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
+    fn add_trend_record(&mut self, _record: BACnetLogRecord) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+        })
     }
 }

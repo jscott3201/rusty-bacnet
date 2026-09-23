@@ -287,17 +287,17 @@ fn log_with_record(family: LogFamily, record: BACnetLogRecord) -> Box<dyn BACnet
     match family {
         LogFamily::Event => {
             let mut object = EventLogObject::new(1, "EL-1", 1).unwrap();
-            object.add_record(record);
+            object.add_record(record).unwrap();
             Box::new(object)
         }
         LogFamily::Trend => {
             let mut object = TrendLogObject::new(1, "TL-1", 1).unwrap();
-            object.add_record(record);
+            object.add_record(record).unwrap();
             Box::new(object)
         }
         LogFamily::TrendMultiple => {
             let mut object = TrendLogMultipleObject::new(1, "TLM-1", 1).unwrap();
-            object.add_record(record);
+            object.add_record(record).unwrap();
             Box::new(object)
         }
     }

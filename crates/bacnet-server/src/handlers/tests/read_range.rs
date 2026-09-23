@@ -397,21 +397,21 @@ pub(super) fn fifo_log(family: LogFamily) -> Box<dyn BACnetObject> {
         LogFamily::Event => {
             let mut object = EventLogObject::new(1, "EL-1", 3).unwrap();
             for value in 1..=4 {
-                object.add_record(record(value));
+                object.add_record(record(value)).unwrap();
             }
             Box::new(object)
         }
         LogFamily::Trend => {
             let mut object = TrendLogObject::new(1, "TL-1", 3).unwrap();
             for value in 1..=4 {
-                object.add_record(record(value));
+                object.add_record(record(value)).unwrap();
             }
             Box::new(object)
         }
         LogFamily::TrendMultiple => {
             let mut object = TrendLogMultipleObject::new(1, "TLM-1", 3).unwrap();
             for value in 1..=4 {
-                object.add_record(record(value));
+                object.add_record(record(value)).unwrap();
             }
             Box::new(object)
         }
@@ -482,8 +482,8 @@ impl ClockReader for FixedClock {
 fn purge_status_record_replaces_old_sequence_continuation() {
     let mut object = EventLogObject::new(7, "EL-7", 3).unwrap();
     object.bind_clock_internal(Some(Arc::new(FixedClock)));
-    object.add_record(record(1));
-    object.add_record(record(2));
+    object.add_record(record(1)).unwrap();
+    object.add_record(record(2)).unwrap();
     object
         .write_property(
             PropertyIdentifier::RECORD_COUNT,

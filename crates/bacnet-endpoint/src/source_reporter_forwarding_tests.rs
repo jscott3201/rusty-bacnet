@@ -7,7 +7,8 @@ use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::traits::{MonotonicClock, ReliabilityEvaluation, WritePropertyRollback};
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
 use bacnet_types::constructed::{
-    BACnetAuditLogQueryParameters, BACnetAuditNotification, BACnetObjectSelector,
+    BACnetAuditLogQueryParameters, BACnetAuditNotification, BACnetLogRecord, BACnetObjectSelector,
+    LogDatum,
 };
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 
@@ -324,6 +325,16 @@ impl BACnetObject for ExtendedReporter {
     }
     fn binary_lighting_blink_count_internal(&self) -> u64 {
         123
+    }
+    fn add_trend_record(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
+        let LogDatum::UnsignedValue(value) = record.log_datum else {
+            return Err(Error::Protocol {
+                class: ErrorClass::DEVICE.to_raw() as u32,
+                code: ErrorCode::OPERATIONAL_PROBLEM.to_raw() as u32,
+            });
+        };
+        self.value = value;
+        Ok(())
     }
     fn capture_write_property_rollback(
         &mut self,
@@ -657,6 +668,31 @@ async fn custom_capabilities_clocks_indexes_and_private_state_are_retained() {
         assert!(
             matches!(sink.store_notifications(&[], 77), Err(Error::Encoding(message)) if message == "custom sink failure")
         );
+        let mut record = BACnetLogRecord {
+            date: bacnet_types::primitives::Date {
+                year: 126,
+                month: 8,
+                day: 31,
+                day_of_week: 1,
+            },
+            time: bacnet_types::primitives::Time {
+                hour: 12,
+                minute: 0,
+                second: 0,
+                hundredths: 0,
+            },
+            log_datum: LogDatum::UnsignedValue(77),
+            status_flags: None,
+        };
+        object.add_trend_record(record.clone()).unwrap();
+        assert_eq!(read(object.as_ref(), CUSTOM), PropertyValue::Unsigned(77));
+        record.log_datum = LogDatum::NullValue;
+        assert!(
+            matches!(object.add_trend_record(record), Err(Error::Protocol { class, code })
+            if class == ErrorClass::DEVICE.to_raw() as u32
+                && code == ErrorCode::OPERATIONAL_PROBLEM.to_raw() as u32)
+        );
+        assert_eq!(read(object.as_ref(), CUSTOM), PropertyValue::Unsigned(77));
         assert_eq!(
             read(object.as_ref(), PropertyIdentifier::AUDIT_SOURCE_REPORTER),
             PropertyValue::Boolean(true)

@@ -71,8 +71,8 @@ fn read_object_type() {
 #[test]
 fn add_records_and_read_count() {
     let mut el = EventLogObject::new(1, "EL-1", 100).unwrap();
-    el.add_record(make_record(10, 72.5));
-    el.add_record(make_record(11, 73.0));
+    el.add_record(make_record(10, 72.5)).unwrap();
+    el.add_record(make_record(11, 73.0)).unwrap();
     assert_eq!(el.records().len(), 2);
     let val = el
         .read_property(PropertyIdentifier::RECORD_COUNT, None)
@@ -87,8 +87,8 @@ fn add_records_and_read_count() {
 #[test]
 fn read_log_buffer() {
     let mut el = EventLogObject::new(1, "EL-1", 100).unwrap();
-    el.add_record(make_record(10, 72.5));
-    el.add_record(make_record(11, 73.0));
+    el.add_record(make_record(10, 72.5)).unwrap();
+    el.add_record(make_record(11, 73.0)).unwrap();
     let val = el
         .read_property(PropertyIdentifier::LOG_BUFFER, None)
         .unwrap();
@@ -128,7 +128,8 @@ fn ring_buffer_wraps() {
             time: make_time(i),
             log_datum: LogDatum::UnsignedValue(i as u64),
             status_flags: None,
-        });
+        })
+        .unwrap();
     }
     assert_eq!(el.records().len(), 3);
     // Oldest records evicted; first remaining is hour=2
@@ -151,7 +152,7 @@ fn stop_when_full() {
     )
     .unwrap();
     for i in 0..5u8 {
-        el.add_record(make_record(i, i as f32));
+        el.add_record(make_record(i, i as f32)).unwrap();
     }
     assert_eq!(el.records().len(), 2);
     assert_eq!(
@@ -172,7 +173,7 @@ fn disable_logging() {
         None,
     )
     .unwrap();
-    el.add_record(make_record(10, 72.5));
+    el.add_record(make_record(10, 72.5)).unwrap();
     assert_eq!(el.records().len(), 1);
     assert_eq!(el.records()[0].log_datum, LogDatum::LogStatus(0b001));
 }
@@ -181,7 +182,7 @@ fn disable_logging() {
 fn clear_buffer_via_record_count() {
     let mut el = EventLogObject::new(1, "EL-1", 100).unwrap();
     bind_clock(&mut el);
-    el.add_record(make_record(10, 72.5));
+    el.add_record(make_record(10, 72.5)).unwrap();
     assert_eq!(el.records().len(), 1);
     el.write_property(
         PropertyIdentifier::RECORD_COUNT,
@@ -259,19 +260,22 @@ fn log_buffer_various_datum_types() {
         time,
         log_datum: LogDatum::BooleanValue(true),
         status_flags: None,
-    });
+    })
+    .unwrap();
     el.add_record(BACnetLogRecord {
         date,
         time,
         log_datum: LogDatum::EnumValue(42),
         status_flags: Some(0b0100),
-    });
+    })
+    .unwrap();
     el.add_record(BACnetLogRecord {
         date,
         time,
         log_datum: LogDatum::NullValue,
         status_flags: None,
-    });
+    })
+    .unwrap();
 
     let val = el
         .read_property(PropertyIdentifier::LOG_BUFFER, None)
@@ -302,7 +306,7 @@ fn log_buffer_various_datum_types() {
 fn event_log_identities_align_after_eviction_and_differ_from_position() {
     let mut el = EventLogObject::new(1, "EL-1", 2).unwrap();
     for hour in 1..=3 {
-        el.add_record(make_record(hour, hour as f32));
+        el.add_record(make_record(hour, hour as f32)).unwrap();
     }
 
     let identities = el.log_record_identities_internal().unwrap();
@@ -339,8 +343,8 @@ fn event_log_clear_preserves_total_and_next_identity() {
             .unwrap(),
         PropertyValue::Unsigned(0)
     );
-    el.add_record(make_record(1, 1.0));
-    el.add_record(make_record(1, 2.0));
+    el.add_record(make_record(1, 1.0)).unwrap();
+    el.add_record(make_record(1, 2.0)).unwrap();
     assert_eq!(
         el.log_record_identities_internal()
             .unwrap()
@@ -357,7 +361,7 @@ fn event_log_clear_preserves_total_and_next_identity() {
             .unwrap(),
         PropertyValue::Unsigned(2)
     );
-    el.add_record(make_record(1, 3.0));
+    el.add_record(make_record(1, 3.0)).unwrap();
     assert_eq!(
         el.log_record_identities_internal().unwrap()[0].sequence_number(),
         3
@@ -376,7 +380,7 @@ fn event_log_disabled_ordinary_rejection_does_not_consume_identity() {
     )
     .unwrap();
     let before = el.log_record_identities_internal().unwrap();
-    el.add_record(make_record(1, 1.0));
+    el.add_record(make_record(1, 1.0)).unwrap();
 
     assert_eq!(el.log_record_identities_internal().unwrap(), before);
     assert_eq!(
@@ -395,7 +399,7 @@ fn event_log_total_record_count_is_u32_and_wraps_max_to_one() {
             .unwrap(),
         PropertyValue::Unsigned(u32::MAX as u64)
     );
-    el.add_record(make_record(1, 1.0));
+    el.add_record(make_record(1, 1.0)).unwrap();
     assert_eq!(
         el.read_property(PropertyIdentifier::TOTAL_RECORD_COUNT, None)
             .unwrap(),
@@ -412,7 +416,7 @@ fn event_log_retains_raw_flags_but_projects_no_status_or_sequence() {
     let mut el = EventLogObject::new(1, "EL-1", 1).unwrap();
     let mut record = make_record(1, 42.0);
     record.status_flags = Some(0b0100);
-    el.add_record(record);
+    el.add_record(record).unwrap();
 
     assert_eq!(el.records()[0].status_flags, Some(0b0100));
     let PropertyValue::List(records) = el

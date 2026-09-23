@@ -34,8 +34,8 @@ fn projected_records(object: &dyn BACnetObject) -> Vec<PropertyValue> {
 #[test]
 fn trend_log_projects_only_present_status_flags_as_fourth_field() {
     let mut trend = TrendLogObject::new(1, "TL-1", 2).unwrap();
-    trend.add_record(record(1, 10.0, Some(0b0100)));
-    trend.add_record(record(1, 20.0, None));
+    trend.add_record(record(1, 10.0, Some(0b0100))).unwrap();
+    trend.add_record(record(1, 20.0, None)).unwrap();
 
     let identities = trend.log_record_identities_internal().unwrap();
     assert_eq!(identities[0].sequence_number(), 1);
@@ -69,7 +69,7 @@ fn trend_log_keeps_log_status_and_record_status_flags_as_distinct_bitstrings() {
     let mut trend = TrendLogObject::new(1, "TL-1", 1).unwrap();
     let mut status = record(1, 0.0, Some(0b0100));
     status.log_datum = LogDatum::LogStatus(0b101);
-    trend.add_record(status);
+    trend.add_record(status).unwrap();
 
     let projected = projected_records(&trend);
     let PropertyValue::List(fields) = &projected[0] else {
@@ -95,7 +95,7 @@ fn trend_log_keeps_log_status_and_record_status_flags_as_distinct_bitstrings() {
 #[test]
 fn trend_multiple_retains_raw_flags_but_projects_three_fields() {
     let mut trend = TrendLogMultipleObject::new(1, "TLM-1", 1).unwrap();
-    trend.add_record(record(1, 10.0, Some(0b0100)));
+    trend.add_record(record(1, 10.0, Some(0b0100))).unwrap();
 
     assert_eq!(trend.records()[0].status_flags, Some(0b0100));
     let projected = projected_records(&trend);
@@ -111,8 +111,10 @@ fn trend_family_identity_raw_and_projection_views_stay_fifo_aligned() {
     let mut trend = TrendLogObject::new(1, "TL-1", 2).unwrap();
     let mut multiple = TrendLogMultipleObject::new(1, "TLM-1", 2).unwrap();
     for hour in 1..=3 {
-        trend.add_record(record(hour, hour as f32, None));
-        multiple.add_record(record(hour, hour as f32, Some(0b0001)));
+        trend.add_record(record(hour, hour as f32, None)).unwrap();
+        multiple
+            .add_record(record(hour, hour as f32, Some(0b0001)))
+            .unwrap();
     }
 
     for object in [&trend as &dyn BACnetObject, &multiple as &dyn BACnetObject] {

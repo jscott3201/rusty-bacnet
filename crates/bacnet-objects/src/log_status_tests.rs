@@ -12,6 +12,9 @@ use crate::event_log::EventLogObject;
 use crate::traits::BACnetObject;
 use crate::trend::{TrendLogMultipleObject, TrendLogObject};
 
+#[path = "log_insertion_tests.rs"]
+mod insertion;
+
 const LOG_DISABLED: u8 = 0b001;
 const BUFFER_PURGED: u8 = 0b010;
 
@@ -67,7 +70,7 @@ impl Family {
         }
     }
 
-    fn add_record(&mut self, record: BACnetLogRecord) {
+    fn add_record(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
         match self {
             Self::Event(object) => object.add_record(record),
             Self::Trend(object) => object.add_record(record),
@@ -289,12 +292,12 @@ fn stop_before_full_omits_triggering_ordinary_and_clock_failure_is_atomic() {
             PropertyValue::Boolean(true),
         )
         .unwrap();
-        one.add_record(ordinary(1, 10));
+        one.add_record(ordinary(1, 10)).unwrap();
         assert!(!one.enabled(), "{kind:?}");
         assert_eq!(one.total(), 1, "{kind:?}");
         assert_eq!(one.records().len(), 1, "{kind:?}");
         assert_status(&one, LOG_DISABLED);
-        one.add_record(ordinary(2, 20));
+        one.add_record(ordinary(2, 20)).unwrap();
         assert_eq!(one.total(), 1, "{kind:?}");
 
         let mut many = kind.object(3);
@@ -304,9 +307,9 @@ fn stop_before_full_omits_triggering_ordinary_and_clock_failure_is_atomic() {
             PropertyValue::Boolean(true),
         )
         .unwrap();
-        many.add_record(ordinary(1, 10));
-        many.add_record(ordinary(2, 20));
-        many.add_record(ordinary(3, 30));
+        many.add_record(ordinary(1, 10)).unwrap();
+        many.add_record(ordinary(2, 20)).unwrap();
+        many.add_record(ordinary(3, 30)).unwrap();
         assert_eq!(many.total(), 3, "{kind:?}");
         assert_eq!(many.records().len(), 3, "{kind:?}");
         assert_eq!(many.records()[0].log_datum, LogDatum::UnsignedValue(10));
@@ -324,11 +327,15 @@ fn stop_before_full_omits_triggering_ordinary_and_clock_failure_is_atomic() {
                     PropertyValue::Boolean(true),
                 )
                 .unwrap();
-            atomic.add_record(ordinary(1, 10));
+            atomic.add_record(ordinary(1, 10)).unwrap();
             let before_records = atomic.records().clone();
             let before_total = atomic.total();
             let before_identities = atomic.identities();
-            atomic.add_record(ordinary(2, 20));
+            assert_protocol(
+                atomic.add_record(ordinary(2, 20)).unwrap_err(),
+                ErrorClass::DEVICE,
+                ErrorCode::OPERATIONAL_PROBLEM,
+            );
             assert_eq!(atomic.records(), &before_records, "{kind:?}");
             assert_eq!(atomic.total(), before_total, "{kind:?}");
             assert_eq!(atomic.identities(), before_identities, "{kind:?}");
@@ -394,12 +401,12 @@ fn enable_and_stop_when_full_transitions_emit_exactly_one_status() {
             )
             .unwrap();
         transitions.clear();
-        transitions.add_record(ordinary(1, 10));
+        transitions.add_record(ordinary(1, 10)).unwrap();
         assert!(transitions.records().is_empty(), "{kind:?}");
 
         let mut fills = kind.object(3);
         fills.bind_clock(TestClock::valid());
-        fills.add_record(ordinary(1, 10));
+        fills.add_record(ordinary(1, 10)).unwrap();
         fills
             .write(
                 PropertyIdentifier::LOG_ENABLE,
@@ -422,8 +429,8 @@ fn enable_and_stop_when_full_transitions_emit_exactly_one_status() {
         let mut full = kind.object(2);
         let clock = TestClock::valid();
         full.bind_clock(clock.clone());
-        full.add_record(ordinary(1, 10));
-        full.add_record(ordinary(2, 20));
+        full.add_record(ordinary(1, 10)).unwrap();
+        full.add_record(ordinary(2, 20)).unwrap();
         full.write(
             PropertyIdentifier::STOP_WHEN_FULL,
             PropertyValue::Boolean(true),
@@ -451,8 +458,8 @@ fn zero_capacity_counts_without_residents_and_enforces_full_enable_gate() {
         let mut object = kind.object(0);
         let clock = TestClock::valid();
         object.bind_clock(clock.clone());
-        object.add_record(ordinary(1, 10));
-        object.add_record(ordinary(2, 20));
+        object.add_record(ordinary(1, 10)).unwrap();
+        object.add_record(ordinary(2, 20)).unwrap();
         assert!(object.records().is_empty(), "{kind:?}");
         assert_eq!(object.total(), 2, "{kind:?}");
         assert!(object.identities().is_empty(), "{kind:?}");
@@ -487,7 +494,7 @@ fn status_writes_require_a_valid_clock_before_mutation() {
     for kind in FamilyKind::ALL {
         for clock in [None, Some(TestClock::invalid())] {
             let mut object = kind.object(2);
-            object.add_record(ordinary(1, 10));
+            object.add_record(ordinary(1, 10)).unwrap();
             if let Some(clock) = clock.clone() {
                 object.bind_clock(clock);
             }
@@ -522,8 +529,8 @@ fn status_writes_require_a_valid_clock_before_mutation() {
             if let Some(clock) = clock.clone() {
                 stop.bind_clock(clock);
             }
-            stop.add_record(ordinary(1, 10));
-            stop.add_record(ordinary(2, 20));
+            stop.add_record(ordinary(1, 10)).unwrap();
+            stop.add_record(ordinary(2, 20)).unwrap();
             let before = stop.records().clone();
             let error = stop
                 .write(

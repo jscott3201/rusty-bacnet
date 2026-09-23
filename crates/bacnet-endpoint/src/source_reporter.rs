@@ -402,11 +402,7 @@ impl BACnetObject for SourceReporter {
         self.wrapped.log_record_identities_internal()
     }
 
-    fn add_trend_record(&mut self, record: BACnetLogRecord) {
+    fn add_trend_record(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
         self.wrapped.add_trend_record(record)
-    }
-
-    fn try_add_trend_record_internal(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
-        self.wrapped.try_add_trend_record_internal(record)
     }
 }

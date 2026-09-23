@@ -456,7 +456,7 @@
     "crates/bacnet-objects/src/event_log.rs::EventLogObject",
     "crates/bacnet-objects/src/trend/mod.rs::TrendLogObject",
     "crates/bacnet-objects/src/trend/mod.rs::TrendLogMultipleObject",
-    "crates/bacnet-objects/src/traits.rs::BACnetObject::try_add_trend_record_internal",
+    "crates/bacnet-objects/src/traits.rs::BACnetObject::add_trend_record",
     "crates/bacnet-server/src/trend_log.rs::poll_trend_logs"
    ],
    "positive_tests": [
@@ -469,11 +469,14 @@
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/log_status_tests.rs::status_writes_require_a_valid_clock_before_mutation",
-    "crates/bacnet-server/src/trend_log.rs::tests::poller_retries_when_mandatory_stop_status_has_no_clock"
+    "crates/bacnet-server/src/trend_log.rs::tests::poller_retries_when_mandatory_stop_status_has_no_clock",
+    "crates/bacnet-objects/src/log_insertion_tests.rs::fallible_trend_hook_preserves_state_on_clock_error_and_retries",
+    "crates/bacnet-objects/src/log_insertion_tests.rs::fallible_insertion_keeps_count_only_success_and_rejects_unsupported_objects",
+    "crates/bacnet-endpoint/src/source_reporter_forwarding_tests.rs::custom_capabilities_clocks_indexes_and_private_state_are_retained"
    ],
    "benchmarks": [],
    "public_claims": [],
-    "notes": "Qualified PR-0702 evidence only; no full log-family support claim is made. The shared lifecycle covers explicit effective Enable transitions, Record_Count zero purges, Stop_When_Full activation/full behavior, and ordinary stop-before-full insertion. Public constructors, records(), add_record(), and raw clear() remain compatible. ReadRange By Sequence and By Time can select the resident purge status identity under BACNET-15-READ-RANGE-LOG-BUFFER. Time-window Start_Time/Stop_Time transitions, LOG_INTERRUPTED, writable Log_DeviceObjectProperty purge paths, formal EventLog notification records, Trend Log Multiple polling, persistence/restart, and complete log conformance remain deferred."
+    "notes": "Qualified PR-0702 evidence only; no full log-family support claim is made. The shared lifecycle covers explicit effective Enable transitions, Record_Count zero purges, Stop_When_Full activation/full behavior, and ordinary stop-before-full insertion. Refs #742: concrete EventLog/TrendLog/TrendLogMultiple add_record and the single BACnetObject::add_trend_record hook now return Result<(), Error>; the void hooks and compatibility adapter are removed. Missing/invalid clocks required by a status transition return DEVICE/OPERATIONAL_PROBLEM without mutation. Disabled ordinary logging and zero-capacity count-only operations remain successful without guaranteeing a resident ordinary record. Unsupported objects explicitly return OBJECT/OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. Poller insertion failures preserve last_log and can retry after clock repair; SourceReporter forwards results. Constructors, records() and raw clear() retain their behavior. ReadRange By Sequence and By Time can select the resident purge status identity under BACNET-15-READ-RANGE-LOG-BUFFER. Time-window Start_Time/Stop_Time transitions, LOG_INTERRUPTED, writable Log_DeviceObjectProperty purge paths, formal EventLog notification records, Trend Log Multiple polling, persistence/restart, and complete log conformance remain deferred."
   },
   {
    "id": "BACNET-15-READ-RANGE-LOG-BUFFER",
