@@ -100,8 +100,15 @@ impl WritePropertyRollback {
 /// Implementors represent a single BACnet object (Device, AnalogInput, etc.)
 /// and provide read/write access to their properties.
 pub trait BACnetObject: Send + Sync {
-    /// Opt-in server-owned target Audit Reporter capability. The default keeps
-    /// downstream object implementations source-compatible and inert.
+    /// Typed local Device authority for composition-owned configuration.
+    /// This does not grant network write access to the object database.
+    #[doc(hidden)]
+    fn device_mut_internal(&mut self) -> Option<&mut crate::device::DeviceObject> {
+        None
+    }
+
+    /// Opt-in server-owned target Audit Reporter capability. Objects without
+    /// this capability remain inert for target reporting.
     #[doc(hidden)]
     fn audit_reporter_internal(&self) -> Option<&crate::audit::AuditReporterObject> {
         None

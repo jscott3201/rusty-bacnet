@@ -255,6 +255,17 @@ pub(crate) fn decode_write_property_value(
     if property == PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT {
         use bacnet_types::constructed::BACnetRecipient;
 
+        // Clause 15.9/15.10 relinquishment is an operation, not a Recipient
+        // value or disabled sentinel. The object owner must leave state intact.
+        if let Ok((tag, end)) = bacnet_encoding::tags::decode_tag(bytes, 0) {
+            if tag.class == bacnet_encoding::tags::TagClass::Application
+                && tag.number == bacnet_encoding::tags::app_tag::NULL
+                && tag.length == 0
+                && end == bytes.len()
+            {
+                return Ok(PropertyValue::Null);
+            }
+        }
         let (recipient, consumed) = bacnet_encoding::constructed::decode_recipient(bytes, 0)
             .map_err(|_| invalid_data_encoding_error())?;
         if consumed != bytes.len() {

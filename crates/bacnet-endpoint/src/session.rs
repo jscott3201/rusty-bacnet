@@ -65,6 +65,9 @@ use tokio::task::JoinHandle;
 #[path = "source_reporter.rs"]
 mod source_reporter;
 
+#[path = "device_writes.rs"]
+mod device_writes;
+
 use crate::roles::{
     admit_once, decode_terminal, inbound_canonical_peer, is_requester_lease, ClientRoleHandle,
     ServerRoleHandle, SessionToken,
@@ -229,6 +232,7 @@ pub struct EndpointSession<T: TransportPort + 'static> {
     source_broadcast: std::net::Ipv4Addr,
     static_source_audit_recipient: Option<crate::bip::StaticSourceAuditRecipient>,
     identity: Option<crate::identity::DeviceIdentity>,
+    device_write_authorizer: Option<bacnet_server::mutation::MutationAuthorizer>,
     egress: Option<bacnet_endpoint_core::endpoint_ingress::EndpointEgress>,
 }
 
@@ -311,6 +315,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             source_broadcast: std::net::Ipv4Addr::BROADCAST,
             static_source_audit_recipient: None,
             identity: None,
+            device_write_authorizer: None,
             egress: None,
         })
     }
@@ -514,7 +519,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                 "endpoint session cannot be started more than once".into(),
             ));
         }
+        let device_write_target = self.validate_device_writes()?;
         self.prepare_source_audit_reporter()?;
+        self.commit_device_write_profile(device_write_target);
         if self.lifecycle.compare_exchange(
             Lifecycle::Ready as u8,
             Lifecycle::Running as u8,
@@ -572,7 +579,16 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                 let db = self
                     .database
                     .get_or_insert_with(|| Arc::new(RwLock::new(ObjectDatabase::new())));
-                let responder = Arc::new(EndpointResponder::new(Arc::clone(db), egress.clone()));
+                let mut responder = EndpointResponder::new(Arc::clone(db), egress.clone());
+                if let Some(device) = device_write_target {
+                    responder = responder.with_device_writes(
+                        device,
+                        self.device_write_authorizer
+                            .clone()
+                            .expect("validated authorizer"),
+                    );
+                }
+                let responder = Arc::new(responder);
                 let handle = ServerRoleHandle::new(
                     &self.shared.token,
                     Arc::clone(&responder),
@@ -804,6 +820,10 @@ impl EndpointSession<bacnet_transport::bip::BipTransport> {
 #[cfg(test)]
 #[path = "source_reporter_tests.rs"]
 mod source_reporter_tests;
+
+#[cfg(test)]
+#[path = "device_write_tests.rs"]
+mod device_write_tests;
 
 impl<T: TransportPort + 'static> Drop for EndpointSession<T> {
     fn drop(&mut self) {

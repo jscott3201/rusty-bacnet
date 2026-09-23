@@ -13,7 +13,7 @@
 | Dimension | Value | Count |
 |---|---|---|
 | Priority | P0 | 16 |
-| Priority | P1 | 44 |
+| Priority | P1 | 45 |
 | Priority | P2 | 5 |
 | Priority | P3 | 4 |
 | Status | deferred-pending-owner-decision | 2 |
@@ -25,7 +25,7 @@
 | Status | implementation-present-needs-state-machine-audit | 4 |
 | Status | implementation-present-needs-timeout-tests | 1 |
 | Status | implementation-present-needs-window-tests | 1 |
-| Status | in-progress | 10 |
+| Status | in-progress | 11 |
 | Status | supported-with-clause-evidence | 19 |
 | Status | unknown-pending-source-review | 4 |
 | Status | unsupported-by-design | 3 |
@@ -34,6 +34,7 @@
 
 | ID | Anchor | Priority | Status | Public Claims |
 |---|---|---|---|---|
+| `BACNET-15-ENDPOINT-DEVICE-WRITE` | Clause 15.9; Clause 12.11 Protocol_Services_Supported | P1 | in-progress | 2 |
 | `BACNET-4-ARCHITECTURE` | Clause 4 | P2 | implementation-present-needs-source-review | 2 |
 | `BACNET-5-TSM-CLIENT` | Clause 5.4.4 | P1 | implementation-present-needs-state-machine-audit | 2 |
 | `BACNET-5-TSM-SERVER` | Clause 5.4.5 | P1 | implementation-present-needs-state-machine-audit | 1 |

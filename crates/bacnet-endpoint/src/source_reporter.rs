@@ -62,6 +62,10 @@ pub(super) fn install(
 // a default here would silently discard a downstream object's override. Only the
 // source property and its write gate, plus deletion, belong to this adapter.
 impl BACnetObject for SourceReporter {
+    fn device_mut_internal(&mut self) -> Option<&mut bacnet_objects::device::DeviceObject> {
+        self.wrapped.device_mut_internal()
+    }
+
     fn audit_reporter_internal(&self) -> Option<&AuditReporterObject> {
         self.wrapped.audit_reporter_internal()
     }

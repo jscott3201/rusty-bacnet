@@ -1,3 +1,5 @@
+mod description;
+
 use super::*;
 use crate::clock::{ClockFrame, ClockReader};
 use bacnet_types::primitives::{Date, Time};
@@ -182,23 +184,6 @@ fn device_description_default_empty() {
         .read_property(PropertyIdentifier::DESCRIPTION, None)
         .unwrap();
     assert_eq!(val, PropertyValue::CharacterString(String::new()));
-}
-
-#[test]
-fn device_description_write_read() {
-    let mut dev = make_device();
-    dev.write_property(
-        PropertyIdentifier::DESCRIPTION,
-        None,
-        PropertyValue::CharacterString("Main building controller".into()),
-        None,
-    )
-    .unwrap();
-    assert_eq!(
-        dev.read_property(PropertyIdentifier::DESCRIPTION, None)
-            .unwrap(),
-        PropertyValue::CharacterString("Main building controller".into())
-    );
 }
 
 #[test]

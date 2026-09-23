@@ -50,6 +50,9 @@ impl BACnetObject for RecipientObject {
         assert_eq!(property, PROPERTY);
         // Deliberately accept any value: validation must precede this mutation.
         self.writes.fetch_add(1, Ordering::SeqCst);
+        if value == PropertyValue::Null {
+            return Ok(());
+        }
         self.value = value;
         Ok(())
     }
@@ -152,14 +155,15 @@ fn valid_values() -> Vec<&'static [u8]> {
 fn invalid_values() -> Vec<Vec<u8>> {
     vec![
         vec![],
-        vec![0x00], // NULL is not a Recipient or a disabled sentinel.
-        vec![0x11], // Boolean
+        vec![0x01, 0x00],                   // NULL with contents is malformed.
+        vec![0x00, 0x00],                   // two relinquishments are not one property value.
+        vec![0x11],                         // Boolean
         vec![0xc4, 0x02, 0x00, 0x00, 0x2a], // application OID, not choice [0]
         vec![0x2c, 0x02, 0x00, 0x00, 0x2a], // unknown choice [2]
-        vec![0x0b, 0x02, 0x00, 0x2a], // short Device contents
+        vec![0x0b, 0x02, 0x00, 0x2a],       // short Device contents
         vec![0x0c, 0x00, 0x00, 0x00, 0x2a], // non-Device OID
         vec![0x0c, 0x02, 0x3f, 0xff, 0xff], // wildcard Device
-        vec![0x1e, 0x21, 0x00, 0x1f], // missing MAC
+        vec![0x1e, 0x21, 0x00, 0x1f],       // missing MAC
         vec![0x1e, 0x91, 0x00, 0x60, 0x1f], // wrong network type
         vec![0x1e, 0x23, 0x01, 0x00, 0x00, 0x60, 0x1f], // network > u16
         vec![0x1e, 0x21, 0x00, 0x00, 0x1f], // wrong MAC type
@@ -211,6 +215,21 @@ fn wp_rejects_invalid_recipient_before_mutation() {
         assert_value(&db, INITIAL);
         assert_eq!(writes.load(Ordering::SeqCst), 0, "{value:02x?}");
     }
+}
+
+#[test]
+fn recipient_null_relinquishment_is_noop_and_wpm_continues() {
+    let (mut db, writes) = fixture();
+    assert_eq!(wp(&mut db, &[0x00]).unwrap(), oid());
+    assert_value(&db, INITIAL);
+    let WritePropertyMultipleOutcome::Success { committed_oids } =
+        wpm(&mut db, &[&[0x00], DEVICE, &[0x00]])
+    else {
+        panic!("NULL relinquishment must not stop the valid WPM suffix");
+    };
+    assert_eq!(committed_oids, vec![oid()]);
+    assert_value(&db, DEVICE);
+    assert_eq!(writes.load(Ordering::SeqCst), 4);
 }
 
 #[test]

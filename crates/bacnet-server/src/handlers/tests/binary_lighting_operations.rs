@@ -98,14 +98,13 @@ fn assert_property_error(error: Error, expected: ErrorCode) {
     }
 }
 
-fn assert_priority_decode_error(error: Error, priority: u8) {
-    match error {
-        Error::Decoding { message, .. } => assert!(
-            message.contains(&format!("priority {priority} out of range 1-16")),
-            "unexpected priority error: {message}"
-        ),
-        other => panic!("expected existing priority decoding error, got {other:?}"),
-    }
+fn assert_priority_range_error(error: Error) {
+    assert!(
+        matches!(error, Error::Protocol { class, code }
+        if class == ErrorClass::SERVICES.to_raw() as u32
+            && code == ErrorCode::PARAMETER_OUT_OF_RANGE.to_raw() as u32),
+        "{error:?}"
+    );
 }
 
 fn assert_services_invalid_tag(error: Error) {
@@ -223,7 +222,7 @@ fn write_property_priority_errors_are_atomic_and_wpm_keeps_prior_prefix() {
     .unwrap();
 
     for priority in [0, 17, u8::MAX] {
-        assert_priority_decode_error(
+        assert_priority_range_error(
             wp(
                 &mut db,
                 oid,
@@ -233,7 +232,6 @@ fn write_property_priority_errors_are_atomic_and_wpm_keeps_prior_prefix() {
                 Some(priority),
             )
             .unwrap_err(),
-            priority,
         );
         assert_eq!(
             read(&db, oid, PropertyIdentifier::EGRESS_ACTIVE, None),

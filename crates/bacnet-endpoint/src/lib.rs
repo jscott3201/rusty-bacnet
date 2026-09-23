@@ -46,7 +46,10 @@
 //!   `LoopbackTransport` / `LoopbackWebSocket` for determinism, not as
 //!   on-wire claims.
 //! - Narrow server scope: the endpoint server role executes `ReadProperty`
-//!   (+ `Reject`/`Abort` + segmentation-`Abort`). Full `bacnet-server`
+//!   (+ `Reject`/`Abort` + segmentation-`Abort`). Explicit
+//!   [`EndpointSession::with_device_writes`](session::EndpointSession::with_device_writes)
+//!   enables authorized writes to the one local Device's Description, with
+//!   deterministic and real B/IP loopback tests. Full `bacnet-server`
 //!   dispatch parity is out of scope.
 //!
 //! # Data-link support matrix (explicit, not silent)
