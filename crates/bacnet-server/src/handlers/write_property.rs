@@ -252,6 +252,25 @@ pub(crate) fn decode_write_property_value(
     if property == PropertyIdentifier::RECIPIENT_LIST {
         return Ok(PropertyValue::ApplicationData(bytes.to_vec()));
     }
+    if property == PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT {
+        use bacnet_types::constructed::BACnetRecipient;
+
+        let (recipient, consumed) = bacnet_encoding::constructed::decode_recipient(bytes, 0)
+            .map_err(|_| invalid_data_encoding_error())?;
+        if consumed != bytes.len() {
+            return Err(invalid_data_encoding_error());
+        }
+        if let BACnetRecipient::Device(oid) = recipient {
+            if oid.object_type() != ObjectType::DEVICE
+                || oid.instance_number() == ObjectIdentifier::MAX_INSTANCE
+            {
+                return Err(invalid_data_encoding_error());
+            }
+        }
+        // This validates the single Recipient value, not its deliverability.
+        // Address routing and broadcast policy belong to the mutation owner.
+        return Ok(PropertyValue::ApplicationData(bytes.to_vec()));
+    }
     if array_index != Some(0) && property == PropertyIdentifier::STAGES {
         return decode_structured_array(bytes, array_index, |data, offset| {
             bacnet_encoding::constructed::decode_stage_limit_value(data, offset).map(|(_, end)| end)
