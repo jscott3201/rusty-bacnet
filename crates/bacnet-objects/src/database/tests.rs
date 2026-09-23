@@ -24,11 +24,6 @@ fn all_nine_builtin_intrinsic_families_implement_atomic_commit() {
     ];
 
     for object in &mut objects {
-        assert!(
-            object.intrinsic_reporting_requires_atomic_commit(),
-            "{} must opt into the atomic server path",
-            object.object_name()
-        );
         object
             .commit_event_transition_internal(EventTransitionCommit {
                 change: EventStateChange {

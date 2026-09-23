@@ -144,10 +144,6 @@ impl BACnetObject for AtomicHistoryObject {
         ])
     }
 
-    fn intrinsic_reporting_requires_atomic_commit(&self) -> bool {
-        true
-    }
-
     fn commit_event_transition_internal(
         &mut self,
         _commit: EventTransitionCommit,
@@ -459,8 +455,7 @@ fn malformed_or_missing_required_projection_commits_locally_but_cannot_emit() {
         .expect("the local atomic transition remains committed");
         assert_eq!(commits.load(Ordering::Relaxed), 1);
         assert!(
-            !crate::server::event_notifications::ResolvedIntrinsicTransition::Committed(committed)
-                .can_emit(),
+            committed.event_values.is_none(),
             "malformed or missing required values suppress the frame before encoding"
         );
     }

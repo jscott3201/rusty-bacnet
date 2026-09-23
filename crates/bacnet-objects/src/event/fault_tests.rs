@@ -710,7 +710,7 @@ fn command_failure_fault_entry_discards_an_in_flight_countdown() {
 
 #[test]
 fn writing_reliability_on_an_object_drives_event_state_to_fault() {
-    // Proves the `impl_intrinsic_reporting!` wiring, which is what carries
+    // Proves the `impl_builtin_intrinsic_reporting!` wiring, which is what carries
     // reliability into detection for all nine intrinsically-reporting object
     // types. Reliability arrives by the ordinary property-write route, so this
     // also covers the case the server's fault detector is not involved in at

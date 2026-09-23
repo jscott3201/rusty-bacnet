@@ -397,7 +397,7 @@ pub trait BACnetObject: Send + Sync {
     /// `None` when none did (no change, delay seeded, or the object does not
     /// support intrinsic reporting). A cleared `Event_Enable` bit sets the
     /// outcome's `distribute` flag to false rather than withholding the
-    /// transition. Built-in object families leave `Event_State`,
+    /// transition. Implementations must leave `Event_State`,
     /// `Acked_Transitions`, event history, and fire-ready detector state
     /// unchanged until [`commit_event_transition_internal`](Self::commit_event_transition_internal)
     /// succeeds. Clause 13.2.2.1.4's transition actions run either way, and
@@ -412,27 +412,13 @@ pub trait BACnetObject: Send + Sync {
     /// Called by the server's one-second intrinsic-reporting task. Fires the
     /// pending transition when its delay elapses this tick, cancels it if the
     /// triggering condition reverted, and returns `Some(TransitionOutcome)`
-    /// when a transition is ready. A fire-ready built-in proposal remains
+    /// when a transition is ready. A fire-ready proposal must remain
     /// retryable until the commit hook succeeds. As with
     /// [`evaluate_intrinsic_reporting`](Self::evaluate_intrinsic_reporting),
     /// `Event_Enable` is reported via `distribute`, not by returning `None`.
     /// Objects without a delayed transition return `None`.
     fn tick_intrinsic_reporting(&mut self) -> Option<TransitionOutcome> {
         None
-    }
-
-    /// Whether intrinsic-reporting outcomes require the atomic commit hook.
-    ///
-    /// The default preserves the legacy contract used by downstream objects
-    /// and [`crate::impl_intrinsic_reporting!`]: evaluation mutates detector
-    /// state immediately, so the server must distribute its outcome without
-    /// attempting another commit. Built-in proposal-based objects override
-    /// this to return `true`; their outcomes are uncommitted and must be
-    /// rejected unless [`commit_event_transition_internal`](Self::commit_event_transition_internal)
-    /// succeeds.
-    #[doc(hidden)]
-    fn intrinsic_reporting_requires_atomic_commit(&self) -> bool {
-        false
     }
 
     /// Atomically commit all object-owned state for one event transition.
@@ -442,14 +428,17 @@ pub trait BACnetObject: Send + Sync {
     /// timestamp, and an optional message. Implementations must validate the
     /// coordinate and source state before changing `Event_State`,
     /// `Acked_Transitions`, `Event_Time_Stamps`, or stored message state, and
-    /// must leave every value unchanged on error. A successful built-in
+    /// must leave every value unchanged on error. A successful
     /// implementation also finalizes the detector's pending and fault-edge
     /// state; a failed commit leaves that state retryable.
     ///
     /// This internal channel is deliberately separate from network property
     /// writes and notification distribution. The default fails closed so an
-    /// object family participates only after it can lend all required state to
-    /// the shared commit kernel.
+    /// object participates only after implementing this contract. Custom objects
+    /// can own and commit their state directly using the public
+    /// [`EventTransitionCommit`] and [`EventTransitionCommitError`] types;
+    /// no built-in commit kernel is required. Both server intrinsic paths
+    /// require success before distributing a notification.
     #[doc(hidden)]
     fn commit_event_transition_internal(
         &mut self,

@@ -121,8 +121,7 @@ fn policy_format_uses_object_and_state_display_including_unknown_state_numbers()
     let committed = commit(&mut db, oid, EventState::NORMAL, unknown, true)
         .expect("the local transition and message commit independently of wire projection");
     assert!(
-        !crate::server::event_notifications::ResolvedIntrinsicTransition::Committed(committed)
-            .can_emit(),
+        committed.event_values.is_none(),
         "an unsupported structured projection suppresses only the outbound frame"
     );
     assert_eq!(

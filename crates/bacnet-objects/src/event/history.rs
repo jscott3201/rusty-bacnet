@@ -112,10 +112,6 @@ macro_rules! impl_builtin_intrinsic_reporting {
             })
         }
 
-        fn intrinsic_reporting_requires_atomic_commit(&self) -> bool {
-            true
-        }
-
         fn evaluate_intrinsic_reporting(&mut self) -> Option<$crate::event::TransitionOutcome> {
             if !self.$event_detection_enable_field {
                 return None;
