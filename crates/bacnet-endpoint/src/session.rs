@@ -842,51 +842,25 @@ struct DispatchParts {
     shared: Arc<SessionShared>,
 }
 
+#[path = "session_dispatch.rs"]
+mod dispatch;
+use dispatch::{next_event, DispatchEvent};
+
 async fn dispatch_loop(mut parts: DispatchParts, mut cancel: oneshot::Receiver<()>) -> SessionExit {
-    // Single ingress consumer: this task alone polls all three receivers.
-    // Every await is cancellation-safe: leases are held by RAII guards
-    // (request guard / notification operation) so dropping this future
-    // cannot strand a coordinator slot.
+    // One consumer retains all receivers and joins; cancellation stays first.
+    let mut next = 0;
     loop {
-        tokio::select! {
+        let event = tokio::select! {
             biased;
             _ = &mut cancel => return SessionExit::Cancelled,
-            joined = async {
-                match &parts.notifications {
-                    Some(owner) => owner.join_next().await,
-                    None => std::future::pending().await,
-                }
-            } => NotificationTransactions::observe(joined),
-            received = parts.inbound.recv() => {
-                let Some(received) = received else {
-                    // Inbound closed: keep terminal/policy draining; ingress
-                    // closure is reported via policy/terminal shutdown below.
-                    // If both are also closed, exit.
-                    if parts.terminal.is_closed() && parts.policy.is_closed() {
-                        return SessionExit::ReceiversClosed;
-                    }
-                    continue;
-                };
-                handle_inbound(&mut parts, received).await;
-            }
-            received = parts.terminal.recv() => {
-                let Some(received) = received else {
-                    if parts.inbound.is_closed() && parts.policy.is_closed() {
-                        return SessionExit::ReceiversClosed;
-                    }
-                    continue;
-                };
-                handle_terminal(&mut parts, received).await;
-            }
-            outcome = parts.policy.recv() => {
-                let Some(outcome) = outcome else {
-                    if parts.inbound.is_closed() && parts.terminal.is_closed() {
-                        return SessionExit::ReceiversClosed;
-                    }
-                    continue;
-                };
-                handle_ingress_policy(&parts.shared, outcome).await;
-            }
+            event = next_event(&mut parts, &mut next) => event,
+        };
+        match event {
+            DispatchEvent::Worker(joined) => NotificationTransactions::observe(Some(joined)),
+            DispatchEvent::Inbound(received) => handle_inbound(&mut parts, received).await,
+            DispatchEvent::Terminal(received) => handle_terminal(&mut parts, received).await,
+            DispatchEvent::Policy(outcome) => handle_ingress_policy(&parts.shared, outcome).await,
+            DispatchEvent::Closed => return SessionExit::ReceiversClosed,
         }
     }
 }
