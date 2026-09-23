@@ -377,6 +377,15 @@ hub.stop().await;
 
 The SC hub is a TLS WebSocket relay. Both clients and servers connect to it as spoke nodes. Messages are routed by VMAC address.
 
+Each admitted NPDU or addressed opaque unicast relay has one five-second local
+attempt, including destination sink acquisition and WebSocket send. A timeout
+lets that source process its next frame; it does not retry, fabricate a Result,
+or retire the destination solely for timing out. Terminal send errors retain the
+existing captured-connection retirement rules, and heartbeat liveness is separate.
+Cancellation cannot retract bytes already buffered by the WebSocket. Broadcast
+and forwarded Result attempts retain their existing bounds; the graceful shutdown
+budget may force cleanup before a blocked relay's send deadline.
+
 With `sc-tls`, every public hub startup requires `ScHubTlsConfig`:
 explicit nonempty CA trust anchors, mandatory WebPKI client verification, and
 TLS 1.3-only local policy. Its fallible `from_der` constructor performs no file or

@@ -266,19 +266,15 @@ impl ScServerBuilder {
         if let Some(rc) = self.reconnect {
             let hub_url = self.hub_url.clone();
             let tls_config = tls_config.clone();
-            #[allow(deprecated)]
-            {
-                transport = transport
-                    .with_connector(move || {
-                        let hub_url = hub_url.clone();
-                        let tls_config = tls_config.clone();
-                        async move {
-                            bacnet_transport::sc_tls::TlsWebSocket::connect(&hub_url, tls_config)
-                                .await
-                        }
-                    })
-                    .with_reconnect(rc);
-            }
+            transport = transport
+                .with_connector(move || {
+                    let hub_url = hub_url.clone();
+                    let tls_config = tls_config.clone();
+                    async move {
+                        bacnet_transport::sc_tls::TlsWebSocket::connect(&hub_url, tls_config).await
+                    }
+                })
+                .with_reconnect(rc);
         }
 
         BACnetServer::start_with_clock_mode_and_bindings(
