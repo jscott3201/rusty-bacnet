@@ -486,10 +486,18 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                         }
                                     };
 
-                                    match rejection::reject(
-                                        &msg, &data, &*ws_clone,
-                                        rejection::RejectionBudget::new(last_bvlc_received, heartbeat_timeout_ms),
-                                    ).await {
+                                    let budget = rejection::RejectionBudget::new(
+                                        last_bvlc_received, heartbeat_timeout_ms,
+                                    );
+                                    match async {
+                                        if rejection::reject(&msg, &data, &*ws_clone, budget).await? {
+                                            return Ok(true);
+                                        }
+                                        address_resolution::maybe_answer(
+                                            &msg, &conn, &*ws_clone, &advertised_payload,
+                                            &direct_intake, !npdu_tx.is_closed(), budget,
+                                        ).await
+                                    }.await {
                                         Ok(true) => continue,
                                         Ok(false) => {},
                                         Err(rejection::RejectionExpired) => {
@@ -609,12 +617,6 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                         }
                                     }
 
-                                    // Best-effort answer to one accepted
-                                    // Address-Resolution request, if any.
-                                    address_resolution::maybe_answer(
-                                        &msg, &conn, &*ws_clone, &advertised_payload,
-                                    )
-                                    .await;
                                     if let Some(direct) = &direct {
                                         direct.fulfill_from_hub_message(&msg).await;
                                     }

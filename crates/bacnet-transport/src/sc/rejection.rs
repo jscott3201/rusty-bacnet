@@ -105,7 +105,7 @@ pub(super) async fn reject<W: WebSocketPort>(
         return Ok(true);
     }
     // Address-Resolution 0x02/0x03 validates URI bodies before dispatch.
-    // Well-formed bodies stay silently consumed (no answering yet); malformed
+    // Valid requests proceed to the live accepting-capability answer; malformed
     // requests NAK locally while malformed responses stay silent per the
     // response rule. Precedes Unknown so the known family keeps its shape
     // diagnostics.

@@ -1,8 +1,9 @@
 //! Established-node Address-Resolution admission and answering, not
 //! discovery or dialing.
 //!
-//! Well-formed request bodies earn an ACK from [`maybe_answer`] carrying the
-//! configured URI list (empty when unconfigured); well-formed response
+//! Well-formed requests earn an ACK only while this node accepts direct
+//! connections; otherwise they receive an optional-functionality NAK. The ACK
+//! carries the configured URI list (which may be empty). Well-formed response
 //! bodies stay silently consumed with accepted activity (no NPDU, no state
 //! change), per the response rule. Malformed request bodies draw the
 //! validator's diagnostic as a connection-local NAK for locally-addressed
@@ -40,10 +41,12 @@ impl<W: WebSocketPort> super::ScTransport<W> {
     /// Each entry must have the secure WebSocket shape the receive-side
     /// validator accepts (scheme, host, visible characters), and the
     /// space-joined list must fit its own answer envelope inside the local
-    /// receive budget. Accepted requests are answered with an
-    /// Address-Resolution-ACK carrying the joined list; an unconfigured node
-    /// answers with a valid empty list, never a refusal. Discovery, dialing,
-    /// and hub behavior are unaffected.
+    /// receive budget. This configures URI knowledge, not accepting capability.
+    /// A live registered direct listener with matching identity and open intakes
+    /// answers with an Address-Resolution-ACK carrying the list (possibly empty).
+    /// Otherwise the node sends OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. Using
+    /// current listener availability is local policy, shared with Advertisement.
+    /// Discovery, dialing, and hub behavior are unaffected.
     ///
     /// # Panics
     ///
@@ -107,10 +110,10 @@ pub(super) fn answer_destination(msg: &ScMessage) -> Option<Option<Vmac>> {
     Some(msg.originating_vmac)
 }
 
-/// Answer one accepted Address-Resolution request with an ACK carrying the
-/// configured URI payload (empty when unconfigured).
+/// Answer a valid request before activity refresh. Return true when denied or
+/// disconnected so the caller preserves the existing rejection liveness policy.
 ///
-/// Best-effort like Heartbeat-ACK: no rejection budget is spent on this
+/// Positive ACKs are best-effort like Heartbeat-ACK: no rejection budget is spent on this
 /// positive answer, and no separate rate gate is added — each valid unicast
 /// request earns one answer, while the broadcast/response/addressed
 /// envelopes that could amplify a storm stay silent and malformed shapes
@@ -124,23 +127,47 @@ pub(super) async fn maybe_answer<W: WebSocketPort>(
     conn: &Mutex<ScConnection>,
     ws: &W,
     advertised_payload: &[u8],
-) {
+    intake: &super::advertisement::DirectIntake,
+    application_intake_open: bool,
+    budget: RejectionBudget,
+) -> Result<bool, RejectionExpired> {
     let destination = match answer_destination(msg) {
         Some(destination) => destination,
-        None => return,
+        None => return Ok(false),
     };
-    let reply = {
+    let (reply, supported) = {
         let c = conn.lock().await;
         if c.state != ScConnectionState::Connected {
-            return;
+            return Ok(true);
         }
-        c.build_address_resolution_ack(msg.message_id, destination, advertised_payload)
+        // Sample actual admission, not URI knowledge or a remembered listener
+        // flag. A subsequent listener stop cannot recall an already-built ACK.
+        let supported = application_intake_open && intake.accepts_direct(&c);
+        let reply = if supported {
+            c.build_address_resolution_ack(msg.message_id, destination, advertised_payload)
+        } else {
+            build_bvlc_result_nak(
+                msg.message_id,
+                msg.function,
+                0,
+                destination,
+                ErrorClass::COMMUNICATION,
+                ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
+            )
+        };
+        (reply, supported)
     };
     let mut bytes = BytesMut::new();
     encode_sc_message(&mut bytes, &reply);
-    if let Err(e) = ws.send(&bytes).await {
-        warn!("BACnet/SC address-resolution ACK send error: {}", e);
+    let sent = if supported {
+        ws.send(&bytes).await
+    } else {
+        budget.send(ws, &bytes).await?
+    };
+    if let Err(e) = sent {
+        warn!("BACnet/SC address-resolution reply send error: {}", e);
     }
+    Ok(!supported)
 }
 
 pub(super) async fn reject<W: WebSocketPort>(
@@ -164,10 +191,9 @@ pub(super) async fn reject<W: WebSocketPort>(
     {
         return Ok(true);
     }
-    // Valid shapes are answered by `maybe_answer` (empty versus populated
-    // URI list) and stay consumed with accepted activity. Discovery and
-    // dialing remain later work; this gate only rejects malformed bodies
-    // before dispatch.
+    // Valid requests proceed to the live capability decision in `maybe_answer`;
+    // valid responses stay consumed with accepted activity. This gate rejects
+    // malformed bodies before dispatch.
     let Some(code) = address_resolution_message_error(msg) else {
         return Ok(false);
     };

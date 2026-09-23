@@ -340,6 +340,15 @@ enforcement, not lifetime immutability**: `connection()` still exposes mutable
 `ScConnection` identity fields to applications. Pure `ScConnection` codec/manual
 WebSocket use and later handshake validation are outside this guard.
 
+`with_advertised_uris` configures known direct-connection URIs; it does not enable
+accepting connections. Address-Resolution requests receive an ACK (with a
+possibly empty URI list) only while a registered direct listener is live, its
+VMAC/UUID matches, and both NPDU intakes remain open. Otherwise the node returns
+COMMUNICATION/OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED (`7/45`). This current-live
+availability policy is shared with Advertisement. Capability NAKs use the
+existing rejection deadline and retirement behavior. See the
+[scoped conformance evidence](conformance/standard-135-2020-ledger.md#node-address-resolution-accepting-capability).
+
 ### BACnet/SC Hub
 
 ```rust

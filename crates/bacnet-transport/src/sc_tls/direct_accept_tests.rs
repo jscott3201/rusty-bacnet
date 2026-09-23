@@ -543,6 +543,18 @@ async fn assert_accept_direct(hub: &crate::sc::LoopbackWebSocket, expected: u8) 
         reply,
         [4, 0, reply[2], reply[3], 1, expected, 0x16, 0x49, 0x05, 0xC4]
     );
+    // Address-Resolution must agree with Advertisement's live capability,
+    // including after accept-task cancellation or application-intake closure.
+    hub.send(&[2, 0, 0x33, 0x44]).await.unwrap();
+    let reply = tokio::time::timeout(Duration::from_secs(5), hub.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    if expected == 1 {
+        assert_eq!(reply, [3, 0, 0x33, 0x44]);
+    } else {
+        assert_eq!(reply, [0, 0, 0x33, 0x44, 2, 1, 0, 0, 7, 0, 45]);
+    }
 }
 
 #[tokio::test]

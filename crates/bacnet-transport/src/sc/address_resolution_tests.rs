@@ -1,13 +1,20 @@
 //! Independent raw-wire node admission vectors for Address-Resolution
 //! (0x02) and Address-Resolution-ACK (0x03); no hub fallback involved.
 //!
-//! Well-formed requests earn an ACK (empty here: the fixture transport is
-//! unconfigured); well-formed responses stay silently consumed per the
+//! Without a direct listener, well-formed requests earn a capability NAK;
+//! well-formed responses stay silently consumed per the
 //! response rule. Malformed requests NAK locally while malformed responses
 //! stay silent. Hub opaque transit for valid bodies is preserved by
 //! existing hub tests; these vectors prove the node gate only.
 use super::*;
 use tokio::time::timeout;
+
+#[cfg(feature = "sc-tls")]
+#[path = "address_resolution_capability_tests.rs"]
+mod capability;
+#[cfg(feature = "sc-tls")]
+#[path = "address_resolution_test_support.rs"]
+pub(super) mod listener;
 
 fn wire(
     raw: u8,
@@ -238,52 +245,32 @@ fn answer_predicate_accepts_only_answerable_requests() {
 }
 
 #[tokio::test]
-async fn answer_configured_uris_echoed_with_copied_ids() {
-    let (mut transport, mut rx, hub) =
-        start_with_uris(&["wss://one.example/sc", "wss://two.example:8443/sc"]).await;
-    hub.send(&wire(2, 0x2234, None, None, 0, &[]))
-        .await
-        .unwrap();
-    let first = recv_ack(&hub).await;
-    assert_eq!(first.function, ScFunction::AddressResolutionAck);
-    assert_eq!(first.message_id, 0x2234);
-    assert_eq!(first.originating_vmac, None);
-    assert_eq!(first.destination_vmac, None);
-    assert!(first.dest_options.is_empty());
-    assert!(first.data_options.is_empty());
-    assert_eq!(
-        first.payload.as_ref(),
-        b"wss://one.example/sc wss://two.example:8443/sc"
-    );
-    hub.send(&wire(2, 0x2235, Some([0x22; 6]), None, 0, &[]))
-        .await
-        .unwrap();
-    let second = recv_ack(&hub).await;
-    assert_eq!(second.function, ScFunction::AddressResolutionAck);
-    assert_eq!(
-        second.destination_vmac,
-        Some([0x22; 6]),
-        "answer must be routable back to the requesting node"
-    );
-    assert_eq!(second.message_id, 0x2235);
-    assert_eq!(
-        second.payload.as_ref(),
-        b"wss://one.example/sc wss://two.example:8443/sc"
-    );
-    barrier(&hub).await;
-    assert!(rx.try_recv().is_err());
-    transport.stop().await.unwrap();
+async fn absent_listener_refuses_regardless_of_configured_uris() {
+    for uris in [
+        vec![],
+        vec!["wss://one.example/sc", "wss://two.example:8443/sc"],
+    ] {
+        let (mut transport, mut rx, hub) = start_with_uris(&uris).await;
+        for source in [None, Some([0x22; 6])] {
+            hub.send(&wire(2, 0x2234, source, None, 0, &[]))
+                .await
+                .unwrap();
+            assert_eq!(recv(&hub).await, nak(2, 0x2234, source, 45, 0));
+            barrier(&hub).await;
+        }
+        assert!(rx.try_recv().is_err());
+        transport.stop().await.unwrap();
+    }
 }
 
 #[tokio::test]
 async fn no_answer_once_disconnected() {
     let (mut transport, mut rx, hub) = start_with_uris(&["wss://one.example/sc"]).await;
-    // A valid request is answered while connected.
+    // A valid request is refused while connected without a direct listener.
     hub.send(&wire(2, 0x2234, None, None, 0, &[]))
         .await
         .unwrap();
-    let reply = recv_ack(&hub).await;
-    assert_eq!(reply.function, ScFunction::AddressResolutionAck);
+    assert_eq!(recv(&hub).await, nak(2, 0x2234, None, 45, 0));
     // Peer-initiated disconnect retires the connection; the transport
     // acknowledges the disconnect itself.
     hub.send(&wire(8, 0x2236, None, None, 0, &[]))
@@ -305,7 +292,7 @@ async fn no_answer_once_disconnected() {
 }
 
 #[tokio::test]
-async fn answer_keeps_heartbeat_and_npdu_interop() {
+async fn capability_denial_preserves_pending_heartbeat_and_npdu_interop() {
     let (client, hub) = LoopbackWebSocket::pair();
     let mut transport = ScTransport::new(client, [1; 6])
         .with_device_uuid([1; 16])
@@ -318,24 +305,14 @@ async fn answer_keeps_heartbeat_and_npdu_interop() {
     let mut rx = rx.unwrap();
     let probe = recv(&hub).await;
     assert_eq!(probe[0], 0x0A);
-    // A request earns exactly one answer; accepted traffic keeps the
-    // heartbeat budget alive like NPDUs.
+    // Capability denial does not clear the outstanding probe. Its matching
+    // ACK remains usable, followed by an independent NPDU control.
     hub.send(&wire(2, 0x2234, Some([0x22; 6]), None, 0, &[]))
         .await
         .unwrap();
-    let reply = recv_ack(&hub).await;
-    assert_eq!(reply.function, ScFunction::AddressResolutionAck);
-    assert_eq!(reply.destination_vmac, Some([0x22; 6]));
-    assert_eq!(reply.payload.as_ref(), b"wss://one.example/sc");
-    let next = timeout(Duration::from_secs(1), hub.recv())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(next[0], 0x0A);
-    assert_ne!(&next[2..4], &probe[2..4]);
+    assert_eq!(recv(&hub).await, nak(2, 0x2234, Some([0x22; 6]), 45, 0));
     assert!(rx.try_recv().is_err());
-    // Positive controls only AFTER the resolution window.
-    hub.send(&[0x0B, 0, next[2], next[3]]).await.unwrap();
+    hub.send(&[0x0B, 0, probe[2], probe[3]]).await.unwrap();
     hub.send(&wire(1, 0, Some([0x22; 6]), None, 0, &[1, 0, 0x30]))
         .await
         .unwrap();
@@ -358,17 +335,13 @@ async fn barrier(hub: &LoopbackWebSocket) {
 async fn address_resolution_valid_shapes_answered_or_silent_without_npdu() {
     let (mut transport, mut rx, hub) = super::data_attribute_tests::start_transport().await;
     // Empty request is the only valid request shape. The fixture transport
-    // is unconfigured, so each answer carries a valid empty URI list with
-    // the request ID copied and the destination mirrored to the origin.
+    // has no listener, so each answer carries a capability NAK with the
+    // request ID copied and the destination mirrored to the origin.
     for source in [None, Some([0x22; 6])] {
         hub.send(&wire(2, 0x2233, source, None, 0, &[]))
             .await
             .unwrap();
-        let reply = recv_ack(&hub).await;
-        assert_eq!(reply.function, ScFunction::AddressResolutionAck);
-        assert_eq!(reply.message_id, 0x2233);
-        assert_eq!(reply.destination_vmac, source);
-        assert!(reply.payload.is_empty());
+        assert_eq!(recv(&hub).await, nak(2, 0x2233, source, 45, 0));
         barrier(&hub).await;
         assert!(rx.try_recv().is_err());
     }
@@ -391,10 +364,7 @@ async fn address_resolution_valid_shapes_answered_or_silent_without_npdu() {
             .await
             .unwrap();
         if function == 2 {
-            let reply = recv_ack(&hub).await;
-            assert_eq!(reply.function, ScFunction::AddressResolutionAck);
-            assert_eq!(reply.message_id, 0x2235);
-            assert!(reply.payload.is_empty());
+            assert_eq!(recv(&hub).await, nak(2, 0x2235, None, 45, 0));
         }
         barrier(&hub).await;
         assert!(rx.try_recv().is_err());
@@ -722,11 +692,11 @@ async fn address_resolution_valid_traffic_keeps_heartbeat_and_npdu_interop() {
     let mut rx = rx.unwrap();
     let probe = recv(&hub).await;
     assert_eq!(probe[0], 0x0A);
-    // Valid requests earn one empty ACK each (fixture is unconfigured);
-    // valid responses stay silent.
+    // Valid requests are refused without a listener; valid responses stay
+    // silent and still count as accepted resolution traffic.
     for _ in 0..4 {
         hub.send(&wire(2, 0, None, None, 0, &[])).await.unwrap();
-        assert!(recv_ack(&hub).await.payload.is_empty());
+        assert_eq!(recv(&hub).await, nak(2, 0, None, 45, 0));
         hub.send(&wire(
             3,
             1,
