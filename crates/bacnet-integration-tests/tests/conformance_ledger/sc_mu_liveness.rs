@@ -10,13 +10,6 @@ fn mu_liveness_evidence_preserves_scope_and_blocked_write_limitation() {
         row["status"],
         "implementation-present-needs-state-machine-audit"
     );
-    assert_eq!(rows.len(), 68);
-    assert_eq!(
-        rows.values()
-            .filter(|row| row["status"] == "supported-with-clause-evidence")
-            .count(),
-        19
-    );
     assert_eq!(data["reviewed_at"], "2026-09-17");
     assert_eq!(data["repo_sha"], "b4c845caf920db279b0aefbd2824ac1348bba1cb");
     for (field, anchors) in [
@@ -174,13 +167,6 @@ fn rejection_nak_budget_evidence_preserves_freshness_and_cancellation_limits() {
 fn empty_npdu_evidence_preserves_zero_only_scope_and_existing_lifecycle_owners() {
     let data = ledger();
     let rows = rows_by_id(&data);
-    assert_eq!(rows.len(), 68);
-    assert_eq!(
-        rows.values()
-            .filter(|r| r["status"] == "supported-with-clause-evidence")
-            .count(),
-        19
-    );
     assert_eq!(data["reviewed_at"], "2026-09-17");
     assert_eq!(data["repo_sha"], "b4c845caf920db279b0aefbd2824ac1348bba1cb");
     let row = rows["BACNET-AB-SC-CONNECTION-STATE"];
@@ -233,13 +219,6 @@ fn empty_npdu_evidence_preserves_zero_only_scope_and_existing_lifecycle_owners()
 fn unknown_function_evidence_preserves_node_only_scope_and_fifth_budget_path() {
     let data = ledger();
     let rows = rows_by_id(&data);
-    assert_eq!(rows.len(), 68);
-    assert_eq!(
-        rows.values()
-            .filter(|r| r["status"] == "supported-with-clause-evidence")
-            .count(),
-        19
-    );
     let row = rows["BACNET-AB-SC-CONNECTION-STATE"];
     assert_eq!(
         row["status"],

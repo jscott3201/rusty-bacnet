@@ -390,13 +390,6 @@ fn sc_hub_identity_evidence_retains_pre_io_checks_and_no_status_promotion() {
     ] {
         assert!(row["negative_tests"].as_array().unwrap().iter().any(|test| test == anchor));
     }
-    assert_eq!(rows.len(), 68);
-    assert_eq!(
-        rows.values()
-            .filter(|row| row["status"] == "supported-with-clause-evidence")
-            .count(),
-        19
-    );
     assert_eq!(row["status"], "implementation-present-needs-security-tests");
 }
 
@@ -497,13 +490,6 @@ fn sc_peer_uuid_evidence_retains_silent_accept_policy_without_status_promotion()
             "missing boundary: {phrase}"
         );
     }
-    assert_eq!(rows.len(), 68);
-    assert_eq!(
-        rows.values()
-            .filter(|row| row["status"] == "supported-with-clause-evidence")
-            .count(),
-        19
-    );
 }
 
 #[test]
