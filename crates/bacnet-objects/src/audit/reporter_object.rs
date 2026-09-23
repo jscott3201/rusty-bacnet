@@ -150,3 +150,7 @@ impl BACnetObject for AuditReporterObject {
         crate::property_metadata::property_list_from_metadata(&self.property_metadata())
     }
 }
+
+#[cfg(test)]
+#[path = "source_reporter_tests.rs"]
+mod source_reporter_tests;
