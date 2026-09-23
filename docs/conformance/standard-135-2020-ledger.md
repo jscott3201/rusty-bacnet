@@ -13,6 +13,30 @@
 - Addenda/errata status: ASHRAE 135-2020 Errata Summary 2024-04-29 (v1) reviewed for the supported subset. Item 7 (Clause 21.6, p. 886): successful-actions-only corrected from BOOLEAN (struck through, removed) to BACnetSuccessFilter (italic, added), tags [7]/[4]. Item 8 (Clause 21.2.3, p. 865): start-at-sequence-number corrected from Unsigned32 (struck through, removed) to Unsigned64 (italic, added), tag [2] OPTIONAL. Both items visually verified from the rendered errata p. 3 (strikeout = removed, italics = added per the p. 1 convention); not inferred from concatenated text extraction. The implementation encodes the corrected BACnetSuccessFilter/u64 contract after the RB-02 codec and RB-20 runtime/Python migrations; `BACNET-13-AUDIT-WIRE-MODELS` remains `implementation-present-needs-source-review` pending broader Audit review.
 - PR-0808 evidence row: `BACNET-12-ALERT-ENROLLMENT-TABLE-12-61` is `supported-with-clause-evidence` for the served object model only; it is not an Alert evaluator or notification-generation claim.
 
+## Hub conflict-aware admission
+
+Scoped evidence for `BACNET-AB-SC-CONNECTION-STATE`, Refs #767 under #476.
+Base 135-2020 AB.6.2.3 (PDF 1406 / printed 1404) requires accepting a known
+Device UUID and closing its incumbent. That remains the default. Explicit
+operator refusal is a local security policy before protocol acceptance, not a
+claim that the standard requires duplicate-UUID rejection.
+
+The existing locked registration decision supplies one fixed classification to
+Rust admission policy: initial, same UUID/same VMAC, same UUID/moved VMAC, or a
+VMAC owned by a different UUID. No incumbent identity or certificate fields are
+added. Python's static `deny_uuid_replacement` mode uses that same authority;
+no Python callback runs under the registry lock. Denial preserves the incumbent
+and uses the existing RESOURCES/OTHER NAK/admin-denial counter. Standard collision
+and capacity rules still follow Allow; the original commit deadline, panic-deny,
+retirement and shutdown ownership are retained.
+
+Evidence: [real TLS conflict and concurrent admission](../../crates/bacnet-transport/src/sc_hub/conflict_admission_tests.rs),
+[installed Python default/refusal modes](../../crates/rusty-bacnet/tests/test_sc_hub_conflict_admission.py),
+and [constructor rejection before I/O](../../crates/rusty-bacnet/tests/test_sc_hub_lifecycle.py).
+Global review pins and row status are unchanged. Timing policy and fixed-shape
+outcome-counter work remain under #476; certificate-principal authorization and
+broader Annex AB qualification are not claimed.
+
 ## Target Device Audit recipient
 
 The `BACNET-13-AUDIT-WIRE-MODELS` row records the target-only portion of #728.

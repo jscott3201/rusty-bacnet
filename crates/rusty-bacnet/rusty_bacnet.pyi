@@ -2540,9 +2540,14 @@ class ScHub:
     Admission and timeout policy is constructor-validated, before bind:
     ``max_clients``/``max_handshakes`` caps (zero/overflowing raise ValueError,
     negative values raise OverflowError); ``admission_policy`` is the static
-    string ``"allow_all"`` (default) or ``"deny_all"`` (unknown strings raise
+    string ``"allow_all"`` (default), ``"deny_all"`` or
+    ``"deny_uuid_replacement"`` (unknown strings raise
     ValueError, non-strings including callables raise TypeError — no Python
-    callback can run under the native registry lock); graceful per-peer ack /
+    callback can run under the native registry lock). Replacement refusal is a
+    local security policy before protocol acceptance: it preserves an incumbent
+    when the same claimed UUID requests its current or another VMAC. Default
+    mode retains Annex AB replacement; a different-UUID VMAC collision keeps its
+    standard NAK. UUID equality is not certificate identity proof. Graceful per-peer ack /
     close / overall millisecond bounds and handshake TLS / WebSocket-upgrade /
     Connect-Request millisecond bounds (out-of-range values raise ValueError).
     ``stop()`` is forceful and idempotent; ``shutdown_gracefully()`` runs the
@@ -2561,7 +2566,7 @@ class ScHub:
         device_uuid: Optional[Union[bytes, bytearray]] = None,
         max_clients: int = 256,
         max_handshakes: int = 256,
-        admission_policy: str = "allow_all",
+        admission_policy: Literal["allow_all", "deny_all", "deny_uuid_replacement"] = "allow_all",
         graceful_disconnect_ack_ms: int = 5000,
         graceful_ws_close_ms: int = 5000,
         graceful_overall_ms: int = 15000,

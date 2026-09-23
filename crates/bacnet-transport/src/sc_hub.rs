@@ -54,7 +54,7 @@ mod unknown_transit;
 
 pub use admission::{
     ScHubAdmissionDecision, ScHubAdmissionInput, ScHubAdmissionLimits, ScHubAdmissionPolicy,
-    ScHubStatus, DEFAULT_MAX_CLIENTS, DEFAULT_MAX_HANDSHAKES,
+    ScHubRegistrationKind, ScHubStatus, DEFAULT_MAX_CLIENTS, DEFAULT_MAX_HANDSHAKES,
 };
 pub use broadcast_rate::{ScHubBroadcastDropCounts, ScHubBroadcastRatePolicy};
 pub use graceful::{ScHubGracefulTimeouts, ScHubShutdownOutcome};

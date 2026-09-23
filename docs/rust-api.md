@@ -377,6 +377,20 @@ hub.stop().await;
 
 The SC hub is a TLS WebSocket relay. Both clients and servers connect to it as spoke nodes. Messages are routed by VMAC address.
 
+`ScHubTlsConfig::with_admission_policy` receives `ScHubAdmissionInput::registration`
+as one fixed `ScHubRegistrationKind`: `Initial`, `SameUuidSameVmac`,
+`SameUuidMovedVmac`, or `ConflictingVmac`. Classification and policy run under the
+same registry lock before registration commit; Allow still applies ordinary
+collision and capacity rules. The labels reveal no incumbent identity fields.
+A known UUID moving onto another UUID's VMAC is classified as `ConflictingVmac`.
+UUID equality is a payload claim, not certificate-principal authentication.
+The default accepts/replaces a known UUID as Annex AB requires; an operator may
+explicitly deny the two same-UUID kinds as local security policy before protocol
+acceptance. Denial leaves the incumbent untouched and retains the existing
+RESOURCES/OTHER NAK and admin-denial counter. Policies remain synchronous,
+nonblocking and panic-deny; they must not perform I/O or reenter the registry.
+
+
 Each admitted NPDU or addressed opaque unicast relay has one five-second local
 attempt, including destination sink acquisition and WebSocket send. A timeout
 lets that source process its next frame; it does not retry, fabricate a Result,

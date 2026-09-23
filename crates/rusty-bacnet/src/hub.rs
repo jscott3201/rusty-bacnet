@@ -14,7 +14,7 @@ use tokio::sync::Mutex;
 
 use bacnet_transport::sc_hub::{
     ScHub, ScHubAdmissionDecision, ScHubAdmissionLimits, ScHubGracefulTimeouts,
-    ScHubHandshakeTimeouts, ScHubShutdownOutcome,
+    ScHubHandshakeTimeouts, ScHubRegistrationKind, ScHubShutdownOutcome,
 };
 
 use crate::errors::to_py_err;
@@ -59,7 +59,9 @@ use crate::errors::to_py_err;
 /// `shutdown_gracefully()`, or context-manager exit when cleanup matters.
 ///
 /// Admission policy is a static string only (`"allow_all"` default,
-/// `"deny_all"`); arbitrary Python callables are rejected. The native policy
+/// `"deny_all"`, or `"deny_uuid_replacement"`); arbitrary Python callables are rejected.
+/// Refusing UUID replacement is a local security policy before protocol acceptance,
+/// not the default Annex AB known-UUID replacement behavior or identity proof. The native policy
 /// runs synchronously under the Tokio registry mutex, where attaching the
 /// GIL could deadlock, so no Python callback can be installed there.
 #[pyclass(name = "ScHub")]
@@ -67,6 +69,26 @@ pub struct PyScHub {
     inner: Arc<Mutex<Option<ScHub>>>,
     config: HubConfig,
     address: Arc<Mutex<Option<String>>>,
+}
+
+#[derive(Clone, Copy)]
+enum AdmissionPolicy {
+    AllowAll,
+    DenyAll,
+    DenyUuidReplacement,
+}
+
+impl AdmissionPolicy {
+    fn evaluate(self, kind: ScHubRegistrationKind) -> ScHubAdmissionDecision {
+        match (self, kind) {
+            (Self::DenyAll, _)
+            | (
+                Self::DenyUuidReplacement,
+                ScHubRegistrationKind::SameUuidSameVmac | ScHubRegistrationKind::SameUuidMovedVmac,
+            ) => ScHubAdmissionDecision::Deny,
+            _ => ScHubAdmissionDecision::Allow,
+        }
+    }
 }
 
 /// Owned, validated hub startup configuration shared by `start` and `__aenter__`.
@@ -85,7 +107,7 @@ struct HubConfig {
     admission_limits: ScHubAdmissionLimits,
     graceful_timeouts: ScHubGracefulTimeouts,
     handshake_timeouts: ScHubHandshakeTimeouts,
-    admission_deny_all: bool,
+    admission_policy: AdmissionPolicy,
 }
 
 impl HubConfig {
@@ -98,10 +120,11 @@ impl HubConfig {
                 .map_err(to_py_err)?
                 .with_admission_limits(self.admission_limits)
                 .with_graceful_timeouts(self.graceful_timeouts);
-        if self.admission_deny_all {
-            // Static deny-all: a plain Rust closure, never a Python callable.
-            server_tls = server_tls.with_admission_policy(|_| ScHubAdmissionDecision::Deny);
-        }
+        // One native policy consumes the locked classification; no registry
+        // copies, Python callbacks or certificate-principal inference.
+        let policy = self.admission_policy;
+        server_tls =
+            server_tls.with_admission_policy(move |input| policy.evaluate(input.registration));
 
         let hub = ScHub::start_with_tls_config(
             &self.listen,
@@ -151,7 +174,10 @@ impl PyScHub {
     ///     max_handshakes: Keyword-only cap on simultaneously unregistered
     ///         (handshake) connections. Same error mapping as `max_clients`.
     ///     admission_policy: Keyword-only static policy, `"allow_all"`
-    ///         (default) or `"deny_all"`. Unknown strings raise ValueError;
+    ///         (default), `"deny_all"`, or `"deny_uuid_replacement"`. The latter
+    ///         refuses same-UUID same/moved-VMAC replacement before protocol
+    ///         acceptance; different-UUID collisions retain the standard NAK.
+    ///         Unknown strings raise ValueError;
     ///         non-strings (including Python callables) raise TypeError — no
     ///         Python callback can run under the native registry lock.
     ///     graceful_disconnect_ack_ms: Keyword-only per-peer budget for sending
@@ -211,12 +237,13 @@ impl PyScHub {
         }
         let admission_limits = ScHubAdmissionLimits::new(max_clients, max_handshakes)
             .map_err(|error| PyValueError::new_err(error.to_string()))?;
-        let admission_deny_all = match admission_policy {
-            "allow_all" => false,
-            "deny_all" => true,
+        let admission_policy = match admission_policy {
+            "allow_all" => AdmissionPolicy::AllowAll,
+            "deny_all" => AdmissionPolicy::DenyAll,
+            "deny_uuid_replacement" => AdmissionPolicy::DenyUuidReplacement,
             _ => {
                 return Err(PyValueError::new_err(
-                    "admission_policy must be 'allow_all' or 'deny_all'",
+                    "admission_policy must be 'allow_all', 'deny_all' or 'deny_uuid_replacement'",
                 ));
             }
         };
@@ -244,7 +271,7 @@ impl PyScHub {
                 admission_limits,
                 graceful_timeouts,
                 handshake_timeouts,
-                admission_deny_all,
+                admission_policy,
             },
             address: Arc::new(Mutex::new(None)),
         })

@@ -485,3 +485,6 @@ async fn unverified_channel_reaches_policy_as_unverified() {
     verified.close().await;
     assert!(clients.lock().await.is_empty());
 }
+
+#[path = "conflict_admission_tests.rs"]
+mod conflict;

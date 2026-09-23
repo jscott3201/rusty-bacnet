@@ -185,7 +185,8 @@ impl ScHubTlsConfig {
     ///
     /// The policy sees the bounded [`super::ScHubAdmissionInput`] (claimed
     /// VMAC/UUID/limits inside the TLS channel plus the verified-client
-    /// boolean and RB-07 peer context) and returns
+    /// boolean and RB-07 peer context, plus the current redacted registration
+    /// kind) and returns
     /// [`super::ScHubAdmissionDecision::Allow`] or
     /// [`super::ScHubAdmissionDecision::Deny`]. It runs synchronously under
     /// the registry lock before the registration commit, so it must not
@@ -197,6 +198,21 @@ impl ScHubTlsConfig {
     /// the policy but never the deny counters. Device UUID shape and
     /// equality are registry keys, not certificate authentication: no
     /// certificate subject or fingerprint is extracted or exposed.
+    ///
+    /// Refusing replacement is an explicit local security policy before
+    /// protocol acceptance; the default retains Annex AB known-UUID replacement.
+    /// No incumbent identity fields are exposed by the classification.
+    ///
+    /// ```
+    /// use bacnet_transport::sc_hub::{ScHubAdmissionDecision as Decision,
+    ///     ScHubRegistrationKind as Kind, ScHubTlsConfig};
+    /// fn preserve_incumbents(tls: ScHubTlsConfig) -> ScHubTlsConfig {
+    ///     tls.with_admission_policy(|input| match input.registration {
+    ///         Kind::SameUuidSameVmac | Kind::SameUuidMovedVmac => Decision::Deny,
+    ///         _ => Decision::Allow,
+    ///     })
+    /// }
+    /// ```
     pub fn with_admission_policy(
         mut self,
         policy: impl Fn(&super::ScHubAdmissionInput) -> super::ScHubAdmissionDecision
