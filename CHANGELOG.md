@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Bounded endpoint source ReadProperty audit reporting (Refs #727, #345):**
+  Direct B/IP IPv4 `ClientOnly`/`Both` sessions can send source READ records to
+  their static recipient in either notification mode. Actual invoke IDs,
+  request-time timestamps and terminal outcomes survive caller cancellation and
+  retries; ACK object/property/index must match before success is recorded.
+  Source emission requires absent Monitored_Objects. Separate 64-operation and
+  64-notification limits, an absolute three-second notification deadline and
+  joined session shutdown bound retained work. Queue expiry prevents canceled
+  notifications from being transmitted later; already-started sends remain
+  ambiguous. Delivery failure updates Reporter health without changing the READ
+  result. Source loss summaries (#732), Device recipient properties and full
+  Audit Reporting conformance remain out of scope. See
+  [endpoint source READ](docs/rust-api.md#bounded-endpoint-source-readproperty-reporting).
+  **Pre-1.0 internal Rust API cleanup:** shared coordinator
+  `LeaseOwner::ServerNotification` / `LeaseMetadata::server_notification` become
+  `Notification` / `notification`, reflecting ClientOnly notification ownership.
+
 - **Breaking Rust Reporter configuration cleanup (pre-1.0):**
   `BACnetObject::configure_audit_reporter_internal` now takes all five settings:
   audit level, operation flags, confirmed notifications, optional monitored-object

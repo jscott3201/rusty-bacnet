@@ -13,10 +13,11 @@
 //!
 //! # Cancellation and drop
 //!
-//! Every dispatch await is cancellation-safe: outbound leases are held by
-//! RAII guards, so aborting a pending `read_property*` future releases its
-//! exact coordinator lease instead of stranding it. `stop()` seals admission,
-//! closes roles, signals dispatch, joins the task, then stops ingress.
+//! Outbound leases use RAII guards. Ordinary `read_property*` calls release their
+//! exact lease when cancelled. Source-audited calls transfer to bounded session
+//! ownership before egress admission, so dropping their caller does not cancel
+//! admitted work. `stop()` seals admission, closes roles, joins dispatch and owned
+//! workers, then stops ingress. Undelivered audit records may be lost on shutdown.
 //! Cloned role handles keep working until shutdown, then fail closed; after
 //! the session drops, [`Weak`](std::sync::Weak) upgrade fails and every role
 //! call reports shutdown.
@@ -224,6 +225,8 @@ pub struct EndpointSession<T: TransportPort + 'static> {
     client_config: ClientConfig,
     database: Option<Arc<RwLock<ObjectDatabase>>>,
     source_audit_reporter: Option<ObjectIdentifier>,
+    source_read: Option<Arc<crate::source_read::SourceRead>>,
+    source_broadcast: std::net::Ipv4Addr,
     static_source_audit_recipient: Option<crate::bip::StaticSourceAuditRecipient>,
     identity: Option<crate::identity::DeviceIdentity>,
     egress: Option<bacnet_endpoint_core::endpoint_ingress::EndpointEgress>,
@@ -304,6 +307,8 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             client_config,
             database: None,
             source_audit_reporter: None,
+            source_read: None,
+            source_broadcast: std::net::Ipv4Addr::BROADCAST,
             static_source_audit_recipient: None,
             identity: None,
             egress: None,
@@ -331,8 +336,10 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
 
     /// Select the sole source Audit Reporter in the attached local database.
     ///
-    /// This is **ownership/invariant only**: no source audit records or
-    /// notifications are generated. Standalone `BACnetClient` source ownership
+    /// Without a static recipient this establishes ownership only and emits no
+    /// records. A B/IP builder's static recipient enables bounded source READ
+    /// reporting; its profile requires absent Monitored_Objects. Standalone
+    /// `BACnetClient` source ownership
     /// and source emission remain unsupported. Target Reporter behavior is
     /// unchanged. Repeated calls before start replace the selection.
     ///
@@ -457,6 +464,17 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                 "selected object lacks the Audit Reporter capability".into(),
             ));
         }
+        if self.static_source_audit_recipient.is_some()
+            && object.audit_reporter_internal().is_some_and(|reporter| {
+                reporter
+                    .property_list()
+                    .contains(&PropertyIdentifier::MONITORED_OBJECTS)
+            })
+        {
+            return Err(Error::Encoding(
+                "source READ does not support Monitored_Objects".into(),
+            ));
+        }
         for (oid, object) in db.iter_objects() {
             if oid != selected && oid.object_type() == ObjectType::AUDIT_REPORTER {
                 match object.read_property(PropertyIdentifier::AUDIT_SOURCE_REPORTER, None) {
@@ -479,6 +497,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         source_reporter::install(
             db.get_mut(&selected)
                 .expect("selected Reporter was validated"),
+            self.static_source_audit_recipient.is_some(),
         )
     }
 
@@ -518,6 +537,21 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         // demultiplexer, no role-side Invoke-ID allocation: the requester and
         // notification pool reserve from `self.coordinator`; the responder
         // reuses the wire invoke ID directly.
+        let notifications = (matches!(self.role, SessionRole::ServerOnly | SessionRole::Both)
+            || self.static_source_audit_recipient.is_some())
+        .then(|| NotificationTransactions::with_coordinator(Arc::clone(&self.coordinator)));
+        let source_read = self.static_source_audit_recipient.map(|recipient| {
+            crate::source_read::SourceRead::new(
+                Arc::clone(self.database.as_ref().expect("validated source database")),
+                self.source_audit_reporter
+                    .expect("validated source Reporter"),
+                recipient,
+                self.source_broadcast,
+                egress.clone(),
+                notifications.as_ref().expect("source worker owner"),
+                self.client_config.max_apdu_length,
+            )
+        });
         let (requester, client_handle) =
             if matches!(self.role, SessionRole::ClientOnly | SessionRole::Both) {
                 let requester = EndpointRequester::new(
@@ -525,27 +559,28 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                     Arc::clone(&self.coordinator),
                     self.client_config.clone(),
                 )?;
-                let handle = ClientRoleHandle::new(&self.shared.token, requester.clone());
+                let mut handle = ClientRoleHandle::new(&self.shared.token, requester.clone());
+                if let Some(source) = &source_read {
+                    handle = handle.with_source_read(source);
+                }
                 (Some(requester), Some(handle))
             } else {
                 (None, None)
             };
-        let (responder, notifications, server_handle) =
+        let (responder, server_handle) =
             if matches!(self.role, SessionRole::ServerOnly | SessionRole::Both) {
                 let db = self
                     .database
                     .get_or_insert_with(|| Arc::new(RwLock::new(ObjectDatabase::new())));
                 let responder = Arc::new(EndpointResponder::new(Arc::clone(db), egress.clone()));
-                let notifications =
-                    NotificationTransactions::with_coordinator(Arc::clone(&self.coordinator));
                 let handle = ServerRoleHandle::new(
                     &self.shared.token,
                     Arc::clone(&responder),
-                    Arc::clone(&notifications),
+                    Arc::clone(notifications.as_ref().expect("server worker owner")),
                 );
-                (Some(responder), Some(notifications), Some(handle))
+                (Some(responder), Some(handle))
             } else {
-                (None, None, None)
+                (None, None)
             };
 
         let (cancel_tx, cancel_rx) = oneshot::channel();
@@ -565,6 +600,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         // session retains one egress clone for the identity I-Am path while
         // the receiver halves move into dispatch. No second demultiplexer.
         self.egress = Some(egress);
+        self.source_read = source_read;
         self.requester = requester;
         self.responder = responder;
         self.notifications = notifications;
@@ -593,13 +629,17 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             return Err(Error::Encoding("endpoint session is not running".into()));
         }
         self.shared.token.shutdown();
+        if let Some(source) = self.source_read.take() {
+            source.close();
+        }
         if let Some(requester) = self.requester.take() {
             requester.close();
         }
         if let Some(responder) = self.responder.take() {
             responder.close();
         }
-        if let Some(notifications) = self.notifications.take() {
+        let notifications = self.notifications.take();
+        if let Some(notifications) = &notifications {
             notifications.close();
         }
         if let Some(cancel) = self.cancel_tx.take() {
@@ -608,9 +648,14 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         let exit = match self.dispatch_task.take() {
             Some(task) => task
                 .await
-                .map_err(|e| Error::Encoding(format!("endpoint session dispatch failed: {e}")))?,
-            None => SessionExit::ReceiversClosed,
+                .map_err(|e| Error::Encoding(format!("endpoint session dispatch failed: {e}"))),
+            None => Ok(SessionExit::ReceiversClosed),
         };
+        if let Some(notifications) = notifications {
+            while let Some(result) = notifications.join_next().await {
+                NotificationTransactions::observe(Some(result));
+            }
+        }
         if let Some(ingress) = self.ingress.as_mut() {
             // Ingress stop reports its classifier exit; session exit above
             // already owns termination, so a closed ingress here is expected.
@@ -621,7 +666,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         // termination.
         self.client_handle = None;
         self.server_handle = None;
-        Ok(exit)
+        exit
     }
 
     /// Borrows the client role (`None` when not composed).
@@ -747,9 +792,11 @@ impl EndpointSession<bacnet_transport::bip::BipTransport> {
     pub(crate) fn with_static_source_audit_recipient(
         mut self,
         recipient: crate::bip::StaticSourceAuditRecipient,
+        broadcast: std::net::Ipv4Addr,
     ) -> Self {
         self.assert_configurable();
         self.static_source_audit_recipient = Some(recipient);
+        self.source_broadcast = broadcast;
         self
     }
 }
@@ -763,6 +810,9 @@ impl<T: TransportPort + 'static> Drop for EndpointSession<T> {
         // Synchronous abort path: never orphan dispatch/ingress/role work.
         // `stop()` remains the graceful path; Drop only seals + aborts.
         self.shared.token.shutdown();
+        if let Some(source) = self.source_read.take() {
+            source.close();
+        }
         if let Some(requester) = self.requester.take() {
             requester.close();
         }
@@ -801,6 +851,12 @@ async fn dispatch_loop(mut parts: DispatchParts, mut cancel: oneshot::Receiver<(
         tokio::select! {
             biased;
             _ = &mut cancel => return SessionExit::Cancelled,
+            joined = async {
+                match &parts.notifications {
+                    Some(owner) => owner.join_next().await,
+                    None => std::future::pending().await,
+                }
+            } => NotificationTransactions::observe(joined),
             received = parts.inbound.recv() => {
                 let Some(received) = received else {
                     // Inbound closed: keep terminal/policy draining; ingress
@@ -976,3 +1032,7 @@ async fn handle_ingress_policy(shared: &Arc<SessionShared>, outcome: PolicyOutco
     }
     let _ = PolicyReason::MalformedApdu;
 }
+
+#[cfg(test)]
+#[path = "source_read_tests.rs"]
+mod source_read_tests;

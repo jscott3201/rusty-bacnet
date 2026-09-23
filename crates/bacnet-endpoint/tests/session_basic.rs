@@ -130,7 +130,7 @@ async fn concurrent_equal_inbound_outbound_ids_stay_unambiguous() {
     // Both sessions start with empty coordinators, so both outbound requests
     // use numeric invoke ID 0 while each also serves an inbound request with
     // wire ID 0. The classifier (request vs terminal by PDU type) + coordinator
-    // owner (Requester vs ServerNotification) keeps them unambiguous.
+    // owner (Requester vs Notification) keeps them unambiguous.
     let (transport_a, transport_b) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
     let mut session_a = EndpointSession::new(transport_a, SessionRole::Both, session_config())
         .unwrap()

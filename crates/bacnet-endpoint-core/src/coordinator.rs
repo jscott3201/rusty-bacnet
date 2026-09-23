@@ -51,7 +51,7 @@ pub enum LeaseOwner {
     /// A local client-side confirmed request.
     Requester,
     /// A confirmed notification initiated by the local server role.
-    ServerNotification,
+    Notification,
 }
 
 /// Successful acknowledgment shape accepted for a lease.
@@ -117,12 +117,9 @@ impl LeaseMetadata {
     }
 
     /// Metadata for a server notification, whose successful terminal is SimpleACK.
-    pub fn server_notification(
-        peer: CanonicalPeer,
-        service_choice: ConfirmedServiceChoice,
-    ) -> Self {
+    pub fn notification(peer: CanonicalPeer, service_choice: ConfirmedServiceChoice) -> Self {
         Self {
-            owner: LeaseOwner::ServerNotification,
+            owner: LeaseOwner::Notification,
             peer,
             service_choice,
             terminal_policy: TerminalPolicy::SimpleAck,
@@ -499,7 +496,7 @@ fn validate_apdu(metadata: &LeaseMetadata, apdu: &Apdu) -> Result<AdmissionKind,
         Apdu::Abort(pdu) => {
             let expected_server_bit = match metadata.owner {
                 LeaseOwner::Requester => true,
-                LeaseOwner::ServerNotification => false,
+                LeaseOwner::Notification => false,
             };
             if pdu.sent_by_server != expected_server_bit {
                 return Err(AdmissionOutcome::DirectionMismatch);

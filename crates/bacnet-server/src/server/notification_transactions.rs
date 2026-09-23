@@ -77,10 +77,9 @@ struct NotificationWorkers {
 struct NotificationCore {
     coordinator: Arc<OutboundTransactionCoordinator>,
     state: Mutex<NotificationState>,
-    // RB-21 producers run only in BACnetServer, which creates a private pool
-    // via new(): every capacity release passes through this adapter. The
-    // shared endpoint has no audit producer; extending it requires a
-    // coordinator-wide release signal, not this adapter-local notification.
+    // Target failure summaries use a private BACnetServer pool whose releases
+    // all pass here. Endpoint source delivery shares requester capacity and
+    // deliberately does not use this signal or the target failure-summary worker.
     released: tokio::sync::Notify,
 }
 
@@ -264,7 +263,8 @@ impl NotificationTransactions {
         })
     }
 
-    pub(super) fn try_admit_audit(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
+    #[doc(hidden)]
+    pub fn try_admit_audit(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
         Arc::clone(&self.audit_permits).try_acquire_owned().ok()
     }
 
@@ -424,7 +424,7 @@ impl NotificationCore {
     {
         let token = self
             .coordinator
-            .reserve(LeaseMetadata::server_notification(peer, service_choice))
+            .reserve(LeaseMetadata::notification(peer, service_choice))
             .map_err(NotificationReserveError::Coordinator)?;
         let (sender, receiver) = oneshot::channel();
 
@@ -476,7 +476,7 @@ impl NotificationCore {
 
     pub(super) fn complete_pre_admitted(&self, admission: Admission, apdu: &Apdu) -> bool {
         if admission.kind() != AdmissionKind::Terminal
-            || admission.metadata().owner() != LeaseOwner::ServerNotification
+            || admission.metadata().owner() != LeaseOwner::Notification
         {
             return false;
         }

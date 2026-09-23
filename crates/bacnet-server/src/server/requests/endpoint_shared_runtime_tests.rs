@@ -153,7 +153,7 @@ async fn loopback_shared_runtime_routes_same_invoke_id_by_admitted_role() {
                             .complete_pre_admitted(admission, decoded, received)
                             .await
                     }
-                    LeaseOwner::ServerNotification => {
+                    LeaseOwner::Notification => {
                         notification_transactions.complete_pre_admitted(admission, &decoded)
                     }
                 },

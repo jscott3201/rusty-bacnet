@@ -59,7 +59,31 @@ struct NetworkServiceCommand {
     expecting_reply: bool,
     priority: NetworkPriority,
     data_attributes: Vec<DataAttribute>,
-    completion: oneshot::Sender<Result<(), Error>>,
+    completion: oneshot::Sender<EndpointSendOutcome>,
+    deadline: Option<tokio::time::Instant>,
+}
+
+/// Completion of an admitted endpoint send, without claiming remote receipt.
+#[doc(hidden)]
+pub struct EndpointSendOutcome {
+    /// Local send completion; success is not remote receipt or execution.
+    pub result: Result<(), Error>,
+    /// Transport execution began; an error may have an ambiguous wire outcome.
+    pub attempted: bool,
+}
+
+/// One queued send completion. Deadline-bound sends cancel when this is dropped.
+#[doc(hidden)]
+pub struct EndpointSend(oneshot::Receiver<EndpointSendOutcome>);
+
+impl EndpointSend {
+    #[doc(hidden)]
+    pub async fn complete(self) -> EndpointSendOutcome {
+        self.0.await.unwrap_or_else(|_| EndpointSendOutcome {
+            result: Err(shutdown_error()),
+            attempted: false,
+        })
+    }
 }
 
 /// Bounded APDU network-service sender for roles attached to an endpoint session.
@@ -81,10 +105,35 @@ impl EndpointEgress {
         priority: NetworkPriority,
         data_attributes: Vec<DataAttribute>,
     ) -> Result<(), Error> {
+        self.admit_apdu(
+            apdu,
+            destination,
+            expecting_reply,
+            priority,
+            data_attributes,
+            None,
+        )?
+        .complete()
+        .await
+        .result
+    }
+
+    /// Queue one send synchronously, distinguishing admission from execution.
+    /// A deadline also makes receiver cancellation retract queued work. Sends
+    /// already in progress may have reached the peer when cancellation wins.
+    #[doc(hidden)]
+    pub fn admit_apdu(
+        &self,
+        apdu: Vec<u8>,
+        destination: EndpointApduDestination,
+        expecting_reply: bool,
+        priority: NetworkPriority,
+        data_attributes: Vec<DataAttribute>,
+        deadline: Option<tokio::time::Instant>,
+    ) -> Result<EndpointSend, Error> {
         if !self.open.load(Ordering::Acquire) {
             return Err(shutdown_error());
         }
-
         let (completion, result) = oneshot::channel();
         let command = NetworkServiceCommand {
             apdu,
@@ -93,19 +142,15 @@ impl EndpointEgress {
             priority,
             data_attributes,
             completion,
+            deadline,
         };
         match self.commands.try_send(command) {
-            Ok(()) => {}
-            Err(mpsc::error::TrySendError::Closed(_)) => return Err(shutdown_error()),
+            Ok(()) => Ok(EndpointSend(result)),
+            Err(mpsc::error::TrySendError::Closed(_)) => Err(shutdown_error()),
             Err(mpsc::error::TrySendError::Full(_)) => {
-                if !self.open.load(Ordering::Acquire) {
-                    return Err(shutdown_error());
-                }
-                return Err(Error::Encoding("endpoint egress queue is full".into()));
+                Err(Error::Encoding("endpoint egress queue is full".into()))
             }
         }
-
-        result.await.unwrap_or_else(|_| Err(shutdown_error()))
     }
 
     /// Sends one direct unicast APDU without granting network lifecycle access.
@@ -375,7 +420,10 @@ async fn session_task<T: TransportPort + 'static>(
     egress_open.store(false, Ordering::Release);
     egress_rx.close();
     while let Ok(command) = egress_rx.try_recv() {
-        let _ = command.completion.send(Err(shutdown_error()));
+        let _ = command.completion.send(EndpointSendOutcome {
+            result: Err(shutdown_error()),
+            attempted: false,
+        });
     }
     network.stop().await?;
     Ok(exit)
@@ -416,8 +464,27 @@ async fn drive_network_service<T: TransportPort + 'static>(
         expecting_reply,
         priority,
         data_attributes,
-        completion,
+        mut completion,
+        deadline,
     } = command;
+    if deadline
+        .is_some_and(|deadline| deadline <= tokio::time::Instant::now() || completion.is_closed())
+    {
+        let _ = completion.send(EndpointSendOutcome {
+            result: Err(Error::Encoding(
+                "endpoint send expired before execution".into(),
+            )),
+            attempted: false,
+        });
+        return EgressDrive::Complete;
+    }
+    let expiry = async {
+        match deadline {
+            Some(deadline) => tokio::time::sleep_until(deadline).await,
+            None => std::future::pending::<()>().await,
+        }
+    };
+    tokio::pin!(expiry);
     let outcome = {
         let send = send_network_service_apdu(
             network,
@@ -433,6 +500,13 @@ async fn drive_network_service<T: TransportPort + 'static>(
                 tokio::select! {
                     biased;
                     _ = &mut *cancel_rx => PendingEvent::Cancelled,
+                    _ = &mut expiry => {
+                        let _ = completion.send(EndpointSendOutcome {
+                            result: Err(Error::Encoding("endpoint send deadline expired".into())), attempted: true,
+                        });
+                        return EgressDrive::Complete;
+                    },
+                    _ = completion.closed(), if deadline.is_some() => return EgressDrive::Complete,
                     received = apdu_rx.recv() => PendingEvent::Received(received),
                     result = &mut send => PendingEvent::Sent(result),
                 }
@@ -440,6 +514,13 @@ async fn drive_network_service<T: TransportPort + 'static>(
                 tokio::select! {
                     biased;
                     _ = &mut *cancel_rx => PendingEvent::Cancelled,
+                    _ = &mut expiry => {
+                        let _ = completion.send(EndpointSendOutcome {
+                            result: Err(Error::Encoding("endpoint send deadline expired".into())), attempted: true,
+                        });
+                        return EgressDrive::Complete;
+                    },
+                    _ = completion.closed(), if deadline.is_some() => return EgressDrive::Complete,
                     result = &mut send => PendingEvent::Sent(result),
                     received = apdu_rx.recv() => PendingEvent::Received(received),
                 }
@@ -459,14 +540,20 @@ async fn drive_network_service<T: TransportPort + 'static>(
                 }
                 PendingEvent::Sent(result) => {
                     *prefer_ingress = !*prefer_ingress;
-                    let _ = completion.send(result);
+                    let _ = completion.send(EndpointSendOutcome {
+                        result,
+                        attempted: true,
+                    });
                     return EgressDrive::Complete;
                 }
             }
         }
     };
 
-    let _ = completion.send(Err(shutdown_error()));
+    let _ = completion.send(EndpointSendOutcome {
+        result: Err(shutdown_error()),
+        attempted: true,
+    });
     outcome
 }
 
@@ -652,3 +739,7 @@ mod tests;
 #[cfg(test)]
 #[path = "endpoint_network_service_tests.rs"]
 mod network_service_tests;
+
+#[cfg(test)]
+#[path = "endpoint_egress_deadline_tests.rs"]
+mod deadline_tests;

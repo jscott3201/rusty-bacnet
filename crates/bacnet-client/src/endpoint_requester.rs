@@ -22,6 +22,10 @@ use bacnet_types::MacAddr;
 use bytes::BytesMut;
 
 use crate::client::{confirmed_response_result, new_coordinated_tsm, ClientConfig};
+#[path = "endpoint_read_operation.rs"]
+mod operation;
+pub use operation::{EndpointReadOutcome, PreparedEndpointRead};
+
 use crate::tsm::{CompletionOutcome, CoordinatedCompletion, TransactionOwner, Tsm, TsmResponse};
 
 fn shutdown_error() -> Error {
@@ -211,6 +215,29 @@ impl EndpointRequester {
         property_identifier: PropertyIdentifier,
         property_array_index: Option<u32>,
     ) -> Result<ReadPropertyACK, Error> {
+        self.prepare_read_property(
+            destination,
+            data_attributes,
+            object_identifier,
+            property_identifier,
+            property_array_index,
+        )?
+        .execute()
+        .await
+        .result
+    }
+
+    /// Validate and reserve the exact transaction before transferring ownership.
+    /// Dropping the prepared operation releases only its own requester lease.
+    #[doc(hidden)]
+    pub fn prepare_read_property(
+        &self,
+        destination: EndpointApduDestination,
+        data_attributes: Vec<DataAttribute>,
+        object_identifier: ObjectIdentifier,
+        property_identifier: PropertyIdentifier,
+        property_array_index: Option<u32>,
+    ) -> Result<PreparedEndpointRead, Error> {
         if !self.inner.open.load(Ordering::Acquire) {
             return Err(shutdown_error());
         }
@@ -262,7 +289,7 @@ impl EndpointRequester {
         };
 
         let owner = registration.owner.clone();
-        let mut guard = EndpointRequestGuard {
+        let guard = EndpointRequestGuard {
             inner: Arc::clone(&self.inner),
             destination: tsm_mac.clone(),
             invoke_id,
@@ -284,41 +311,14 @@ impl EndpointRequester {
         let mut encoded = BytesMut::new();
         encode_apdu(&mut encoded, &pdu)?;
         let encoded = encoded.to_vec();
-        let mut response = registration.response;
-
-        for attempt in 0..=self.inner.retries {
-            if !self.inner.open.load(Ordering::Acquire) {
-                return Err(shutdown_error());
-            }
-            self.inner
-                .egress
-                .send_apdu(
-                    encoded.clone(),
-                    destination.clone(),
-                    true,
-                    NetworkPriority::NORMAL,
-                    data_attributes.clone(),
-                )
-                .await?;
-
-            match tokio::time::timeout(self.inner.timeout, &mut response).await {
-                Ok(Ok(response)) => {
-                    guard.active = false;
-                    let service_data = confirmed_response_result(response)?;
-                    return ReadPropertyACK::decode(&service_data);
-                }
-                Ok(Err(_)) if !self.inner.open.load(Ordering::Acquire) => {
-                    return Err(shutdown_error());
-                }
-                Ok(Err(_)) => {
-                    return Err(Error::Encoding("TSM response channel closed".into()));
-                }
-                Err(_) if attempt < self.inner.retries => {}
-                Err(_) => return Err(Error::Timeout(self.inner.timeout)),
-            }
-        }
-
-        unreachable!("the inclusive retry loop always returns")
+        Ok(PreparedEndpointRead {
+            guard,
+            destination,
+            data_attributes,
+            request,
+            encoded,
+            response: registration.response,
+        })
     }
 
     /// Performs one routed ReadProperty transaction via a known router.
