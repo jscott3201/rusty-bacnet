@@ -383,17 +383,6 @@ impl BACnetObject for LifeSafetyPointObject {
     fn apply_life_safety_operation(
         &mut self,
         operation: LifeSafetyOperation,
-    ) -> Result<LifeSafetyOperationEffect, Error> {
-        if reset::is_reset_operation(operation) {
-            self.apply_reset_operation(operation)
-        } else {
-            apply_silenced_operation(&mut self.silenced, &mut self.operation_expected, operation)
-        }
-    }
-
-    fn apply_life_safety_operation_detailed(
-        &mut self,
-        operation: LifeSafetyOperation,
     ) -> Result<LifeSafetyOperationOutcome, Error> {
         let before = POINT_COV_PROPERTIES
             .into_iter()
@@ -403,7 +392,11 @@ impl BACnetObject for LifeSafetyPointObject {
                     .map(|value| (property, value))
             })
             .collect();
-        let effect = self.apply_life_safety_operation(operation)?;
+        let effect = if reset::is_reset_operation(operation) {
+            self.apply_reset_operation(operation)?
+        } else {
+            apply_silenced_operation(&mut self.silenced, &mut self.operation_expected, operation)?
+        };
         Ok(operation_outcome(self, before, effect))
     }
 
@@ -613,17 +606,6 @@ impl BACnetObject for LifeSafetyZoneObject {
     fn apply_life_safety_operation(
         &mut self,
         operation: LifeSafetyOperation,
-    ) -> Result<LifeSafetyOperationEffect, Error> {
-        if reset::is_reset_operation(operation) {
-            self.apply_reset_operation(operation)
-        } else {
-            apply_silenced_operation(&mut self.silenced, &mut self.operation_expected, operation)
-        }
-    }
-
-    fn apply_life_safety_operation_detailed(
-        &mut self,
-        operation: LifeSafetyOperation,
     ) -> Result<LifeSafetyOperationOutcome, Error> {
         let before = ZONE_COV_PROPERTIES
             .into_iter()
@@ -633,7 +615,11 @@ impl BACnetObject for LifeSafetyZoneObject {
                     .map(|value| (property, value))
             })
             .collect();
-        let effect = self.apply_life_safety_operation(operation)?;
+        let effect = if reset::is_reset_operation(operation) {
+            self.apply_reset_operation(operation)?
+        } else {
+            apply_silenced_operation(&mut self.silenced, &mut self.operation_expected, operation)?
+        };
         Ok(operation_outcome(self, before, effect))
     }
 

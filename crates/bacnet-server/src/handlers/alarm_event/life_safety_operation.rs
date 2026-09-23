@@ -7,32 +7,17 @@ use bacnet_types::enums::{ErrorClass, ErrorCode, LifeSafetyOperation};
 
 use crate::life_safety_cov::LifeSafetyCovChange;
 
-/// Detailed internal service result retained through response dispatch.
-pub(crate) struct LifeSafetyOperationHandlerResult {
-    pub(crate) applied_object_identifiers: Vec<ObjectIdentifier>,
-    pub(crate) cov_changes: Vec<LifeSafetyCovChange>,
-}
-
-/// Handle a LifeSafetyOperation request.
+/// Apply a LifeSafetyOperation and retain exact committed COV changes.
 ///
 /// Targeted requests return the exact Clause 13.13 object error. Targetless
 /// reset requests attempt only Life Safety Point and Zone objects; targetless
-/// silence/unsilence retains its generic legacy traversal. Successful
-/// per-object mutations are retained. Returned identifiers are objects whose
-/// state changed.
-pub fn handle_life_safety_operation(
+/// silence/unsilence attempts every object. Successful mutations are retained.
+/// An applied operation with no changed readback properties succeeds without
+/// producing a COV entry.
+pub(crate) fn handle_life_safety_operation(
     db: &mut ObjectDatabase,
     request: &LifeSafetyOperationRequest,
-) -> Result<Vec<ObjectIdentifier>, Error> {
-    handle_life_safety_operation_detailed(db, request)
-        .map(|result| result.applied_object_identifiers)
-}
-
-/// Handle a LifeSafetyOperation while retaining exact known property deltas.
-pub(crate) fn handle_life_safety_operation_detailed(
-    db: &mut ObjectDatabase,
-    request: &LifeSafetyOperationRequest,
-) -> Result<LifeSafetyOperationHandlerResult, Error> {
+) -> Result<Vec<LifeSafetyCovChange>, Error> {
     validate_life_safety_operation(request.request)?;
 
     if let Some(oid) = request.object_identifier {
@@ -45,20 +30,13 @@ pub(crate) fn handle_life_safety_operation_detailed(
                 ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
             ));
         }
-        return match object.apply_life_safety_operation_detailed(request.request)? {
+        return match object.apply_life_safety_operation(request.request)? {
             outcome if outcome.effect == LifeSafetyOperationEffect::Applied => {
-                let cov_changes = LifeSafetyCovChange::new(oid, outcome.changed_properties)
+                Ok(LifeSafetyCovChange::new(oid, outcome.changed_properties)
                     .into_iter()
-                    .collect();
-                Ok(LifeSafetyOperationHandlerResult {
-                    applied_object_identifiers: vec![oid],
-                    cov_changes,
-                })
+                    .collect())
             }
-            _ => Ok(LifeSafetyOperationHandlerResult {
-                applied_object_identifiers: Vec::new(),
-                cov_changes: Vec::new(),
-            }),
+            _ => Ok(Vec::new()),
         };
     }
 
@@ -68,7 +46,7 @@ pub(crate) fn handle_life_safety_operation_detailed(
     }
     object_ids.sort_by_key(|oid| (oid.object_type().to_raw(), oid.instance_number()));
     let attempted = object_ids.len();
-    let mut changed = Vec::new();
+    let mut applied = 0usize;
     let mut cov_changes = Vec::new();
     let mut already_applied = 0usize;
     let mut failed = 0usize;
@@ -76,9 +54,9 @@ pub(crate) fn handle_life_safety_operation_detailed(
         let Some(object) = db.get_mut(&oid) else {
             continue;
         };
-        match object.apply_life_safety_operation_detailed(request.request) {
+        match object.apply_life_safety_operation(request.request) {
             Ok(outcome) if outcome.effect == LifeSafetyOperationEffect::Applied => {
-                changed.push(oid);
+                applied += 1;
                 if let Some(change) = LifeSafetyCovChange::new(oid, outcome.changed_properties) {
                     cov_changes.push(change);
                 }
@@ -90,15 +68,12 @@ pub(crate) fn handle_life_safety_operation_detailed(
     tracing::debug!(
         operation = request.request.to_raw(),
         attempted,
-        applied = changed.len(),
+        applied,
         already_applied,
         failed,
         "completed all-applicable LifeSafetyOperation"
     );
-    Ok(LifeSafetyOperationHandlerResult {
-        applied_object_identifiers: changed,
-        cov_changes,
-    })
+    Ok(cov_changes)
 }
 
 /// Validate the standard operations accepted by the service.

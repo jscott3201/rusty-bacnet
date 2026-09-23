@@ -483,16 +483,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                     ))
                                 } else {
                                     let mut db = db.write().await;
-                                    handlers::handle_life_safety_operation_detailed(
-                                        &mut db, &request,
-                                    )
+                                    handlers::handle_life_safety_operation(&mut db, &request)
                                 }
                             }
                         };
 
                         match execution {
                             Ok(result) => {
-                                life_safety_cov_changes.extend(result.cov_changes);
+                                life_safety_cov_changes.extend(result);
                                 simple_ack()
                             }
                             Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),

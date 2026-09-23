@@ -7,7 +7,7 @@ use bacnet_objects::life_safety::{
     LifeSafetyPointResetExecutor, LifeSafetyResetError, LifeSafetyZoneObject,
     LifeSafetyZoneResetCommit, LifeSafetyZoneResetContext, LifeSafetyZoneResetExecutor,
 };
-use bacnet_objects::traits::LifeSafetyOperationEffect;
+use bacnet_objects::traits::{LifeSafetyOperationEffect, LifeSafetyOperationOutcome};
 use bacnet_services::life_safety::LifeSafetyOperationRequest;
 use bacnet_types::enums::{
     ErrorClass, ErrorCode, LifeSafetyOperation, LifeSafetyState, ObjectType, PropertyIdentifier,
@@ -17,6 +17,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::*;
+use crate::life_safety_cov::LifeSafetyCovChange;
 
 fn request(
     operation: LifeSafetyOperation,
@@ -106,11 +107,24 @@ fn targeted_reset_variants_apply_to_point_and_zone() {
         db.add(Box::new(zone)).unwrap();
         assert_eq!(
             handle_life_safety_operation(&mut db, &request(operation, Some(point_oid))).unwrap(),
-            vec![point_oid]
+            vec![LifeSafetyCovChange {
+                object_identifier: point_oid,
+                changed_properties: vec![
+                    PropertyIdentifier::PRESENT_VALUE,
+                    PropertyIdentifier::SILENCED,
+                    PropertyIdentifier::OPERATION_EXPECTED
+                ]
+            }]
         );
         assert_eq!(
             handle_life_safety_operation(&mut db, &request(operation, Some(zone_oid))).unwrap(),
-            vec![zone_oid]
+            vec![LifeSafetyCovChange {
+                object_identifier: zone_oid,
+                changed_properties: vec![
+                    PropertyIdentifier::PRESENT_VALUE,
+                    PropertyIdentifier::OPERATION_EXPECTED
+                ]
+            }]
         );
         assert_eq!(
             read(&db, point_oid, PropertyIdentifier::PRESENT_VALUE),
@@ -174,9 +188,12 @@ impl BACnetObject for ResetHookSpy {
     fn apply_life_safety_operation(
         &mut self,
         _operation: LifeSafetyOperation,
-    ) -> Result<LifeSafetyOperationEffect, Error> {
+    ) -> Result<LifeSafetyOperationOutcome, Error> {
         self.calls.fetch_add(1, Ordering::AcqRel);
-        Ok(LifeSafetyOperationEffect::Applied)
+        Ok(LifeSafetyOperationOutcome {
+            effect: LifeSafetyOperationEffect::Applied,
+            changed_properties: vec![],
+        })
     }
 }
 
@@ -308,7 +325,16 @@ fn targetless_reset_attempts_only_ordered_point_and_zone_candidates() {
     let changed =
         handle_life_safety_operation(&mut db, &request(LifeSafetyOperation::RESET, None)).unwrap();
 
-    assert_eq!(changed, vec![point_success_oid, zone_success_oid]);
+    assert_eq!(
+        changed,
+        [point_success_oid, zone_success_oid].map(|oid| LifeSafetyCovChange {
+            object_identifier: oid,
+            changed_properties: vec![
+                PropertyIdentifier::PRESENT_VALUE,
+                PropertyIdentifier::OPERATION_EXPECTED
+            ],
+        })
+    );
     assert_eq!(
         *order.lock().unwrap(),
         vec![

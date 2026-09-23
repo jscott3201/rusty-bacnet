@@ -1,4 +1,5 @@
 use super::*;
+use crate::life_safety_cov::LifeSafetyCovChange;
 
 use bacnet_objects::life_safety::{LifeSafetyPointObject, LifeSafetyZoneObject};
 use bacnet_services::life_safety::LifeSafetyOperationRequest;
@@ -52,7 +53,16 @@ fn life_safety_operation_targeted_silence_changes_object() {
         handle_life_safety_operation(&mut db, &request(LifeSafetyOperation::SILENCE, Some(oid)))
             .unwrap();
 
-    assert_eq!(changed, vec![oid]);
+    assert_eq!(
+        changed,
+        vec![LifeSafetyCovChange {
+            object_identifier: oid,
+            changed_properties: vec![
+                PropertyIdentifier::SILENCED,
+                PropertyIdentifier::OPERATION_EXPECTED
+            ]
+        }]
+    );
     assert_eq!(
         read_enumerated(&db, oid, PropertyIdentifier::SILENCED),
         SilencedState::ALL_SILENCED.to_raw()
@@ -70,7 +80,13 @@ fn life_safety_operation_replay_without_response_cache_is_invalid_state() {
 
     assert_eq!(
         handle_life_safety_operation(&mut db, &request).unwrap(),
-        vec![oid]
+        vec![LifeSafetyCovChange {
+            object_identifier: oid,
+            changed_properties: vec![
+                PropertyIdentifier::SILENCED,
+                PropertyIdentifier::OPERATION_EXPECTED
+            ]
+        }]
     );
     let error = handle_life_safety_operation(&mut db, &request).unwrap_err();
     assert_protocol_error(
@@ -166,14 +182,19 @@ fn life_safety_operation_without_target_attempts_every_object() {
     db.add(Box::new(AnalogInputObject::new(1, "analog", 62).unwrap()))
         .unwrap();
 
-    let mut changed =
+    let changed =
         handle_life_safety_operation(&mut db, &request(LifeSafetyOperation::SILENCE_VISUAL, None))
             .unwrap();
-    changed.sort_by_key(|oid| (oid.object_type().to_raw(), oid.instance_number()));
-    let mut expected = vec![point_oid, zone_oid];
-    expected.sort_by_key(|oid| (oid.object_type().to_raw(), oid.instance_number()));
-
-    assert_eq!(changed, expected);
+    assert_eq!(
+        changed,
+        [point_oid, zone_oid].map(|oid| LifeSafetyCovChange {
+            object_identifier: oid,
+            changed_properties: vec![
+                PropertyIdentifier::SILENCED,
+                PropertyIdentifier::OPERATION_EXPECTED
+            ],
+        })
+    );
     for oid in [point_oid, zone_oid] {
         assert_eq!(
             read_enumerated(&db, oid, PropertyIdentifier::SILENCED),
@@ -213,22 +234,19 @@ fn targetless_mixed_outcomes_aggregate_only_successful_exact_deltas() {
     db.add(Box::new(zone)).unwrap();
     db.add(Box::new(failed)).unwrap();
 
-    let result = handle_life_safety_operation_detailed(
-        &mut db,
-        &request(LifeSafetyOperation::SILENCE_VISUAL, None),
-    )
-    .unwrap();
+    let result =
+        handle_life_safety_operation(&mut db, &request(LifeSafetyOperation::SILENCE_VISUAL, None))
+            .unwrap();
 
-    assert_eq!(result.applied_object_identifiers, vec![point_oid, zone_oid]);
-    assert_eq!(result.cov_changes.len(), 2);
-    assert_eq!(result.cov_changes[0].object_identifier, point_oid);
+    assert_eq!(result.len(), 2);
+    assert_eq!(result[0].object_identifier, point_oid);
     assert_eq!(
-        result.cov_changes[0].changed_properties,
+        result[0].changed_properties,
         vec![PropertyIdentifier::OPERATION_EXPECTED]
     );
-    assert_eq!(result.cov_changes[1].object_identifier, zone_oid);
+    assert_eq!(result[1].object_identifier, zone_oid);
     assert_eq!(
-        result.cov_changes[1].changed_properties,
+        result[1].changed_properties,
         vec![
             PropertyIdentifier::SILENCED,
             PropertyIdentifier::OPERATION_EXPECTED,

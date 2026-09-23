@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **One LifeSafetyOperation outcome contract (Refs #752, pre-1.0 API break):**
+  `BACnetObject::apply_life_safety_operation` now returns
+  `LifeSafetyOperationOutcome`, containing the effect and ordered exact property
+  deltas. The `_detailed` hook and empty-delta compatibility adapter are removed.
+  Custom implementations report their own committed changes for COV; unsupported
+  objects explicitly error. Built-in reset/arming, error atomicity and existing
+  COV behavior are preserved. The unused public coarse server handler is also
+  removed; confirmed dispatch uses one internal handler retaining exact COV changes.
+
 - **One intrinsic proposal/commit contract (Refs #746, pre-1.0 API break):**
   removed `BACnetObject::intrinsic_reporting_requires_atomic_commit` and the
   exported `impl_intrinsic_reporting!` macro. Custom objects implement the

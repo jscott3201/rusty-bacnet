@@ -20,8 +20,7 @@ use bacnet_objects::log_buffer::LogRecordIdentity;
 use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::staging::StagingWritePlan;
 use bacnet_objects::traits::{
-    BACnetObject, LifeSafetyOperationEffect, LifeSafetyOperationOutcome, MonotonicClock,
-    ReliabilityEvaluation,
+    BACnetObject, LifeSafetyOperationOutcome, MonotonicClock, ReliabilityEvaluation,
 };
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
 use bacnet_types::constructed::{
@@ -271,15 +270,8 @@ impl BACnetObject for SourceReporter {
     fn apply_life_safety_operation(
         &mut self,
         operation: LifeSafetyOperation,
-    ) -> Result<LifeSafetyOperationEffect, Error> {
-        self.wrapped.apply_life_safety_operation(operation)
-    }
-
-    fn apply_life_safety_operation_detailed(
-        &mut self,
-        operation: LifeSafetyOperation,
     ) -> Result<LifeSafetyOperationOutcome, Error> {
-        self.wrapped.apply_life_safety_operation_detailed(operation)
+        self.wrapped.apply_life_safety_operation(operation)
     }
 
     fn set_life_safety_operation_expected_internal(

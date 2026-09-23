@@ -39,16 +39,16 @@ pub enum LifeSafetyOperationEffect {
     AlreadyApplied,
 }
 
-/// Detailed result of applying a `LifeSafetyOperation` to object-owned state.
+/// Result of applying a `LifeSafetyOperation` to object-owned state.
 ///
-/// `changed_properties` is ordered by the object's stable reporting order and
-/// contains each property at most once. Custom objects that implement only
-/// [`BACnetObject::apply_life_safety_operation`] remain source-compatible: the
-/// default detailed hook delegates to that method and reports no properties
-/// because the trait cannot truthfully infer their object-private mutations.
+/// `changed_properties` contains exact committed readback changes in the object's
+/// stable reporting order, with each property at most once. Implementations own
+/// this projection; the server does not infer custom object mutations.
+/// [`LifeSafetyOperationEffect::AlreadyApplied`] means no state changed and must
+/// carry an empty property list.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LifeSafetyOperationOutcome {
-    /// Existing coarse operation result.
+    /// Whether the operation committed a change or was already applied.
     pub effect: LifeSafetyOperationEffect,
     /// Exact properties whose committed readback changed.
     pub changed_properties: Vec<PropertyIdentifier>,
@@ -522,30 +522,19 @@ pub trait BACnetObject: Send + Sync {
     /// They run synchronously under the object-database write lock and must be
     /// fast, nonblocking, and panic-free. External or irreversible actuation
     /// also needs an application-owned idempotency/replay contract. The default
-    /// reports that the object does not support this service.
+    /// reports that the object does not support this service. Successful
+    /// implementations return an outcome with exact, ordered, deduplicated
+    /// committed property changes. `AlreadyApplied` leaves all state unchanged
+    /// and reports no deltas. The bundled server uses these changes for COV
+    /// after releasing the database lock and dispatching the service response.
     fn apply_life_safety_operation(
         &mut self,
         _operation: LifeSafetyOperation,
-    ) -> Result<LifeSafetyOperationEffect, Error> {
+    ) -> Result<LifeSafetyOperationOutcome, Error> {
         Err(Error::Protocol {
             class: ErrorClass::OBJECT.to_raw() as u32,
             code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
         })
-    }
-
-    /// Apply a LifeSafetyOperation and report exact known property deltas.
-    ///
-    /// The default delegates to the source-compatible coarse hook and reports
-    /// no known properties rather than guessing about custom object state.
-    fn apply_life_safety_operation_detailed(
-        &mut self,
-        operation: LifeSafetyOperation,
-    ) -> Result<LifeSafetyOperationOutcome, Error> {
-        self.apply_life_safety_operation(operation)
-            .map(|effect| LifeSafetyOperationOutcome {
-                effect,
-                changed_properties: Vec::new(),
-            })
     }
 
     /// Set the next LifeSafetyOperation expected by trusted local logic.
