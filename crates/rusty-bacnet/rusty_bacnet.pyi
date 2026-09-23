@@ -2267,8 +2267,20 @@ class BACnetServer:
         """
         ...
     def add_audit_reporter(self, instance: int, name: str) -> None: ...
+    def configure_audit_recipient(self, recipient: AuditRecipientInput) -> None:
+        """Provision the copied Device-owned recipient before startup.
+
+        Accepts a concrete remote Device (not instance 4194303), or a supported
+        direct unicast IPv4 BACnetAddress on B/IP. The selected target Reporter
+        requires provision even at Audit_Level NONE. Add Device routes with
+        add_device_binding independently. Missing Device routes start with
+        CONFIGURATION_ERROR; live changes require usable old and new routes.
+        This setter freezes at ownership transfer. Use Device property writes
+        after start for atomic old/new delivery. No NULL recipient sentinel.
+        """
+        ...
     def configure_audit_reporter(
-        self, instance: int, *, recipient_device_instance: int,
+        self, instance: int, *,
         audit_level: Literal["none", "audit_config", "audit_all"],
         auditable_operations: int, issue_confirmed_notifications: bool,
         monitored_objects: list[ObjectIdentifier | ObjectType | None] | None = None,
@@ -2277,13 +2289,13 @@ class BACnetServer:
         """Configure one static target Reporter; add_audit_reporter alone stays inert.
 
         The first valid call fixes the Reporter identity. Later pre-start calls
-        replace its settings/recipient; another Reporter raises ValueError.
-        Instances are non-bool integers in 0..=4194303; recipient must be remote.
+        replace its settings; another Reporter raises ValueError.
+        Reporter instances are non-bool integers in 0..=4194303.
         Operations is a non-bool u64 mask: bits 0..15 and 32..63 only. Wrong mask,
         level or confirmation types raise TypeError; invalid values/identities
         raise ValueError. Failures preserve prior settings and registrations.
         Configuration freezes at startup ownership transfer, including in-flight
-        start and after stop (RuntimeError). Configure a direct B/IP recipient
+        start and after stop (RuntimeError). Provision the Device recipient separately; configure its route
         with add_device_binding, in either order; an unresolved recipient permits
         startup but exposes CONFIGURATION_ERROR on an enabled Reporter's RELIABILITY.
         Monitored objects: None/omission removes the property (catch-all); an exact

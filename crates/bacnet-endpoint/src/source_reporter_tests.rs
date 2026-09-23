@@ -281,14 +281,17 @@ async fn device_validation_is_atomic_and_correctable() {
         let (session, _peer, observed) = session(SessionRole::Both);
         let mut db = database();
         if case == "missing" {
-            db.remove(&oid(ObjectType::DEVICE, 123));
+            db.remove(&oid(ObjectType::DEVICE, 123)).unwrap();
         }
         if case == "multiple" {
             let mut other = crate::identity::DeviceIdentity::new(456, 42)
                 .unwrap()
                 .build_database()
                 .unwrap();
-            let device = other.remove(&oid(ObjectType::DEVICE, 456)).unwrap();
+            let device = other
+                .remove(&oid(ObjectType::DEVICE, 456))
+                .unwrap()
+                .unwrap();
             // build_database uses the instance in the default Device name.
             db.add(device).unwrap();
         }

@@ -545,74 +545,39 @@ async fn audit_reporter_lifecycle_denials_and_decode_failures_are_silent() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn audit_reporter_selected_reporter_deletion_survives_removal_without_recursion() {
-    for (level, delete_bit, expected) in [
-        (AuditLevel::AUDIT_CONFIG, true, 1),
-        (AuditLevel::NONE, true, 0),
-        (AuditLevel::AUDIT_ALL, false, 0),
-    ] {
-        let mut reporter = lifecycle_reporter();
-        reporter.set_monitored_objects(Some(vec![]));
-        reporter.set_audit_level(level).unwrap();
-        if !delete_bit {
-            reporter.set_auditable_operations(AuditOperationFlags::empty());
-        }
-        let mut fixture = server(reporter).await;
-        fixture.transport.block.store(true, Ordering::Release);
-        let target = oid(ObjectType::AUDIT_REPORTER, 1);
-        let response = dispatch(
-            &fixture.server,
-            ConfirmedServiceChoice::DELETE_OBJECT,
-            delete(target),
-        )
-        .await;
-        assert!(matches!(response, Apdu::SimpleAck(_)), "{response:?}");
-        assert!(fixture.server.db.read().await.get(&target).is_none());
-        settle().await;
-        let records = notifications(&fixture.transport.sent);
-        assert_eq!(records.len(), expected);
-        if expected == 1 {
-            assert_record(
-                &records[0].notifications[0],
-                AuditOperation::DELETE,
-                target,
-                77,
-                0,
-                None,
-            );
-        }
-        // Configured profile now has no Reporter, but ordinary mutations still work.
-        let response = dispatch(
-            &fixture.server,
-            ConfirmedServiceChoice::CREATE_OBJECT,
-            create(
-                ObjectSpecifier::Identifier(oid(ObjectType::BINARY_VALUE, 3)),
-                vec![],
-            ),
-        )
-        .await;
-        assert!(matches!(response, Apdu::ComplexAck(_)), "{response:?}");
-        settle().await;
-        assert_eq!(notifications(&fixture.transport.sent).len(), expected);
-        // A new object at the same OID must not inherit the old send's timeout.
-        let replacement = lifecycle_reporter();
-        replacement.status_internal().set_configured(true);
-        fixture
-            .server
-            .db
-            .write()
-            .await
-            .add(Box::new(replacement))
-            .unwrap();
-        tokio::time::advance(Duration::from_secs(4)).await;
-        settle().await;
-        assert_eq!(
-            health(&fixture.server).await,
-            Reliability::NO_FAULT_DETECTED
-        );
-        assert_eq!(notifications(&fixture.transport.sent).len(), expected);
-        fixture.server.stop().await.unwrap();
-    }
+async fn audit_reporter_selected_reporter_deletion_is_denied_until_stopped() {
+    let mut fixture = server(lifecycle_reporter()).await;
+    let target = oid(ObjectType::AUDIT_REPORTER, 1);
+    let response = dispatch(
+        &fixture.server,
+        ConfirmedServiceChoice::DELETE_OBJECT,
+        delete(target),
+    )
+    .await;
+    assert!(
+        matches!(response, Apdu::Error(ref error) if error.error_class == ErrorClass::OBJECT && error.error_code == ErrorCode::OBJECT_DELETION_NOT_PERMITTED)
+    );
+    assert!(fixture.server.db.read().await.get(&target).is_some());
+    settle().await;
+    let records = notifications(&fixture.transport.sent);
+    assert_eq!(records.len(), 1);
+    assert_record(
+        &records[0].notifications[0],
+        AuditOperation::DELETE,
+        target,
+        77,
+        0,
+        Some((ErrorClass::OBJECT, ErrorCode::OBJECT_DELETION_NOT_PERMITTED)),
+    );
+    fixture.server.stop().await.unwrap();
+    assert!(fixture
+        .server
+        .db
+        .write()
+        .await
+        .remove(&target)
+        .unwrap()
+        .is_some());
 }
 
 #[tokio::test]

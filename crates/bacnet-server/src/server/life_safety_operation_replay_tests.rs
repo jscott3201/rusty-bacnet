@@ -62,7 +62,7 @@ async fn dispatch_life_safety_operation_with_tracker(
     let notification_transactions = NotificationTransactions::new();
     let device_bindings = Arc::new(RwLock::new(DeviceBindingTable::new()));
     let comm_state = Arc::new(AtomicU8::new(0));
-    let dcc_timer = Arc::new(Mutex::new(None::<JoinHandle<()>>));
+    let dcc_timer = Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default()));
     let mut service_request = BytesMut::new();
     request.encode(&mut service_request).unwrap();
     let confirmed = ConfirmedRequestPdu {
@@ -164,7 +164,7 @@ async fn dispatch_confirmed_raw_with_tracker(
     let notification_transactions = NotificationTransactions::new();
     let device_bindings = Arc::new(RwLock::new(DeviceBindingTable::new()));
     let comm_state = Arc::new(AtomicU8::new(0));
-    let dcc_timer = Arc::new(Mutex::new(None::<JoinHandle<()>>));
+    let dcc_timer = Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default()));
     let (tx, rx) = oneshot::channel();
 
     BACnetServer::<BipTransport>::handle_confirmed_request(
@@ -576,7 +576,7 @@ async fn dispatch_lso_raw_recording(
     let notification_transactions = NotificationTransactions::new();
     let device_bindings = Arc::new(RwLock::new(DeviceBindingTable::new()));
     let comm_state = Arc::new(AtomicU8::new(0));
-    let dcc_timer = Arc::new(Mutex::new(None::<JoinHandle<()>>));
+    let dcc_timer = Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default()));
 
     BACnetServer::<RecordingTransport>::handle_confirmed_request(
         db,

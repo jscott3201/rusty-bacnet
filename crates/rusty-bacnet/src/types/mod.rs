@@ -34,6 +34,7 @@ mod rpm_wpm;
 mod timestamp;
 
 pub use address::parse_address;
+pub(crate) use audit::recipient as audit_recipient_from_py;
 pub(crate) use audit::{audit_log_query_request_from_py, audit_notification_request_from_py};
 pub(crate) use audit_projection::audit_log_query_ack_to_py;
 pub use cov::{PyCovNotification, PyCovNotificationIterator};

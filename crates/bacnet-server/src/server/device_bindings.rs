@@ -150,7 +150,7 @@ enum BindingEntry {
     },
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(super) struct DeviceBindingTable {
     entries: HashMap<ObjectIdentifier, BindingEntry>,
 }

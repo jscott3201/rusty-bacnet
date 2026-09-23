@@ -254,6 +254,7 @@ impl BACnetServer {
             get_event_information_budget,
             audit_notification_sink: None,
             audit_reporter: None,
+            audit_recipient: std::sync::Mutex::new(None),
             device_bindings: std::collections::BTreeMap::new(),
             forwarding_configuration_started: AtomicBool::new(false),
             started: Arc::new(AtomicBool::new(false)),

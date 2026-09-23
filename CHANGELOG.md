@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Target Device Audit recipient (Refs #728, pre-1.0 API break):** recipient state
+  moves from `AuditReporterConfig.recipient` into the built-in Device. Python uses
+  `configure_audit_recipient` instead of the removed `recipient_device_instance`
+  keyword. The installed target profile exposes a required/writable recipient;
+  direct/local/WP/WPM changes atomically admit mandatory old/new notifications.
+  Active Device/Reporter membership is protected through shutdown quiescence.
+  `ObjectDatabase::remove` and `with_object_adapter` now return `Result` to report
+  protection denial. The raw mutable Device hook becomes an operation capability.
+  See the [bounded contract](docs/device-audit-recipient.md); source migration and
+  broader Audit conformance remain open.
+
 - **One LifeSafetyOperation outcome contract (Refs #752, pre-1.0 API break):**
   `BACnetObject::apply_life_safety_operation` now returns
   `LifeSafetyOperationOutcome`, containing the effect and ordered exact property
@@ -78,10 +89,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The Python configuration API and Reporter operational behavior are unchanged.
 
 - **Standalone Python static target Audit Reporter (RB-23c, Refs #345):**
-  Add pre-start `configure_audit_reporter(instance, *, recipient_device_instance,
-  audit_level, auditable_operations, issue_confirmed_notifications)`; unchanged
+  Add pre-start Reporter selection (now `configure_audit_reporter(instance, *,
+  audit_level, auditable_operations, issue_confirmed_notifications)`); unchanged
   `add_audit_reporter()` alone stays inert. The first valid call fixes the Reporter
-  identity; repeated calls replace that instance's settings and recipient only.
+  identity; repeated calls replace that instance's settings. Initial recipient
+  provision now uses the separate Device-owned API described above.
   Strict identifiers, level literals, full-u64 operation masks and actual booleans
   validate before mutation. Configuration freezes at startup ownership transfer,
   including startup in flight and after stop. Existing direct B/IP bindings resolve
@@ -93,8 +105,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   invalid-call atomicity and lifecycle behavior. See
   [Python static Reporter](docs/python-api.md#static-target-audit-reporter).
   This supersedes prior active-Python-Reporter exclusions only for this static
-  target-side subset: no other destinations, source-side/local-write production,
-  dynamic/monitored-object/priority API, retries/durable outbox, full Reporter parity,
+  target-side subset. The Device recipient path above extends its destination
+  configuration; ordinary source-side/local-write production, retries/durable
+  outbox and full Reporter parity remain outside it. No broader
   Audit/BIBB/BTL/certification, independent interop or #345 closure is claimed.
 
 - **Standalone Python direct B/IP Audit Log parent forwarding (RB-23b, Refs #345):**

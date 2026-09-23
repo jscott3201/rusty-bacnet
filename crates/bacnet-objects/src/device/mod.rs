@@ -19,7 +19,9 @@ use crate::clock::{ClockFrame, ClockReader};
 use crate::common::read_property_list_property;
 use crate::traits::BACnetObject;
 
+mod audit_recipient;
 mod metadata;
+pub use audit_recipient::{AuditRecipientChangeSink, AuditWriteSource, DeviceAuthority};
 
 /// Every service the bundled `bacnet-server` dispatch executes, as
 /// `BACnetServicesSupported` bit positions (Clause 21).
@@ -146,6 +148,7 @@ impl Default for DeviceConfig {
 /// BACnet Device object.
 pub struct DeviceObject {
     oid: ObjectIdentifier,
+    recipient: audit_recipient::RecipientState,
     properties: HashMap<PropertyIdentifier, PropertyValue>,
     /// Cached object list for array-indexed reads.
     object_list: Vec<ObjectIdentifier>,
@@ -336,6 +339,7 @@ impl DeviceObject {
 
         Ok(Self {
             oid,
+            recipient: Default::default(),
             properties,
             object_list: vec![oid], // Device itself is always in the list
             protocol_object_types_supported,
@@ -418,8 +422,8 @@ impl DeviceObject {
 }
 
 impl BACnetObject for DeviceObject {
-    fn device_mut_internal(&mut self) -> Option<&mut DeviceObject> {
-        Some(self)
+    fn device_authority_internal(&mut self) -> Option<DeviceAuthority<'_>> {
+        Some(DeviceAuthority(self))
     }
 
     fn object_identifier(&self) -> ObjectIdentifier {
@@ -438,6 +442,9 @@ impl BACnetObject for DeviceObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        if property == PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT {
+            return self.read_audit_recipient(array_index);
+        }
         if property == PropertyIdentifier::OBJECT_LIST {
             return match array_index {
                 None => {
@@ -548,6 +555,9 @@ impl BACnetObject for DeviceObject {
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
+        if property == PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT {
+            return self.write_audit_recipient(array_index, value, _priority, None);
+        }
         if property == PropertyIdentifier::DESCRIPTION {
             if array_index.is_some() {
                 return Err(Error::Protocol {

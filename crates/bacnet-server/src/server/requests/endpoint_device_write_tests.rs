@@ -197,9 +197,15 @@ async fn endpoint_device_write_null_relinquishment_is_authorized_noop() {
             .await
             .get_mut(&device())
             .unwrap()
-            .device_mut_internal()
+            .device_authority_internal()
             .unwrap()
-            .set_description("retained");
+            .write_property(
+                PropertyIdentifier::DESCRIPTION,
+                None,
+                PropertyValue::CharacterString("retained".into()),
+                None,
+            )
+            .unwrap();
         let mut write = write();
         write.property_value = vec![0];
         let (response, _) = reply(&responder, received(request(&write))).await;
@@ -249,8 +255,10 @@ impl BACnetObject for TrapObject {
         self.writes.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
-    fn device_mut_internal(&mut self) -> Option<&mut DeviceObject> {
-        self.authority.as_mut()
+    fn device_authority_internal(&mut self) -> Option<bacnet_objects::device::DeviceAuthority<'_>> {
+        self.authority
+            .as_mut()
+            .and_then(|device| device.device_authority_internal())
     }
 }
 
@@ -280,7 +288,7 @@ async fn endpoint_device_write_revalidates_lower_level_authority_before_policy()
         };
         {
             let mut db = responder.db.write().await;
-            db.remove(&device());
+            db.remove(&device()).unwrap();
             if case != "removed" {
                 db.add(Box::new(TrapObject {
                     oid: target,
@@ -337,7 +345,7 @@ async fn endpoint_device_write_revalidates_replacement_after_authorization() {
                 // Deterministically model an independently owned database replacement
                 // between preflight and commit; no database guard may span policy.
                 let mut db = db.try_write().expect("authorizer must run without DB lock");
-                db.remove(&device());
+                db.remove(&device()).unwrap();
                 if !remove_only {
                     db.add(Box::new(TrapObject {
                         oid: device(),

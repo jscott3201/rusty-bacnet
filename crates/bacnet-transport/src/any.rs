@@ -43,6 +43,9 @@ pub enum AnyTransport<S: SerialPort + 'static> {
 }
 
 impl<S: SerialPort + 'static> TransportPort for AnyTransport<S> {
+    fn is_bip_ipv4(&self) -> bool {
+        matches!(self, Self::Bip(_))
+    }
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
         match self {
             Self::Bip(t) => t.start().await,

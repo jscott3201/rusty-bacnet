@@ -282,8 +282,9 @@ pub use config::ServerConfig;
 mod audit_forwarder;
 #[cfg(test)]
 mod audit_forwarder_tests;
+mod audit_recipient;
 mod audit_reporter;
-pub use audit_reporter::AuditReporterConfig;
+pub use audit_reporter::{valid_bip_audit_address, AuditReporterConfig};
 #[cfg(test)]
 mod audit_reporter_tests;
 
@@ -574,6 +575,7 @@ impl BipServerBuilder {
 
 /// BACnet server with APDU dispatch and service handling.
 pub struct BACnetServer<T: TransportPort> {
+    target_audit: Option<Arc<audit_recipient::TargetAudit<T>>>,
     config: ServerConfig,
     discovery_limiter: Arc<DiscoveryLimiter>,
     #[allow(dead_code)] // Retained with the server, including direct dispatch tests.
@@ -612,7 +614,7 @@ pub struct BACnetServer<T: TransportPort> {
     comm_state: Arc<AtomicU8>,
     /// DCC timer owner and replacement/expiry serialization boundary.
     /// Valid replacement and explicit stop abort and join before clearing it.
-    dcc_timer: Arc<Mutex<Option<JoinHandle<()>>>>,
+    dcc_timer: Arc<Mutex<crate::server::dcc_timer::TimerSlot>>,
     dcc_outcomes: Arc<dcc_outcomes::DccOutcomes>,
     mutation_decisions: Arc<crate::mutation::MutationDecisions>,
     dispatch_task: Option<JoinHandle<()>>,

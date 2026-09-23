@@ -152,6 +152,7 @@ async fn audit_forwarding_old_instance_completion_and_cancellation_cannot_update
             .write()
             .await
             .remove(&oid(ObjectType::AUDIT_LOG, 7))
+            .unwrap()
             .unwrap();
         let old_profile = old.audit_log_forwarding_internal().unwrap();
         let mut replacement = AuditLogObject::new(7, "replacement", 16, f.store.clone()).unwrap();

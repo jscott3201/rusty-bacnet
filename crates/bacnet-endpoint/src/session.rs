@@ -501,7 +501,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         // existing slot is wrapped in place: no remove/add, rebind or index churn.
         db.with_object_adapter(&selected, |slot| {
             source_reporter::install(slot, self.static_source_audit_recipient.is_some())
-        })
+        })?
         .expect("selected Reporter was validated")
     }
 

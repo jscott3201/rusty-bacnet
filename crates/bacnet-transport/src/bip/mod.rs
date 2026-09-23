@@ -482,6 +482,9 @@ impl BipTransport {
 }
 
 impl TransportPort for BipTransport {
+    fn is_bip_ipv4(&self) -> bool {
+        true
+    }
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
         if self.recv_task.is_some() {
             return Err(Error::Transport(std::io::Error::new(

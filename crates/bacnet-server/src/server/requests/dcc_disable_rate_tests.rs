@@ -10,7 +10,7 @@ use tokio::time::{advance, Duration};
 struct Fixture {
     config: ServerConfig,
     tasks: Arc<RequestTasks>,
-    timer: Arc<Mutex<Option<JoinHandle<()>>>>,
+    timer: Arc<Mutex<crate::server::dcc_timer::TimerSlot>>,
     state: Arc<AtomicU8>,
     outcomes: dcc_outcomes::DccOutcomes,
 }
@@ -25,7 +25,7 @@ impl Fixture {
         Self {
             tasks: RequestTasks::for_server(&config).unwrap(),
             config,
-            timer: Arc::new(Mutex::new(None)),
+            timer: Arc::new(Mutex::new(Default::default())),
             state: Arc::new(AtomicU8::new(0)),
             outcomes: Default::default(),
         }

@@ -497,7 +497,7 @@ fn get_event_information_paginates_by_object_identifier_after_cursor_removal() {
     assert!(!first_page.more_events);
 
     let cursor = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 25).unwrap();
-    db.remove(&cursor).unwrap();
+    db.remove(&cursor).unwrap().unwrap();
     let second_page = get_event_information_ack(&db, Some(cursor));
     let second_instances: Vec<_> = second_page
         .list_of_event_summaries

@@ -109,6 +109,15 @@ impl<R> AuditFailureQueue<R> {
 }
 
 impl<R: PartialEq> AuditFailureQueue<R> {
+    /// Retire pending old-generation summaries even if no new ordinary record arrives.
+    pub(in crate::server) fn recipient_changed(&self) {
+        let mut state = self.state.lock().unwrap();
+        state.pending = None;
+        state.current = None;
+        drop(state);
+        self.changed.notify_waiters();
+    }
+
     /// Capture admission order, not completion or wire-timestamp order.
     /// A new context supersedes the single pending batch, without transferring it.
     pub fn observe(&self, context: AuditFailureContext<R>) -> Option<AuditFailureTicket<R>> {

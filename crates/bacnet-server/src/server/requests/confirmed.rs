@@ -26,7 +26,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         confirmed_request_tracker: &Arc<ConfirmedRequestTracker>,
         device_bindings: &Arc<RwLock<DeviceBindingTable>>,
         comm_state: &Arc<AtomicU8>,
-        dcc_timer: &Arc<Mutex<Option<JoinHandle<()>>>>,
+        dcc_timer: &Arc<Mutex<crate::server::dcc_timer::TimerSlot>>,
         config: &ServerConfig,
         request_tasks: &super::super::request_tasks::RequestTaskSpawner,
         source_mac: &[u8],

@@ -8,8 +8,6 @@ use bacnet_encoding::apdu::{decode_apdu, encode_apdu};
 use bacnet_encoding::npdu::{encode_npdu, Npdu};
 use bacnet_endpoint_core::endpoint_ingress::{EndpointApduDestination, EndpointEgress};
 use bacnet_network::layer::ReceivedApdu;
-use bacnet_objects::device::DeviceObject;
-use bacnet_objects::traits::BACnetObject;
 use bacnet_services::write_property::WritePropertyRequest;
 
 use super::confirmed_response;
@@ -33,7 +31,7 @@ fn device_write_target<'a>(
     db: &'a mut ObjectDatabase,
     selected: ObjectIdentifier,
     write: &WritePropertyRequest,
-) -> Result<&'a mut DeviceObject, Error> {
+) -> Result<bacnet_objects::device::DeviceAuthority<'a>, Error> {
     let object = db
         .get_mut(&write.object_identifier)
         .ok_or_else(|| property_error(ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT))?;
@@ -54,7 +52,7 @@ fn device_write_target<'a>(
         ));
     }
     object
-        .device_mut_internal()
+        .device_authority_internal()
         .filter(|device| device.object_identifier() == selected)
         .ok_or_else(|| property_error(ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED))
 }

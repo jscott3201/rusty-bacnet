@@ -405,7 +405,7 @@ struct DispatchFixture {
     tracker: Arc<ConfirmedRequestTracker>,
     device_bindings: Arc<RwLock<DeviceBindingTable>>,
     comm_state: Arc<AtomicU8>,
-    dcc_timer: Arc<Mutex<Option<JoinHandle<()>>>>,
+    dcc_timer: Arc<Mutex<crate::server::dcc_timer::TimerSlot>>,
     config: ServerConfig,
     source_mac: MacAddr,
 }
@@ -438,7 +438,7 @@ impl DispatchFixture {
             tracker: Arc::new(ConfirmedRequestTracker::default()),
             device_bindings: Arc::new(RwLock::new(DeviceBindingTable::new())),
             comm_state: Arc::new(AtomicU8::new(0)),
-            dcc_timer: Arc::new(Mutex::new(None)),
+            dcc_timer: Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default())),
             config: ServerConfig {
                 life_safety_operation_authorizer: Some(Arc::new(|_| true)),
                 ..ServerConfig::default()

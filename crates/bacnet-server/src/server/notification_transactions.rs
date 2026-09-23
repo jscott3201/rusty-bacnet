@@ -12,6 +12,7 @@ use bacnet_endpoint_core::coordinator::{
 };
 use bacnet_objects::audit::AuditReporterStatus;
 use bacnet_types::enums::ConfirmedServiceChoice;
+use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier};
 use tokio::sync::oneshot;
 use tokio::task::{JoinError, JoinSet};
@@ -68,6 +69,7 @@ pub struct NotificationTransactions {
 
 #[derive(Default)]
 struct NotificationWorkers {
+    audit_owner: Option<std::sync::Weak<bacnet_objects::database::AuditOwnership>>,
     closed: bool,
     tasks: JoinSet<()>,
     waiter: Option<Waker>,
@@ -118,6 +120,53 @@ impl NotificationTransactions {
         })
     }
 
+    pub(super) fn set_audit_owner(&self, owner: &Arc<bacnet_objects::database::AuditOwnership>) {
+        self.workers.lock().unwrap().audit_owner = Some(Arc::downgrade(owner));
+    }
+    pub(super) fn audit_owner_lease(
+        &self,
+    ) -> Option<Arc<bacnet_objects::database::AuditOwnership>> {
+        self.workers
+            .lock()
+            .unwrap()
+            .audit_owner
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+    }
+    pub(super) fn seal_audit_owner(&self, owner: &bacnet_objects::database::AuditOwnership) {
+        let _workers = self.workers.lock().unwrap();
+        owner.seal();
+    }
+    pub(super) fn commit_audit<F: Future<Output = ()> + Send + 'static>(
+        &self,
+        prepare_commit: impl FnOnce() -> Result<F, Error>,
+    ) -> Result<(), Error> {
+        let handle = tokio::runtime::Handle::try_current()
+            .map_err(|_| Error::Encoding("recipient changes require a Tokio runtime".into()))?;
+        let mut workers = self.workers.lock().unwrap();
+        if workers.closed {
+            return Err(Error::Encoding("recipient delivery owner is closed".into()));
+        }
+        let task = prepare_commit()?;
+        let owner = workers
+            .audit_owner
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade);
+        workers.tasks.spawn_on(
+            async move {
+                let _owner = owner;
+                task.await;
+            },
+            &handle,
+        );
+        let waiter = workers.waiter.take();
+        drop(workers);
+        if let Some(waiter) = waiter {
+            waiter.wake();
+        }
+        Ok(())
+    }
+
     #[doc(hidden)]
     pub fn spawn(&self, task: impl Future<Output = ()> + Send + 'static) {
         let mut workers = self.workers.lock().unwrap();
@@ -127,7 +176,14 @@ impl NotificationTransactions {
             drop(task);
             return;
         }
-        workers.tasks.spawn(task);
+        let owner = workers
+            .audit_owner
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade);
+        workers.tasks.spawn(async move {
+            let _owner = owner;
+            task.await;
+        });
         let waiter = workers.waiter.take();
         drop(workers);
         if let Some(waiter) = waiter {

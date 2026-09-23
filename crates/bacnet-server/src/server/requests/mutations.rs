@@ -101,7 +101,7 @@ impl Request<'_> {
         coarse_cov_oids: &mut Vec<ObjectIdentifier>,
         life_safety_cov_changes: &mut Vec<LifeSafetyCovChange>,
         staging_plans: &mut Vec<StagingWritePlan>,
-        audit: &mut dyn handlers::WriteCommitObserver,
+        audit: &mut audit_reporter::WriteAudit<'_, T>,
     ) -> Apdu {
         if let Err(error) = self.authorize(|| {
             WritePropertyRequest::decode(&self.req.service_request)
@@ -115,10 +115,12 @@ impl Request<'_> {
                 &db,
                 &self.req.service_request,
             );
+            let source = audit.write_source();
             let result = handlers::handle_write_property_observed(
                 &mut db,
                 &self.req.service_request,
                 Some(audit),
+                Some(&source),
             );
             let changes = result
                 .as_ref()
@@ -152,7 +154,7 @@ impl Request<'_> {
         coarse_cov_oids: &mut Vec<ObjectIdentifier>,
         life_safety_cov_changes: &mut Vec<LifeSafetyCovChange>,
         staging_plans: &mut Vec<StagingWritePlan>,
-        audit: &mut dyn handlers::WriteCommitObserver,
+        audit: &mut audit_reporter::WriteAudit<'_, T>,
     ) -> Apdu {
         let (outcome, exact_changes, plans) = {
             let mut db = db.write().await;
@@ -160,12 +162,14 @@ impl Request<'_> {
             let authorize = |attempt: &bacnet_services::wpm::WritePropertyAttempt| {
                 self.authorize(|| Ok(MutationTarget::WritePropertyMultiple(attempt.clone())))
             };
+            let source = audit.write_source();
             let outcome = handlers::handle_write_property_multiple_observed(
                 &mut db,
                 &self.req.service_request,
                 &mut snapshots,
                 Some(&authorize),
                 Some(audit),
+                Some(&source),
             );
             let committed_oids = match &outcome {
                 handlers::WritePropertyMultipleOutcome::Success { committed_oids }

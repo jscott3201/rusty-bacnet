@@ -622,7 +622,6 @@ pub struct AuditReporterObject {
     audit_level: AuditLevel,
     auditable_operations: AuditOperationFlags,
     audit_priority_filter: BACnetPriorityFilter,
-    issue_confirmed_notifications: bool,
     monitored_objects: Option<Vec<BACnetObjectSelector>>,
 }
 
@@ -638,7 +637,6 @@ impl AuditReporterObject {
             audit_level: AuditLevel::NONE,
             auditable_operations: AuditOperationFlags::empty(),
             audit_priority_filter: BACnetPriorityFilter::all(),
-            issue_confirmed_notifications: false,
             monitored_objects: None,
         })
     }
@@ -725,7 +723,7 @@ impl AuditReporterObject {
     /// Delivery mode sampled at the observed mutation boundary.
     #[doc(hidden)]
     pub fn confirmed_internal(&self) -> bool {
-        self.issue_confirmed_notifications
+        self.status.confirmed()
     }
 
     fn reliability(&self) -> Reliability {

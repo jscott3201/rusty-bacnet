@@ -37,6 +37,8 @@ pub enum PropertyPresenceCondition {
     Commandable,
     /// The row is present because the object implements intrinsic reporting.
     IntrinsicReporting,
+    /// Audit Reporting is active, making its recipient required and writable.
+    AuditReporting,
     /// The paired Active_Text and Inactive_Text option is implemented.
     PairedText,
 }
@@ -83,6 +85,16 @@ pub struct PropertyMetadata {
 }
 
 impl PropertyMetadata {
+    /// Whether this effective row is required, including the active Device
+    /// Audit Reporting requirement while retaining its optional base table code.
+    pub const fn is_required(self) -> bool {
+        self.conformance.is_required()
+            || matches!(
+                self.presence_condition,
+                Some(PropertyPresenceCondition::AuditReporting)
+            )
+    }
+
     /// Construct one canonical metadata row.
     ///
     /// This constructor is the stable construction path as the non-exhaustive
@@ -119,7 +131,7 @@ pub fn property_list_from_metadata(
     )
 }
 
-/// Derive all table-required identifiers from canonical metadata.
+/// Derive all effectively required identifiers from canonical metadata.
 ///
 /// Unlike the legacy property-list projection, this includes `PROPERTY_LIST`.
 /// Consumers such as RPM apply their own service-specific exclusion.
@@ -129,11 +141,7 @@ pub fn required_properties_from_metadata(
     Cow::Owned(
         metadata
             .iter()
-            .filter_map(|row| {
-                row.conformance
-                    .is_required()
-                    .then_some(row.property_identifier)
-            })
+            .filter_map(|row| row.is_required().then_some(row.property_identifier))
             .collect(),
     )
 }

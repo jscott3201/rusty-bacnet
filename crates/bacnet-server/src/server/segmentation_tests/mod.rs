@@ -276,7 +276,7 @@ async fn dispatch_test_apdu_from_network<T: TransportPort + 'static>(
     let confirmed_request_tracker = Arc::new(ConfirmedRequestTracker::default());
     let device_bindings = Arc::new(RwLock::new(DeviceBindingTable::new()));
     let comm_state = Arc::new(AtomicU8::new(0));
-    let dcc_timer = Arc::new(Mutex::new(None::<JoinHandle<()>>));
+    let dcc_timer = Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default()));
     let config = Arc::new(ServerConfig::default());
 
     BACnetServer::<T>::dispatch(

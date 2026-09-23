@@ -21,6 +21,9 @@ async fn stop_producer(slot: &mut Option<JoinHandle<()>>) {
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Stop the server.
     pub async fn stop(&mut self) -> Result<(), Error> {
+        if let Some(runtime) = &self.target_audit {
+            runtime.seal();
+        }
         self.request_tasks.close();
         // Seal both reservations and worker admission before quiescing any
         // producer; abort also interrupts workers suspended in async send.
@@ -51,12 +54,40 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         while let Some(result) = self.notification_transactions.join_next().await {
             NotificationTransactions::observe(Some(result));
         }
+        if let Some(runtime) = &self.target_audit {
+            runtime.uninstall(&mut *self.db.write().await);
+        }
+        self.target_audit = None;
         Ok(())
     }
 }
 
 impl<T: TransportPort> Drop for BACnetServer<T> {
     fn drop(&mut self) {
+        if let Some(runtime) = &self.target_audit {
+            runtime.seal();
+        }
+        self.request_tasks.close();
         self.notification_transactions.close();
+        for task in [
+            &self.dispatch_task,
+            &self.cov_purge_task,
+            &self.fault_detection_task,
+            &self.event_enrollment_task,
+            &self.trend_log_task,
+            &self.schedule_tick_task,
+            &self.intrinsic_reporting_task,
+            &self.binary_lighting_operation_task,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            task.abort();
+        }
+        if let Ok(timer) = self.dcc_timer.try_lock() {
+            if let Some(task) = timer.as_ref() {
+                task.abort();
+            }
+        }
     }
 }

@@ -111,7 +111,7 @@ async fn audit_log_query_dispatch_returns_a_typed_complex_ack() {
     let confirmed_request_tracker = Arc::new(ConfirmedRequestTracker::default());
     let device_bindings = Arc::new(RwLock::new(DeviceBindingTable::new()));
     let comm_state = Arc::new(AtomicU8::new(0));
-    let dcc_timer = Arc::new(Mutex::new(None::<JoinHandle<()>>));
+    let dcc_timer = Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default()));
     let config = ServerConfig::default();
     let source_mac = MacAddr::from_slice(&[1]);
     let routed_source = NpduAddress {
@@ -229,7 +229,7 @@ async fn audit_log_query_dispatch_applies_three_state_filter_to_typed_complex_ac
             let confirmed_request_tracker = Arc::new(ConfirmedRequestTracker::default());
             let device_bindings = Arc::new(RwLock::new(DeviceBindingTable::new()));
             let comm_state = Arc::new(AtomicU8::new(0));
-            let dcc_timer = Arc::new(Mutex::new(None::<JoinHandle<()>>));
+            let dcc_timer = Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default()));
             let config = ServerConfig::default();
             let source_mac = MacAddr::from_slice(&[1]);
             let confirmed = ConfirmedRequestPdu {

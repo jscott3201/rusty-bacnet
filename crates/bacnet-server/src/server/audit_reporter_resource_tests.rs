@@ -378,23 +378,41 @@ async fn audit_reporter_auditing_failure_late_completion_does_not_update_replace
     writes(&fixture, 2).await;
     drop(permits);
     settle().await;
+    let old = fixture
+        .server
+        .db
+        .read()
+        .await
+        .get(&oid(ObjectType::AUDIT_REPORTER, 1))
+        .unwrap()
+        .audit_reporter_internal()
+        .unwrap()
+        .status_internal();
+    let token = old.begin_delivery();
+    assert!(fixture
+        .server
+        .db
+        .write()
+        .await
+        .add(Box::new(enabled(true)))
+        .is_err());
+    fixture.server.stop().await.unwrap();
     let replacement = enabled(true);
     let status = replacement.status_internal();
     status.set_configured(true);
     status.complete_delivery(status.begin_delivery(), false);
-    {
-        let mut db = fixture.server.db.write().await;
-        db.remove(&oid(ObjectType::AUDIT_REPORTER, 1)).unwrap();
-        db.add(Box::new(replacement)).unwrap();
-    }
-    ack(&fixture, 0);
-    settle().await;
+    fixture
+        .server
+        .db
+        .write()
+        .await
+        .add(Box::new(replacement))
+        .unwrap();
+    old.complete_delivery(token, true);
     assert_eq!(
         health(&fixture.server).await,
         Reliability::COMMUNICATION_FAILURE
     );
-    assert_eq!(records(&fixture), vec![expected(2, 0)]);
-    stop(&mut fixture).await;
 }
 
 #[tokio::test(start_paused = true)]
@@ -449,8 +467,7 @@ async fn audit_reporter_auditing_failure_excludes_nonresource_failures_under_loa
 }
 
 #[tokio::test(start_paused = true)]
-async fn audit_reporter_auditing_failure_replacement_supersedes_old_context_without_transferring_drops(
-) {
+async fn audit_reporter_auditing_failure_active_replacement_preserves_pending_context() {
     let mut fixture = server(enabled(true)).await;
     let permits: Vec<_> = (0..64)
         .map(|_| {
@@ -464,23 +481,22 @@ async fn audit_reporter_auditing_failure_replacement_supersedes_old_context_with
     writes(&fixture, 2).await;
     {
         let mut db = fixture.server.db.write().await;
-        db.remove(&oid(ObjectType::AUDIT_REPORTER, 1)).unwrap();
-        db.add(Box::new(enabled(true))).unwrap();
+        assert!(db.remove(&oid(ObjectType::AUDIT_REPORTER, 1)).is_err());
+        assert!(db.add(Box::new(enabled(true))).is_err());
     }
     writes(&fixture, 3).await;
     assert_eq!(
         fixture.server.notification_transactions.audit_resources(),
-        (true, 3, 0)
+        (true, 5, 0)
     );
     drop(permits);
     settle().await;
-    assert_eq!(records(&fixture), vec![expected(3, 2)]);
+    assert_eq!(records(&fixture), vec![expected(5, 0)]);
     ack(&fixture, 0);
     settle().await;
     assert_eq!(
         health(&fixture.server).await,
-        Reliability::NO_FAULT_DETECTED,
-        "only the replacement context summary owns its health completion"
+        Reliability::NO_FAULT_DETECTED
     );
     stop(&mut fixture).await;
 }

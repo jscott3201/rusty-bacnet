@@ -12,8 +12,18 @@ impl BACnetServer {
             sink.validate(&pending)?;
         }
         let audit_reporter = self.audit_reporter.clone();
+        let mut recipient_input = self
+            .audit_recipient
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("recipient lock poisoned"))?;
         if let Some(profile) = &audit_reporter {
             audit_configuration::pending_audit_reporter_index(&pending, profile.reporter)?;
+            let recipient = recipient_input.as_ref().ok_or_else(|| {
+                pyo3::exceptions::PyValueError::new_err(
+                    "target Audit requires configure_audit_recipient before start",
+                )
+            })?;
+            self.validate_audit_recipient_input(recipient)?;
         }
         for object in pending.iter() {
             if object.audit_log_forwarding_internal().is_some() {
@@ -61,6 +71,7 @@ impl BACnetServer {
         let inner = self.inner.clone();
         let started = self.started.clone();
         let device_instance = self.device_instance;
+        let audit_recipient = recipient_input.take();
         let device_name = self.device_name.clone();
         let transport_type = self.transport_type.clone();
         let interface_str = self.interface.clone();
@@ -103,6 +114,11 @@ impl BACnetServer {
                 ..DeviceConfig::default()
             })
             .map_err(to_py_err)?;
+            if let Some(recipient) = audit_recipient {
+                device
+                    .provision_audit_recipient(recipient)
+                    .map_err(to_py_err)?;
+            }
 
             // Collect object identifiers for device object-list
             let dev_oid = device.object_identifier();

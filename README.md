@@ -256,7 +256,7 @@ particular service, object, direction, and configuration you need.
 | Discovery, routing, and COV | Rust client/network components and Python APIs expose discovery, routed requests, subscriptions, and notifications. Consult the individual API for address forms, notification delivery, and lifecycle ownership. |
 | Events, logs, files, and device management | APIs and server handlers exist for selected services, with configuration, authorization, resource, and persistence limits. Client availability does not imply equivalent server execution or Python configuration support. |
 | LifeSafetyOperation | Authorized Rust server execution covers modeled silence/unsilence and application-owned resets, with exact COV changes and bounded response replay. Reset requires explicit arming and an executor; no physical state is inferred. See [execution and COV limits](docs/rust-api.md#life-safety-execution-and-cov) for property coverage, replay bounds, and deferred object behavior. This is not full Life Safety object conformance or physical-safety qualification. |
-| Audit services | Rust and Python expose client notification/query helpers, explicit Audit Log reception policies, static target reporting, and direct B/IP parent forwarding. Python selects one registered Audit Log with an explicit `deny_all` or `allow_all` policy before startup; unconfigured reception is denied. Rust endpoint source reporting currently covers direct B/IP ReadProperty. These subsets do not imply full Audit Reporter, BIBB or BTL conformance. |
+| Audit services | Rust and Python expose client notification/query helpers, explicit Audit Log reception policies, configured target reporting, and direct B/IP parent forwarding. Python selects one registered Audit Log with an explicit `deny_all` or `allow_all` policy before startup; unconfigured reception is denied. Rust endpoint source reporting currently covers direct B/IP ReadProperty. These subsets do not imply full Audit Reporter, BIBB or BTL conformance. |
 
 Audit records contain peer-reported identities, not authenticated provenance.
 Notification storage uses the database's write path and depends on synchronous
@@ -268,8 +268,8 @@ and [Python Audit APIs](docs/python-api.md#audit-services), including the
 Python's receiver policy is an all-or-none choice, not a sender allowlist or
 authentication callback. The narrow Rust source producer is documented under
 [endpoint ReadProperty reporting](docs/rust-api.md#bounded-endpoint-source-readproperty-reporting).
-The writable Device recipient contract remains tracked
-in [#728](https://github.com/jscott3201/rusty-bacnet/issues/728), with broader Audit
+The standalone target profile implements the [Device recipient contract](docs/device-audit-recipient.md);
+endpoint source migration remains tracked in [#728](https://github.com/jscott3201/rusty-bacnet/issues/728), with broader Audit
 completion in [#345](https://github.com/jscott3201/rusty-bacnet/issues/345).
 The server does not claim execution of WriteGroup, Virtual Terminal, or
 PrivateTransfer services merely because a client can send them.

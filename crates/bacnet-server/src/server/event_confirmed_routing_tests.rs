@@ -255,7 +255,7 @@ impl Harness {
             &Arc::new(ConfirmedRequestTracker::default()),
             &self.device_bindings,
             &self.comm_state,
-            &Arc::new(Mutex::new(None::<JoinHandle<()>>)),
+            &Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default())),
             &Arc::new(dcc_outcomes::DccOutcomes::default()),
             &Arc::new(crate::mutation::MutationDecisions::default()),
             &Arc::new(ServerConfig::default()),

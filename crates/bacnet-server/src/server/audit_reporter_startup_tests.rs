@@ -18,16 +18,21 @@ async fn start_profile(
         .unwrap(),
     ))
     .unwrap();
+    if let Some(recipient) = recipient {
+        db.get_mut(&oid(ObjectType::DEVICE, 10))
+            .unwrap()
+            .device_authority_internal()
+            .unwrap()
+            .provision_audit_recipient(BACnetRecipient::Device(recipient))
+            .unwrap();
+    }
     db.add(Box::new(BinaryValueObject::new(1, "value").unwrap()))
         .unwrap();
     // An available Reporter must not silently substitute for the selected one.
     db.add(Box::new(reporter())).unwrap();
     BACnetServer::start_with_clock_mode_and_bindings(
         ServerConfig {
-            audit_reporter: Some(AuditReporterConfig {
-                reporter: selected,
-                recipient,
-            }),
+            audit_reporter: Some(AuditReporterConfig { reporter: selected }),
             ..Default::default()
         },
         db,
@@ -76,7 +81,6 @@ async fn audit_reporter_startup_rejects_wrong_type_selected_object() {
 #[tokio::test]
 async fn audit_reporter_startup_preserves_recipient_configuration_health() {
     for (recipient, expected) in [
-        (None, Reliability::CONFIGURATION_ERROR),
         (
             Some(oid(ObjectType::DEVICE, 999)),
             Reliability::CONFIGURATION_ERROR,
@@ -100,4 +104,52 @@ async fn audit_reporter_startup_preserves_recipient_configuration_health() {
         assert_eq!(server.notification_transactions.active_count(), 0);
         server.stop().await.unwrap();
     }
+}
+
+#[tokio::test]
+async fn audit_recipient_non_bip_six_byte_mac_is_not_an_address_capability() {
+    let mut transport = CaptureTransport::default();
+    transport.six_byte_mac = true;
+    // Six octets on a generic link do not establish the B/IP address grammar.
+    let mut db = ObjectDatabase::new();
+    let mut device = DeviceObject::new(DeviceConfig {
+        instance: 10,
+        ..Default::default()
+    })
+    .unwrap();
+    device
+        .provision_audit_recipient(BACnetRecipient::Address(BACnetAddress {
+            network_number: 0,
+            mac_address: MacAddr::from_slice(&[127, 0, 0, 1, 0xba, 0xc1]),
+        }))
+        .unwrap();
+    db.add(Box::new(device)).unwrap();
+    db.add(Box::new(reporter())).unwrap();
+    let result = BACnetServer::start_with_clock_mode_and_bindings(
+        ServerConfig {
+            audit_reporter: Some(AuditReporterConfig {
+                reporter: oid(ObjectType::AUDIT_REPORTER, 1),
+            }),
+            ..Default::default()
+        },
+        db,
+        transport.clone(),
+        None,
+        vec![],
+    )
+    .await;
+    assert!(result.is_err());
+    assert!(!transport.started.load(Ordering::Acquire));
+    let mut server = start_profile(
+        oid(ObjectType::AUDIT_REPORTER, 1),
+        Some(oid(ObjectType::DEVICE, 20)),
+        transport.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        transport.started.load(Ordering::Acquire),
+        "configured Device routes remain link independent"
+    );
+    server.stop().await.unwrap();
 }

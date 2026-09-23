@@ -286,7 +286,7 @@ fn remove_after_rename_frees_current_name_only() {
     assert!(db.find_by_name("BV-A").is_none());
     assert!(db.find_by_name("BV-A2").is_some());
 
-    db.remove(&oid_a);
+    db.remove(&oid_a).unwrap();
     assert!(
         db.find_by_name("BV-A2").is_none(),
         "remove frees current name"

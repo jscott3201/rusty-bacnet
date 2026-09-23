@@ -310,11 +310,11 @@ class AuditContractArtifactTests(unittest.TestCase):
         for name, positional, keyword_only in (
             ("add_device_binding", {"device_instance": "int", "address": "str"}, {}),
             ("add_audit_reporter", {"instance": "int", "name": "str"}, {}),
+            ("configure_audit_recipient", {"recipient": "AuditRecipientInput"}, {}),
             ("configure_audit_log_parent", {"instance": "int"}, {
                 "parent_device_instance": "int", "parent_audit_log_instance": "int",
             }),
             ("configure_audit_reporter", {"instance": "int"}, {
-                "recipient_device_instance": "int",
                 "audit_level": "Literal['none', 'audit_config', 'audit_all']",
                 "auditable_operations": "int", "issue_confirmed_notifications": "bool",
                 "monitored_objects": "list[ObjectIdentifier | ObjectType | None] | None",
@@ -658,11 +658,67 @@ class AuditContractArtifactTests(unittest.TestCase):
         # Failed calls must not reserve the Device identifier.
         add(99, ADDRESS)
 
+    def test_device_recipient_provision_retry_copy_and_freeze(self) -> None:
+        async def exercise() -> None:
+            server = BACnetServer(device_instance=8, interface="127.0.0.1", port=0)
+            server.add_audit_reporter(1, "Selected")
+            server.configure_audit_reporter(1, audit_level="none", auditable_operations=0,
+                                            issue_confirmed_notifications=False)
+            with self.assertRaisesRegex(ValueError, "configure_audit_recipient"):
+                await server.start()
+            self.assertEqual(getattr(server, "_pending_registration_count")(), 1)
+            recipient: dict[str, Any] = {"kind": "device", "object_identifier": ObjectIdentifier(ObjectType.DEVICE, 9)}
+            server.configure_audit_recipient(cast(Any, recipient))
+            recipient["object_identifier"] = ObjectIdentifier(ObjectType.DEVICE, 10)
+            for invalid in (
+                {"kind": "device", "object_identifier": ObjectIdentifier(ObjectType.DEVICE, 2**22 - 1)},
+                {"kind": "device", "object_identifier": ObjectIdentifier(ObjectType.ANALOG_VALUE, 9)},
+                {"kind": "address", "network_number": 65535, "mac_address": b""},
+                {"kind": "address", "network_number": 0, "mac_address": bytes.fromhex("ffffffffbac0")},
+                {"kind": "address", "network_number": 0, "mac_address": bytes.fromhex("7f0000010000")},
+            ):
+                with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                    server.configure_audit_recipient(cast(Any, invalid))
+            starting = server.start()
+            with self.assertRaises(RuntimeError):
+                server.configure_audit_recipient(cast(Any, recipient))
+            await starting
+            try:
+                value = await server.read_property(ObjectIdentifier(ObjectType.DEVICE, 8),
+                                                   PropertyIdentifier.AUDIT_NOTIFICATION_RECIPIENT)
+                self.assertEqual(value.tag, "application_data")
+                self.assertEqual(value.value, bytes.fromhex("0c02000009"))
+            finally:
+                await server.stop()
+            with self.assertRaises(RuntimeError):
+                server.configure_audit_recipient(cast(Any, recipient))
+        asyncio.run(bounded_reporter_test(exercise()))
+
+    def test_device_recipient_address_is_copied_and_exposed_through_any_transport(self) -> None:
+        async def exercise() -> None:
+            server = BACnetServer(device_instance=8, interface="127.0.0.1", port=0)
+            recipient: dict[str, Any] = {"kind": "address", "network_number": 0,
+                                         "mac_address": bytes.fromhex("7f000001bac0")}
+            server.configure_audit_recipient(cast(Any, recipient))
+            recipient["mac_address"] = bytes.fromhex("7f000001bac1")
+            server.add_audit_reporter(1, "Selected")
+            server.configure_audit_reporter(1, audit_level="none", auditable_operations=0,
+                                            issue_confirmed_notifications=False)
+            await server.start()
+            try:
+                value = await server.read_property(ObjectIdentifier(ObjectType.DEVICE, 8),
+                                                   PropertyIdentifier.AUDIT_NOTIFICATION_RECIPIENT)
+                self.assertEqual(value.value, bytes.fromhex("1e210065067f000001bac01f"))
+            finally:
+                await server.stop()
+        asyncio.run(bounded_reporter_test(exercise()))
+
     def test_reporter_strict_validation_is_atomic_and_identity_is_fixed(self) -> None:
         async def exercise() -> None:
             server = BACnetServer(device_instance=8, interface="127.0.0.1", port=0)
+            server.configure_audit_recipient({"kind": "device", "object_identifier": ObjectIdentifier(ObjectType.DEVICE, 9)})
             configure = cast(Callable[..., None], server.configure_audit_reporter)
-            settings = dict(recipient_device_instance=9, audit_level="audit_all",
+            settings = dict(audit_level="audit_all",
                             auditable_operations=2, issue_confirmed_notifications=False)
             with self.assertRaisesRegex(ValueError, "no pending Audit Reporter"):
                 configure(1, **settings)
@@ -678,14 +734,14 @@ class AuditContractArtifactTests(unittest.TestCase):
             configure(1, **settings)
             # All allowed u64 positions survive, including bit 63, without narrowing.
             valid_mask = 0xffff_ffff_0000_ffff
-            configure(1, recipient_device_instance=0, audit_level="none",
+            configure(1, audit_level="none",
                       auditable_operations=0, issue_confirmed_notifications=False)
             with self.assertRaisesRegex(ValueError, "different Audit Reporter"):
                 configure(2, **settings)  # NONE does not release the fixed selection.
-            configure(1, recipient_device_instance=2**22 - 1, audit_level="audit_config",
+            configure(1, audit_level="audit_config",
                       auditable_operations=valid_mask, issue_confirmed_notifications=True)
 
-            for field in ("instance", "recipient_device_instance"):
+            for field in ("instance",):
                 for invalid in (-1, 2**22, 2**100, True, False, 1.0, "1", None):
                     with self.subTest(field=field, invalid=invalid), self.assertRaises(ValueError):
                         configure(**{**settings, "instance": 1, field: invalid})
@@ -708,8 +764,10 @@ class AuditContractArtifactTests(unittest.TestCase):
                 for error, invalid in invalids:
                     with self.subTest(field=field, invalid=invalid), self.assertRaises(error):
                         configure(1, **{**settings, field: invalid})
-            with self.assertRaisesRegex(ValueError, "must be remote"):
-                configure(1, **{**settings, "recipient_device_instance": 8})
+            with self.assertRaisesRegex(ValueError, "remote Device"):
+                server.configure_audit_recipient({"kind": "device", "object_identifier": ObjectIdentifier(ObjectType.DEVICE, 8)})
+            with self.assertRaises(TypeError):
+                configure(1, **settings, recipient_device_instance=9)
             with self.assertRaisesRegex(ValueError, "different Audit Reporter"):
                 configure(2, **settings)
             with self.assertRaisesRegex(ValueError, "no pending Audit Reporter"):
@@ -743,13 +801,14 @@ class AuditContractArtifactTests(unittest.TestCase):
         target = ObjectIdentifier(ObjectType.ANALOG_VALUE, 1)
         selectors = [None, target, ObjectType.ANALOG_VALUE, ObjectType.from_raw(512),
                      ObjectType.from_raw(2**32 - 1), target]
-        settings = dict(recipient_device_instance=9, audit_level="audit_all",
+        settings = dict(audit_level="audit_all",
                         auditable_operations=2, issue_confirmed_notifications=True)
 
         async def exercise(options: dict[str, Any], expected: list[Any] | None,
                            priority_bytes: bytes) -> None:
             server = BACnetServer(device_instance=8, interface="127.0.0.1", port=0)
             server.add_audit_reporter(1, "Selected")
+            server.configure_audit_recipient({"kind": "device", "object_identifier": ObjectIdentifier(ObjectType.DEVICE, 9)})
             configure = cast(Callable[..., None], server.configure_audit_reporter)
             # Every case replaces a non-default configuration, including removal
             # by explicit None and omission. Inputs are copied, not retained.
@@ -761,7 +820,7 @@ class AuditContractArtifactTests(unittest.TestCase):
                 {"monitored_objects": [], "audit_priority_filter": 0, "auditable_operations": 1 << 16},
             ):
                 with self.assertRaises((TypeError, ValueError)):
-                    configure(1, **{**settings, "recipient_device_instance": 99, **invalid})
+                    configure(1, **{**settings, **invalid})
             if isinstance(options.get("monitored_objects"), list):
                 options["monitored_objects"].clear()
             self.assertEqual(getattr(server, "_pending_registration_count")(), 1)
@@ -801,8 +860,9 @@ class AuditContractArtifactTests(unittest.TestCase):
     def test_reporter_start_revalidates_duplicates_without_draining(self) -> None:
         server = BACnetServer(device_instance=8)
         server.add_audit_reporter(1, "Selected")
-        settings = dict(recipient_device_instance=9, audit_level="audit_all",
+        settings = dict(audit_level="audit_all",
                         auditable_operations=2, issue_confirmed_notifications=False)
+        server.configure_audit_recipient({"kind": "device", "object_identifier": ObjectIdentifier(ObjectType.DEVICE, 9)})
         configure = cast(Callable[..., None], server.configure_audit_reporter)
         configure(1, **settings)
         server.add_audit_reporter(1, "Duplicate")
@@ -821,9 +881,9 @@ class AuditContractArtifactTests(unittest.TestCase):
                 server = BACnetServer(device_instance=8, transport="sc", sc_device_uuid=b"\x01" * 16,
                                       sc_ca_cert=missing, sc_client_cert=missing, sc_client_key=missing)
                 server.add_audit_reporter(1, "Retryable")
+                server.configure_audit_recipient({"kind": "device", "object_identifier": ObjectIdentifier(ObjectType.DEVICE, 9)})
                 for level in ("audit_all", "none"):
-                    server.configure_audit_reporter(1, recipient_device_instance=9,
-                        audit_level=cast(Any, level), auditable_operations=2, issue_confirmed_notifications=False,
+                    server.configure_audit_reporter(1, audit_level=cast(Any, level), auditable_operations=2, issue_confirmed_notifications=False,
                         monitored_objects=[None], audit_priority_filter=0)
                     with self.assertRaisesRegex(RuntimeError, "TLS config error"):
                         _unused = server.start()
@@ -833,9 +893,9 @@ class AuditContractArtifactTests(unittest.TestCase):
                 with self.subTest(configure_before_start=configure_before_start):
                     server = BACnetServer(device_instance=8, interface="127.0.0.1", port=0)
                     server.add_audit_reporter(2**22 - 1, "Frozen")
+                    server.configure_audit_recipient({"kind": "device", "object_identifier": ObjectIdentifier(ObjectType.DEVICE, 0)})
                     def configure() -> None:
-                        server.configure_audit_reporter(2**22 - 1, recipient_device_instance=0,
-                            audit_level="audit_all", auditable_operations=2, issue_confirmed_notifications=True,
+                        server.configure_audit_reporter(2**22 - 1, audit_level="audit_all", auditable_operations=2, issue_confirmed_notifications=True,
                             monitored_objects=[ObjectType.ANALOG_VALUE], audit_priority_filter=1 << 7)
                     if configure_before_start:
                         configure()
@@ -920,25 +980,21 @@ class AuditContractArtifactTests(unittest.TestCase):
                 if bound and confirmed:
                     child.add_device_binding(9, parent_address)
                 if level is not None:
-                    child.configure_audit_reporter(0, recipient_device_instance=99,
-                        audit_level="none", auditable_operations=0, issue_confirmed_notifications=not confirmed,
+                    child.configure_audit_recipient({"kind": "device", "object_identifier": ObjectIdentifier(ObjectType.DEVICE, 9)})
+                    child.configure_audit_reporter(0, audit_level="none", auditable_operations=0, issue_confirmed_notifications=not confirmed,
                         monitored_objects=[], audit_priority_filter=0)
-                    child.configure_audit_reporter(0, recipient_device_instance=9,
-                        audit_level=cast(Any, level), auditable_operations=operations,
+                    child.configure_audit_reporter(0, audit_level=cast(Any, level), auditable_operations=operations,
                         issue_confirmed_notifications=confirmed, **(filters or {}))
                     with self.assertRaises(ValueError):
-                        child.configure_audit_reporter(1, recipient_device_instance=99,
-                            audit_level="audit_all", auditable_operations=2, issue_confirmed_notifications=True)
+                        child.configure_audit_reporter(1, audit_level="audit_all", auditable_operations=2, issue_confirmed_notifications=True)
                     with self.assertRaises(ValueError):
-                        child.configure_audit_reporter(0, recipient_device_instance=99,
-                            audit_level="none", auditable_operations=1 << 16, issue_confirmed_notifications=True)
+                        child.configure_audit_reporter(0, audit_level="none", auditable_operations=1 << 16, issue_confirmed_notifications=True)
                     invalid_filters: list[dict[str, Any]] = [
                         {"monitored_objects": [True]}, {"audit_priority_filter": 65536},
                     ]
                     for invalid in invalid_filters:
                         with self.assertRaises((TypeError, ValueError)):
-                            child.configure_audit_reporter(0, recipient_device_instance=99,
-                                audit_level="none", auditable_operations=0,
+                            child.configure_audit_reporter(0, audit_level="none", auditable_operations=0,
                                 issue_confirmed_notifications=not confirmed, **invalid)
                 if bound and not confirmed:
                     child.add_device_binding(9, parent_address)

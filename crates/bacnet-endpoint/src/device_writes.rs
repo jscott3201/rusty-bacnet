@@ -78,7 +78,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         if !db
             .get_mut(&oid)
             .expect("Device exists")
-            .device_mut_internal()
+            .device_authority_internal()
             .is_some_and(|device| device.object_identifier() == oid)
         {
             return Err(Error::Encoding(
@@ -97,7 +97,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             .get_mut();
         db.get_mut(&oid)
             .expect("validated Device")
-            .device_mut_internal()
+            .device_authority_internal()
             .expect("validated Device authority")
             .set_services_supported(SERVICES);
         if let Some(identity) = self.identity.take() {

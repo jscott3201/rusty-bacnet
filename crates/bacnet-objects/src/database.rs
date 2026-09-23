@@ -19,13 +19,14 @@ use trend_poll::TrendPollSchedule;
 /// Enforces Object_Name uniqueness within a device.
 /// Maintains secondary indexes for O(1) name lookup and O(1) type lookup.
 pub struct ObjectDatabase {
+    audit_owner: Option<std::sync::Weak<AuditOwnership>>,
     objects: HashMap<ObjectIdentifier, Box<dyn BACnetObject>>,
     trend_poll: TrendPollSchedule,
     /// Shared Device clock reader. `None` is an explicit clockless database.
     clock: Option<Arc<dyn ClockReader>>,
     monotonic_clock: Option<Arc<MonotonicClock>>,
     /// Device-local EventNotification ordering source for clockless operation.
-    event_sequence_number: u16,
+    event_sequence: Arc<EventSequence>,
     /// Reverse index: object name → ObjectIdentifier for uniqueness enforcement.
     name_index: HashMap<String, ObjectIdentifier>,
     /// Type index: object type → set of ObjectIdentifiers for fast enumeration.
@@ -53,6 +54,11 @@ impl EventSequenceReservation {
     }
 }
 
+mod audit_ownership;
+mod event_sequence;
+pub use audit_ownership::AuditOwnership;
+pub use event_sequence::EventSequence;
+
 impl Default for ObjectDatabase {
     fn default() -> Self {
         Self::new()
@@ -67,7 +73,8 @@ impl ObjectDatabase {
             trend_poll: TrendPollSchedule::default(),
             clock: None,
             monotonic_clock: None,
-            event_sequence_number: 0,
+            event_sequence: Arc::default(),
+            audit_owner: None,
             name_index: HashMap::new(),
             type_index: HashMap::new(),
             invalid_enrollment_eval_state: HashSet::new(),
@@ -78,8 +85,10 @@ impl ObjectDatabase {
     /// Add an object to the database.
     ///
     /// Returns `Err` if another object already has the same `object_name()`.
-    /// Replacing an object with the same OID is allowed (the old object is removed).
+    /// Replacing an object with the same OID is allowed unless an installed
+    /// Audit runtime protects its membership. Protection is checked before any binding.
     pub fn add(&mut self, mut object: Box<dyn BACnetObject>) -> Result<(), Error> {
+        self.check_audit_membership(&object.object_identifier(), true)?;
         object.bind_clock_internal(self.clock.clone());
         object.bind_monotonic_clock_internal(self.monotonic_clock.clone());
         let oid = object.object_identifier();
@@ -179,21 +188,27 @@ impl ObjectDatabase {
     /// neither rebinds clocks nor updates indexes, and does not provide rollback.
     /// Poll ownership is retired before invocation, even if the callback returns
     /// an error or unwinds after modifying the slot. Slot borrows cannot escape.
+    /// An installed Audit runtime can reject protected members before the callback.
     ///
     /// ```compile_fail
     /// use bacnet_objects::{database::ObjectDatabase, traits::BACnetObject};
     /// use bacnet_types::primitives::ObjectIdentifier;
     /// fn escape<'a>(db: &'a mut ObjectDatabase, oid: &ObjectIdentifier)
-    ///     -> Option<&'a mut Box<dyn BACnetObject>> {
+    ///     -> Result<Option<&'a mut Box<dyn BACnetObject>>, bacnet_types::error::Error> {
     ///     db.with_object_adapter(oid, |slot| slot)
     /// }
     /// ```
-    pub fn with_object_adapter<R, F>(&mut self, oid: &ObjectIdentifier, adapt: F) -> Option<R>
+    pub fn with_object_adapter<R, F>(
+        &mut self,
+        oid: &ObjectIdentifier,
+        adapt: F,
+    ) -> Result<Option<R>, Error>
     where
         F: for<'slot> FnOnce(&'slot mut Box<dyn BACnetObject>) -> R,
     {
+        self.check_audit_membership(oid, false)?;
         self.trend_poll.retire(oid);
-        self.objects.get_mut(oid).map(adapt)
+        Ok(self.objects.get_mut(oid).map(adapt))
     }
 
     /// Whether an Event Enrollment object's private evaluator state requires a
@@ -255,8 +270,13 @@ impl ObjectDatabase {
         self.invalid_enrollment_eval_state.extend(affected);
     }
 
-    /// Remove an object by identifier.
-    pub fn remove(&mut self, oid: &ObjectIdentifier) -> Option<Box<dyn BACnetObject>> {
+    /// Remove an object by identifier. Installed Audit membership protection
+    /// returns an error before removing the object or changing indexes.
+    pub fn remove(
+        &mut self,
+        oid: &ObjectIdentifier,
+    ) -> Result<Option<Box<dyn BACnetObject>>, Error> {
+        self.check_audit_membership(oid, false)?;
         self.trend_poll.retire(oid);
         if self.objects.contains_key(oid) {
             self.invalidate_enrollments_monitoring(oid);
@@ -283,9 +303,9 @@ impl ObjectDatabase {
             if let Some(type_set) = self.type_index.get_mut(&oid.object_type()) {
                 type_set.retain(|o| o != oid);
             }
-            Some(obj)
+            Ok(Some(obj))
         } else {
-            None
+            Ok(None)
         }
     }
 
@@ -337,6 +357,11 @@ impl ObjectDatabase {
         self.clock.as_ref()?.read_clock()
     }
 
+    #[doc(hidden)]
+    pub fn event_sequence_internal(&self) -> Arc<EventSequence> {
+        Arc::clone(&self.event_sequence)
+    }
+
     /// Consume the next Device-local EventNotification sequence number.
     ///
     /// The counter wraps modulo 65536 as required by the timestamp production.
@@ -356,18 +381,14 @@ impl ObjectDatabase {
     #[doc(hidden)]
     pub fn reserve_event_sequence_number(&self) -> EventSequenceReservation {
         EventSequenceReservation {
-            number: self.event_sequence_number,
+            number: self.event_sequence.current(),
         }
     }
 
     /// Consume an exact reservation if it is still current.
     #[doc(hidden)]
     pub fn confirm_event_sequence_number(&mut self, reservation: EventSequenceReservation) -> bool {
-        if reservation.number != self.event_sequence_number {
-            return false;
-        }
-        self.event_sequence_number = self.event_sequence_number.wrapping_add(1);
-        true
+        self.event_sequence.confirm(reservation.number)
     }
 
     /// Visit every `(ObjectIdentifier, &mut dyn BACnetObject)` pair.

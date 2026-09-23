@@ -4,8 +4,8 @@ use crate::mutation::{MutationAuthorizationContext, MutationAuthorizer, Mutation
 /// Server configuration.
 #[derive(Clone)]
 pub struct ServerConfig {
-    /// Optional single target-WRITE, immediate-send Audit Reporter profile.
-    /// This is local configuration, not Device.Audit_Notification_Recipient.
+    /// Optional target Audit Reporter profile. Its recipient is provisioned on
+    /// the built-in Device and becomes writable while the runtime is installed.
     pub audit_reporter: Option<AuditReporterConfig>,
     /// Per-service GetAlarmSummary database scan and encoded response limits.
     pub get_alarm_summary_budget: GetAlarmSummaryBudget,

@@ -76,7 +76,7 @@ pub trait BACnetObject: Send + Sync {
     /// Typed local Device authority for composition-owned configuration.
     /// This does not grant network write access to the object database.
     #[doc(hidden)]
-    fn device_mut_internal(&mut self) -> Option<&mut crate::device::DeviceObject> {
+    fn device_authority_internal(&mut self) -> Option<crate::device::DeviceAuthority<'_>> {
         None
     }
 

@@ -45,10 +45,7 @@ impl AuditReporterObject {
 
     /// Select confirmed or unconfirmed target audit notifications.
     pub fn set_issue_confirmed_notifications(&mut self, confirmed: bool) {
-        if self.issue_confirmed_notifications != confirmed {
-            self.status.configuration_changed();
-        }
-        self.issue_confirmed_notifications = confirmed;
+        self.status.set_confirmed(confirmed);
     }
 
     /// Configure the optional Monitored_Objects array locally (never over BACnet).

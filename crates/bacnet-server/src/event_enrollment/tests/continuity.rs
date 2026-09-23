@@ -44,7 +44,7 @@ fn retarget(
     target_oid: ObjectIdentifier,
     property: PropertyIdentifier,
 ) {
-    let mut enrollment = db.remove(&enrollment_oid).unwrap();
+    let mut enrollment = db.remove(&enrollment_oid).unwrap().unwrap();
     enrollment
         .write_property(
             PropertyIdentifier::OBJECT_PROPERTY_REFERENCE,
@@ -174,7 +174,7 @@ fn removed_same_target_clears_all_continuity_and_restarts_full_delay() {
         )))
         .unwrap();
 
-    let removed = db.remove(&target_oid).unwrap();
+    let removed = db.remove(&target_oid).unwrap().unwrap();
     let before = public_snapshot(&mut db, enrollment_oid);
     let report = evaluate_event_enrollments_detailed_report(&mut db, 1);
     assert_observation_gap(&report, enrollment_oid);
@@ -223,7 +223,7 @@ fn cov_restore_and_valid_retarget_each_establish_a_fresh_baseline() {
     db.add(Box::new(enrollment)).unwrap();
     assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
 
-    let mut removed = db.remove(&first_oid).unwrap();
+    let mut removed = db.remove(&first_oid).unwrap().unwrap();
     let report = evaluate_event_enrollments_detailed_report(&mut db, 1);
     assert_observation_gap(&report, enrollment_oid);
     assert_private_reset(&db, enrollment_oid);
@@ -290,7 +290,7 @@ fn change_of_state_does_not_reuse_pre_gap_last_offnormal_identity() {
     db.add(Box::new(enrollment)).unwrap();
     assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
 
-    let mut removed = db.remove(&target_oid).unwrap();
+    let mut removed = db.remove(&target_oid).unwrap().unwrap();
     set_input_value(removed.as_mut(), PropertyValue::Enumerated(0));
     let report = evaluate_event_enrollments_detailed_report(&mut db, 1);
     assert_observation_gap(&report, enrollment_oid);

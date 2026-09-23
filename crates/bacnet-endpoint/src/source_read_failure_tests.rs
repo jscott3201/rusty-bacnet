@@ -168,10 +168,10 @@ async fn source_failure_pending_context_invalidates_without_another_read() {
                     .unwrap();
                 }
                 "removal" => {
-                    db.remove(&selected()).unwrap();
+                    db.remove(&selected()).unwrap().unwrap();
                 }
                 "device" => {
-                    db.remove(&oid(ObjectType::DEVICE, 123)).unwrap();
+                    db.remove(&oid(ObjectType::DEVICE, 123)).unwrap().unwrap();
                 }
                 _ => {
                     let object = db.get_mut(&selected()).unwrap();

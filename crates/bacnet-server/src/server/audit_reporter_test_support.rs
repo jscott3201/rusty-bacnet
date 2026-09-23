@@ -19,12 +19,15 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex as StdMutex;
 
 pub(super) const LOGGER: &[u8] = &[2];
+pub(super) const NEW_LOGGER: &[u8] = &[4];
 pub(super) const SOURCE: &[u8] = &[3];
 
 #[derive(Clone, Default)]
 pub(super) struct CaptureTransport {
+    pub(super) six_byte_mac: bool,
     pub(super) started: Arc<AtomicBool>,
     pub(super) sent: Arc<StdMutex<Vec<Bytes>>>,
+    pub(super) destinations: Arc<StdMutex<Vec<Vec<u8>>>>,
     pub(super) responses: Arc<StdMutex<Vec<Bytes>>>,
     pub(super) fail: Arc<AtomicBool>,
     pub(super) fail_response: Arc<AtomicBool>,
@@ -54,7 +57,8 @@ impl TransportPort for CaptureTransport {
             }
             return Ok(());
         }
-        assert_eq!(mac, LOGGER);
+        assert!(mac == LOGGER || mac == NEW_LOGGER);
+        self.destinations.lock().unwrap().push(mac.to_vec());
         self.sent
             .lock()
             .unwrap()
@@ -71,7 +75,11 @@ impl TransportPort for CaptureTransport {
         Ok(())
     }
     fn local_mac(&self) -> &[u8] {
-        &[1]
+        if self.six_byte_mac {
+            &[127, 0, 0, 1, 0xba, 0xc0]
+        } else {
+            &[1]
+        }
     }
 }
 
@@ -139,10 +147,33 @@ pub(super) struct Fixture {
 }
 
 pub(super) async fn server(reporter: AuditReporterObject) -> Fixture {
-    server_with_devices(reporter, &[10]).await
+    server_with_recipient(
+        reporter,
+        bacnet_types::constructed::BACnetRecipient::Device(oid(ObjectType::DEVICE, 20)),
+    )
+    .await
 }
 
-pub(super) async fn server_with_devices(reporter: AuditReporterObject, devices: &[u32]) -> Fixture {
+pub(super) async fn server_with_recipient(
+    reporter: AuditReporterObject,
+    recipient: bacnet_types::constructed::BACnetRecipient,
+) -> Fixture {
+    try_server(
+        reporter,
+        &[10],
+        Some(recipient),
+        vec![DeviceBinding::local(oid(ObjectType::DEVICE, 20), LOGGER).unwrap()],
+    )
+    .await
+    .unwrap()
+}
+
+pub(super) async fn try_server(
+    reporter: AuditReporterObject,
+    devices: &[u32],
+    recipient: Option<bacnet_types::constructed::BACnetRecipient>,
+    bindings: Vec<DeviceBinding>,
+) -> Result<Fixture, Error> {
     let mut db = ObjectDatabase::new();
     let writes = Arc::new(AtomicUsize::new(0));
     let attempts = Arc::new(AtomicUsize::new(0));
@@ -157,6 +188,15 @@ pub(super) async fn server_with_devices(reporter: AuditReporterObject, devices: 
             .unwrap(),
         ))
         .unwrap();
+    }
+    for &instance in devices {
+        if let Some(recipient) = &recipient {
+            db.get_mut(&oid(ObjectType::DEVICE, instance))
+                .unwrap()
+                .device_authority_internal()
+                .unwrap()
+                .provision_audit_recipient(recipient.clone())?;
+        }
     }
     db.add(Box::new(CountingValue {
         value: BinaryValueObject::new(1, "value").unwrap(),
@@ -176,24 +216,22 @@ pub(super) async fn server_with_devices(reporter: AuditReporterObject, devices: 
         ServerConfig {
             audit_reporter: Some(AuditReporterConfig {
                 reporter: oid(ObjectType::AUDIT_REPORTER, 1),
-                recipient: Some(oid(ObjectType::DEVICE, 20)),
             }),
             ..Default::default()
         },
         db,
         transport,
         None,
-        vec![DeviceBinding::local(oid(ObjectType::DEVICE, 20), LOGGER).unwrap()],
+        bindings,
     )
-    .await
-    .unwrap();
-    Fixture {
+    .await?;
+    Ok(Fixture {
         server,
         transport: captured,
         writes,
         attempts,
         execution_error,
-    }
+    })
 }
 
 pub(super) async fn dispatch(

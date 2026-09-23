@@ -86,8 +86,6 @@ fn expand_property_reference(
     object: &dyn bacnet_objects::traits::BACnetObject,
     property_identifier: PropertyIdentifier,
 ) -> Vec<PropertyIdentifier> {
-    use bacnet_objects::property_metadata::PropertyConformance;
-
     let metadata = object.property_metadata();
     if !metadata.is_empty() {
         return match property_identifier {
@@ -102,16 +100,13 @@ fn expand_property_reference(
                 .iter()
                 .filter_map(|row| {
                     (row.property_identifier != PropertyIdentifier::PROPERTY_LIST
-                        && row.conformance.is_required())
+                        && row.is_required())
                     .then_some(row.property_identifier)
                 })
                 .collect(),
             PropertyIdentifier::OPTIONAL => metadata
                 .iter()
-                .filter_map(|row| {
-                    (row.conformance == PropertyConformance::Optional)
-                        .then_some(row.property_identifier)
-                })
+                .filter_map(|row| (!row.is_required()).then_some(row.property_identifier))
                 .collect(),
             other => vec![other],
         };

@@ -150,7 +150,7 @@ fn object_identifier(value: &Bound<'_, PyAny>, name: &str) -> PyResult<ObjectIde
         .map_err(|_| PyTypeError::new_err(format!("{name} must be an ObjectIdentifier")))
 }
 
-fn recipient(value: &Bound<'_, PyAny>, name: &str) -> PyResult<BACnetRecipient> {
+pub(crate) fn recipient(value: &Bound<'_, PyAny>, name: &str) -> PyResult<BACnetRecipient> {
     let value = mapping(value, name)?;
     match discriminator(value, name)?.as_str() {
         "device" => {
