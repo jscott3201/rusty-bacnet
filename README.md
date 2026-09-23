@@ -22,10 +22,19 @@ explore protocol behavior in a local lab. The project targets ASHRAE Standard
 > for a released deployment. The [SC migration section](#bacnetsc-current-development-checkout)
 > below specifically requires a current source build.
 
+> **API stability:** Public APIs are unfrozen before **1.0.0** and may change as
+> obsolete APIs are removed. APIs freeze at **1.0.0**, with compatibility
+> preserved thereafter.
+
 ## What is included?
 
 - Async Rust client and server APIs, with protocol encoding, network routing,
   transaction handling, and object models in separate crates.
+- Shared endpoint APIs let one device initiate requests and serve a bounded
+  request set through one transport owner. Rust supports B/IP, SC and MS/TP
+  composition; Python also exposes owners for those transports. See
+  [shared endpoints](#shared-endpoints-current-development-checkout) for the
+  server-role limits.
 - Python client, server, and SC hub bindings, typed values and exceptions, and
   async COV notification streams. Python and Rust expose different configuration
   surfaces; do not assume feature parity.
@@ -243,17 +252,44 @@ particular service, object, direction, and configuration you need.
 | Area | Scope and important limits |
 |---|---|
 | Property access and objects | Client/server paths for single and multiple-property access, with common and extended object models. Served properties, writable behavior, and optional functionality are object-specific; an object constructor is not a declaration of full object conformance. |
+| Shared endpoints | One transport owner composes initiating and executing roles. The default responder serves ReadProperty; Rust additionally offers authorized Device.Description writes as an explicit opt-in. This is a bounded server role, not parity with the standalone server. |
 | Discovery, routing, and COV | Rust client/network components and Python APIs expose discovery, routed requests, subscriptions, and notifications. Consult the individual API for address forms, notification delivery, and lifecycle ownership. |
 | Events, logs, files, and device management | APIs and server handlers exist for selected services, with configuration, authorization, resource, and persistence limits. Client availability does not imply equivalent server execution or Python configuration support. |
-| LifeSafetyOperation | The Rust server implements a partial modeled behavior with explicit application authorization; reset needs a configured application executor. The six silence/unsilence operations mutate only `Silenced` plus clearing `Operation_Expected` (actual deltas only; both properties are network read-only). Resets commit only supplied modeled values (Point `Present_Value`/`Tracking_Value`/`Silenced`, Zone without `Tracking_Value`) before clearing `Operation_Expected`, with no physical inference. Whole-object COV triggers only for `Present_Value`/`Status_Flags` and reports both; property COV reports the subscribed property plus one `Status_Flags` (Point `Present_Value`/`Status_Flags`/`Tracking_Value`/`Silenced`/`Operation_Expected`, Zone without `Tracking_Value` as `NOT_COV_PROPERTY`); initial/resubscription share payloads after ACK and cancellation is quiet. Exact duplicates replay the byte-identical response from a bounded process-local 60-second/256-entry tracker before authorization/execution (requests over 64 KiB execute untracked; not durable actuation idempotency). `Event_State` is intrinsic-only (`IN_ALARM` latent, no setter). This is not whole-object conformance, BIBB/profile/device-advertisement, accepted-mode validation, out-of-service/reliability, or intrinsic `CHANGE_OF_LIFE_SAFETY` conformance, nor physical-safety qualification. |
-| Audit services | Rust client helpers and Python raw/typed helpers are available. Rust server notification reception requires an explicit Audit Log sink and separate confirmed/unconfirmed authorizers; AuditLogQuery requires retained Audit Log storage. Python server object helpers do not wire the notification receiver's sink/authorizers. |
+| LifeSafetyOperation | Authorized Rust server execution covers modeled silence/unsilence and application-owned resets, with exact COV changes and bounded response replay. Reset requires explicit arming and an executor; no physical state is inferred. See [execution and COV limits](docs/rust-api.md#life-safety-execution-and-cov) for property coverage, replay bounds, and deferred object behavior. This is not full Life Safety object conformance or physical-safety qualification. |
+| Audit services | Rust and Python expose client notification/query helpers, explicit Audit Log reception policies, static target reporting, and direct B/IP parent forwarding. Python selects one registered Audit Log with an explicit `deny_all` or `allow_all` policy before startup; unconfigured reception is denied. Rust endpoint source reporting currently covers direct B/IP ReadProperty. These subsets do not imply full Audit Reporter, BIBB or BTL conformance. |
 
 Audit records contain peer-reported identities, not authenticated provenance.
 Notification storage uses the database's write path and depends on synchronous
 storage availability. See [Rust Audit configuration and limits](docs/rust-api.md#audit-services)
-and [Python Audit APIs](docs/python-api.md#audit-services). The server does not
-claim execution of WriteGroup, Virtual Terminal, or PrivateTransfer services
-merely because a client can send them.
+and [Python Audit APIs](docs/python-api.md#audit-services), including the
+[receiver policy](docs/python-api.md#inbound-audit-notification-sink),
+[static target Reporter](docs/python-api.md#static-target-audit-reporter) and
+[direct B/IP parent forwarding](docs/python-api.md#direct-audit-log-parent-forwarding).
+Python's receiver policy is an all-or-none choice, not a sender allowlist or
+authentication callback. The narrow Rust source producer is documented under
+[endpoint ReadProperty reporting](docs/rust-api.md#bounded-endpoint-source-readproperty-reporting).
+The writable Device recipient contract remains tracked
+in [#728](https://github.com/jscott3201/rusty-bacnet/issues/728), with broader Audit
+completion in [#345](https://github.com/jscott3201/rusty-bacnet/issues/345).
+The server does not claim execution of WriteGroup, Virtual Terminal, or
+PrivateTransfer services merely because a client can send them.
+
+## Shared endpoints: current development checkout
+
+Use a shared endpoint when one BACnet Device must both initiate requests and
+respond through the same socket, SC node or MS/TP serial owner. The Rust
+[`bacnet-endpoint` API](docs/rust-api.md#bacnet-endpoint-forward-path-rb-18)
+composes client and server roles under one lifecycle. Python provides
+[`BipEndpoint`, `ScEndpoint` and `MstpEndpoint`](docs/python-api.md#endpoint-one-transport-both-roles)
+with corresponding role handles. These APIs require a current source build.
+
+The default endpoint responder supports ReadProperty. Rust's
+[authorized Device.Description write](docs/rust-api.md#authorized-endpoint-device-writes)
+is a separate opt-in capability and is not exposed in Python. Consult that
+contract before enabling it. Use the standalone server when you need its broader service surface. One-owner
+loopback proofs do not establish physical MS/TP timing or full device-profile
+conformance. Python MS/TP API and setup checks also do not qualify a physical
+serial adapter.
 
 ## Transports and platforms
 
