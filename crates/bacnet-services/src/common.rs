@@ -10,7 +10,9 @@ use bytes::{BufMut, BytesMut};
 pub const MAX_DECODED_ITEMS: usize = 10_000;
 
 mod property_value_decode;
-pub(crate) use property_value_decode::{PropertyValueDecodeError, PropertyValueDecodeStage};
+pub(crate) use property_value_decode::{
+    PropertyValueDecodeError, PropertyValueDecodeFailure, PropertyValueDecodeStage,
+};
 
 pub(crate) fn decode_context<'a>(
     data: &'a [u8],

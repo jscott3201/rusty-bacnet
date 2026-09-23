@@ -10,10 +10,12 @@ use crate::common::BACnetPropertyValue;
 
 pub mod cursor;
 pub mod error;
+#[cfg(test)]
+mod priority_tests;
 
 pub use cursor::{
     WritePropertyAttempt, WritePropertyMultipleCursor, WritePropertyMultipleCursorError,
-    WritePropertyMultipleDecodeStage, WritePropertyMultipleEvent,
+    WritePropertyMultipleDecodeStage, WritePropertyMultipleEvent, WritePropertyMultipleFailureKind,
 };
 pub use error::WritePropertyMultipleError;
 

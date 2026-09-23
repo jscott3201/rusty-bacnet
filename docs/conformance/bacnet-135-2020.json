@@ -1563,11 +1563,15 @@
     "crates/bacnet-encoding/src/apdu/wpm_error_tests.rs::formal_wpm_error_projection_must_match_body",
     "crates/bacnet-server/src/handlers/tests/wpm_prefix_commit.rs::unknown_object_is_semantic_result_with_actual_reference_before_any_commit",
     "crates/bacnet-server/src/handlers/tests/wpm_prefix_commit.rs::semantic_index_value_name_and_write_arm_failures_keep_exact_reference",
-    "crates/bacnet-server/src/handlers/tests/wpm_prefix_commit.rs::malformed_before_first_write_rejects_without_mutation"
+    "crates/bacnet-server/src/handlers/tests/wpm_prefix_commit.rs::malformed_before_first_write_rejects_without_mutation",
+    "crates/bacnet-services/src/wpm/priority_tests.rs::wpm_priority_range_failure_keeps_kind_stage_offset_and_indexed_reference",
+    "crates/bacnet-services/src/wpm/priority_tests.rs::wpm_priority_malformed_unsigned_is_syntax_not_numeric_range",
+    "crates/bacnet-server/src/server/requests/mutation_wpm_priority_tests.rs::wpm_priority_range_wire_error_is_semantic_before_and_after_prefix",
+    "crates/bacnet-server/src/server/requests/mutation_wpm_priority_tests.rs::wpm_priority_syntax_wire_result_retains_reject_and_prefix_invalid_tag"
    ],
    "benchmarks": [],
    "public_claims": [],
-   "notes": "Bounded service-procedure correction (Refs #242), not full BACnet, object, PICS, or BIBB conformance. The post-success undecodable-coordinate policy uses DEVICE instance 4194303, PropertyIdentifier ALL, and no array index; only the instance is normative. Empty requests and empty property lists retain the existing SimpleACK/no-op compatibility. Existing ErrorPdu, TsmResponse, client, and Python shapes are unchanged: low-level ErrorPdu.error_data retains the complete formal body while high-level clients continue exposing class/code. Legacy generic WPM Error PDUs remain decodable. Public object rollback traits remain for compatibility but service 16 no longer invokes them."
+   "notes": "Refs #741: syntactically valid Unsigned priorities outside 1..16 retain a typed PriorityOutOfRange cursor failure and return formal SERVICES / PARAMETER_OUT_OF_RANGE both before writes and after a committed prefix. Commandable AnalogOutput wire tests cover 0, 17 and 257, exact failed coordinates, untouched suffixes and policy reachability; malformed priority encodings retain initial Reject and post-prefix INVALID_TAG. The public cursor error kind replaces its former reject-only field; whole-request decode still returns Error::Decoding. Bounded service-procedure correction (Refs #242), not full BACnet, object, PICS, or BIBB conformance. The post-success undecodable-coordinate policy uses DEVICE instance 4194303, PropertyIdentifier ALL, and no array index; only the instance is normative. Empty requests and empty property lists retain the existing SimpleACK/no-op compatibility. Existing ErrorPdu, TsmResponse, client, and Python shapes are unchanged: low-level ErrorPdu.error_data retains the complete formal body while high-level clients continue exposing class/code. Legacy generic WPM Error PDUs remain decodable. Public object rollback traits remain for compatibility but service 16 no longer invokes them."
   },
   {
    "id": "BACNET-20-ENCODING",
