@@ -272,8 +272,9 @@ impl ClientRoleHandle {
 
 /// Server role: narrow responder + shared notification pool.
 ///
-/// Service scope stays narrow (`ReadProperty` + `Reject`/`Abort` +
-/// segmentation-`Abort`); full `bacnet-server` parity is a later packet. No
+/// Service scope stays narrow: `ReadProperty`, optionally authorized local
+/// Device.Description `WriteProperty`, and `Reject`/`Abort`. Full
+/// `bacnet-server` parity is a later packet. No
 /// lifecycle methods on this handle; the session owner drives dispatch +
 /// `close()`. `Send + Sync`; every method fails closed after shutdown.
 #[derive(Clone)]

@@ -11,6 +11,21 @@ use bacnet_types::constructed::{
 };
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 
+#[test]
+fn typed_device_authority_is_forwarded_without_copying() {
+    let device = bacnet_objects::device::DeviceObject::new(Default::default()).unwrap();
+    let mut object: Box<dyn BACnetObject> = Box::new(device);
+    let original = std::ptr::from_mut(object.device_mut_internal().unwrap());
+    source_reporter::install(&mut object, false).unwrap();
+    let forwarded = object.device_mut_internal().unwrap();
+    assert_eq!(std::ptr::from_mut(forwarded), original);
+    forwarded.set_description("same authority");
+    assert_eq!(
+        read(object.as_ref(), PropertyIdentifier::DESCRIPTION),
+        PropertyValue::CharacterString("same authority".into())
+    );
+}
+
 fn read(object: &dyn BACnetObject, property: PropertyIdentifier) -> PropertyValue {
     object.read_property(property, None).unwrap()
 }

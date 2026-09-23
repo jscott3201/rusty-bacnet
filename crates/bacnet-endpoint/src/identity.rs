@@ -40,6 +40,10 @@
 //! + segmentation-`Abort`). It deliberately differs from the full
 //! `bacnet-server` dispatch surface (`EXECUTED_SERVICES`): advertising the
 //! full set here would be a superset flag the endpoint roles cannot honor.
+//! Explicit [`EndpointSession::with_device_writes`](crate::session::EndpointSession::with_device_writes)
+//! adds `WRITE_PROPERTY` for authorized local Device.Description writes and
+//! sets the Device and identity to that actual two-service profile at startup.
+//! This opt-in rejects any other configured identity service bits before start.
 //! Deployments needing the full server surface override via
 //! [`DeviceIdentity::with_services`], but must then compose the full server —
 //! not the narrow endpoint responder — or the I-Am vs ReadProperty vs behavior
@@ -242,7 +246,8 @@ impl DeviceIdentity {
     /// Overrides the services profile (must equal what roles can do; no superset).
     ///
     /// Default `[READ_PROPERTY]` matches the narrow endpoint responder.
-    /// Deployments needing more must compose the full server, not this crate.
+    /// `EndpointSession::with_device_writes` adds `WRITE_PROPERTY` and rejects
+    /// other service bits. Broader profiles require a matching full server.
     pub fn with_services(mut self, services: &[ServiceSupported]) -> Self {
         self.services = services.to_vec();
         self

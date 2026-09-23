@@ -12,6 +12,8 @@ const PICS_DRAFT: &str = include_str!("../../../docs/conformance/pics-draft.md")
 const BIBBS_DRAFT: &str = include_str!("../../../docs/conformance/bibbs-draft.md");
 const STANDARD_LEDGER: &str = include_str!("../../../docs/conformance/standard-135-2020-ledger.md");
 
+#[path = "conformance_ledger/endpoint_device_write.rs"]
+mod endpoint_device_write;
 #[path = "conformance_ledger/sc_hub_response_silence.rs"]
 mod sc_hub_response_silence;
 #[path = "conformance_ledger/sc_mu_liveness.rs"]

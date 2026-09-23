@@ -1676,14 +1676,42 @@ no bench or on-wire conformance; timing is RB-26).
 | `BACnetServer::sc_builder()...build().await` | Same `ScEndpointBuilder` with `ServerOnly` + `database` + `identity` |
 | `generic_builder().transport(mstp)...` | `MstpEndpointBuilder::new(serial, station)...build_session()?` (one serial owner) |
 
-Notes: the endpoint server role executes `ReadProperty` (+ `Reject`/`Abort`
-+ segmentation-`Abort`) only — full `bacnet-server` parity is out of scope.
+Notes: the endpoint server role defaults to `ReadProperty` (+ `Reject`/`Abort`
++ segmentation-`Abort`). The explicit Device-write opt-in below adds one
+bounded WriteProperty path; full `bacnet-server` parity is out of scope.
 Standalone BBMD helpers (`read_bdt` / `write_bdt` / `read_fdt` / foreign
 registration) stay on `BipTransport`; the endpoint BBMD setters only stage
 pre-start state and are experimental (construction-only, no wire proof).
 BIPv6/Ethernet have no endpoint builder — keep the standalone path there and
 do not expect identical administration across data links.
 
+
+### Authorized endpoint Device writes
+
+`EndpointSession::with_device_writes(authorizer)` or
+`BipEndpointBuilder::device_writes(authorizer)` enables WriteProperty for the
+one local Device's `Description`. Supply a mandatory Rust
+`bacnet_server::mutation::MutationAuthorizer`; its decoded context retains the
+immediate peer, claimed routed source, transport provenance and invoke ID.
+The callback must be fast, nonblocking and side-effect-free. Refusal or panic
+denies before mutation. Provenance is channel scope, not authenticated leaf identity.
+
+Startup requires a server role and exactly one concrete built-in Device in
+the attached database. An optional `DeviceIdentity` must match that Device
+and contain only ReadProperty/WriteProperty service bits. Configuration
+validation precedes transport startup and any profile/source-ownership changes.
+The enabled Device and identity advertise exactly RP+WP, including sessions
+without an identity. Default sessions keep their existing RP-only responder.
+Valid priorities 1–16 are ignored for noncommandable Description; array indices,
+invalid priorities and non-string values fail. Other targets, properties and
+WritePropertyMultiple remain excluded, including source Reporter configuration.
+
+Deterministic request/reply tests cover authorization, framing, routing,
+reply channels, group silence, segmentation and shutdown; a B/IP loopback test
+covers an authorized write and service-profile readback. Evidence is tracked
+in `BACNET-15-ENDPOINT-DEVICE-WRITE` (in progress). This is not general endpoint
+mutation parity, inbound replay suppression, or Audit_Notification_Recipient
+storage/change-notification support.
 
 ### Bounded endpoint source ReadProperty reporting
 

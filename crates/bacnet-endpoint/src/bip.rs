@@ -103,6 +103,7 @@ pub struct BipEndpointBuilder {
     session: SessionConfig,
     database: Option<ObjectDatabase>,
     identity: Option<crate::identity::DeviceIdentity>,
+    device_write_authorizer: Option<bacnet_server::mutation::MutationAuthorizer>,
     static_source_audit_recipient: Option<StaticSourceAuditRecipient>,
     bbmd_bdt: Option<Vec<BdtEntry>>,
     foreign_policy: Option<ForeignDevicePolicy>,
@@ -127,6 +128,7 @@ impl BipEndpointBuilder {
             session: SessionConfig::default(),
             database: None,
             identity: None,
+            device_write_authorizer: None,
             static_source_audit_recipient: None,
             bbmd_bdt: None,
             foreign_policy: None,
@@ -175,6 +177,20 @@ impl BipEndpointBuilder {
     /// role limits. No generation, no extra socket.
     pub fn identity(mut self, identity: crate::identity::DeviceIdentity) -> Self {
         self.identity = Some(identity);
+        self
+    }
+
+    /// Enables authorized writes to the local Device's `Description` only.
+    ///
+    /// The mandatory callback and atomic startup requirements are those of
+    /// [`EndpointSession::with_device_writes`]. Other objects/properties and
+    /// WritePropertyMultiple remain unsupported. Requires `build_session()`;
+    /// a bare transport cannot retain this session-owned authorization.
+    pub fn device_writes(
+        mut self,
+        authorizer: bacnet_server::mutation::MutationAuthorizer,
+    ) -> Self {
+        self.device_write_authorizer = Some(authorizer);
         self
     }
 
@@ -331,6 +347,11 @@ impl BipEndpointBuilder {
     /// is set (it requires [`build_session`](Self::build_session), not a bare
     /// transport that would discard the endpoint-owned configuration).
     pub fn build_transport(self) -> Result<BipTransport, Error> {
+        if self.device_write_authorizer.is_some() {
+            return Err(Error::Encoding(
+                "Device writes require build_session()".into(),
+            ));
+        }
         if self.static_source_audit_recipient.is_some() {
             return Err(Error::Encoding(
                 "static source audit recipient requires build_session()".into(),
@@ -381,6 +402,7 @@ impl BipEndpointBuilder {
     /// in [`EndpointSession`]. Bind-count proofs use a counting test double
     /// plus real-socket corroboration (single nonzero local MAC/port).
     pub fn build_session(mut self) -> Result<EndpointSession<BipTransport>, Error> {
+        let device_write_authorizer = self.device_write_authorizer.take();
         let recipient = self.static_source_audit_recipient.take();
         if let Some(recipient) = &recipient {
             recipient.validate(self.broadcast_address)?;
@@ -397,6 +419,9 @@ impl BipEndpointBuilder {
         }
         if let Some(id) = identity {
             endpoint = endpoint.with_identity(id);
+        }
+        if let Some(authorizer) = device_write_authorizer {
+            endpoint = endpoint.with_device_writes(authorizer);
         }
         if let Some(recipient) = recipient {
             endpoint = endpoint.with_static_source_audit_recipient(recipient, broadcast);

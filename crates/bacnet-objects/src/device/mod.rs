@@ -418,6 +418,10 @@ impl DeviceObject {
 }
 
 impl BACnetObject for DeviceObject {
+    fn device_mut_internal(&mut self) -> Option<&mut DeviceObject> {
+        Some(self)
+    }
+
     fn object_identifier(&self) -> ObjectIdentifier {
         self.oid
     }
