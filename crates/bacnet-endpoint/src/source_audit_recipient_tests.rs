@@ -194,7 +194,7 @@ async fn recipient_preserves_all_source_preflight_failures_and_retry() {
         let expected = match case {
             "no database" => "requires an attached local database",
             "no device" => {
-                db.remove(&oid(ObjectType::DEVICE, 123));
+                db.remove(&oid(ObjectType::DEVICE, 123)).unwrap();
                 "requires exactly one local Device"
             }
             "two devices" => {
@@ -202,7 +202,8 @@ async fn recipient_preserves_all_source_preflight_failures_and_retry() {
                     .unwrap()
                     .build_database()
                     .unwrap();
-                db.add(other.remove(&destination()).unwrap()).unwrap();
+                db.add(other.remove(&destination()).unwrap().unwrap())
+                    .unwrap();
                 "requires exactly one local Device"
             }
             "identity mismatch" => "does not match session identity",

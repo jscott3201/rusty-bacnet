@@ -157,14 +157,13 @@ impl BACnetServer {
 #[pymethods]
 impl BACnetServer {
     /// Configure one registered target Reporter before start(). The first valid
-    /// call fixes its identity; later calls replace settings and recipient only.
+    /// call fixes its identity; later calls replace its Reporter settings.
     /// All validation precedes mutation. None selects catch-all objects/all priorities;
     /// an empty list selects no ordinary targets. A missing binding is a runtime fault.
-    #[pyo3(signature = (instance, *, recipient_device_instance, audit_level, auditable_operations, issue_confirmed_notifications, monitored_objects=None, audit_priority_filter=None))]
+    #[pyo3(signature = (instance, *, audit_level, auditable_operations, issue_confirmed_notifications, monitored_objects=None, audit_priority_filter=None))]
     fn configure_audit_reporter(
         &mut self,
         instance: &Bound<'_, PyAny>,
-        recipient_device_instance: &Bound<'_, PyAny>,
         audit_level: &Bound<'_, PyAny>,
         auditable_operations: &Bound<'_, PyAny>,
         issue_confirmed_notifications: &Bound<'_, PyAny>,
@@ -172,11 +171,6 @@ impl BACnetServer {
         audit_priority_filter: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<()> {
         let reporter = instance_identifier(instance, "instance", ObjectType::AUDIT_REPORTER)?;
-        let device = instance_identifier(
-            recipient_device_instance,
-            "recipient_device_instance",
-            ObjectType::DEVICE,
-        )?;
         let level = match audit_level.extract::<&str>()? {
             "none" => AuditLevel::NONE,
             "audit_config" => AuditLevel::AUDIT_CONFIG,
@@ -207,9 +201,6 @@ impl BACnetServer {
         let confirmed = issue_confirmed_notifications.extract::<bool>()?;
         let selectors = monitored_object_selectors(monitored_objects)?;
         let priorities = priority_filter(audit_priority_filter)?;
-        if device.instance_number() == self.device_instance {
-            return Err(PyValueError::new_err("recipient Device must be remote"));
-        }
         {
             let mut pending = self.lock_pending()?;
             self.check_forwarding_configuration()?;
@@ -229,10 +220,20 @@ impl BACnetServer {
                 )
                 .map_err(to_py_err)?;
         }
-        self.audit_reporter = Some(server::AuditReporterConfig {
-            reporter,
-            recipient: Some(device),
-        });
+        self.audit_reporter = Some(server::AuditReporterConfig { reporter });
+        Ok(())
+    }
+
+    /// Provision the Device-owned target recipient before startup. The input is
+    /// copied; live changes use the Device property and notify both destinations.
+    fn configure_audit_recipient(&mut self, recipient: &Bound<'_, PyAny>) -> PyResult<()> {
+        let value = crate::types::audit_recipient_from_py(recipient, "recipient")?;
+        self.validate_audit_recipient_input(&value)?;
+        self.check_forwarding_configuration()?;
+        *self
+            .audit_recipient
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("recipient lock poisoned"))? = Some(value);
         Ok(())
     }
 
@@ -340,5 +341,24 @@ impl BACnetServer {
         }
         self.audit_notification_sink = Some(sink);
         Ok(())
+    }
+}
+
+impl BACnetServer {
+    pub(super) fn validate_audit_recipient_input(
+        &self,
+        recipient: &bacnet_types::constructed::BACnetRecipient,
+    ) -> PyResult<()> {
+        use bacnet_types::constructed::BACnetRecipient;
+        match recipient {
+            BACnetRecipient::Device(device) if device.object_type() == ObjectType::DEVICE
+                && device.instance_number() < ObjectIdentifier::MAX_INSTANCE
+                && device.instance_number() != self.device_instance => Ok(()),
+            BACnetRecipient::Address(address) if self.transport_type == "bip"
+                && server::valid_bip_audit_address(address)
+                && address.mac_address.as_slice()[..4] != self.broadcast_address.parse::<std::net::Ipv4Addr>()
+                    .map_err(|_| PyValueError::new_err("invalid configured broadcast address"))?.octets() => Ok(()),
+            _ => Err(PyValueError::new_err("recipient must be a concrete remote Device or a supported direct unicast B/IP address")),
+        }
     }
 }

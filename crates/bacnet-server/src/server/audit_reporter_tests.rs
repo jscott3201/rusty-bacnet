@@ -16,6 +16,12 @@ use std::sync::Mutex as StdMutex;
 mod support;
 use support::*;
 
+#[path = "audit_recipient_routes_tests.rs"]
+mod recipient_routes;
+
+#[path = "audit_recipient_tests.rs"]
+mod recipient_changes;
+
 #[path = "audit_reporter_identity_tests.rs"]
 mod identity;
 
@@ -375,15 +381,8 @@ async fn audit_reporter_denied_wp_and_wpm_suffix_have_no_audit_side_effects() {
 
 #[tokio::test]
 async fn audit_reporter_missing_recipient_is_configuration_failure_without_growth() {
-    for recipient in [None, Some(oid(ObjectType::DEVICE, 999))] {
-        let mut fixture = server(reporter()).await;
-        fixture
-            .server
-            .config
-            .audit_reporter
-            .as_mut()
-            .unwrap()
-            .recipient = recipient;
+    for recipient in [BACnetRecipient::Device(oid(ObjectType::DEVICE, 999))] {
+        let mut fixture = server_with_recipient(reporter(), recipient).await;
         for _ in 0..100 {
             assert!(matches!(
                 write_value(&fixture.server, None).await,

@@ -1425,8 +1425,7 @@ or issue #345 closure.
 
 #### Static target Audit Reporter
 
-`BACnetServer.configure_audit_reporter(instance, *, recipient_device_instance,
-audit_level, auditable_operations, issue_confirmed_notifications,
+`BACnetServer.configure_audit_reporter(instance, *, audit_level, auditable_operations, issue_confirmed_notifications,
 monitored_objects=None, audit_priority_filter=None) -> None` connects
 one pending Reporter to the existing Rust target-side producer. It is synchronous,
 opt-in and pre-start only; `add_audit_reporter(instance, name)` is unchanged.
@@ -1436,8 +1435,9 @@ opt-in and pre-start only; `add_audit_reporter(instance, name)` is unchanged.
 # child: a distinct, not-yet-started transport="bip" server (Device 8).
 child.add_audit_reporter(1, "Target Reporter")
 child.add_analog_value(1, "Writable target")
+child.configure_audit_recipient({"kind": "device", "object_identifier": ObjectIdentifier(ObjectType.DEVICE, 9)})
 child.configure_audit_reporter(
-    1, recipient_device_instance=9, audit_level="audit_all",
+    1, audit_level="audit_all",
     auditable_operations=1 << AuditOperation.WRITE.to_raw(),
     issue_confirmed_notifications=True,
     monitored_objects=[ObjectIdentifier(ObjectType.ANALOG_VALUE, 1)],
@@ -1449,12 +1449,16 @@ child.add_device_binding(9, await parent.local_address())
 # under a deadline to observe receipt; the write ACK alone is not that evidence.
 ```
 
-- Both identifiers must be non-Boolean integers in `0..=4194303`; the recipient
-  must differ from the local server Device. Missing/wrong-type/duplicate pending
-  Reporters, invalid identifiers or a local recipient raise `ValueError`.
+- The Reporter identifier must be a non-Boolean integer in `0..=4194303`.
+  Provision the Device recipient independently with `configure_audit_recipient`,
+  using a copied `AuditRecipientInput` Device or Address mapping. Device choices
+  must be concrete, remote Device identifiers (instance 4194303 is reserved).
+  Address choices use the supported direct unicast B/IP subset. Missing provision
+  fails startup before registration transfer, including at Audit_Level NONE.
+  See [Device recipient writes](device-audit-recipient.md) for the complete bounded contract.
 - `audit_level` is required and exactly `"none"`, `"audit_config"` or `"audit_all"`.
   Other strings raise `ValueError`; non-strings raise `TypeError`. DEFAULT and
-  proprietary levels are not exposed. NONE suppresses reporting; AUDIT_CONFIG
+  proprietary levels are not exposed. NONE suppresses ordinary reporting; AUDIT_CONFIG
   treats Present_Value writes as operational (suppressed), other property writes,
   implemented list/file writes and CREATE/DELETE as configuration operations.
 - `auditable_operations` is a required non-Boolean integer mask, not a list or
@@ -1483,13 +1487,15 @@ child.add_device_binding(9, await parent.local_address())
   non-commandable writes or non-write operations. Existing list/file/lifecycle
   behavior is unchanged; enabled Reporter-target writes retain their bypass.
 - **The first valid call fixes the Reporter identity.** Further valid pre-start
-  calls on that same instance replace all settings and the recipient; omitted
+  calls on that same instance replace all Reporter settings; omitted
   options reset to catch-all/all priorities rather than retaining previous filters.
   Selecting another Reporter raises `ValueError`, even after selecting level NONE;
   other registered Reporters remain inert. Failed calls preserve settings and registrations.
-- Binding and Reporter configuration may occur in either order. Destinations use
-  only existing configured direct B/IP IPv4 bindings: no discovery, routed, IPv6,
-  SC or MS/TP destinations. An unresolved recipient does not fail configuration or
+- Binding and Reporter configuration may occur in either order. Device choices use
+  existing configured direct B/IP IPv4 `add_device_binding()` routes. Address
+  choices need no binding and use the direct unicast B/IP IPv4 subset described
+  above. Neither choice adds discovery, routed, IPv6, SC or MS/TP destinations to
+  this Python profile. An unresolved Device recipient does not fail configuration or
   startup: an enabled Reporter exposes `RELIABILITY=CONFIGURATION_ERROR` (`10`)
   and the fault bit in `STATUS_FLAGS`, without emitting or queuing ordinary records.
   Use existing `read_property()` on these properties; there is no separate status API.
@@ -1508,7 +1514,7 @@ their existing operation boundaries. Normal operations require their operation
 bit; enabled external Reporter property writes retain the core filter bypass.
 Success omits Result; known execution errors include the response-mapped Error.
 The existing optional AUDITING_FAILURE resource-admission summary remains bounded
-and memory-only when its bit is enabled. No new producer source is introduced.
+and memory-only when its bit is enabled. No new ordinary producer source is introduced.
 
 Delivery retains 64 shared immediate Audit permits, one total three-second deadline,
 no ordinary-record queue/retry or outbound segmentation, object-owned health and
@@ -1522,10 +1528,12 @@ bypass, suppression, unresolved-recipient no growth and lifecycle freezing.
 Broader source/bounds evidence remains the existing Rust
 Reporter suites, not independent interoperability qualification.
 
-No per-object overrides, dynamic/network-writable
+Recipient changes through the active Device property also support local and
+network writes with atomic old/new notification admission. Ordinary direct local
+writes remain outside the target producer. No per-object overrides, other dynamic
 configuration, multi-Reporter arbitration, Python callbacks, payload-origin
-verification, source-side or local direct-write reporting, ordinary sample/event
-production, WriteGroup expansion, Device.Audit_Notification_Recipient, batching,
+verification, source-side reporting, ordinary sample/event production,
+WriteGroup expansion or batching,
 Maximum_Send_Delay/Send_Now, durability, full Reporter/Audit/BIBB/BTL/certification,
 independent interop or #345 closure is claimed.
 

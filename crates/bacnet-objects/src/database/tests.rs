@@ -73,7 +73,9 @@ fn event_sequence_wraps_and_is_database_local() {
     assert_eq!(first.next_event_sequence_number(), 1);
     assert_eq!(second.next_event_sequence_number(), 0);
 
-    first.event_sequence_number = u16::MAX;
+    for _ in 2..u16::MAX {
+        first.next_event_sequence_number();
+    }
     assert_eq!(first.next_event_sequence_number(), u16::MAX);
     assert_eq!(first.next_event_sequence_number(), 0);
     assert_eq!(second.next_event_sequence_number(), 1);
@@ -192,7 +194,7 @@ fn remove_object() {
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
     db.add(make_test_object(1)).unwrap();
     assert_eq!(db.len(), 1);
-    let removed = db.remove(&oid);
+    let removed = db.remove(&oid).unwrap();
     assert!(removed.is_some());
     assert_eq!(db.len(), 0);
 }
@@ -342,7 +344,7 @@ fn remove_frees_name() {
         "Sensor",
     ))
     .unwrap();
-    db.remove(&oid);
+    db.remove(&oid).unwrap();
     // Name should now be available for a different object
     db.add(make_test_object_typed(
         ObjectType::ANALOG_INPUT,

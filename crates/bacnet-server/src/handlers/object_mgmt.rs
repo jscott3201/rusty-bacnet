@@ -159,7 +159,7 @@ pub(crate) fn handle_create_object_observed(
         let (value, _) = match bacnet_encoding::primitives::decode_application_value(&pv.value, 0) {
             Ok(v) => v,
             Err(e) => {
-                db.remove(&created_oid);
+                let _ = db.remove(&created_oid);
                 return Err(e);
             }
         };
@@ -170,7 +170,7 @@ pub(crate) fn handle_create_object_observed(
         if pv.property_identifier == PropertyIdentifier::OBJECT_NAME {
             if let PropertyValue::CharacterString(ref new_name) = value {
                 if let Err(e) = db.check_name_available(&created_oid, new_name) {
-                    db.remove(&created_oid);
+                    let _ = db.remove(&created_oid);
                     return Err(e);
                 }
             }
@@ -182,7 +182,7 @@ pub(crate) fn handle_create_object_observed(
                 value,
                 pv.priority,
             ) {
-                db.remove(&created_oid);
+                let _ = db.remove(&created_oid);
                 return Err(e);
             }
         }
@@ -217,7 +217,7 @@ pub fn handle_delete_object(db: &mut ObjectDatabase, service_data: &[u8]) -> Res
         _ => {}
     }
 
-    db.remove(&request.object_identifier)
+    db.remove(&request.object_identifier)?
         .ok_or(Error::Protocol {
             class: ErrorClass::OBJECT.to_raw() as u32,
             code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,

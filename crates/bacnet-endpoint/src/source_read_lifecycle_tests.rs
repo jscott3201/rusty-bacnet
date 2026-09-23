@@ -327,13 +327,21 @@ async fn source_read_and_target_reporting_remain_independent_over_bip() {
         )
         .unwrap();
     db.add(Box::new(reporter)).unwrap();
+    db.get_mut(&oid(ObjectType::DEVICE, 456))
+        .unwrap()
+        .device_authority_internal()
+        .unwrap()
+        .provision_audit_recipient(bacnet_types::constructed::BACnetRecipient::Device(oid(
+            ObjectType::DEVICE,
+            999,
+        )))
+        .unwrap();
     let mut target_server = BACnetServer::builder()
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
         .database(db)
         .audit_reporter(AuditReporterConfig {
             reporter: selected(),
-            recipient: Some(oid(ObjectType::DEVICE, 999)),
         })
         .device_binding(
             DeviceBinding::local(oid(ObjectType::DEVICE, 999), sink.local_mac()).unwrap(),

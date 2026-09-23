@@ -43,6 +43,12 @@ pub enum AnyTransport<S: SerialPort + 'static> {
 }
 
 impl<S: SerialPort + 'static> TransportPort for AnyTransport<S> {
+    fn bip_broadcast_endpoint(&self) -> Option<std::net::SocketAddrV4> {
+        match self {
+            Self::Bip(transport) => transport.bip_broadcast_endpoint(),
+            _ => None,
+        }
+    }
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
         match self {
             Self::Bip(t) => t.start().await,

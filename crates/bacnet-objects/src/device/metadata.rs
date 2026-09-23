@@ -84,10 +84,22 @@ const CLOCKED: &[PropertyMetadata] = &effective::<29>(true, false);
 pub(super) fn for_object(object: &DeviceObject) -> Cow<'_, [PropertyMetadata]> {
     let clock = object.clock_frame().is_some();
     let segments = object.properties.contains_key(&P::MAX_SEGMENTS_ACCEPTED);
-    Cow::Borrowed(match (clock, segments) {
+    let base = match (clock, segments) {
         (false, false) => CLOCKLESS,
         (false, true) => CLOCKLESS_SEGMENTED,
         (true, false) => CLOCKED,
         (true, true) => BASE,
-    })
+    };
+    if object.audit_recipient_present() {
+        let mut rows = base.to_vec();
+        rows.push(PropertyMetadata::new(
+            P::AUDIT_NOTIFICATION_RECIPIENT,
+            Optional,
+            Some(crate::property_metadata::PropertyPresenceCondition::AuditReporting),
+            Always,
+        ));
+        Cow::Owned(rows)
+    } else {
+        Cow::Borrowed(base)
+    }
 }

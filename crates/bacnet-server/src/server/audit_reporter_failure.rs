@@ -7,8 +7,9 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         status: &Arc<AuditReporterStatus>,
         confirmed: bool,
         device: ObjectIdentifier,
+        route: Option<Arc<ConfirmedRecipientRoute>>,
     ) -> Option<AuditFailureTicket<Arc<ConfirmedRecipientRoute>>> {
-        let route = self.route.clone()?;
+        let route = route?;
         self.transactions
             .audit_failure_queue()
             .observe(AuditFailureContext {

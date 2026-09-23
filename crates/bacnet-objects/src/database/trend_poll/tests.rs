@@ -130,7 +130,7 @@ fn lifecycle_and_configuration_changes_reset_owned_schedule() {
     let (mut db, oid, _, _) = fixture(u32::MAX);
     db.poll_trend_logs();
     assert_eq!(count(&db, oid), 1);
-    let removed = db.remove(&oid).unwrap();
+    let removed = db.remove(&oid).unwrap().unwrap();
     assert!(!db.trend_poll.0.contains_key(&oid));
     db.add(removed).unwrap();
     db.poll_trend_logs();
@@ -290,7 +290,7 @@ fn full_reference_and_logging_mode_changes_retire_previous_selection() {
             .unwrap(),
     ));
     let mode = Arc::new(AtomicU32::new(0));
-    let inner = db.remove(&oid).unwrap();
+    let inner = db.remove(&oid).unwrap().unwrap();
     db.add(Box::new(ConfigurableTrend {
         inner,
         reference: reference.clone(),
@@ -413,7 +413,7 @@ fn idle_reconciliation_and_max_interval_failure_backoff_are_bounded() {
     db.set_monotonic_clock_internal(Some(Arc::new(|| Duration::ZERO)));
     db.poll_trend_logs();
     assert_eq!(count(&db, oid), 2);
-    db.remove(&oid);
+    db.remove(&oid).unwrap();
     assert!(db.trend_poll.0.is_empty());
     assert_eq!(db.poll_trend_logs(), RECONCILE);
 }

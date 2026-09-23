@@ -297,7 +297,7 @@ fn index_change_restarts_the_pending_delay() {
         .unwrap();
     assert_eq!(pending.pending.as_ref().unwrap().remaining, 2);
 
-    assert!(db.remove(&enrollment_oid).is_some());
+    assert!(db.remove(&enrollment_oid).unwrap().is_some());
     let replacement_oid = add_out_of_range_enrollment(
         &mut db,
         5,
@@ -354,7 +354,7 @@ fn index_change_discards_the_previous_element_baselines() {
     assert_eq!(prior_state.cov_baseline, Some(PropertyValue::Real(10.0)));
     prior_state.last_offnormal_value = Some(7);
 
-    assert!(db.remove(&enrollment_oid).is_some());
+    assert!(db.remove(&enrollment_oid).unwrap().is_some());
     assert_eq!(add_cov_enrollment(&mut db, 6, value_oid, 2), enrollment_oid);
     db.get_mut(&enrollment_oid)
         .unwrap()

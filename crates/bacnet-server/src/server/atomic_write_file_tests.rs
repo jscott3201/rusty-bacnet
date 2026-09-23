@@ -53,7 +53,7 @@ async fn response(
         &Arc::new(ConfirmedRequestTracker::default()),
         &Arc::new(RwLock::new(DeviceBindingTable::new())),
         &Arc::new(AtomicU8::new(0)),
-        &Arc::new(Mutex::new(None::<JoinHandle<()>>)),
+        &Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default())),
         &ServerConfig::default(),
         &Arc::new(crate::server::request_tasks::RequestTasks::default()).spawner(),
         &MacAddr::from_slice(&[1]),

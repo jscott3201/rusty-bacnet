@@ -371,15 +371,8 @@ async fn audit_reporter_failed_self_write_and_delivery_do_not_recurse() {
 
 #[tokio::test]
 async fn audit_reporter_execution_failures_without_recipient_do_not_accumulate() {
-    for recipient in [None, Some(oid(ObjectType::DEVICE, 999))] {
-        let mut fixture = server(reporter()).await;
-        fixture
-            .server
-            .config
-            .audit_reporter
-            .as_mut()
-            .unwrap()
-            .recipient = recipient;
+    for recipient in [BACnetRecipient::Device(oid(ObjectType::DEVICE, 999))] {
+        let mut fixture = server_with_recipient(reporter(), recipient).await;
         for _ in 0..100 {
             assert_wp_error(
                 failed_value_write(&fixture.server, None).await,

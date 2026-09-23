@@ -132,7 +132,7 @@ async fn queued_replacement_cannot_interleave_selection_and_append() {
     let appended = Arc::new(AtomicUsize::new(0));
     {
         let mut guard = db.write().await;
-        let object = guard.remove(&oid).unwrap();
+        let object = guard.remove(&oid).unwrap().unwrap();
         guard
             .add(Box::new(GateTrend {
                 object,

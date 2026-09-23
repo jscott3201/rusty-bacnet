@@ -45,7 +45,7 @@ async fn dispatch(
     let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
     let device_bindings = Arc::new(RwLock::new(DeviceBindingTable::new()));
     let comm_state = Arc::new(AtomicU8::new(0));
-    let dcc_timer = Arc::new(Mutex::new(None::<JoinHandle<()>>));
+    let dcc_timer = Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default()));
     let mut service_request = BytesMut::new();
     request.encode(&mut service_request).unwrap();
     let confirmed = ConfirmedRequestPdu {

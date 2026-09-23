@@ -1913,3 +1913,12 @@ or full Audit Reporting/BIBB/BTL conformance. Device
 `Audit_Notification_Recipient`, other source operations, multiple Reporters,
 selector semantics, batching/send delay, standalone source ownership and other
 transports remain outside this subset.
+
+### Target Device Audit recipient
+
+The standalone target profile uses `DeviceObject::provision_audit_recipient` for
+initial state and `AuditReporterConfig { reporter }` for selection. Active local
+and authorized network recipient writes share atomic old/new delivery admission.
+See the [Device recipient contract](device-audit-recipient.md) for supported routes,
+metadata, failure semantics and shutdown ownership. The endpoint source profile
+retains its separate static setting until its subsequent migration.

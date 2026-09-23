@@ -44,7 +44,7 @@ async fn dcc_source_exact_full_bytes_and_fail_closed_wire() {
                     mac_address: MacAddr::from_slice(&address),
                 });
                 let state = Arc::new(AtomicU8::new(1));
-                let timer = Arc::new(Mutex::new(None));
+                let timer = Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default()));
                 let response = dispatch_wire(
                     &state,
                     &timer,
@@ -98,7 +98,7 @@ async fn dcc_source_denial_preserves_timer_and_error_precedence() {
     use crate::server::DccSourceRestriction;
     for pending_expiry in [false, true] {
         let state = Arc::new(AtomicU8::new(0));
-        let timer = Arc::new(Mutex::new(None));
+        let timer = Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default()));
         assert!(matches!(
             dispatch(&state, &timer, EnableDisable::DISABLE_INITIATION, Some(1)).await,
             Apdu::SimpleAck(_)
@@ -150,7 +150,7 @@ async fn dcc_source_denial_preserves_timer_and_error_precedence() {
 
 async fn dispatch(
     comm_state: &Arc<AtomicU8>,
-    dcc_timer: &Arc<Mutex<Option<JoinHandle<()>>>>,
+    dcc_timer: &Arc<Mutex<crate::server::dcc_timer::TimerSlot>>,
     mode: EnableDisable,
     duration: Option<u16>,
 ) -> Apdu {
@@ -169,7 +169,7 @@ async fn dispatch(
 
 async fn dispatch_with_config(
     comm_state: &Arc<AtomicU8>,
-    dcc_timer: &Arc<Mutex<Option<JoinHandle<()>>>>,
+    dcc_timer: &Arc<Mutex<crate::server::dcc_timer::TimerSlot>>,
     mode: EnableDisable,
     duration: Option<u16>,
     config: &ServerConfig,
@@ -179,7 +179,7 @@ async fn dispatch_with_config(
 
 async fn dispatch_wire(
     comm_state: &Arc<AtomicU8>,
-    dcc_timer: &Arc<Mutex<Option<JoinHandle<()>>>>,
+    dcc_timer: &Arc<Mutex<crate::server::dcc_timer::TimerSlot>>,
     mode: EnableDisable,
     duration: Option<u16>,
     config: &ServerConfig,
@@ -256,7 +256,7 @@ async fn dcc_default_denies_valid_modes_without_live_mutation() {
         for initial in [0, 1, 2] {
             for duration in [None, Some(0), Some(1)] {
                 let state = Arc::new(AtomicU8::new(initial));
-                let timer = Arc::new(Mutex::new(None));
+                let timer = Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default()));
                 let response =
                     dispatch_with_config(&state, &timer, mode, duration, &ServerConfig::default())
                         .await;
@@ -293,7 +293,9 @@ async fn dcc_policy_wire_password_precedence_direct_and_routed() {
                     for routed in [false, true] {
                         for duration in [None, Some(0), Some(2)] {
                             let state = Arc::new(AtomicU8::new(1));
-                            let timer = Arc::new(Mutex::new(None));
+                            let timer = Arc::new(Mutex::new(
+                                crate::server::dcc_timer::TimerSlot::default(),
+                            ));
                             let source = routed.then(|| NpduAddress {
                                 network: 7,
                                 mac_address: MacAddr::from_slice(&[42]),
@@ -335,7 +337,7 @@ async fn dcc_policy_wire_password_precedence_direct_and_routed() {
 async fn dcc_default_denials_preserve_timer_even_with_expiry_waiting_for_lock() {
     for pending_expiry in [false, true] {
         let state = Arc::new(AtomicU8::new(0));
-        let timer = Arc::new(Mutex::new(None));
+        let timer = Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default()));
         assert!(matches!(
             dispatch(&state, &timer, EnableDisable::DISABLE_INITIATION, Some(1)).await,
             Apdu::SimpleAck(_)
@@ -383,7 +385,7 @@ async fn dcc_default_denials_preserve_timer_even_with_expiry_waiting_for_lock() 
 async fn dcc_disable_does_not_replace_cancel_or_extend_active_timer() {
     for rejected_duration in [None, Some(0), Some(1), Some(5)] {
         let state = Arc::new(AtomicU8::new(0));
-        let timer = Arc::new(Mutex::new(None));
+        let timer = Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default()));
         assert!(matches!(
             dispatch(&state, &timer, EnableDisable::DISABLE_INITIATION, Some(1)).await,
             Apdu::SimpleAck(_)
@@ -408,7 +410,7 @@ async fn dcc_disable_does_not_replace_cancel_or_extend_active_timer() {
 async fn dcc_disable_does_not_create_timer_in_any_state() {
     for initial in [0, 1, 2] {
         let state = Arc::new(AtomicU8::new(initial));
-        let timer = Arc::new(Mutex::new(None));
+        let timer = Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default()));
         assert_denied(dispatch(&state, &timer, EnableDisable::DISABLE, Some(1)).await);
         assert!(timer.lock().await.is_none());
         advance(Duration::from_secs(61)).await;
@@ -439,7 +441,7 @@ async fn dcc_require_password_preserves_replacement_expiry_and_enable_timer_sema
         ..Default::default()
     };
     let state = Arc::new(AtomicU8::new(0));
-    let timer = Arc::new(Mutex::new(None));
+    let timer = Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default()));
     for (mode, duration) in [
         (EnableDisable::DISABLE_INITIATION, Some(1)),
         (EnableDisable::DISABLE_INITIATION, Some(2)),
@@ -489,7 +491,7 @@ async fn dcc_require_password_preserves_replacement_expiry_and_enable_timer_sema
 #[tokio::test(start_paused = true)]
 async fn dcc_rejection_preserves_pending_expiry_and_password_precedence() {
     let state = Arc::new(AtomicU8::new(0));
-    let timer = Arc::new(Mutex::new(None));
+    let timer = Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default()));
     dispatch(&state, &timer, EnableDisable::DISABLE_INITIATION, Some(1)).await;
     tokio::task::yield_now().await;
     let slot = timer.lock().await;
@@ -525,7 +527,7 @@ async fn dcc_replacement_joins_resource_before_ack() {
     let state = Arc::new(AtomicU8::new(2));
     let (old, mut resource) = held_timer();
     let finished = old.abort_handle();
-    let timer = Arc::new(Mutex::new(Some(old)));
+    let timer = Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot(Some(old))));
     assert!(matches!(
         dispatch(&state, &timer, EnableDisable::ENABLE, None).await,
         Apdu::SimpleAck(_)
@@ -544,7 +546,7 @@ async fn dcc_cancelled_replacement_retains_join_and_defers_state_commit() {
     let state = Arc::new(AtomicU8::new(2));
     let (old, mut resource) = held_timer();
     let id = old.id();
-    let timer = Arc::new(Mutex::new(Some(old)));
+    let timer = Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot(Some(old))));
     {
         let replacement = dispatch(&state, &timer, EnableDisable::ENABLE, Some(2));
         tokio::pin!(replacement);
@@ -576,7 +578,7 @@ async fn dcc_cancelled_replacement_retains_join_and_defers_state_commit() {
 #[tokio::test(start_paused = true)]
 async fn dcc_concurrent_replacements_serialize_with_pending_expiry() {
     let state = Arc::new(AtomicU8::new(0));
-    let timer = Arc::new(Mutex::new(None));
+    let timer = Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default()));
     dispatch(&state, &timer, EnableDisable::DISABLE_INITIATION, Some(1)).await;
     tokio::task::yield_now().await;
     let slot = timer.lock().await;
@@ -621,7 +623,7 @@ async fn dcc_concurrent_replacements_serialize_with_pending_expiry() {
 #[tokio::test(start_paused = true)]
 async fn dcc_duration_extension_none_zero_and_enable_are_preserved() {
     let state = Arc::new(AtomicU8::new(0));
-    let timer = Arc::new(Mutex::new(None));
+    let timer = Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default()));
     dispatch(&state, &timer, EnableDisable::DISABLE_INITIATION, Some(1)).await;
     tokio::task::yield_now().await;
     advance(Duration::from_secs(30)).await;

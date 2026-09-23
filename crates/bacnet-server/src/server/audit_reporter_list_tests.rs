@@ -344,7 +344,6 @@ async fn audit_reporter_list_filters_selection_and_self_target_do_not_change_exe
             (AuditLevel::AUDIT_CONFIG, false, Some(vec![]), true, true),
             (AuditLevel::NONE, false, Some(vec![]), false, true),
         ] {
-            let mut fixture = list_server(vec![1]).await;
             let mut reporter = reporter();
             reporter.set_audit_level(level).unwrap();
             if !write_bit {
@@ -352,11 +351,16 @@ async fn audit_reporter_list_filters_selection_and_self_target_do_not_change_exe
             }
             reporter.set_audit_priority_filter(BACnetPriorityFilter::empty());
             reporter.set_monitored_objects(selection);
-            {
-                let mut db = fixture.server.db.write().await;
-                db.remove(&oid(ObjectType::AUDIT_REPORTER, 1)).unwrap();
-                db.add(Box::new(reporter)).unwrap();
-            }
+            let mut fixture = server(reporter).await;
+            let mut object = MultiStateInputObject::new(1, "list", 3).unwrap();
+            object.set_alarm_values(vec![1]);
+            fixture
+                .server
+                .db
+                .write()
+                .await
+                .add(Box::new(object))
+                .unwrap();
             let object = if self_target {
                 oid(ObjectType::AUDIT_REPORTER, 1)
             } else {

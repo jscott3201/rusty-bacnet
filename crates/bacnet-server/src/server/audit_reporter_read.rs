@@ -44,8 +44,11 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         let profile = self.config.audit_reporter.as_ref()?;
         let reporter = db.get(&profile.reporter)?.audit_reporter_internal()?;
         let device = local_device(db);
+        let route = device
+            .and_then(|device| recipient(db, device))
+            .and_then(|value| self.transactions.audit_routes.get()?.resolve(&value));
         let status = reporter.status_internal();
-        status.set_configured(device.is_some() && self.route.is_some());
+        status.set_configured(device.is_some() && route.is_some());
         let device = device?;
         // Reuse the existing local property classification: Present_Value is
         // operational, other properties configuration, proprietary levels ALL.
@@ -71,7 +74,13 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
             return None;
         }
         Some(ReadAuditIntent(PendingWrite {
-            failure: self.failure_ticket(&status, reporter.confirmed_internal(), device),
+            failure: self.failure_ticket(
+                &status,
+                reporter.confirmed_internal(),
+                device,
+                route.clone(),
+            ),
+            route,
             completion: status.begin_delivery(),
             status,
             confirmed: reporter.confirmed_internal(),
@@ -108,7 +117,8 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         db: &RwLock<ObjectDatabase>,
         mut intents: Vec<ReadAuditIntent>,
     ) {
-        if intents.is_empty() || self.route.is_none() {
+        intents.retain(|intent| intent.0.route.is_some());
+        if intents.is_empty() {
             return;
         }
         {

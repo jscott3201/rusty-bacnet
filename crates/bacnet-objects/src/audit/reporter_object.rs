@@ -84,7 +84,7 @@ impl BACnetObject for AuditReporterObject {
                 Ok(PropertyValue::BitString { unused_bits, data })
             }
             p if p == PropertyIdentifier::ISSUE_CONFIRMED_NOTIFICATIONS => {
-                Ok(PropertyValue::Boolean(self.issue_confirmed_notifications))
+                Ok(PropertyValue::Boolean(self.status.confirmed()))
             }
             p if p == PropertyIdentifier::MONITORED_OBJECTS && self.monitored_objects.is_some() => {
                 let selectors = self.monitored_objects.as_ref().expect("presence checked");

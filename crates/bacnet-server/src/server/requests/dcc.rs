@@ -6,7 +6,7 @@ mod rate_tests;
 
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn response<T: TransportPort + 'static>(
-    timer: &Arc<Mutex<Option<JoinHandle<()>>>>,
+    timer: &Arc<Mutex<crate::server::dcc_timer::TimerSlot>>,
     comm_state: &Arc<AtomicU8>,
     outcomes: &dcc_outcomes::DccOutcomes,
     config: &ServerConfig,

@@ -684,7 +684,7 @@ mod tests {
             assert!(detector.evaluate(&mut db).is_empty());
             assert_eq!(warnings.load(Ordering::SeqCst), 1);
 
-            assert!(db.remove(&oid).is_some());
+            assert!(db.remove(&oid).unwrap().is_some());
             assert!(detector.evaluate(&mut db).is_empty());
             assert_eq!(warnings.load(Ordering::SeqCst), 1);
 

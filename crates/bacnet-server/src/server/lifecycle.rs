@@ -1,8 +1,8 @@
 use super::*;
-use bacnet_transport::port::TransportProvenance;
 
 #[path = "lifecycle_period.rs"]
 mod period;
+use super::{audit_recipient::spawn_owned, audit_recipient_routes::AuditRoutes};
 pub(super) use period::event_enrollment_period;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
@@ -18,7 +18,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let is_broadcast = |mac: &[u8]| transport.is_broadcast_mac(mac);
         let device_bindings =
             DeviceBindingTable::from_configured(configured_device_bindings, is_broadcast)?;
-        super::audit_reporter::initialize(&db, &config, &device_bindings, is_broadcast)?;
+        let audit_routes = AuditRoutes::prepare(&mut db, &config, &device_bindings, &transport)?;
         super::audit_forwarder::initialize(&db, &config, &device_bindings, &transport);
         let transport_max = transport.max_apdu_length() as u32;
         config.max_apdu_length = config.max_apdu_length.min(transport_max);
@@ -48,6 +48,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
         let mut network = NetworkLayer::new(transport);
         let mut apdu_rx = network.start().await?;
+        let audit_routes = audit_routes.finish(&mut db, &config, &mut network).await?;
         let local_mac = MacAddr::from_slice(network.local_mac());
 
         let network = Arc::new(network);
@@ -72,7 +73,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let confirmed_request_tracker = Arc::new(ConfirmedRequestTracker::default());
         let device_bindings = Arc::new(RwLock::new(device_bindings));
         let comm_state = Arc::new(AtomicU8::new(0)); // 0 = Enable (default)
-        let dcc_timer: Arc<Mutex<Option<JoinHandle<()>>>> = Arc::new(Mutex::new(None));
+        let dcc_timer: Arc<Mutex<crate::server::dcc_timer::TimerSlot>> =
+            Arc::new(Mutex::new(Default::default()));
         let dcc_outcomes = Arc::new(dcc_outcomes::DccOutcomes::default());
         let dcc_outcomes_dispatch = Arc::clone(&dcc_outcomes);
         let mutation_decisions = Arc::new(crate::mutation::MutationDecisions::default());
@@ -94,8 +96,22 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let clock_dispatch = clock.clone();
         let limiters_dispatch = (discovery_limiter.clone(), time_sync_limiter.clone());
 
+        let target_audit = super::audit_recipient::TargetAudit::install(
+            &mut *db.write().await,
+            &config,
+            audit_routes,
+            &network,
+            &notification_transactions,
+            &comm_state,
+        )?;
+        let audit_owner = target_audit
+            .as_ref()
+            .map(|runtime| Arc::clone(&runtime.owner));
+        if let Some(owner) = &audit_owner {
+            request_tasks.set_audit_owner(owner);
+        }
         let requests = Arc::clone(&request_tasks);
-        let dispatch_task = tokio::spawn(async move {
+        let dispatch_task = spawn_owned(audit_owner.clone(), async move {
             let mut seg_receivers: HashMap<SegRecvKey, SegmentedRequestState> = HashMap::new();
             let mut notifications_open = true;
             let mut ingress_open = true;
@@ -569,7 +585,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         });
 
         let cov_table_for_purge = Arc::clone(&cov_table);
-        let cov_purge_task = tokio::spawn(async move {
+        let cov_purge_task = spawn_owned(audit_owner.clone(), async move {
             let mut interval = tokio::time::interval(Duration::from_secs(30));
             loop {
                 interval.tick().await;
@@ -583,7 +599,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
         let fault_detection_task = if config.enable_fault_detection {
             let db_fault = Arc::clone(&db);
-            Some(tokio::spawn(async move {
+            Some(spawn_owned(audit_owner.clone(), async move {
                 let detector = crate::fault_detection::FaultDetector::default();
                 let mut interval = tokio::time::interval(Duration::from_secs(10));
                 loop {
@@ -625,7 +641,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             None
         };
 
-        let trend_log_task = Some(tokio::spawn(crate::trend_log::run(Arc::clone(&db))));
+        let trend_log_task = Some(spawn_owned(
+            audit_owner.clone(),
+            crate::trend_log::run(Arc::clone(&db)),
+        ));
 
         let db_schedule = Arc::clone(&db);
         let network_schedule = Arc::clone(&network);
@@ -634,7 +653,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let notification_transactions_schedule = Arc::clone(&notification_transactions);
         let comm_state_schedule = Arc::clone(&comm_state);
         let schedule_config = config.clone();
-        let schedule_tick_task = Some(tokio::spawn(async move {
+        let schedule_tick_task = Some(spawn_owned(audit_owner.clone(), async move {
             let mut interval = tokio::time::interval(Duration::from_secs(60));
             loop {
                 interval.tick().await;
@@ -685,7 +704,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let notification_transactions_intrinsic = Arc::clone(&notification_transactions);
         let device_bindings_intrinsic = Arc::clone(&device_bindings);
         let intrinsic_retry_ms = config.cov_retry_timeout_ms;
-        let intrinsic_reporting_task = Some(tokio::spawn(async move {
+        let intrinsic_reporting_task = Some(spawn_owned(audit_owner.clone(), async move {
             let mut interval = tokio::time::interval(Duration::from_secs(1));
             // The countdown decrements exactly once per call, so a delayed wake
             // must NOT burst-deliver missed ticks (each would decrement
@@ -753,6 +772,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         );
 
         let server = Self {
+            target_audit,
             config,
             discovery_limiter,
             time_sync_limiter,

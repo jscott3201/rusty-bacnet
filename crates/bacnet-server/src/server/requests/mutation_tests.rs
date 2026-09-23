@@ -130,7 +130,7 @@ impl Fixture {
             &self.tracker,
             &Arc::new(RwLock::new(DeviceBindingTable::new())),
             &self.state,
-            &Arc::new(Mutex::new(None)),
+            &Arc::new(Mutex::new(Default::default())),
             &self.config,
             &Arc::new(crate::server::request_tasks::RequestTasks::default()).spawner(),
             SOURCE,

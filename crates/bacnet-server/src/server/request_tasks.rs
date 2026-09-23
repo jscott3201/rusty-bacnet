@@ -21,6 +21,7 @@ impl Default for RequestTasks {
 
 #[derive(Default)]
 struct State {
+    audit_owner: Option<Weak<bacnet_objects::database::AuditOwnership>>,
     closed: bool,
     tasks: JoinSet<()>,
 }
@@ -96,7 +97,9 @@ impl RequestTasks {
         let mut state = self.0.lock().unwrap();
         let guard = self.1.try_enter(class, peer, state.closed)?;
         let task = make();
+        let owner = state.audit_owner.as_ref().and_then(Weak::upgrade);
         state.tasks.spawn(async move {
+            let _owner = owner;
             let _guard = guard;
             task.await;
         });
@@ -107,11 +110,19 @@ impl RequestTasks {
         RequestTaskSpawner(Arc::downgrade(self))
     }
 
+    pub(super) fn set_audit_owner(&self, owner: &Arc<bacnet_objects::database::AuditOwnership>) {
+        self.0.lock().unwrap().audit_owner = Some(Arc::downgrade(owner));
+    }
+
     pub(super) fn spawn(&self, task: impl Future<Output = ()> + Send + 'static) {
         let mut state = self.0.lock().unwrap();
         // Admission and registration are one synchronous critical section.
         if !state.closed {
-            state.tasks.spawn(task);
+            let owner = state.audit_owner.as_ref().and_then(Weak::upgrade);
+            state.tasks.spawn(async move {
+                let _owner = owner;
+                task.await;
+            });
         }
     }
 
@@ -138,5 +149,41 @@ impl RequestTasks {
                 tracing::warn!(%error, "Inbound request handler failed");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod audit_lifetime_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn admitted_request_retains_audit_membership_until_its_frame_is_destroyed() {
+        use bacnet_objects::database::AuditOwnership;
+        use bacnet_types::{enums::ObjectType, primitives::ObjectIdentifier};
+        let owner = AuditOwnership::new(
+            ObjectIdentifier::new(ObjectType::DEVICE, 10).unwrap(),
+            ObjectIdentifier::new(ObjectType::AUDIT_REPORTER, 1).unwrap(),
+        );
+        let weak = Arc::downgrade(&owner);
+        let requests = RequestTasks::default();
+        requests.set_audit_owner(&owner);
+        requests
+            .try_spawn(
+                Class::Confirmed,
+                super::super::request_peer::CanonicalRequester::Direct(
+                    bacnet_types::MacAddr::from_slice(&[1]),
+                ),
+                std::future::pending::<()>,
+            )
+            .unwrap();
+        owner.seal();
+        requests.close();
+        drop(owner);
+        assert!(
+            weak.upgrade().is_some(),
+            "abort request is not task-frame quiescence"
+        );
+        while requests.join_next().await.is_some() {}
+        assert!(weak.upgrade().is_none());
     }
 }

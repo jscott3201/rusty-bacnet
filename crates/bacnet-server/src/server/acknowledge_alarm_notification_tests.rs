@@ -265,7 +265,7 @@ impl Harness {
             &self.tracker,
             &self.bindings,
             &self.comm_state,
-            &Arc::new(Mutex::new(None::<JoinHandle<()>>)),
+            &Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default())),
             &self.config,
             &Arc::new(crate::server::request_tasks::RequestTasks::default()).spawner(),
             REQUESTER,

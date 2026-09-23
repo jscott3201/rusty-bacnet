@@ -571,8 +571,8 @@ fn detached_enrollment_does_not_resume_state_after_target_replacement() {
     db.add(Box::new(enrollment)).unwrap();
     assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
 
-    let enrollment = db.remove(&enrollment_oid).unwrap();
-    db.remove(&target_oid).unwrap();
+    let enrollment = db.remove(&enrollment_oid).unwrap().unwrap();
+    db.remove(&target_oid).unwrap().unwrap();
     let mut replacement = AnalogValueObject::new(113, "AV-detached-replacement", 62).unwrap();
     replacement
         .write_property(

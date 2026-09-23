@@ -1,5 +1,28 @@
 use super::*;
 
+/// Last-owner destruction aborts the timer even if server Drop could not acquire
+/// the async slot while a request was replacing it.
+#[derive(Default)]
+pub(crate) struct TimerSlot(pub(crate) Option<JoinHandle<()>>);
+impl std::ops::Deref for TimerSlot {
+    type Target = Option<JoinHandle<()>>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for TimerSlot {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+impl Drop for TimerSlot {
+    fn drop(&mut self) {
+        if let Some(task) = &self.0 {
+            task.abort();
+        }
+    }
+}
+
 // Borrow the handle in its owning slot through the join. Cancelling the caller
 // leaves the (possibly already aborted) handle available for the next cleanup.
 pub(super) async fn cancel(slot: &mut Option<JoinHandle<()>>) {
@@ -11,7 +34,7 @@ pub(super) async fn cancel(slot: &mut Option<JoinHandle<()>>) {
 }
 
 pub(super) async fn replace(
-    timer: &Arc<Mutex<Option<JoinHandle<()>>>>,
+    timer: &Arc<Mutex<crate::server::dcc_timer::TimerSlot>>,
     comm_state: &Arc<AtomicU8>,
     service_data: &[u8],
     config: &ServerConfig,
@@ -55,7 +78,7 @@ pub(super) async fn replace(
     if let Some(minutes) = duration {
         let owner = Arc::downgrade(timer);
         let comm = Arc::clone(comm_state);
-        *slot = Some(tokio::spawn(async move {
+        **slot = Some(tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(minutes as u64 * 60)).await;
             if let Some(owner) = owner.upgrade() {
                 // An old task waiting here can be aborted and joined while a

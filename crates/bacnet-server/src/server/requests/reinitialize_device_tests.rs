@@ -36,7 +36,7 @@ async fn dispatch(service_request: Bytes, password: Option<&str>, initial: u8) -
         Ipv4Addr::BROADCAST,
     )));
     let comm_state = Arc::new(AtomicU8::new(initial));
-    let dcc_timer = Arc::new(Mutex::new(None));
+    let dcc_timer = Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default()));
     let config = ServerConfig {
         reinit_password: password.map(str::to_owned),
         ..Default::default()

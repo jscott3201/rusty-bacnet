@@ -628,7 +628,7 @@ async fn reply_tx_response_preserves_routed_npdu_destination() {
     let confirmed_request_tracker = Arc::new(ConfirmedRequestTracker::default());
     let device_bindings = Arc::new(RwLock::new(DeviceBindingTable::new()));
     let comm_state = Arc::new(AtomicU8::new(0));
-    let dcc_timer = Arc::new(Mutex::new(None::<JoinHandle<()>>));
+    let dcc_timer = Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default()));
     let config = ServerConfig::default();
     let source_mac = test_mac(1);
     let routed_source = NpduAddress {

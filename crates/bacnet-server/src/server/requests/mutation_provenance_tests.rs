@@ -62,7 +62,7 @@ async fn dispatch_admitted(
         &NotificationTransactions::new(),
         &Arc::new(RwLock::new(DeviceBindingTable::new())),
         &fixture.state,
-        &Arc::new(Mutex::new(None)),
+        &Arc::new(Mutex::new(Default::default())),
         &Arc::new(dcc_outcomes::DccOutcomes::default()),
         decisions,
         &fixture.config,

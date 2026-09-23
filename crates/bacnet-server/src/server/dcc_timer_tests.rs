@@ -74,7 +74,7 @@ async fn dcc_timer_cancelled_stop_retains_join_for_retry() {
         std::future::pending::<()>().await;
     });
     let id = task.id();
-    *server.dcc_timer.lock().await = Some(task);
+    **server.dcc_timer.lock().await = Some(task);
     server.comm_state.store(2, Ordering::Release);
     {
         let stop = server.stop();

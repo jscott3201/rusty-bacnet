@@ -150,7 +150,7 @@ enum BindingEntry {
     },
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(super) struct DeviceBindingTable {
     entries: HashMap<ObjectIdentifier, BindingEntry>,
 }
@@ -202,6 +202,16 @@ impl DeviceBindingTable {
             table.insert_configured(binding, &is_broadcast)?;
         }
         Ok(table)
+    }
+
+    /// Immutable configured routes, already validated against the concrete link.
+    pub(super) fn configured_resolutions(
+        &self,
+    ) -> impl Iterator<Item = (ObjectIdentifier, DeviceResolution)> + '_ {
+        self.entries
+            .iter()
+            .filter(|(_, entry)| matches!(entry, BindingEntry::Configured(_)))
+            .map(|(device, _)| (*device, self.resolve_at(device, Instant::now(), |_| false)))
     }
 
     #[cfg(test)]

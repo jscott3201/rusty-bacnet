@@ -79,7 +79,7 @@ pub(crate) fn handle_write_property_multiple_authorized(
     snapshots: &mut crate::life_safety_cov::LifeSafetyCovSnapshots,
     authorize: Option<WritePropertyMultipleGate<'_>>,
 ) -> WritePropertyMultipleOutcome {
-    handle_write_property_multiple_observed(db, service_data, snapshots, authorize, None)
+    handle_write_property_multiple_observed(db, service_data, snapshots, authorize, None, None)
 }
 
 pub(crate) fn handle_write_property_multiple_observed(
@@ -88,6 +88,7 @@ pub(crate) fn handle_write_property_multiple_observed(
     snapshots: &mut crate::life_safety_cov::LifeSafetyCovSnapshots,
     authorize: Option<WritePropertyMultipleGate<'_>>,
     mut observer: Option<&mut dyn WriteCommitObserver>,
+    source: Option<&bacnet_objects::device::AuditWriteSource>,
 ) -> WritePropertyMultipleOutcome {
     let mut cursor = WritePropertyMultipleCursor::new(service_data);
     let mut committed_oids = Vec::new();
@@ -158,6 +159,27 @@ pub(crate) fn handle_write_property_multiple_observed(
         if let Some(authorize) = authorize {
             if let Err(error) = authorize(&attempt) {
                 return semantic_failure(error, reference, committed_oids);
+            }
+        }
+        if property == PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT {
+            if let Some(mut device) = db
+                .get_mut(&oid)
+                .and_then(|object| object.device_authority_internal())
+            {
+                if device.object_identifier() == oid {
+                    if let Err(error) = device.write_audit_recipient(
+                        reference.property_array_index,
+                        value,
+                        attempt.priority,
+                        source,
+                    ) {
+                        return semantic_failure(error, reference, committed_oids);
+                    }
+                    if !committed_oids.contains(&oid) {
+                        committed_oids.push(oid);
+                    }
+                    continue;
+                }
             }
         }
         snapshots.capture_before_write(db, oid);
@@ -354,13 +376,14 @@ pub fn handle_write_property(
     db: &mut ObjectDatabase,
     service_data: &[u8],
 ) -> Result<ObjectIdentifier, Error> {
-    handle_write_property_observed(db, service_data, None)
+    handle_write_property_observed(db, service_data, None, None)
 }
 
 pub(crate) fn handle_write_property_observed(
     db: &mut ObjectDatabase,
     service_data: &[u8],
     mut observer: Option<&mut dyn WriteCommitObserver>,
+    source: Option<&bacnet_objects::device::AuditWriteSource>,
 ) -> Result<ObjectIdentifier, Error> {
     let request = WritePropertyRequest::decode(service_data)?;
     let oid = request.object_identifier;
@@ -389,6 +412,22 @@ pub(crate) fn handle_write_property_observed(
     )?;
     if request.property_identifier == PropertyIdentifier::OBJECT_NAME {
         check_and_prepare_name_write(db, &oid, &value)?;
+    }
+    if request.property_identifier == PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT {
+        if let Some(mut device) = db
+            .get_mut(&oid)
+            .and_then(|object| object.device_authority_internal())
+        {
+            if device.object_identifier() == oid {
+                device.write_audit_recipient(
+                    request.property_array_index,
+                    value,
+                    request.priority,
+                    source,
+                )?;
+                return Ok(oid);
+            }
+        }
     }
     if let Some(observer) = observer.as_deref_mut() {
         observer.before(

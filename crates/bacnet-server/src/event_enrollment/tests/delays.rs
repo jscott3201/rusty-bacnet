@@ -484,7 +484,7 @@ fn params_round_trip_does_not_resume_stale_countdown() {
     // Params A->B (different limits, same delay) while the monitored object
     // is GONE: the pass cannot complete — but the cancellation must stick.
     set_oor_params(&mut db, &ee_oid, 3, 21.0, 81.0);
-    let removed = db.remove(&ai_oid).expect("fixture AI present");
+    let removed = db.remove(&ai_oid).unwrap().expect("fixture AI present");
     assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
 
     // Params B->A, monitored object restored. The re-gated countdown must
@@ -664,7 +664,7 @@ fn retarget_mid_pending_cancels_and_regates() {
     ai2.set_present_value(86.0);
     let ai2_oid = ai2.object_identifier();
     db.add(Box::new(ai2)).unwrap();
-    db.remove(&ee_oid);
+    db.remove(&ee_oid).unwrap();
     let mut ee = EventEnrollmentObject::new(1, "EE-OOR", EventType::OUT_OF_RANGE.to_raw()).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai2_oid,

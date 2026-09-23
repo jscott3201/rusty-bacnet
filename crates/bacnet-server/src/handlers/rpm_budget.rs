@@ -1,7 +1,7 @@
 //! Bounded server-owned RPM planning and service-ACK accumulation.
 use super::*;
 use crate::server::ReadPropertyMultipleBudget;
-use bacnet_objects::{property_metadata::PropertyConformance, traits::BACnetObject};
+use bacnet_objects::traits::BACnetObject;
 use bacnet_services::common::PropertyReference;
 
 #[derive(Debug)]
@@ -40,9 +40,9 @@ fn expand(
                 }
                 PropertyIdentifier::REQUIRED => {
                     row.property_identifier != PropertyIdentifier::PROPERTY_LIST
-                        && row.conformance.is_required()
+                        && row.is_required()
                 }
-                _ => row.conformance == PropertyConformance::Optional,
+                _ => !row.is_required(),
             };
             if selected {
                 visit(row.property_identifier)?;

@@ -17,6 +17,7 @@ pub struct AuditDeliveryToken {
 
 #[derive(Default)]
 struct State {
+    confirmed: bool,
     configured: bool,
     communication_failure: bool,
     failure_epoch: u64,
@@ -25,6 +26,44 @@ struct State {
 }
 
 impl AuditReporterStatus {
+    pub(super) fn confirmed(&self) -> bool {
+        self.0.lock().unwrap().confirmed
+    }
+    pub(super) fn set_confirmed(&self, confirmed: bool) {
+        let mut state = self.0.lock().unwrap();
+        if state.confirmed != confirmed {
+            state.configuration_epoch = state.configuration_epoch.saturating_add(1);
+            state.confirmed = confirmed;
+        }
+    }
+
+    /// Reserve the next configuration and both delivery tokens atomically with
+    /// a synchronous recipient commit. A failed preparation leaves health and
+    /// configuration untouched. The closure must not reenter status or a queue.
+    #[doc(hidden)]
+    pub fn commit_recipient_change<R>(
+        &self,
+        commit: impl FnOnce(bool, AuditDeliveryToken) -> Result<R, bacnet_types::error::Error>,
+    ) -> Result<R, bacnet_types::error::Error> {
+        let mut state = self.0.lock().unwrap();
+        let configuration = state
+            .configuration_epoch
+            .checked_add(1)
+            .filter(|epoch| *epoch != u64::MAX)
+            .ok_or_else(|| {
+                bacnet_types::error::Error::Encoding("audit generation exhausted".into())
+            })?;
+        let token = AuditDeliveryToken {
+            configuration,
+            failure: state.failure_epoch,
+        };
+        let result = commit(state.confirmed, token)?;
+        state.configuration_epoch = configuration;
+        state.configured = true;
+        state.communication_failure = false;
+        Ok(result)
+    }
+
     pub(super) fn set_auditing_failure_enabled(&self, enabled: bool) {
         let mut state = self.0.lock().unwrap();
         state.auditing_failure_enabled = enabled;

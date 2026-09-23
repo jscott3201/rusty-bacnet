@@ -48,7 +48,6 @@ fn exercise_instances(configured_instances: &[Option<u32>]) {
                         audit_reporter: Some(AuditReporterConfig {
                             reporter: ObjectIdentifier::new(ObjectType::AUDIT_REPORTER, selected)
                                 .unwrap(),
-                            recipient: None,
                         }),
                         ..Default::default()
                     };
