@@ -306,7 +306,7 @@ impl BACnetObject for BinaryValueObject {
             property,
             &value,
         ) {
-            return result;
+            return result.map(|_| ());
         }
         if let Some(result) = common::write_object_name(&mut self.name, property, &value) {
             return result;

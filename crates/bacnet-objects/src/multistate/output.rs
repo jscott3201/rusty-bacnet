@@ -381,8 +381,9 @@ impl BACnetObject for MultiStateOutputObject {
             property,
             &value,
         ) {
-            result?;
-            let _ = self.recompute_reliability();
+            if result? == crate::reliability_inhibit::OutOfServiceWrite::Applied {
+                let _ = self.recompute_reliability();
+            }
             return Ok(());
         }
         if let Some(result) = common::write_object_name(&mut self.name, property, &value) {

@@ -252,25 +252,13 @@ impl BACnetObject for TrendLogObject {
                 code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
             });
         }
-        if property == PropertyIdentifier::OUT_OF_SERVICE {
-            if let PropertyValue::Boolean(v) = value {
-                self.out_of_service = v;
-                return Ok(());
-            }
-            return Err(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
-            });
+        if let Some(result) =
+            common::write_out_of_service(&mut self.out_of_service, property, &value)
+        {
+            return result;
         }
-        if property == PropertyIdentifier::DESCRIPTION {
-            if let PropertyValue::CharacterString(s) = value {
-                self.description = s;
-                return Ok(());
-            }
-            return Err(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
-            });
+        if let Some(result) = common::write_description(&mut self.description, property, &value) {
+            return result;
         }
         Err(Error::Protocol {
             class: ErrorClass::PROPERTY.to_raw() as u32,
@@ -561,15 +549,8 @@ impl BACnetObject for TrendLogMultipleObject {
                 code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
             });
         }
-        if property == PropertyIdentifier::DESCRIPTION {
-            if let PropertyValue::CharacterString(s) = value {
-                self.description = s;
-                return Ok(());
-            }
-            return Err(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
-            });
+        if let Some(result) = common::write_description(&mut self.description, property, &value) {
+            return result;
         }
         Err(Error::Protocol {
             class: ErrorClass::PROPERTY.to_raw() as u32,

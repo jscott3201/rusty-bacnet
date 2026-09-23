@@ -241,7 +241,7 @@ mod tests {
             for p in [P::DESCRIPTION, P::OUT_OF_SERVICE] {
                 assert_error(
                     object
-                        .write_property(p, None, PropertyValue::Null, None)
+                        .write_property(p, None, PropertyValue::Unsigned(1), None)
                         .unwrap_err(),
                     ErrorCode::INVALID_DATA_TYPE,
                 );

@@ -134,15 +134,8 @@ impl BACnetObject for CalendarObject {
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
-        if property == PropertyIdentifier::DESCRIPTION {
-            if let PropertyValue::CharacterString(s) = value {
-                self.description = s;
-                return Ok(());
-            }
-            return Err(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
-            });
+        if let Some(result) = common::write_description(&mut self.description, property, &value) {
+            return result;
         }
         if property == PropertyIdentifier::PRESENT_VALUE {
             return Err(Error::Protocol {
@@ -515,15 +508,8 @@ impl BACnetObject for ScheduleObject {
         ) {
             return result;
         }
-        if property == PropertyIdentifier::DESCRIPTION {
-            if let PropertyValue::CharacterString(s) = value {
-                self.description = s;
-                return Ok(());
-            }
-            return Err(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
-            });
+        if let Some(result) = common::write_description(&mut self.description, property, &value) {
+            return result;
         }
         Err(Error::Protocol {
             class: ErrorClass::PROPERTY.to_raw() as u32,

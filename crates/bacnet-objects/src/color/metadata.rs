@@ -463,8 +463,8 @@ mod tests {
             for (p, value) in [
                 (P::COLOR_COMMAND, PropertyValue::Unsigned(1)),
                 (P::DEFAULT_FADE_TIME, PropertyValue::Real(1000.0)),
-                (P::DESCRIPTION, PropertyValue::Null),
-                (P::OUT_OF_SERVICE, PropertyValue::Null),
+                (P::DESCRIPTION, PropertyValue::Unsigned(1)),
+                (P::OUT_OF_SERVICE, PropertyValue::Unsigned(1)),
             ] {
                 assert_error(
                     object.write_property(p, None, value, None).unwrap_err(),
@@ -571,8 +571,8 @@ mod tests {
             for (p, value) in [
                 (P::PRESENT_VALUE, PropertyValue::Real(4000.0)),
                 (P::COLOR_COMMAND, PropertyValue::Unsigned(1)),
-                (P::DESCRIPTION, PropertyValue::Null),
-                (P::OUT_OF_SERVICE, PropertyValue::Null),
+                (P::DESCRIPTION, PropertyValue::Unsigned(1)),
+                (P::OUT_OF_SERVICE, PropertyValue::Unsigned(1)),
             ] {
                 assert_error(
                     object.write_property(p, None, value, None).unwrap_err(),

@@ -75,6 +75,7 @@ mod read_range;
 mod read_range_time;
 mod read_rpm;
 mod reference_writes;
+mod scalar_null_writes;
 mod staging_writes;
 mod wpm_create_alarm;
 mod wpm_prefix_commit;

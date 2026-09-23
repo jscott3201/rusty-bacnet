@@ -155,6 +155,7 @@ pub(crate) fn unknown_property_error() -> bacnet_types::error::Error {
 }
 
 /// Handle writing the OUT_OF_SERVICE property.
+/// NULL relinquishment succeeds unchanged; it does not store NULL.
 ///
 /// Returns `Some(Ok(()))` if the property was OUT_OF_SERVICE and successfully handled,
 /// `Some(Err(...))` if the property was OUT_OF_SERVICE but the wrong type was provided,
@@ -169,11 +170,10 @@ pub(crate) fn write_out_of_service(
         if let bacnet_types::primitives::PropertyValue::Boolean(v) = value {
             *out_of_service = *v;
             Some(Ok(()))
+        } else if matches!(value, bacnet_types::primitives::PropertyValue::Null) {
+            Some(Ok(()))
         } else {
-            Some(Err(protocol_error(
-                bacnet_types::enums::ErrorClass::PROPERTY,
-                bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE,
-            )))
+            Some(Err(invalid_data_type_error()))
         }
     } else {
         None
@@ -185,7 +185,8 @@ pub(crate) fn write_out_of_service(
 ///
 /// The evaluated value is saved on the FALSE-to-TRUE edge and restored directly
 /// on the TRUE-to-FALSE edge. If the entry edge was not observed, the restore
-/// falls back to NO_FAULT_DETECTED.
+/// falls back to NO_FAULT_DETECTED. NULL relinquishment preserves all three
+/// fields, including the saved value and its restoration ownership.
 #[inline]
 pub(crate) fn write_out_of_service_with_reliability_restore(
     out_of_service: &mut bool,
@@ -205,11 +206,10 @@ pub(crate) fn write_out_of_service_with_reliability_restore(
             }
             *out_of_service = *v;
             Some(Ok(()))
+        } else if matches!(value, bacnet_types::primitives::PropertyValue::Null) {
+            Some(Ok(()))
         } else {
-            Some(Err(protocol_error(
-                bacnet_types::enums::ErrorClass::PROPERTY,
-                bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE,
-            )))
+            Some(Err(invalid_data_type_error()))
         }
     } else {
         None
@@ -218,7 +218,8 @@ pub(crate) fn write_out_of_service_with_reliability_restore(
 
 pub(crate) use crate::reliability_inhibit::ReliabilityInhibitState;
 
-/// Handle writing the DESCRIPTION property.
+/// Handle writing the DESCRIPTION property. NULL relinquishment succeeds
+/// without changing the stored string.
 ///
 /// Returns `Some(Ok(()))` if the property was DESCRIPTION and successfully handled,
 /// `Some(Err(...))` if the property was DESCRIPTION but the wrong type was provided,
@@ -230,12 +231,14 @@ pub(crate) fn write_description(
     value: &bacnet_types::primitives::PropertyValue,
 ) -> Option<Result<(), bacnet_types::error::Error>> {
     if property == bacnet_types::enums::PropertyIdentifier::DESCRIPTION {
-        if let bacnet_types::primitives::PropertyValue::CharacterString(s) = value {
-            *description = s.clone();
-            Some(Ok(()))
-        } else {
-            Some(Err(invalid_data_type_error()))
-        }
+        Some(match value {
+            bacnet_types::primitives::PropertyValue::CharacterString(s) => {
+                *description = s.clone();
+                Ok(())
+            }
+            bacnet_types::primitives::PropertyValue::Null => Ok(()),
+            _ => Err(invalid_data_type_error()),
+        })
     } else {
         None
     }

@@ -308,12 +308,12 @@ mod tests {
             ),
             (
                 P::DESCRIPTION,
-                PropertyValue::Null,
+                PropertyValue::Unsigned(1),
                 ErrorCode::INVALID_DATA_TYPE,
             ),
             (
                 P::OUT_OF_SERVICE,
-                PropertyValue::Null,
+                PropertyValue::Unsigned(1),
                 ErrorCode::INVALID_DATA_TYPE,
             ),
         ] {
@@ -371,12 +371,12 @@ mod tests {
             ),
             (
                 P::DESCRIPTION,
-                PropertyValue::Null,
+                PropertyValue::Unsigned(1),
                 ErrorCode::INVALID_DATA_TYPE,
             ),
             (
                 P::OUT_OF_SERVICE,
-                PropertyValue::Null,
+                PropertyValue::Unsigned(1),
                 ErrorCode::INVALID_DATA_TYPE,
             ),
         ] {

@@ -514,8 +514,8 @@ mod tests {
                     P::LIGHTING_COMMAND_DEFAULT_PRIORITY,
                     PropertyValue::Enumerated(8),
                 ),
-                (P::DESCRIPTION, PropertyValue::Null),
-                (P::OUT_OF_SERVICE, PropertyValue::Null),
+                (P::DESCRIPTION, PropertyValue::Unsigned(1)),
+                (P::OUT_OF_SERVICE, PropertyValue::Unsigned(1)),
                 (P::BLINK_WARN_ENABLE, PropertyValue::Enumerated(1)),
                 (P::EGRESS_TIME, PropertyValue::Boolean(true)),
             ] {

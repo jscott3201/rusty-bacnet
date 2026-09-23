@@ -167,10 +167,13 @@ mod tests {
             .unwrap();
         assert_error(
             object
-                .write_property(P::DESCRIPTION, None, PropertyValue::Null, None)
+                .write_property(P::DESCRIPTION, None, PropertyValue::Unsigned(1), None)
                 .unwrap_err(),
             ErrorCode::INVALID_DATA_TYPE,
         );
+        object
+            .write_property(P::DESCRIPTION, None, PropertyValue::Null, None)
+            .unwrap();
         assert_eq!(
             object.read_property(P::DESCRIPTION, None).unwrap(),
             PropertyValue::CharacterString("updated".into())

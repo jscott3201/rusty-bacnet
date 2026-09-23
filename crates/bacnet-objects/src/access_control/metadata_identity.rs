@@ -540,8 +540,8 @@ mod tests {
             for (p, value) in [
                 (P::PRESENT_VALUE, PropertyValue::Real(3.0)),
                 (P::CREDENTIAL_STATUS, PropertyValue::Real(2.0)),
-                (P::DESCRIPTION, PropertyValue::Null),
-                (P::OUT_OF_SERVICE, PropertyValue::Null),
+                (P::DESCRIPTION, PropertyValue::Unsigned(1)),
+                (P::OUT_OF_SERVICE, PropertyValue::Unsigned(1)),
             ] {
                 assert_error(
                     credential.write_property(p, None, value, None).unwrap_err(),
@@ -584,8 +584,8 @@ mod tests {
             for (p, value) in [
                 (P::PRESENT_VALUE, PropertyValue::Real(1.0)),
                 (P::USER_TYPE, PropertyValue::Real(2.0)),
-                (P::DESCRIPTION, PropertyValue::Null),
-                (P::OUT_OF_SERVICE, PropertyValue::Null),
+                (P::DESCRIPTION, PropertyValue::Unsigned(1)),
+                (P::OUT_OF_SERVICE, PropertyValue::Unsigned(1)),
             ] {
                 assert_error(
                     user.write_property(p, None, value, None).unwrap_err(),
@@ -628,8 +628,8 @@ mod tests {
             );
             for (p, value) in [
                 (P::GLOBAL_IDENTIFIER, PropertyValue::Enumerated(77)),
-                (P::DESCRIPTION, PropertyValue::Null),
-                (P::OUT_OF_SERVICE, PropertyValue::Null),
+                (P::DESCRIPTION, PropertyValue::Unsigned(1)),
+                (P::OUT_OF_SERVICE, PropertyValue::Unsigned(1)),
             ] {
                 assert_error(
                     rights.write_property(p, None, value, None).unwrap_err(),
