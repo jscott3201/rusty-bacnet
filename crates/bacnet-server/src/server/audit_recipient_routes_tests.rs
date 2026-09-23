@@ -174,3 +174,150 @@ async fn audit_target_routes_use_actual_bound_bip_broadcast_port() {
     );
     server.stop().await.unwrap();
 }
+
+#[tokio::test]
+async fn audit_target_routes_revalidate_generic_next_hops_after_startup() {
+    use bacnet_objects::{
+        binary::BinaryValueObject,
+        device::{DeviceConfig, DeviceObject},
+    };
+    for routed in [false, true] {
+        for initially_unresolved in [true, false] {
+            let bad = oid(ObjectType::DEVICE, 20);
+            let good = oid(ObjectType::DEVICE, 21);
+            let target = oid(ObjectType::DEVICE, 10);
+            let initial = BACnetRecipient::Device(if initially_unresolved { bad } else { good });
+            let mut device = DeviceObject::new(DeviceConfig {
+                instance: 10,
+                ..Default::default()
+            })
+            .unwrap();
+            device.provision_audit_recipient(initial.clone()).unwrap();
+            let mut db = ObjectDatabase::new();
+            db.add(Box::new(device)).unwrap();
+            db.add(Box::new(reporter())).unwrap();
+            db.add(Box::new(BinaryValueObject::new(1, "value").unwrap()))
+                .unwrap();
+            let mut transport = CaptureTransport::default();
+            transport.learned_broadcast = Some(MacAddr::from_slice(&[0x42]));
+            assert!(!transport.is_broadcast_mac(&[0x42]));
+            assert_eq!(transport.bip_broadcast_endpoint(), None);
+            let mut server = BACnetServer::start_with_clock_mode_and_bindings(
+                ServerConfig {
+                    audit_reporter: Some(AuditReporterConfig {
+                        reporter: oid(ObjectType::AUDIT_REPORTER, 1),
+                    }),
+                    ..Default::default()
+                },
+                db,
+                transport.clone(),
+                None,
+                vec![
+                    if routed {
+                        DeviceBinding::routed(bad, 200, [9], [0x42]).unwrap()
+                    } else {
+                        DeviceBinding::local(bad, [0x42]).unwrap()
+                    },
+                    DeviceBinding::local(good, NEW_LOGGER).unwrap(),
+                ],
+            )
+            .await
+            .unwrap();
+            assert!(transport.is_broadcast_mac(&[0x42]));
+            let callbacks = transport.route_callbacks.load(Ordering::Acquire);
+            transport
+                .reject_route_callbacks
+                .store(true, Ordering::Release);
+            assert_eq!(
+                health(&server).await,
+                if initially_unresolved {
+                    Reliability::CONFIGURATION_ERROR
+                } else {
+                    Reliability::NO_FAULT_DETECTED
+                }
+            );
+            assert!(matches!(
+                write_value(&server, None).await,
+                Apdu::SimpleAck(_)
+            ));
+            settle().await;
+            assert_eq!(
+                notifications(&transport.sent).len(),
+                usize::from(!initially_unresolved)
+            );
+            assert!(transport
+                .destinations
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|mac| mac.as_slice() == NEW_LOGGER));
+            let sequence = server
+                .db
+                .read()
+                .await
+                .reserve_event_sequence_number()
+                .number();
+            let mut bytes = BytesMut::new();
+            bacnet_encoding::constructed::encode_recipient(
+                &mut bytes,
+                &BACnetRecipient::Device(if initially_unresolved { good } else { bad }),
+            );
+            if initially_unresolved {
+                assert!(server
+                    .write_local(
+                        &target,
+                        PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT,
+                        None,
+                        PropertyValue::ApplicationData(bytes.to_vec()),
+                        None
+                    )
+                    .await
+                    .is_err());
+            } else {
+                assert!(matches!(
+                    dispatch(
+                        &server,
+                        ConfirmedServiceChoice::WRITE_PROPERTY,
+                        wp(
+                            target,
+                            PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT,
+                            bytes.to_vec(),
+                            None
+                        )
+                    )
+                    .await,
+                    Apdu::Error(_)
+                ));
+            }
+            let mut original = BytesMut::new();
+            bacnet_encoding::constructed::encode_recipient(&mut original, &initial);
+            assert_eq!(
+                server
+                    .db
+                    .read()
+                    .await
+                    .get(&target)
+                    .unwrap()
+                    .read_property(PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT, None)
+                    .unwrap(),
+                PropertyValue::ApplicationData(original.to_vec())
+            );
+            assert_eq!(
+                server
+                    .db
+                    .read()
+                    .await
+                    .reserve_event_sequence_number()
+                    .number(),
+                sequence
+            );
+            settle().await;
+            assert_eq!(
+                notifications(&transport.sent).len(),
+                usize::from(!initially_unresolved)
+            );
+            assert_eq!(transport.route_callbacks.load(Ordering::Acquire), callbacks);
+            server.stop().await.unwrap();
+        }
+    }
+}

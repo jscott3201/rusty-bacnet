@@ -39,7 +39,7 @@ impl AuditRoutes {
         Ok(routes)
     }
 
-    /// Finalize the link fact after binding port zero, before shared ownership.
+    /// Finalize link facts and configured next hops after start, before shared ownership.
     pub(super) async fn finish<T: TransportPort + 'static>(
         mut self,
         db: &mut ObjectDatabase,
@@ -48,6 +48,13 @@ impl AuditRoutes {
     ) -> Result<Arc<Self>, Error> {
         if config.audit_reporter.is_some() {
             self.bip_broadcast = network.transport().bip_broadcast_endpoint();
+            // A generic link can learn its broadcast identity during start.
+            // Invoke caller code once here, never during target production or
+            // mutation under shared DB/admission locks. Invalid Device routes
+            // become unresolved rather than rejecting the whole server.
+            self.devices.retain(|_, route| {
+                local_next_hop(route).is_some_and(|mac| !network.transport().is_broadcast_mac(mac))
+            });
             if let Err(error) = super::audit_recipient::validate(db, config, &self) {
                 let _ = network.stop().await;
                 return Err(error);
@@ -72,12 +79,7 @@ impl AuditRoutes {
         match recipient {
             BACnetRecipient::Device(device) => {
                 let route = self.devices.get(device)?;
-                let next_hop = route.local_target.as_ref().or_else(|| {
-                    route
-                        .remote
-                        .as_ref()
-                        .and_then(|(_, _, router)| router.as_ref())
-                })?;
+                let next_hop = local_next_hop(route)?;
                 (!self.is_broadcast(next_hop)).then(|| Arc::clone(route))
             }
             BACnetRecipient::Address(address) => {
@@ -91,4 +93,13 @@ impl AuditRoutes {
             }
         }
     }
+}
+
+fn local_next_hop(route: &ConfirmedRecipientRoute) -> Option<&MacAddr> {
+    route.local_target.as_ref().or_else(|| {
+        route
+            .remote
+            .as_ref()
+            .and_then(|(_, _, router)| router.as_ref())
+    })
 }

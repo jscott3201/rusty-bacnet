@@ -25,6 +25,7 @@ pub(super) const SOURCE: &[u8] = &[3];
 #[derive(Clone, Default)]
 pub(super) struct CaptureTransport {
     pub(super) six_byte_mac: bool,
+    pub(super) learned_broadcast: Option<MacAddr>,
     pub(super) reject_route_callbacks: Arc<AtomicBool>,
     pub(super) route_callbacks: Arc<AtomicUsize>,
     pub(super) started: Arc<AtomicBool>,
@@ -53,9 +54,13 @@ impl TransportPort for CaptureTransport {
         self.route_callback();
         None
     }
-    fn is_broadcast_mac(&self, _: &[u8]) -> bool {
+    fn is_broadcast_mac(&self, mac: &[u8]) -> bool {
         self.route_callback();
-        false
+        self.started.load(Ordering::Acquire)
+            && self
+                .learned_broadcast
+                .as_ref()
+                .is_some_and(|broadcast| broadcast.as_slice() == mac)
     }
 
     async fn start(
