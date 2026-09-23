@@ -349,6 +349,12 @@ Annex AB security profile or qualification of your credential provisioning.
 
 ### Compatibility and forwarding limits
 
+- Hub admission can inspect a fixed current UUID/VMAC conflict classification in
+  Rust; Python offers `admission_policy="deny_uuid_replacement"` to preserve an
+  incumbent. This is opt-in local security policy before protocol acceptance.
+  Default known-UUID replacement remains, and UUID equality is not certificate
+  identity proof. See [conflict-aware admission](docs/conformance/standard-135-2020-ledger.md#hub-conflict-aware-admission).
+
 - After TLS/WebSocket establishment, an all-zero peer UUID in Connect-Request is
   rejected before registration/replacement; eligible Requests receive
   `COMMUNICATION/PARAMETER_OUT_OF_RANGE` (7/80), not a duplicate-VMAC error.

@@ -415,11 +415,18 @@ pub(super) async fn run(
                     #[cfg(test)]
                     deadline.admission_started.store(true, Ordering::Release);
                     let mut map = clients.lock().await;
+                    let decision = hub_client_registration_decision(
+                        vmac,
+                        client_uuid,
+                        map.iter().map(|(vmac, client)| (*vmac, client.device_uuid)),
+                        admission.limits.max_clients,
+                    );
                     // Bounded admin admission runs under the registry lock,
                     // before the deadline commit, so a deny cannot race
                     // replacement or insertion. A deny mutates nothing and
                     // wakes nobody: any incumbent stays exactly as it was.
                     let input = ScHubAdmissionInput {
+                        registration: decision.admission_kind(vmac),
                         peer: peer_addr,
                         claimed_vmac: vmac,
                         claimed_uuid: client_uuid,
@@ -439,12 +446,6 @@ pub(super) async fn run(
                         let _ = w.send(Message::Binary(buf.to_vec().into())).await;
                         break;
                     }
-                    let decision = hub_client_registration_decision(
-                        vmac,
-                        client_uuid,
-                        map.iter().map(|(vmac, client)| (*vmac, client.device_uuid)),
-                        admission.limits.max_clients,
-                    );
                     // The clock is checked under the registry lock, immediately
                     // before the first irreversible replacement/insertion. No await
                     // separates deadline retirement, registry commit, and lease.vmac.

@@ -1937,7 +1937,7 @@ hub = ScHub(
     device_uuid=hub_uuid,
     max_clients=256,              # registered-client cap (zero/overflow: ValueError)
     max_handshakes=256,           # pre-handshake cap (same error mapping)
-    admission_policy="allow_all", # or "deny_all"; unknown strings: ValueError
+    admission_policy="allow_all", # also "deny_all" or "deny_uuid_replacement"
     graceful_disconnect_ack_ms=5000,   # per-peer Disconnect-Ack budget
     graceful_ws_close_ms=5000,         # per-peer AB.7.5.5 close budget
     graceful_overall_ms=15000,         # whole-drain bound (must cover ack + close)
@@ -1950,9 +1950,17 @@ hub = ScHub(
 Out-of-range durations raise `ValueError` mirroring the native
 `ScHubGracefulTimeouts::new` / `ScHubHandshakeTimeouts::new` errors;
 negative integers raise `OverflowError`. `admission_policy` is a static string
-only: `"allow_all"` (default) or `"deny_all"`, which answers Connect-Requests
-with the existing `RESOURCES`/`OTHER` NAK family and counts them in
-`admin_denied`. Non-string values — including Python callables — raise
+only: `"allow_all"` (default), `"deny_all"`, or `"deny_uuid_replacement"`.
+The last mode refuses an incoming connection that would replace an incumbent
+with the same claimed UUID, at either the same or a moved VMAC. It evaluates the
+current native registration classification under the same registry lock; no
+Python callback or second registration map is involved. This is an explicit
+local security policy before protocol acceptance. Default mode retains Annex AB
+known-UUID acceptance/replacement; different-UUID VMAC conflicts still receive
+the standard duplicate-VMAC NAK. No certificate-to-UUID identity is inferred.
+Both denial modes use the existing `RESOURCES`/`OTHER` NAK family and increment
+`admin_denied` only when policy denies. Unknown mode strings raise `ValueError`
+at construction, before credential I/O or binding. Non-string values — including Python callables — raise
 `TypeError`: the native policy runs synchronously under the registry lock,
 where attaching the GIL could deadlock, so no Python callback can be
 installed. There are no deny-lists, issuance/rotation orchestration, or

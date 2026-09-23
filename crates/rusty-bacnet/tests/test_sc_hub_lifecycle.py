@@ -51,6 +51,17 @@ def hub_kwargs(**overrides: Any) -> Any:
 class HubConstructorTests(unittest.TestCase):
     """Sync constructor validation: everything fails before bind, without I/O."""
 
+    def test_deny_uuid_replacement_is_validated_without_io(self):
+        with socket.socket() as occupied:
+            occupied.bind(("127.0.0.1", 0))
+            occupied.listen()
+            # A valid static policy is accepted before opening credential files
+            # or binding; it adds no Python callback under the native lock.
+            ScHub(**hub_kwargs(
+                listen=f"127.0.0.1:{occupied.getsockname()[1]}",
+                admission_policy="deny_uuid_replacement",
+            ))
+
     def test_invalid_bounds_policy_timeouts_raise_before_bind(self):
         with socket.socket() as occupied:
             occupied.bind(("127.0.0.1", 0))

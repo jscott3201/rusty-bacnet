@@ -129,10 +129,42 @@ impl ScHubAdmissionLimits {
     }
 }
 
+/// Current registration relationship, captured under the registry lock.
+///
+/// Fixed labels only: no incumbent address, VMAC, UUID or certificate material.
+/// This describes payload-claim equality, not an authenticated device principal.
+/// Different-UUID VMAC conflict takes precedence even if the requested UUID is
+/// registered at another VMAC. Capacity is independent: a new UUID remains
+/// `Initial` when the client limit is full.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScHubRegistrationKind {
+    /// No known UUID and no conflicting peer VMAC.
+    Initial,
+    /// The requested UUID already owns the requested VMAC.
+    SameUuidSameVmac,
+    /// The requested UUID owns another VMAC; the requested VMAC is free.
+    SameUuidMovedVmac,
+    /// The requested VMAC belongs to a different UUID.
+    ConflictingVmac,
+}
+
+impl super::HubClientRegistrationDecision {
+    pub(super) fn admission_kind(&self, requested_vmac: Vmac) -> ScHubRegistrationKind {
+        match self {
+            Self::Accept | Self::NakMaxClients => ScHubRegistrationKind::Initial,
+            Self::Replace { old_vmac } if *old_vmac == requested_vmac => {
+                ScHubRegistrationKind::SameUuidSameVmac
+            }
+            Self::Replace { .. } => ScHubRegistrationKind::SameUuidMovedVmac,
+            Self::NakDuplicateVmac => ScHubRegistrationKind::ConflictingVmac,
+        }
+    }
+}
+
 /// Bounded input to the admin admission policy.
 ///
-/// Everything here is a claim observed inside the TLS channel, plus one
-/// boolean channel fact — never certificate authentication:
+/// Request claims and channel facts are separate from the current locked
+/// registration classification; none binds a claimed UUID to a certificate:
 ///
 /// - `claimed_vmac` / `claimed_uuid` / `claimed_max_bvlc` /
 ///   `claimed_max_npdu` are the Connect-Request payload bytes. Device UUID
@@ -152,6 +184,10 @@ impl ScHubAdmissionLimits {
 /// nonzero limits) and reserved-VMAC screening reach the policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScHubAdmissionInput {
+    /// Current registry relationship, classified before this policy executes
+    /// under the same lock as the eventual registration decision. An Allow
+    /// still applies standard collision/capacity rules; it does not force accept.
+    pub registration: ScHubRegistrationKind,
     /// Source socket of the TCP connection carrying the request.
     pub peer: SocketAddr,
     /// VMAC claimed in the Connect-Request payload.
@@ -441,6 +477,7 @@ mod tests {
 
     fn allow_input(vmac: Vmac) -> ScHubAdmissionInput {
         ScHubAdmissionInput {
+            registration: ScHubRegistrationKind::Initial,
             peer: "127.0.0.1:47808".parse().unwrap(),
             claimed_vmac: vmac,
             claimed_uuid: [0x11; 16],
