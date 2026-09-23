@@ -90,7 +90,7 @@ fn global_pool_exhausts_across_peers_and_roles_without_duplicate_ids() {
         let metadata = if index % 2 == 0 {
             requester(peer(index as u8), TerminalPolicy::SimpleAck)
         } else {
-            LeaseMetadata::server_notification(
+            LeaseMetadata::notification(
                 CanonicalPeer::routed(index as u16 + 1, &[index as u8]),
                 SERVICE,
             )
@@ -112,10 +112,7 @@ fn notification_abort_releases_for_reuse_and_stale_cleanup_cannot_release_replac
     let coordinator = OutboundTransactionCoordinator::new();
     let expected_peer = peer(1);
     let original = coordinator
-        .reserve(LeaseMetadata::server_notification(
-            expected_peer.clone(),
-            SERVICE,
-        ))
+        .reserve(LeaseMetadata::notification(expected_peer.clone(), SERVICE))
         .unwrap();
     assert_eq!(
         coordinator.admit(&expected_peer, &abort(original.invoke_id(), true)),
@@ -413,14 +410,11 @@ fn segmented_complex_ack_defers_service_validation_and_completion_is_generation_
 }
 
 #[test]
-fn server_notification_accepts_simple_ack_but_never_complex_ack() {
+fn notification_accepts_simple_ack_but_never_complex_ack() {
     let coordinator = OutboundTransactionCoordinator::new();
     let expected_peer = peer(3);
     let token = coordinator
-        .reserve(LeaseMetadata::server_notification(
-            expected_peer.clone(),
-            SERVICE,
-        ))
+        .reserve(LeaseMetadata::notification(expected_peer.clone(), SERVICE))
         .unwrap();
 
     assert_eq!(

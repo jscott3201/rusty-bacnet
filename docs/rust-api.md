@@ -1674,3 +1674,88 @@ registration) stay on `BipTransport`; the endpoint BBMD setters only stage
 pre-start state and are experimental (construction-only, no wire proof).
 BIPv6/Ethernet have no endpoint builder — keep the standalone path there and
 do not expect identical administration across data links.
+
+
+### Bounded endpoint source ReadProperty reporting
+
+On direct B/IP IPv4, combine `BipEndpointBuilder::static_source_audit_recipient`
+with `EndpointSession::with_source_audit_reporter`. The local database must have
+one Device and the selected Audit Reporter. Configure the Reporter's READ bit
+and audit level before startup; both `ClientOnly` and `Both` sessions support
+confirmed and unconfirmed notifications. Startup itself emits nothing.
+
+```rust
+use std::net::{Ipv4Addr, SocketAddrV4};
+use bacnet_endpoint::{bip::BipEndpointBuilder, DeviceIdentity, SessionRole};
+use bacnet_objects::{audit::AuditReporterObject, traits::BACnetObject};
+use bacnet_types::{bitstring::AuditOperationFlags, enums::{AuditLevel, AuditOperation, ObjectType}, primitives::ObjectIdentifier};
+# async fn example() -> Result<(), bacnet_types::error::Error> {
+let mut db = DeviceIdentity::new(123, 42)?.build_database()?;
+let mut reporter = AuditReporterObject::new(1, "Source READ")?;
+reporter.set_audit_level(AuditLevel::AUDIT_ALL)?;
+let mut operations = AuditOperationFlags::empty();
+operations.insert(AuditOperation::READ);
+reporter.set_auditable_operations(operations);
+reporter.set_issue_confirmed_notifications(true);
+let source = reporter.object_identifier();
+db.add(Box::new(reporter))?;
+let mut session = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
+    .role(SessionRole::ClientOnly).database(db)
+    .static_source_audit_recipient(
+        ObjectIdentifier::new(ObjectType::DEVICE, 999)?,
+        SocketAddrV4::new(Ipv4Addr::LOCALHOST, 47808),
+    ).build_session()?.with_source_audit_reporter(source);
+session.start().await?;
+// Use session.client().unwrap().read_property(...) for a direct IPv4 target.
+session.stop().await?;
+# Ok(())
+# }
+```
+
+`Monitored_Objects` must be absent for this profile: empty and NULL-only lists
+are also rejected, atomically before startup consumes the transport. Ownership
+without a static recipient remains valid with selectors and emits no source
+records. Source policy is checked and sampled before each admitted READ; a later
+configuration change does not rewrite an in-flight request's record. The local
+`AUDIT_CONFIG` classification excludes `Present_Value` and includes other
+properties. Priority filters do not filter READ. Requests selected for source
+reporting reject routed, broadcast, or non-IPv4 destinations before traffic.
+
+A record contains the local source Device, one request-time timestamp, the actual
+ReadProperty invoke ID shared across retries, and the requested object/property/
+array index. With no remote Device cache, its target is the exact direct BACnet
+address, including the UDP port. The configured Device identifies the logger
+sink; it is never substituted for the operation target. Unknown user, source
+object, remote timestamp, priority and property values are omitted. Independent
+source and target reports may both arrive; address-based source target identity
+need not correlate with a target record that knows its own Device.
+
+A valid matching ACK has no Result. Peer Error class/code is preserved when
+representable. Local records use Clause 18.7 COMMUNICATION codes for timeout and
+known Abort/Reject reasons, including proprietary reasons. Reserved or unmapped
+reasons (including Reject reason 10), malformed/mismatching ACKs, and ambiguous
+local transport failures use COMMUNICATION/OTHER. These are record fields, never
+Error PDUs sent to the peer. An already-observed peer terminal takes precedence
+over a contradictory local send error. Rejected pre-send admission is silent;
+a later retry failure retains evidence of earlier transmission attempts.
+
+Once an audited request transfers to session ownership, dropping its caller
+waiter does not cancel it: the session observes the response or deadline and
+records once. Ordinary requests retain caller-owned RAII cancellation. There
+are 64 whole-operation slots, acquired before asynchronous policy reads, and a
+separate shared pool of 64 active audit notifications. ReadProperty results do
+not wait for audit delivery. Notifications have one absolute three-second
+send/ACK deadline, no retries and no ordinary-record backlog. Expired or canceled
+queued notification commands are discarded before transport execution; a send
+already in progress may have reached the peer when cancellation wins.
+
+Overload, encoding, send and acknowledgment failures update the selected
+Reporter's instance-owned Reliability without replacing the ReadProperty result.
+Older successful deliveries cannot erase newer failures. `stop()` seals
+admission, cancels operations and notifications, and joins owned workers; drop
+cancels synchronously. Shutdown can lose undelivered records. This is not a
+durable delivery promise or full Audit Reporting/BIBB/BTL conformance. Source
+AUDITING_FAILURE summaries are deferred to #732. Device
+`Audit_Notification_Recipient`, other source operations, multiple Reporters,
+selector semantics, batching/send delay, standalone source ownership and other
+transports remain outside this subset.

@@ -270,7 +270,7 @@ async fn recipient_preserves_all_source_preflight_failures_and_retry() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn retained_config_has_no_send_lease_or_health_effect_through_stop_and_drop() {
+async fn retained_config_sets_availability_without_clearing_failure_or_sending() {
     for role in [SessionRole::ClientOnly, SessionRole::Both] {
         for configured in [false, true] {
             let (session, _peer, observed) = configured_session(role);
@@ -284,7 +284,7 @@ async fn retained_config_has_no_send_lease_or_health_effect_through_stop_and_dro
             status.set_configured(configured);
             // Existing failures must not be cleared by static configuration.
             status.complete_delivery(status.begin_delivery(), false);
-            let before = reliability(reporter);
+            let expected = PropertyValue::Enumerated(Reliability::COMMUNICATION_FAILURE.to_raw());
             let epoch = status.begin_delivery();
             let auditing_failure_epoch = status.auditing_failure_epoch();
             let mut session = session
@@ -299,7 +299,7 @@ async fn retained_config_has_no_send_lease_or_health_effect_through_stop_and_dro
             assert_eq!(session.active_leases(), 0);
             {
                 let db = session.database.as_ref().unwrap().read().await;
-                assert_eq!(reliability(db.get(&selected()).unwrap()), before);
+                assert_eq!(reliability(db.get(&selected()).unwrap()), expected);
             }
             let weak = Arc::downgrade(session.database.as_ref().unwrap());
             session.stop().await.unwrap();
@@ -399,7 +399,10 @@ async fn direct_bip_ipv4_client_only_and_both_start_stop_silently() {
                     .unwrap();
                 assert!(std::ptr::eq(original, reporter));
                 assert!(Arc::ptr_eq(&status, &reporter.status_internal()));
-                assert_eq!(reliability(reporter), configuration_error);
+                assert_eq!(
+                    reliability(reporter),
+                    PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw())
+                );
                 let device = db.get(&oid(ObjectType::DEVICE, 123)).unwrap();
                 assert!(!device
                     .property_list()

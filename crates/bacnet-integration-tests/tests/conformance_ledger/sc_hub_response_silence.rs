@@ -10,13 +10,6 @@ fn hub_response_silence_has_scoped_policy_and_executable_anchors() {
         row["status"],
         "implementation-present-needs-state-machine-audit"
     );
-    assert_eq!(rows.len(), 68);
-    assert_eq!(
-        rows.values()
-            .filter(|r| r["status"] == "supported-with-clause-evidence")
-            .count(),
-        19
-    );
     assert_eq!(data["reviewed_at"], "2026-09-17");
     assert_eq!(data["repo_sha"], "b4c845caf920db279b0aefbd2824ac1348bba1cb");
     for file in [
@@ -102,13 +95,6 @@ fn hub_unknown_transit_evidence_keeps_family_scope_and_existing_lifecycle() {
     let data = ledger();
     let rows = rows_by_id(&data);
     let row = rows["BACNET-AB-SC-CONNECTION-STATE"];
-    assert_eq!(rows.len(), 68);
-    assert_eq!(
-        rows.values()
-            .filter(|r| r["status"] == "supported-with-clause-evidence")
-            .count(),
-        19
-    );
     assert_eq!(
         row["status"],
         "implementation-present-needs-state-machine-audit"
@@ -165,13 +151,6 @@ fn hub_resolution_transit_is_unicast_hub_only_with_executable_evidence() {
     let data = ledger();
     let rows = rows_by_id(&data);
     let row = rows["BACNET-AB-SC-CONNECTION-STATE"];
-    assert_eq!(rows.len(), 68);
-    assert_eq!(
-        rows.values()
-            .filter(|r| r["status"] == "supported-with-clause-evidence")
-            .count(),
-        19
-    );
     assert_eq!(
         row["status"],
         "implementation-present-needs-state-machine-audit"

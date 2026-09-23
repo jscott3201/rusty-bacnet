@@ -109,12 +109,16 @@ impl SessionToken {
 /// move across tasks.
 ///
 /// Service scope is deliberately narrow: `ReadProperty` only. All three
-/// variants preserve routing, data attributes, and RB-07 provenance via the
-/// inner requester (pass-through, no new decisions).
+/// variants preserve data attributes and RB-07 provenance. When source READ
+/// reporting is selected, only direct B/IP IPv4 unicast targets are admitted.
+/// Audited calls are session-owned before egress: dropping their caller does not
+/// cancel an admitted request or its terminal observation. Other calls retain
+/// caller-owned cancellation. Stop/drop may discard undelivered source records.
 #[derive(Clone)]
 pub struct ClientRoleHandle {
     token: Weak<SessionToken>,
     requester: EndpointRequester,
+    source_read: Option<Weak<crate::source_read::SourceRead>>,
 }
 
 impl ClientRoleHandle {
@@ -123,7 +127,13 @@ impl ClientRoleHandle {
         Self {
             token: Arc::downgrade(token),
             requester,
+            source_read: None,
         }
+    }
+
+    pub(crate) fn with_source_read(mut self, source: &Arc<crate::source_read::SourceRead>) -> Self {
+        self.source_read = Some(Arc::downgrade(source));
+        self
     }
 
     fn session(&self) -> Result<Arc<SessionToken>, Error> {
@@ -150,17 +160,16 @@ impl ClientRoleHandle {
         property_identifier: PropertyIdentifier,
         property_array_index: Option<u32>,
     ) -> Result<bacnet_services::read_property::ReadPropertyACK, Error> {
-        self.check_open()?;
-        // RB-07 compat: provenance passes through `ReceivedApdu` on the
-        // reply path; no new decision is made here.
-        self.requester
-            .read_property(
-                destination_mac,
-                object_identifier,
-                property_identifier,
-                property_array_index,
-            )
-            .await
+        self.read_property_with_destination(
+            EndpointApduDestination::Direct {
+                destination_mac: bacnet_types::MacAddr::from_slice(destination_mac),
+            },
+            Vec::new(),
+            object_identifier,
+            property_identifier,
+            property_array_index,
+        )
+        .await
     }
 
     /// Routed ReadProperty with pass-through data attributes.
@@ -179,18 +188,18 @@ impl ClientRoleHandle {
         property_identifier: PropertyIdentifier,
         property_array_index: Option<u32>,
     ) -> Result<bacnet_services::read_property::ReadPropertyACK, Error> {
-        self.check_open()?;
-        self.requester
-            .read_property_routed(
-                router_mac,
+        self.read_property_with_destination(
+            EndpointApduDestination::Routed {
+                router_mac: bacnet_types::MacAddr::from_slice(router_mac),
                 destination_network,
-                destination_mac,
-                data_attributes,
-                object_identifier,
-                property_identifier,
-                property_array_index,
-            )
-            .await
+                destination_mac: bacnet_types::MacAddr::from_slice(destination_mac),
+            },
+            data_attributes,
+            object_identifier,
+            property_identifier,
+            property_array_index,
+        )
+        .await
     }
 
     /// Explicit-destination ReadProperty with pass-through attributes.
@@ -207,6 +216,19 @@ impl ClientRoleHandle {
         property_array_index: Option<u32>,
     ) -> Result<bacnet_services::read_property::ReadPropertyACK, Error> {
         self.check_open()?;
+        if let Some(source) = &self.source_read {
+            let source = source.upgrade().ok_or_else(shutdown_error)?;
+            return source
+                .read(
+                    &self.requester,
+                    destination,
+                    data_attributes,
+                    object_identifier,
+                    property_identifier,
+                    property_array_index,
+                )
+                .await;
+        }
         self.requester
             .read_property_with_destination(
                 destination,
@@ -397,7 +419,7 @@ pub fn decode_terminal(received: &ReceivedApdu) -> Option<Apdu> {
 /// Classifies whether an admitted lease belongs to the client requester.
 ///
 /// Equal inbound/outbound numeric IDs are legal: ownership (`Requester` vs
-/// `ServerNotification`), not the numeric value, selects the consumer.
+/// `Notification`), not the numeric value, selects the consumer.
 #[doc(hidden)]
 pub fn is_requester_lease(admission: &bacnet_endpoint_core::coordinator::Admission) -> bool {
     admission.metadata().owner() == bacnet_endpoint_core::coordinator::LeaseOwner::Requester

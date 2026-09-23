@@ -178,12 +178,14 @@ impl BipEndpointBuilder {
         self
     }
 
-    /// Retains one static destination for the endpoint-owned source Reporter.
+    /// Selects the direct destination for bounded source ReadProperty reporting.
     ///
-    /// **Non-conforming groundwork only**, private to the endpoint: this is not
-    /// the writable Device `Audit_Notification_Recipient` property and does not
-    /// establish Audit Reporting support/conformance. It sends nothing, creates
-    /// no source records, and changes no Reporter Reliability/configured status.
+    /// This endpoint-only subset is not the writable Device
+    /// `Audit_Notification_Recipient` property or full Audit Reporting conformance.
+    /// With a selected Reporter, READ flags and Audit_Level govern source records;
+    /// both confirmed and unconfirmed notification modes are honored. Startup is
+    /// silent and marks valid configuration available without clearing old failures.
+    /// Monitored_Objects must be absent (even an empty list is unsupported).
     ///
     /// Direct B/IP IPv4 only: `device` must identify a concrete addressable Device
     /// (no wildcard instance), and `address` must have a nonzero UDP port.
@@ -199,7 +201,16 @@ impl BipEndpointBuilder {
     /// atomically validates that selection, local database and client-capable
     /// role before consuming lifecycle or starting transport. A linkage error
     /// leaves the session ready for correction/retry via its existing setters.
-    /// Source ownership without a recipient remains supported.
+    /// Source ownership without a recipient remains supported and emits no records.
+    ///
+    /// Audited direct ReadProperty calls transfer to session ownership before
+    /// egress admission: dropping the caller does not cancel admitted work.
+    /// There are 64 whole-operation slots and 64 shared audit-delivery slots;
+    /// notification send/ACK has one three-second deadline, without retries or an
+    /// outbox. Delivery failures affect Reporter health, not the ReadProperty
+    /// result. Stop/drop may lose undelivered records. A transport send already
+    /// in progress may have reached its peer when cancellation wins. Source loss
+    /// summaries and other operation/transport families remain unsupported.
     ///
     /// ```no_run
     /// use std::net::{Ipv4Addr, SocketAddrV4};
@@ -378,6 +389,7 @@ impl BipEndpointBuilder {
         let session = self.session.clone();
         let database = self.database.take();
         let identity = self.identity.take();
+        let broadcast = self.broadcast_address;
         let transport = self.build_transport()?;
         let mut endpoint = EndpointSession::new(transport, role, session)?;
         if let Some(db) = database {
@@ -387,7 +399,7 @@ impl BipEndpointBuilder {
             endpoint = endpoint.with_identity(id);
         }
         if let Some(recipient) = recipient {
-            endpoint = endpoint.with_static_source_audit_recipient(recipient);
+            endpoint = endpoint.with_static_source_audit_recipient(recipient, broadcast);
         }
         Ok(endpoint)
     }

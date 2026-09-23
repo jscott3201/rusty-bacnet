@@ -35,18 +35,23 @@ use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue}
 
 struct SourceReporter {
     wrapped: Box<dyn BACnetObject>,
+    source_emission: bool,
 }
 
 // The only production caller is EndpointSession's complete synchronous preflight.
 // This is deliberately not pub or pub(crate): only the private session module
 // can install the adapter, and no cross-crate capability can mint source state.
-pub(super) fn install(slot: &mut Box<dyn BACnetObject>) -> Result<(), Error> {
+pub(super) fn install(
+    slot: &mut Box<dyn BACnetObject>,
+    source_emission: bool,
+) -> Result<(), Error> {
     // Allocate everything before touching the live entry. An inert built-in
     // Reporter is just a temporary move placeholder, never queried or published.
     // After the swap there is no allocation, fallible operation, await, or user
     // callback (including Drop: the overwritten placeholder is our built-in).
     let mut adapter = Box::new(SourceReporter {
         wrapped: Box::new(AuditReporterObject::new(0, "")?),
+        source_emission,
     });
     std::mem::swap(slot, &mut adapter.wrapped);
     *slot = adapter;
@@ -69,6 +74,11 @@ impl BACnetObject for SourceReporter {
         selectors: Option<Vec<BACnetObjectSelector>>,
         priorities: BACnetPriorityFilter,
     ) -> Result<(), Error> {
+        if self.source_emission && selectors.is_some() {
+            return Err(Error::Encoding(
+                "source READ does not support Monitored_Objects".into(),
+            ));
+        }
         self.wrapped
             .configure_audit_reporter_internal(level, operations, confirmed, selectors, priorities)
     }

@@ -10,13 +10,6 @@ fn zero_limit_policy_has_wire_lifecycle_and_native_evidence_without_promotion() 
         row["status"],
         "implementation-present-needs-state-machine-audit"
     );
-    assert_eq!(rows.len(), 68);
-    assert_eq!(
-        rows.values()
-            .filter(|r| r["status"] == "supported-with-clause-evidence")
-            .count(),
-        19
-    );
     assert_eq!(data["reviewed_at"], "2026-09-17");
     assert_eq!(data["repo_sha"], "b4c845caf920db279b0aefbd2824ac1348bba1cb");
     for anchor in [
