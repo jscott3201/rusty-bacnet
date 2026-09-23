@@ -1,6 +1,7 @@
 //! Source ownership is configuration only: no traffic, records or worker lifecycle.
 
 use super::*;
+use bacnet_objects::audit::AuditReporterObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::ReceivedNpdu;
@@ -107,6 +108,9 @@ fn source(db: &ObjectDatabase, oid: ObjectIdentifier) -> bool {
     }
 }
 
+#[path = "source_reporter_forwarding_tests.rs"]
+mod forwarding;
+
 async fn success(role: SessionRole) {
     let (session, peer, observed) = session(role);
     let mut session = session
@@ -200,6 +204,7 @@ async fn rejected(
                             .read_property(PropertyIdentifier::AUDIT_SOURCE_REPORTER, None)
                             .ok(),
                         object.is_deleteable(),
+                        std::ptr::from_ref(object).cast::<()>(),
                     )
                 })
                 .collect::<Vec<_>>(),
@@ -222,8 +227,13 @@ async fn rejected(
         assert_eq!(observed.sends.load(Ordering::SeqCst), 0);
         if let Some(before) = &before {
             let db = session.database.as_ref().unwrap().read().await;
-            for (oid, value, deleteable) in before {
+            for (oid, value, deleteable, original) in before {
                 let object = db.get(oid).unwrap();
+                assert_eq!(
+                    *original,
+                    std::ptr::from_ref(object).cast::<()>(),
+                    "validation replaced an object"
+                );
                 assert_eq!(
                     &object
                         .read_property(PropertyIdentifier::AUDIT_SOURCE_REPORTER, None)
@@ -308,14 +318,20 @@ async fn device_validation_is_atomic_and_correctable() {
 struct ForeignReporter {
     oid: ObjectIdentifier,
     source: Option<bool>,
+    capability: Option<AuditReporterObject>,
 }
 
 impl BACnetObject for ForeignReporter {
+    fn audit_reporter_internal(&self) -> Option<&AuditReporterObject> {
+        self.capability.as_ref()
+    }
     fn object_identifier(&self) -> ObjectIdentifier {
         self.oid
     }
     fn object_name(&self) -> &str {
-        "Foreign Reporter"
+        self.capability
+            .as_ref()
+            .map_or("Foreign Reporter", |reporter| reporter.object_name())
     }
     fn read_property(&self, p: PropertyIdentifier, _: Option<u32>) -> Result<PropertyValue, Error> {
         if p == PropertyIdentifier::AUDIT_SOURCE_REPORTER {
@@ -341,13 +357,20 @@ impl BACnetObject for ForeignReporter {
 
 #[tokio::test]
 async fn selection_validation_is_atomic_and_correctable() {
-    for case in ["absent", "wrong type", "non capable"] {
+    for case in [
+        "absent",
+        "wrong type",
+        "non capable",
+        "mismatched capability",
+    ] {
         let (session, _peer, observed) = session(SessionRole::Both);
         let mut db = database();
-        if case == "non capable" {
+        if matches!(case, "non capable" | "mismatched capability") {
             db.add(Box::new(ForeignReporter {
                 oid: selected(),
                 source: Some(false),
+                capability: (case == "mismatched capability")
+                    .then(|| AuditReporterObject::new(3, "Wrong capability identity").unwrap()),
             }))
             .unwrap();
         }
@@ -381,6 +404,7 @@ async fn conflicting_or_unknown_foreign_source_is_rejected_before_mutation() {
         db.add(Box::new(ForeignReporter {
             oid: target(),
             source: state,
+            capability: None,
         }))
         .unwrap();
         let mut session = session
@@ -403,13 +427,23 @@ async fn conflicting_or_unknown_foreign_source_is_rejected_before_mutation() {
 async fn existing_source_is_idempotent_but_conflicting_selection_is_not() {
     let (session, _peer, observed) = session(SessionRole::Both);
     let mut db = database();
-    AuditReporterObject::designate_source_internal(&mut db, target()).unwrap();
+    db.add(Box::new(ForeignReporter {
+        oid: target(),
+        source: Some(true),
+        capability: Some(AuditReporterObject::new(2, "Existing source").unwrap()),
+    }))
+    .unwrap();
     let mut session = session
         .with_database(db)
         .with_source_audit_reporter(selected());
     rejected(&mut session, &observed, "conflicting source").await;
     session = session.with_source_audit_reporter(target());
     session.start().await.unwrap();
+    {
+        let db = session.database.as_ref().unwrap().read().await;
+        assert!(source(&db, target()));
+        assert!(!db.get(&target()).unwrap().is_deleteable());
+    }
     session.stop().await.unwrap();
 }
 
@@ -433,11 +467,19 @@ async fn source_database_is_released_on_drop_without_stop() {
 async fn duplicate_sources_assembled_locally_are_rejected_atomically() {
     let (session, _peer, observed) = session(SessionRole::Both);
     let mut first = database();
-    let mut second = database();
-    AuditReporterObject::designate_source_internal(&mut first, selected()).unwrap();
-    AuditReporterObject::designate_source_internal(&mut second, target()).unwrap();
-    // Local database assembly permits moving/replacing objects, unlike wire CREATE.
-    first.add(second.remove(&target()).unwrap()).unwrap();
+    // Downstream objects may already claim source roles; no built-in promotion
+    // primitive is needed (or available) to exercise duplicate validation.
+    for instance in [1, 2] {
+        first
+            .add(Box::new(ForeignReporter {
+                oid: oid(ObjectType::AUDIT_REPORTER, instance),
+                source: Some(true),
+                capability: Some(
+                    AuditReporterObject::new(instance, format!("Source-{instance}")).unwrap(),
+                ),
+            }))
+            .unwrap();
+    }
     let mut session = session
         .with_database(first)
         .with_source_audit_reporter(selected());
@@ -453,4 +495,22 @@ async fn source_selection_cannot_change_after_start() {
         .with_source_audit_reporter(selected());
     session.start().await.unwrap();
     let _ = session.with_source_audit_reporter(target());
+}
+
+#[tokio::test]
+async fn repeated_pre_start_selection_only_wraps_the_final_choice() {
+    let (session, _peer, _) = session(SessionRole::ClientOnly);
+    let mut session = session
+        .with_database(database())
+        .with_source_audit_reporter(selected())
+        .with_source_audit_reporter(target());
+    session.start().await.unwrap();
+    {
+        let db = session.database.as_ref().unwrap().read().await;
+        assert!(!source(&db, selected()));
+        assert!(db.get(&selected()).unwrap().is_deleteable());
+        assert!(source(&db, target()));
+        assert!(!db.get(&target()).unwrap().is_deleteable());
+    }
+    session.stop().await.unwrap();
 }

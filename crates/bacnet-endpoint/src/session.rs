@@ -52,14 +52,17 @@ use bacnet_endpoint_core::endpoint_ingress::{
     ClassifierExit, EndpointIngress, PolicyOutcome, PolicyReason,
 };
 use bacnet_network::layer::ReceivedApdu;
-use bacnet_objects::audit::AuditReporterObject;
 use bacnet_objects::database::ObjectDatabase;
+use bacnet_objects::traits::BACnetObject;
 use bacnet_transport::port::TransportPort;
-use bacnet_types::enums::ObjectType;
+use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::ObjectIdentifier;
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
 use tokio::task::JoinHandle;
+
+#[path = "source_reporter.rs"]
+mod source_reporter;
 
 use crate::roles::{
     admit_once, decode_terminal, inbound_canonical_peer, is_requester_lease, ClientRoleHandle,
@@ -337,6 +340,12 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// Validation failure changes no flags and leaves configuration retryable.
     /// Success makes the selected Reporter's source property true and prevents
     /// its deletion; other Reporters remain targets.
+    /// The adapter and its construction are private to this endpoint owner;
+    /// the wrapped object's Reporter configuration capability remains unchanged.
+    ///
+    /// ```compile_fail,E0603
+    /// use bacnet_endpoint::session::source_reporter::SourceReporter;
+    /// ```
     ///
     /// ```no_run
     /// use bacnet_endpoint::{identity::DeviceIdentity, session::{EndpointSession, SessionConfig, SessionRole}};
@@ -424,7 +433,45 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                 "source Audit Reporter local Device does not match session identity".into(),
             ));
         }
-        AuditReporterObject::designate_source_internal(db, selected)
+        if selected.object_type() != ObjectType::AUDIT_REPORTER {
+            return Err(Error::Encoding(
+                "source selection must be an Audit Reporter".into(),
+            ));
+        }
+        let object = db.get(&selected).ok_or_else(|| {
+            Error::Encoding("selected source Audit Reporter is absent from the database".into())
+        })?;
+        if !object
+            .audit_reporter_internal()
+            .is_some_and(|reporter| reporter.object_identifier() == selected)
+        {
+            return Err(Error::Encoding(
+                "selected object lacks the Audit Reporter capability".into(),
+            ));
+        }
+        for (oid, object) in db.iter_objects() {
+            if oid != selected && oid.object_type() == ObjectType::AUDIT_REPORTER {
+                match object.read_property(PropertyIdentifier::AUDIT_SOURCE_REPORTER, None) {
+                    Ok(PropertyValue::Boolean(false)) => {}
+                    Ok(PropertyValue::Boolean(true)) => {
+                        return Err(Error::Encoding(
+                            "database already contains a conflicting source Audit Reporter".into(),
+                        ))
+                    }
+                    _ => {
+                        return Err(Error::Encoding(
+                            "cannot determine another Audit Reporter's source ownership".into(),
+                        ))
+                    }
+                }
+            }
+        }
+        // Only this fully validated owner can install the private adapter. The
+        // existing slot is wrapped in place: no remove/add, rebind or index churn.
+        source_reporter::install(
+            db.get_mut(&selected)
+                .expect("selected Reporter was validated"),
+        )
     }
 
     /// Starts ingress, roles and the single dispatch consumer once.

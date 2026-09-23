@@ -29,8 +29,6 @@ mod persistence;
 mod receipt;
 mod reporter_metadata;
 mod reporter_object;
-#[doc(hidden)]
-pub use reporter_object::SourceReporterBinding;
 mod reporter_status;
 pub use notification::AuditLogNotificationSink;
 use persistence::{validate_record, validate_snapshot};
@@ -636,6 +634,22 @@ impl BACnetObject for AuditLogObject {
 // ---------------------------------------------------------------------------
 
 /// BACnet AuditReporter object — configures which audit notifications to send.
+///
+/// Ordinary Reporters are always targets. Source ownership is an endpoint-private
+/// adapter, not a mutable flag or capability available from this crate.
+///
+/// ```compile_fail,E0599
+/// use bacnet_objects::{audit::AuditReporterObject, database::ObjectDatabase, traits::BACnetObject};
+/// let reporter = AuditReporterObject::new(1, "Reporter").unwrap();
+/// let oid = reporter.object_identifier();
+/// let mut db = ObjectDatabase::new();
+/// db.add(Box::new(reporter)).unwrap();
+/// AuditReporterObject::designate_source_internal(&mut db, oid).unwrap();
+/// ```
+///
+/// ```compile_fail,E0432
+/// use bacnet_objects::audit::SourceReporterBinding;
+/// ```
 pub struct AuditReporterObject {
     oid: ObjectIdentifier,
     name: String,
@@ -646,7 +660,6 @@ pub struct AuditReporterObject {
     audit_priority_filter: BACnetPriorityFilter,
     issue_confirmed_notifications: bool,
     monitored_objects: Option<Vec<BACnetObjectSelector>>,
-    source_reporter: bool,
 }
 
 impl AuditReporterObject {
@@ -663,7 +676,6 @@ impl AuditReporterObject {
             audit_priority_filter: BACnetPriorityFilter::all(),
             issue_confirmed_notifications: false,
             monitored_objects: None,
-            source_reporter: false,
         })
     }
 

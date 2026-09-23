@@ -2,82 +2,9 @@
 
 use super::*;
 
-/// Opaque, one-use authorization from database-wide source validation.
-/// No public constructor or general mutable source flag is exposed.
-#[doc(hidden)]
-pub struct SourceReporterBinding {
-    oid: ObjectIdentifier,
-}
-
-impl AuditReporterObject {
-    /// Designate the sole source Reporter under exclusive pre-start DB ownership.
-    /// The endpoint separately validates its client role and local Device. This
-    /// changes ownership only, never filters, destinations, records or delivery.
-    #[doc(hidden)]
-    pub fn designate_source_internal(
-        db: &mut crate::database::ObjectDatabase,
-        selected: ObjectIdentifier,
-    ) -> Result<(), Error> {
-        if selected.object_type() != ObjectType::AUDIT_REPORTER {
-            return Err(Error::Encoding(
-                "source selection must be an Audit Reporter".into(),
-            ));
-        }
-        let object = db.get(&selected).ok_or_else(|| {
-            Error::Encoding("selected source Audit Reporter is absent from the database".into())
-        })?;
-        if !object
-            .audit_reporter_internal()
-            .is_some_and(|reporter| reporter.oid == selected)
-        {
-            return Err(Error::Encoding(
-                "selected object lacks the Audit Reporter capability".into(),
-            ));
-        }
-        // Include downstream Reporters without our capability: their visible
-        // source property must also rule out a conflict. Unknown state fails closed.
-        for (oid, object) in db.iter_objects() {
-            if oid != selected && oid.object_type() == ObjectType::AUDIT_REPORTER {
-                match object.read_property(PropertyIdentifier::AUDIT_SOURCE_REPORTER, None) {
-                    Ok(PropertyValue::Boolean(false)) => {}
-                    Ok(PropertyValue::Boolean(true)) => {
-                        return Err(Error::Encoding(
-                            "database already contains a conflicting source Audit Reporter".into(),
-                        ))
-                    }
-                    _ => {
-                        return Err(Error::Encoding(
-                            "cannot determine another Audit Reporter's source ownership".into(),
-                        ))
-                    }
-                }
-            }
-        }
-        // No mutation until every database-wide check has passed. The hook is
-        // opt-in and atomic on failure; the built-in Reporter only sets one bit.
-        db.get_mut(&selected)
-            .expect("selected Reporter was validated under exclusive database ownership")
-            .bind_audit_source_internal(SourceReporterBinding { oid: selected })
-    }
-}
-
 impl BACnetObject for AuditReporterObject {
     fn audit_reporter_internal(&self) -> Option<&AuditReporterObject> {
         Some(self)
-    }
-
-    fn bind_audit_source_internal(&mut self, binding: SourceReporterBinding) -> Result<(), Error> {
-        if binding.oid != self.oid {
-            return Err(Error::Encoding(
-                "source binding belongs to another Audit Reporter".into(),
-            ));
-        }
-        self.source_reporter = true;
-        Ok(())
-    }
-
-    fn is_deleteable(&self) -> bool {
-        !self.source_reporter
     }
 
     fn configure_audit_reporter_internal(
@@ -157,7 +84,7 @@ impl BACnetObject for AuditReporterObject {
                 Ok(PropertyValue::Enumerated(self.audit_level.to_raw()))
             }
             p if p == PropertyIdentifier::AUDIT_SOURCE_REPORTER => {
-                Ok(PropertyValue::Boolean(self.source_reporter))
+                Ok(PropertyValue::Boolean(false))
             }
             p if p == PropertyIdentifier::AUDITABLE_OPERATIONS => {
                 let (unused_bits, data) = self.auditable_operations.to_bacnet();
