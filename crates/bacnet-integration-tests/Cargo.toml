@@ -7,6 +7,7 @@ license.workspace = true
 publish = false
 
 [dev-dependencies]
+syn = { version = "2", features = ["full"] }
 bacnet-types.workspace = true
 bacnet-encoding.workspace = true
 bacnet-services.workspace = true
