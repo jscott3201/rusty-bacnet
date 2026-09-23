@@ -87,11 +87,14 @@ class HubConflictAdmissionTests(mtls.MtlsFixture):
         self.addAsyncCleanup(self.close_peer, source)
         self.addAsyncCleanup(self.close_peer, target)
         for endpoint, identity in ((source, 0x21), (target, 0x22)):
-            self.assertEqual((await self.connect(endpoint, bytes([identity]) * 6,
-                                                 bytes([identity]) * 16))[:4], b"\x07\0\x22\x33")
+            # Advertise small, concrete limits so the independent short-frame
+            # WebSocket encoder can exercise an oversized native relay request.
+            await self.send(endpoint[1], b"\x06\0\x22\x33" + bytes([identity]) * 6
+                            + bytes([identity]) * 16 + b"\0\x10\0\x10")
+            self.assertEqual((await self.binary(endpoint[0]))[:4], b"\x07\0\x22\x33")
         for function in (1, 13):
             await self.send(source[1], bytes([function, 4, 0, 1]) + b"\x23" * 6 + b"\x01\0")
-            await self.send(source[1], bytes([function, 4, 0, 2]) + b"\x22" * 6 + b"\x01" * 1490)
+            await self.send(source[1], bytes([function, 4, 0, 2]) + b"\x22" * 6 + b"\x01" * 20)
         # Ordered response proves all four earlier requests were dispatched.
         await self.send(source[1], b"\x0a\0\x66\x77")
         self.assertEqual(await self.binary(source[0]), b"\x0b\0\x66\x77")
