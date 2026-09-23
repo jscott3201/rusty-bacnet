@@ -51,6 +51,34 @@ def hub_kwargs(**overrides: Any) -> Any:
 class HubConstructorTests(unittest.TestCase):
     """Sync constructor validation: everything fails before bind, without I/O."""
 
+    def test_probe_and_broadcast_configuration_validates_without_io(self):
+        with socket.socket() as occupied:
+            occupied.bind(("127.0.0.1", 0))
+            occupied.listen()
+            ScHub(**hub_kwargs(
+                listen=f"127.0.0.1:{occupied.getsockname()[1]}",
+                probe_scan_interval_ms=25, probe_idle_age_ms=75,
+                probe_ack_age_ms=40, probe_send_budget_ms=30, unicast_send_budget_ms=25,
+                broadcast_sender_burst=2, broadcast_sender_per_second=1,
+                broadcast_global_burst=3, broadcast_global_per_second=1,
+            ))
+
+    def test_invalid_probe_unicast_and_rate_settings_fail_before_io(self):
+        timing = ("probe_scan_interval_ms", "probe_idle_age_ms", "probe_ack_age_ms",
+                  "probe_send_budget_ms", "unicast_send_budget_ms")
+        rates = ("broadcast_sender_burst", "broadcast_sender_per_second",
+                 "broadcast_global_burst", "broadcast_global_per_second")
+        for field in timing + rates:
+            for value, error in ((0, ValueError), (-1, OverflowError),
+                                 (0.5, TypeError), (2**64, OverflowError)):
+                with self.subTest(field=field, value=value):
+                    with self.assertRaises(error):
+                        ScHub(**hub_kwargs(**{field: value}))
+            with self.subTest(field=field, excessive=True):
+                maximum = (2**63 - 1) if field in timing else (2**64 - 1) // 1_000_000_000
+                with self.assertRaises(ValueError):
+                    ScHub(**hub_kwargs(**{field: maximum + 1}))
+
     def test_deny_uuid_replacement_is_validated_without_io(self):
         with socket.socket() as occupied:
             occupied.bind(("127.0.0.1", 0))

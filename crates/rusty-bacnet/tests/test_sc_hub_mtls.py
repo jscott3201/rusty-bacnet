@@ -216,7 +216,8 @@ class HubMtlsTests(MtlsFixture):
                                             "graceful_disconnect_ack_ms", "graceful_ws_close_ms",
                                             "graceful_overall_ms", "handshake_tls_ms",
                                             "handshake_websocket_upgrade_ms",
-                                            "handshake_connect_request_ms"])
+                                            "handshake_connect_request_ms",
+                  'probe_scan_interval_ms', 'probe_idle_age_ms', 'probe_ack_age_ms', 'probe_send_budget_ms', 'broadcast_sender_burst', 'broadcast_sender_per_second', 'broadcast_global_burst', 'broadcast_global_per_second', 'unicast_send_budget_ms'])
         self.assertIsNone(parameters["ca_cert"].default)
         self.assertEqual(parameters["ca_cert"].kind, inspect.Parameter.POSITIONAL_OR_KEYWORD)
         self.assertIsNone(parameters["device_uuid"].default)
@@ -227,7 +228,8 @@ class HubMtlsTests(MtlsFixture):
                               ("graceful_ws_close_ms", 5000), ("graceful_overall_ms", 15000),
                               ("handshake_tls_ms", 10000),
                               ("handshake_websocket_upgrade_ms", 10000),
-                              ("handshake_connect_request_ms", 10000)]:
+                              ("handshake_connect_request_ms", 10000),
+                              ('probe_scan_interval_ms', 30000), ('probe_idle_age_ms', 60000), ('probe_ack_age_ms', 5000), ('probe_send_budget_ms', 5000), ('broadcast_sender_burst', 1024), ('broadcast_sender_per_second', 128), ('broadcast_global_burst', 4096), ('broadcast_global_per_second', 512), ('unicast_send_budget_ms', 5000)]:
             with self.subTest(name=name):
                 self.assertEqual(parameters[name].default, default)
                 self.assertEqual(parameters[name].kind, inspect.Parameter.KEYWORD_ONLY)

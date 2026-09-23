@@ -27,7 +27,7 @@ async fn empty_npdu_hub_held_nak_retirement_and_replacement_preserve_other_owner
         heartbeat::sweep(
             &hub.clients,
             &AtomicU16::new(0x2233),
-            &ClockIo(AtomicU64::new(100)),
+            &ClockIo(AtomicU64::new(100_000)),
         )
         .await;
         assert!(matches!(poll_io(old.ws.next()).await,
@@ -53,7 +53,7 @@ async fn empty_npdu_hub_held_nak_retirement_and_replacement_preserve_other_owner
             heartbeat::sweep(
                 &hub.clients,
                 &AtomicU16::new(0x3344),
-                &ClockIo(AtomicU64::new(106)),
+                &ClockIo(AtomicU64::new(106_000)),
             )
             .await;
             None

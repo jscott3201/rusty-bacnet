@@ -40,6 +40,7 @@ impl Peer {
             runtime,
             true,
             super::tasks::Tasks::new().graceful_ctx(),
+            super::timing::HubTiming::new(super::ScHubProbePolicy::default()),
         );
         let task = tokio::spawn(async move {
             let _admission = admission;
@@ -222,7 +223,7 @@ async fn check_invalid_repeat_flood(cases: Vec<InvalidConnect>) {
     super::heartbeat::sweep(
         &clients,
         &AtomicU16::new(0x7788),
-        &ClockIo(AtomicU64::new(100)),
+        &ClockIo(AtomicU64::new(100_000)),
     )
     .await;
     assert_eq!(peer.binary().await, [0x0a, 0, 0x77, 0x88]);

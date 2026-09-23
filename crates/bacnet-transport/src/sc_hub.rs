@@ -49,6 +49,7 @@ mod resolution_transit;
 mod retirement;
 mod tasks;
 mod timeouts;
+mod timing;
 mod tls_config;
 mod unknown_transit;
 
@@ -59,6 +60,7 @@ pub use admission::{
 pub use broadcast_rate::{ScHubBroadcastDropCounts, ScHubBroadcastRatePolicy};
 pub use graceful::{ScHubGracefulTimeouts, ScHubShutdownOutcome};
 pub use timeouts::ScHubHandshakeTimeouts;
+pub use timing::ScHubProbePolicy;
 pub use tls_config::ScHubTlsConfig;
 
 use client::HubClient;
@@ -261,6 +263,10 @@ impl ScHub {
         // policy: every public startup API funnels through here.
         let admission_limits = tls_config.admission_limits();
         admission_limits.validate()?;
+        let unicast_send_budget = tls_config.unicast_send_budget();
+        ScHubTlsConfig::validate_unicast_send_budget(unicast_send_budget)?;
+        let probe_policy = tls_config.probe_policy();
+        probe_policy.validate()?;
         let graceful_timeouts = tls_config.graceful_timeouts();
         graceful_timeouts.validate()?;
         let admission = Arc::new(admission::AdmissionRuntime::new(
@@ -287,6 +293,8 @@ impl ScHub {
         let tasks = tasks::Tasks::new();
         let tasks = tasks.with_broadcast_budget(broadcast);
         let tasks = tasks.with_graceful_timeouts(graceful_timeouts);
+        let mut tasks = tasks.with_probe_policy(probe_policy);
+        tasks.timing.unicast_send_budget = unicast_send_budget;
         let task = tokio::spawn(connection::accept_loop_with_counter(
             listener,
             tls_acceptor,
@@ -455,6 +463,7 @@ async fn handle_client(
     admission: Arc<admission::AdmissionRuntime>,
     tls_client_verified: bool,
     graceful: graceful::GracefulCtx,
+    timing: timing::HubTiming,
 ) {
     let deadline = Arc::new(deadlines::ConnectDeadline::new(expires));
     deadlines::serve(
@@ -468,6 +477,7 @@ async fn handle_client(
         admission,
         tls_client_verified,
         graceful,
+        timing,
     )
     .await;
 }
@@ -490,7 +500,9 @@ async fn handle_client_observed(
     // Never graceful: a fresh supervisor never fires, preserving the
     // forceful/discard-Ack behavior for heartbeat tests.
     let admission = Arc::new(admission::AdmissionRuntime::default());
-    let graceful = tasks::Tasks::new().graceful_ctx();
+    let tasks = tasks::Tasks::new();
+    let graceful = tasks.graceful_ctx();
+    let timing = heartbeat_test_support::probe_runtime();
     deadlines::serve(
         peer_addr,
         (hub_vmac, hub_uuid),
@@ -502,6 +514,7 @@ async fn handle_client_observed(
         admission,
         false,
         graceful,
+        timing,
     )
     .await;
 }
@@ -593,3 +606,6 @@ mod proprietary_transit_tests;
 mod resolution_transit_lifecycle_tests;
 #[cfg(test)]
 mod resolution_transit_tests;
+
+#[cfg(test)]
+mod probe_tests;

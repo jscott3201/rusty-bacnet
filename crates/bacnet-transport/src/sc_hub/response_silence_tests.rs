@@ -184,7 +184,7 @@ async fn unsolicited_response_matrix_preserves_lease_activity_and_probe_then_rec
             heartbeat::sweep(
                 &clients,
                 &AtomicU16::new(0x2233),
-                &ClockIo(AtomicU64::new(100)),
+                &ClockIo(AtomicU64::new(100_000)),
             )
             .await;
             assert_eq!(recv_raw(&mut live).await, [0x0a, 0, 0x22, 0x33]);
@@ -270,7 +270,7 @@ async fn unsolicited_responses_do_not_defer_idle_probe_or_its_original_timeout()
         );
         // Probe at t=100; keep the exact five-second boundary, retire at t=106.
         if now == 60 || now >= 100 {
-            heartbeat::sweep(&clients, &ids, &ClockIo(AtomicU64::new(now))).await;
+            heartbeat::sweep(&clients, &ids, &ClockIo(AtomicU64::new(now * 1000))).await;
         }
         if now == 100 {
             assert_eq!(recv_raw(&mut live).await, [0x0a, 0, 0x22, 0x33]);
@@ -281,7 +281,7 @@ async fn unsolicited_responses_do_not_defer_idle_probe_or_its_original_timeout()
                 map.get(&live.vmac).unwrap().heartbeat.pending,
                 Some(heartbeat::PendingHeartbeat {
                     message_id: 0x2233,
-                    published_at: 100
+                    published_at: 100_000
                 })
             );
         }

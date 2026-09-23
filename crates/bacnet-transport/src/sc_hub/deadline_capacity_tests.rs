@@ -27,6 +27,7 @@ async fn hub_admission_abort_before_first_poll_reclaims_slot() {
         admission,
         Arc::new(super::admission::AdmissionRuntime::default()),
         super::tasks::Tasks::new().graceful_ctx(),
+        super::timing::HubTiming::new(super::ScHubProbePolicy::default()),
     ));
     // Current-thread runtime: no await occurs between spawn and abort.
     task.abort();
@@ -58,6 +59,7 @@ async fn hub_admission_abort_during_tls_reclaims_slot() {
         admission,
         Arc::new(super::admission::AdmissionRuntime::default()),
         super::tasks::Tasks::new().graceful_ctx(),
+        super::timing::HubTiming::new(super::ScHubProbePolicy::default()),
     ));
     assert!(futures_util::poll!(&mut operation).is_pending()); // actual TLS wait has started
     assert_eq!(active.load(Ordering::Acquire), 1);
@@ -90,7 +92,8 @@ impl CountedHub {
         let active = Arc::new(AtomicUsize::new(0));
         let clients = clients();
         let admission = Arc::new(super::admission::AdmissionRuntime::new(limits, None));
-        let tasks = super::tasks::Tasks::new();
+        let mut tasks = super::tasks::Tasks::new();
+        tasks.timing = super::heartbeat_test_support::probe_runtime();
         let task = tokio::spawn(super::connection::accept_loop_with_counter(
             listener,
             tls.acceptor.clone(),

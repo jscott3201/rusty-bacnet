@@ -43,12 +43,12 @@ async fn unknown_transit_activity_local_idle_and_independent_pending_ack_timeout
                 .load(Ordering::Acquire),
             0
         );
-        heartbeat::sweep(&hub.clients, &ids, &ClockIo(AtomicU64::new(now))).await;
+        heartbeat::sweep(&hub.clients, &ids, &ClockIo(AtomicU64::new(now * 1000))).await;
     }
     assert_eq!(recv(&mut a).await, [10, 0, 0x22, 0x33]);
     let pending = Some(heartbeat::PendingHeartbeat {
         message_id: 0x2233,
-        published_at: 100,
+        published_at: 100_000,
     });
     // Local/invalid/self paths leave the entire snapshot unchanged, even pending.
     let before = Snapshot::capture(hub.clients.lock().await.get(&[0x42; 6]).unwrap());
@@ -99,7 +99,7 @@ async fn unknown_transit_activity_local_idle_and_independent_pending_ack_timeout
         assert!(client.last_activity.load(Ordering::Acquire) > 0);
         assert_eq!(client.heartbeat.pending, pending);
     }
-    heartbeat::sweep(&hub.clients, &ids, &ClockIo(AtomicU64::new(105))).await;
+    heartbeat::sweep(&hub.clients, &ids, &ClockIo(AtomicU64::new(105_000))).await;
     assert_eq!(
         hub.clients
             .lock()
@@ -110,7 +110,7 @@ async fn unknown_transit_activity_local_idle_and_independent_pending_ack_timeout
             .pending,
         pending
     );
-    heartbeat::sweep(&hub.clients, &ids, &ClockIo(AtomicU64::new(106))).await;
+    heartbeat::sweep(&hub.clients, &ids, &ClockIo(AtomicU64::new(106_000))).await;
     until(|| a.deadline.close_started.load(Ordering::Acquire)).await;
     until(|| hub.active.load(Ordering::Acquire) == 1).await;
     assert_eq!(ids.load(Ordering::Acquire), 0x2234);
@@ -138,7 +138,7 @@ async fn retire(hub: &CountedHub, peer: &ControlledPeer, id: u8) {
                 generation: 0
             },
             heartbeat::Retirement::SendFailed,
-            &ClockIo(AtomicU64::new(106))
+            &ClockIo(AtomicU64::new(106_000))
         )
         .await
     );

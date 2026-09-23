@@ -91,7 +91,7 @@ async fn connect_request_invalid_repeat_preserves_registration_activity_and_prob
     sweep(
         &clients,
         &AtomicU16::new(0x2233),
-        &ClockIo(AtomicU64::new(100)),
+        &ClockIo(AtomicU64::new(100_000)),
     )
     .await;
     assert_eq!(recv_raw(&mut live).await, [0x0A, 0, 0x22, 0x33]);

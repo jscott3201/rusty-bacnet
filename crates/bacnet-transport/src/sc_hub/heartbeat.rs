@@ -8,7 +8,6 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 
 use bytes::{Bytes, BytesMut};
 use futures_util::SinkExt;
@@ -16,18 +15,16 @@ use tokio::sync::{Mutex, Notify};
 use tokio_tungstenite::tungstenite::{Error, Message};
 use tracing::warn;
 
-use super::helpers::now_secs;
+use super::timing::HubTiming;
+use super::ScHubProbePolicy;
 use super::{Clients, HubClient, Vmac, WsSink};
 use crate::sc_frame::{encode_sc_message, ScFunction, ScMessage};
 
-const IDLE_THRESHOLD_SECS: u64 = 60;
-const ACK_TIMEOUT_SECS: u64 = 5;
-const SEND_TIMEOUT: Duration = Duration::from_secs(5);
-
 // Private I/O boundary: tests use the real TLS/WebSocket send, but control when
-// its completion becomes visible to the sweep and supply the wall-clock value.
+// its completion becomes visible to the sweep and supply the monotonic millisecond value.
 pub(super) trait HeartbeatIo: Sync {
-    fn now_secs(&self) -> u64;
+    fn now_ms(&self) -> u64;
+    fn policy(&self) -> ScHubProbePolicy;
     fn send(
         &self,
         sink: &mut WsSink,
@@ -35,11 +32,14 @@ pub(super) trait HeartbeatIo: Sync {
     ) -> impl Future<Output = Result<(), Error>> + Send;
 }
 
-pub(super) struct SocketIo;
+pub(super) struct SocketIo(pub HubTiming);
 
 impl HeartbeatIo for SocketIo {
-    fn now_secs(&self) -> u64 {
-        now_secs()
+    fn policy(&self) -> ScHubProbePolicy {
+        self.0.policy
+    }
+    fn now_ms(&self) -> u64 {
+        self.0.now_ms()
     }
 
     async fn send(&self, sink: &mut WsSink, frame: Message) -> Result<(), Error> {
@@ -48,7 +48,7 @@ impl HeartbeatIo for SocketIo {
 }
 
 pub(super) async fn sweep(clients: &Clients, next_msg_id: &AtomicU16, io: &impl HeartbeatIo) {
-    let (timed_out, idle): (Vec<_>, Vec<_>) = snapshot(clients, io.now_secs())
+    let (timed_out, idle): (Vec<_>, Vec<_>) = snapshot(clients, io.now_ms(), io.policy())
         .await
         .into_iter()
         .partition(|(_, decision)| *decision == HubHeartbeatSweepDecision::RemoveTimedOut);
@@ -78,6 +78,7 @@ impl Attempt {
 pub(super) async fn snapshot(
     clients: &Clients,
     now: u64,
+    policy: ScHubProbePolicy,
 ) -> Vec<(Attempt, HubHeartbeatSweepDecision)> {
     clients
         .lock()
@@ -87,7 +88,7 @@ pub(super) async fn snapshot(
             if client.closed.load(Ordering::Acquire) {
                 return None;
             }
-            let decision = decision(client, now);
+            let decision = decision(client, now, policy);
             (decision != HubHeartbeatSweepDecision::Keep).then(|| {
                 (
                     Attempt {
@@ -102,13 +103,13 @@ pub(super) async fn snapshot(
         .collect()
 }
 
-fn decision(client: &HubClient, now: u64) -> HubHeartbeatSweepDecision {
+fn decision(client: &HubClient, now: u64, policy: ScHubProbePolicy) -> HubHeartbeatSweepDecision {
     hub_heartbeat_sweep_decision(
         now,
         client.last_activity.load(Ordering::Acquire),
         client.heartbeat.pending,
-        IDLE_THRESHOLD_SECS,
-        ACK_TIMEOUT_SECS,
+        policy.idle_age().as_millis() as u64,
+        policy.ack_age().as_millis() as u64,
     )
 }
 
@@ -119,11 +120,11 @@ pub(super) async fn reserve(
     io: &impl HeartbeatIo,
 ) -> Option<Attempt> {
     let mut map = clients.lock().await;
-    let now = io.now_secs(); // fresh per attempt, not the earlier sweep snapshot
+    let now = io.now_ms(); // fresh per attempt, not the earlier sweep snapshot
     let client = map.get_mut(&candidate.vmac).filter(|client| {
         Arc::ptr_eq(&client.sink, &candidate.sink)
             && !client.closed.load(Ordering::Acquire)
-            && decision(client, now) == HubHeartbeatSweepDecision::SendRequest
+            && decision(client, now, io.policy()) == HubHeartbeatSweepDecision::SendRequest
     })?;
     let mut attempt = Attempt {
         vmac: candidate.vmac,
@@ -132,7 +133,13 @@ pub(super) async fn reserve(
     };
     let Some(generation) = client.heartbeat.generation.checked_add(1) else {
         // Never recycle a local generation within this registration.
-        let notify = retire_locked(&mut map, &attempt, Retirement::GenerationExhausted, now);
+        let notify = retire_locked(
+            &mut map,
+            &attempt,
+            Retirement::GenerationExhausted,
+            now,
+            io.policy(),
+        );
         drop(map);
         if let Some(notify) = notify {
             super::retirement::wake(&notify);
@@ -174,7 +181,7 @@ pub(super) async fn send_request(
     let Some(attempt) = reserve(clients, candidate, message_id, io).await else {
         return;
     };
-    let result = tokio::time::timeout(SEND_TIMEOUT, async {
+    let result = tokio::time::timeout(io.policy().send_budget(), async {
         let mut sink = attempt.sink.lock().await;
         // Only sink -> Clients nesting is permitted. Never hold Clients while
         // waiting for a sink or doing I/O. Revalidate after the sink wait.
@@ -216,7 +223,7 @@ pub(super) async fn retire(
 ) -> bool {
     let notify = {
         let mut map = clients.lock().await;
-        retire_locked(&mut map, attempt, reason, io.now_secs())
+        retire_locked(&mut map, attempt, reason, io.now_ms(), io.policy())
     };
     if let Some(notify) = notify {
         // Wake the owning dispatch and every sender targeting this identity.
@@ -234,13 +241,14 @@ fn retire_locked(
     attempt: &Attempt,
     reason: Retirement,
     now: u64,
+    policy: ScHubProbePolicy,
 ) -> Option<Arc<Notify>> {
     let client = map
         .get(&attempt.vmac)
         .filter(|client| attempt.matches(client))?;
     if matches!(reason, Retirement::AckTimeout) {
         // A stale timeout snapshot must lose if ACK or a newer attempt won the map.
-        if decision(client, now) != HubHeartbeatSweepDecision::RemoveTimedOut {
+        if decision(client, now, policy) != HubHeartbeatSweepDecision::RemoveTimedOut {
             return None;
         }
     }
@@ -272,25 +280,40 @@ pub(super) enum HubHeartbeatSweepDecision {
 }
 
 pub(super) fn hub_heartbeat_sweep_decision(
-    now_secs: u64,
-    last_activity_secs: u64,
+    now_ms: u64,
+    last_activity_ms: u64,
     pending: Option<PendingHeartbeat>,
-    idle_threshold_secs: u64,
-    ack_timeout_secs: u64,
+    idle_age_ms: u64,
+    ack_age_ms: u64,
 ) -> HubHeartbeatSweepDecision {
     if let Some(pending) = pending {
-        return if now_secs.saturating_sub(pending.published_at) > ack_timeout_secs {
+        return if now_ms.saturating_sub(pending.published_at) > ack_age_ms {
             HubHeartbeatSweepDecision::RemoveTimedOut
         } else {
             HubHeartbeatSweepDecision::Keep
         };
     }
 
-    if now_secs.saturating_sub(last_activity_secs) > idle_threshold_secs {
+    if now_ms.saturating_sub(last_activity_ms) > idle_age_ms {
         HubHeartbeatSweepDecision::SendRequest
     } else {
         HubHeartbeatSweepDecision::Keep
     }
+}
+
+pub(super) async fn send_ack(message_id: u16, sink: &Arc<Mutex<WsSink>>) -> Result<(), Error> {
+    let ack = ScMessage {
+        function: ScFunction::HeartbeatAck,
+        message_id,
+        originating_vmac: None,
+        destination_vmac: None,
+        dest_options: Vec::new(),
+        data_options: Vec::new(),
+        payload: Bytes::new(),
+    };
+    let mut buf = BytesMut::new();
+    encode_sc_message(&mut buf, &ack);
+    sink.lock().await.send(Message::Binary(buf.freeze())).await
 }
 
 pub(super) fn heartbeat_ack_matches_pending(
@@ -305,6 +328,7 @@ pub(super) async fn clear_matching_heartbeat_ack(
     registered_vmac: Vmac,
     sink: &Arc<Mutex<WsSink>>,
     message_id: u16,
+    now_ms: u64,
 ) {
     let mut map = clients.lock().await;
     let Some(client) = map
@@ -316,6 +340,7 @@ pub(super) async fn clear_matching_heartbeat_ack(
 
     if heartbeat_ack_matches_pending(message_id, client.heartbeat.pending) {
         client.heartbeat.pending = None;
+        client.last_activity.store(now_ms, Ordering::Release);
     }
 }
 

@@ -18,6 +18,9 @@ pub(super) struct Tasks {
     graceful_failed: Arc<AtomicBool>,
     graceful_timeouts: ScHubGracefulTimeouts,
     outcome: Arc<Mutex<Option<ScHubShutdownOutcome>>>,
+    #[cfg(test)]
+    pub(super) probe_scans: Arc<std::sync::atomic::AtomicU64>,
+    pub(super) timing: super::timing::HubTiming,
     pub(super) broadcast: Arc<super::broadcast_rate::HubBudget>,
 }
 
@@ -45,8 +48,16 @@ impl Tasks {
             graceful_failed: Arc::new(AtomicBool::new(false)),
             graceful_timeouts: ScHubGracefulTimeouts::default(),
             outcome: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            probe_scans: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            timing: super::timing::HubTiming::new(super::ScHubProbePolicy::default()),
             broadcast: Arc::new(super::broadcast_rate::HubBudget::default()),
         }
+    }
+
+    pub fn with_probe_policy(mut self, policy: super::ScHubProbePolicy) -> Self {
+        self.timing = super::timing::HubTiming::new(policy);
+        self
     }
 
     pub fn with_broadcast_budget(mut self, budget: Arc<super::broadcast_rate::HubBudget>) -> Self {

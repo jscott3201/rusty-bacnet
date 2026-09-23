@@ -13,6 +13,34 @@
 - Addenda/errata status: ASHRAE 135-2020 Errata Summary 2024-04-29 (v1) reviewed for the supported subset. Item 7 (Clause 21.6, p. 886): successful-actions-only corrected from BOOLEAN (struck through, removed) to BACnetSuccessFilter (italic, added), tags [7]/[4]. Item 8 (Clause 21.2.3, p. 865): start-at-sequence-number corrected from Unsigned32 (struck through, removed) to Unsigned64 (italic, added), tag [2] OPTIONAL. Both items visually verified from the rendered errata p. 3 (strikeout = removed, italics = added per the p. 1 convention); not inferred from concatenated text extraction. The implementation encodes the corrected BACnetSuccessFilter/u64 contract after the RB-02 codec and RB-20 runtime/Python migrations; `BACNET-13-AUDIT-WIRE-MODELS` remains `implementation-present-needs-source-review` pending broader Audit review.
 - PR-0808 evidence row: `BACNET-12-ALERT-ENROLLMENT-TABLE-12-61` is `supported-with-clause-evidence` for the served object model only; it is not an Alert evaluator or notification-generation claim.
 
+## Hub operator timing and broadcast policy
+
+Refs #769 under #476. The accepting Hub's optional outbound probe is a local
+liveness policy. Base 135-2020 AB.6.3 (PDF1407 / printed1405) assigns idle
+Heartbeat-Request initiation and configurable 3–300s timing to the initiating
+peer; the accepting peer responds with ACK. The local Hub probe does not replace
+that node contract or establish broader Annex AB conformance.
+
+[One monotonic timing owner](../../crates/bacnet-transport/src/sc_hub/timing.rs)
+provides checked millisecond scan/idle/ACK/send policy (defaults 30/60/5/5s).
+Idle and ACK ages must be strictly exceeded at a scan; pending age starts at
+reservation. Sequential sends can delay later scans; missed ticks are skipped,
+not replayed. Matching ACK/activity and pending clearing share the registry lock;
+wrong-ID/invalid ACKs cannot refresh activity. The public configuration also sets
+one separate NPDU/opaque unicast acquisition-plus-send budget (default5s), without
+retry, fabricated Result, or timeout-only retirement. Broadcast/Result send
+budgets and the initiating node's heartbeat policy remain separate.
+
+[Paused-clock real TLS tests](../../crates/bacnet-transport/src/sc_hub/probe_tests.rs)
+cover exact strict age boundaries, held-sink budgets, missed-scan behavior, and
+forceful/graceful task cleanup. [Unicast tests](../../crates/bacnet-transport/src/sc_hub/unicast_deadline_tests.rs)
+exercise default and custom budgets through public configuration. Existing ACK,
+generation, and replacement regressions remain. [Installed Python tests](../../crates/rusty-bacnet/tests/test_sc_hub_probe_policy.py)
+observe custom probes and the existing native sender/global rate drops with exact
+wire/count reconciliation; constructor tests cover invalid bounds before I/O.
+Representation bounds are local policy, not BACnet-specified probe ranges.
+Global pins and row status remain unchanged; #476 outcome counters remain open.
+
 ## Hub conflict-aware admission
 
 Scoped evidence for `BACNET-AB-SC-CONNECTION-STATE`, Refs #767 under #476.
@@ -33,8 +61,7 @@ retirement and shutdown ownership are retained.
 Evidence: [real TLS conflict and concurrent admission](../../crates/bacnet-transport/src/sc_hub/conflict_admission_tests.rs),
 [installed Python default/refusal modes](../../crates/rusty-bacnet/tests/test_sc_hub_conflict_admission.py),
 and [constructor rejection before I/O](../../crates/rusty-bacnet/tests/test_sc_hub_lifecycle.py).
-Global review pins and row status are unchanged. Timing policy and fixed-shape
-outcome-counter work remain under #476; certificate-principal authorization and
+Global review pins and row status are unchanged. Fixed-shape outcome-counter work remains under #476; certificate-principal authorization and
 broader Annex AB qualification are not claimed.
 
 ## Target Device Audit recipient

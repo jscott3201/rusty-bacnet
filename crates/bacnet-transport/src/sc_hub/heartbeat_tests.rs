@@ -9,7 +9,7 @@ async fn wire_ack_during_send_completion_survives_next_sweep() {
     let mut live = LiveClient::connect(clients.clone(), [0x22; 6]).await;
     let mut peer = LiveClient::connect(clients.clone(), [0x23; 6]).await;
     live.idle().await;
-    let io = GatedIo::new(100);
+    let io = GatedIo::new(100_000);
     let sweep_task = tokio::spawn({
         let clients = clients.clone();
         let io = io.clone();
@@ -26,7 +26,7 @@ async fn wire_ack_during_send_completion_survives_next_sweep() {
     sweep(
         &clients,
         &AtomicU16::new(0x8001),
-        &ClockIo(AtomicU64::new(106)),
+        &ClockIo(AtomicU64::new(106_000)),
     )
     .await;
     assert!(
@@ -54,7 +54,7 @@ async fn sink_wait_budget_retires_closes_and_saves_notification() {
     let sink = live.sink().await;
     let guard = sink.lock().await;
     let ids = AtomicU16::new(1);
-    let clock = ClockIo(AtomicU64::new(100));
+    let clock = ClockIo(AtomicU64::new(100_000));
     tokio::time::pause();
     let work = sweep(&clients, &ids, &clock);
     tokio::pin!(work);
@@ -78,7 +78,7 @@ async fn send_completion_budget_retires_and_wakes_live_reader() {
     let mut live = LiveClient::connect(clients.clone(), [0x22; 6]).await;
     live.idle().await;
     let closed = clients.lock().await.get(&live.vmac).unwrap().closed.clone();
-    let io = GatedIo::new(100);
+    let io = GatedIo::new(100_000);
     let task = tokio::spawn({
         let clients = clients.clone();
         let io = io.clone();
@@ -101,16 +101,16 @@ async fn wrapped_zero_request_still_times_out_after_wrong_wire_ack() {
     let mut live = LiveClient::connect(clients.clone(), [0x22; 6]).await;
     let ids = AtomicU16::new(u16::MAX);
     live.idle().await;
-    sweep(&clients, &ids, &ClockIo(AtomicU64::new(100))).await;
+    sweep(&clients, &ids, &ClockIo(AtomicU64::new(100_000))).await;
     assert_eq!(live.recv().await.message_id, u16::MAX);
     live.ack(u16::MAX).await;
     live.idle().await;
-    sweep(&clients, &ids, &ClockIo(AtomicU64::new(200))).await;
+    sweep(&clients, &ids, &ClockIo(AtomicU64::new(200_000))).await;
     assert_eq!(live.recv().await.message_id, 0);
     live.ack(u16::MAX).await; // stale ID must not clear or extend zero's deadline
-    sweep(&clients, &ids, &ClockIo(AtomicU64::new(205))).await;
+    sweep(&clients, &ids, &ClockIo(AtomicU64::new(205_000))).await;
     assert!(clients.lock().await.contains_key(&live.vmac)); // strict > five seconds
-    sweep(&clients, &ids, &ClockIo(AtomicU64::new(206))).await;
+    sweep(&clients, &ids, &ClockIo(AtomicU64::new(206_000))).await;
     assert!(
         !clients.lock().await.contains_key(&live.vmac),
         "zero-ID heartbeat never expired"
@@ -124,7 +124,7 @@ async fn send_failure_after_matching_ack_retires_and_wakes_reader() {
     let mut live = LiveClient::connect(clients.clone(), [0x22; 6]).await;
     let closed = clients.lock().await.get(&live.vmac).unwrap().closed.clone();
     live.idle().await;
-    let io = GatedIo::new(100);
+    let io = GatedIo::new(100_000);
     let sweep_task = tokio::spawn({
         let clients = clients.clone();
         let io = io.clone();
@@ -148,7 +148,7 @@ async fn stale_send_failure_does_not_remove_newly_reserved_attempt() {
     let clients = clients();
     let mut live = LiveClient::connect(clients.clone(), [0x22; 6]).await;
     live.idle().await;
-    let io = GatedIo::new(100);
+    let io = GatedIo::new(100_000);
     let old_task = tokio::spawn({
         let clients = clients.clone();
         let io = io.clone();
@@ -158,7 +158,7 @@ async fn stale_send_failure_does_not_remove_newly_reserved_attempt() {
     live.ack(1).await;
     live.idle().await;
     let next_ids = AtomicU16::new(2);
-    let clock = ClockIo(AtomicU64::new(101));
+    let clock = ClockIo(AtomicU64::new(101_000));
     let new_sweep = sweep(&clients, &next_ids, &clock);
     tokio::pin!(new_sweep);
     assert!(futures_util::poll!(&mut new_sweep).is_pending()); // reserved; waiting for old sink owner
@@ -208,11 +208,16 @@ async fn expired_socket_is_released_before_another_clients_blocked_send() {
     let clients = clients();
     let mut expired = LiveClient::connect(clients.clone(), [0x22; 6]).await;
     expired.idle().await;
-    sweep(&clients, &AtomicU16::new(1), &ClockIo(AtomicU64::new(100))).await;
+    sweep(
+        &clients,
+        &AtomicU16::new(1),
+        &ClockIo(AtomicU64::new(100_000)),
+    )
+    .await;
     assert_eq!(expired.recv().await.message_id, 1);
     let mut idle = LiveClient::connect(clients.clone(), [0x23; 6]).await;
     idle.idle().await;
-    let io = GatedIo::new(106);
+    let io = GatedIo::new(106_000);
     let task = tokio::spawn({
         let clients = clients.clone();
         let io = io.clone();
