@@ -449,7 +449,8 @@ async fn audit_reporter_auditing_failure_excludes_nonresource_failures_under_loa
 }
 
 #[tokio::test(start_paused = true)]
-async fn audit_reporter_auditing_failure_pending_owner_survives_replacement_and_more_drops() {
+async fn audit_reporter_auditing_failure_replacement_supersedes_old_context_without_transferring_drops(
+) {
     let mut fixture = server(enabled(true)).await;
     let permits: Vec<_> = (0..64)
         .map(|_| {
@@ -469,17 +470,17 @@ async fn audit_reporter_auditing_failure_pending_owner_survives_replacement_and_
     writes(&fixture, 3).await;
     assert_eq!(
         fixture.server.notification_transactions.audit_resources(),
-        (true, 5, 0)
+        (true, 3, 0)
     );
     drop(permits);
     settle().await;
-    assert_eq!(records(&fixture), vec![expected(5, 0)]);
+    assert_eq!(records(&fixture), vec![expected(3, 2)]);
     ack(&fixture, 0);
     settle().await;
     assert_eq!(
         health(&fixture.server).await,
-        Reliability::COMMUNICATION_FAILURE,
-        "the original pending summary must not be transferred to a replacement instance"
+        Reliability::NO_FAULT_DETECTED,
+        "only the replacement context summary owns its health completion"
     );
     stop(&mut fixture).await;
 }

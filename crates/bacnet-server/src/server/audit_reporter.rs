@@ -1,7 +1,7 @@
 use super::device_bindings::BindingFreshness;
 use super::event_recipient_route::{ConfirmedRecipientRoute, RecipientRoute};
 use super::notification_transactions::{
-    AuditFailureBatch, NotificationReservation, NotificationReserveError,
+    AuditFailureContext, AuditFailureTicket, NotificationReservation, NotificationReserveError,
 };
 use super::*;
 use crate::handlers::{WriteCommitObserver, WriteTarget};
@@ -194,6 +194,8 @@ pub(super) struct WriteAudit<'a, T: TransportPort> {
 }
 
 struct PendingWrite {
+    failure: Option<AuditFailureTicket<Arc<ConfirmedRecipientRoute>>>,
+    completion: bacnet_objects::audit::AuditDeliveryToken,
     status: Arc<AuditReporterStatus>,
     confirmed: bool,
     notification: BACnetAuditNotification,
@@ -288,6 +290,8 @@ impl<T: TransportPort + 'static> WriteCommitObserver for WriteAudit<'_, T> {
             .ok()
             .and_then(|value| small_value(&value));
         self.pending = Some(PendingWrite {
+            failure: self.failure_ticket(&status, reporter.confirmed_internal(), device),
+            completion: status.begin_delivery(),
             status,
             confirmed: reporter.confirmed_internal(),
             notification: BACnetAuditNotification {
@@ -380,6 +384,8 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
             return;
         }
         self.pending = Some(PendingWrite {
+            failure: self.failure_ticket(&status, reporter.confirmed_internal(), device),
+            completion: status.begin_delivery(),
             status,
             confirmed: reporter.confirmed_internal(),
             notification: BACnetAuditNotification {
@@ -441,6 +447,8 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
             return;
         }
         self.pending = Some(PendingWrite {
+            failure: self.failure_ticket(&status, reporter.confirmed_internal(), device),
+            completion: status.begin_delivery(),
             status,
             confirmed: reporter.confirmed_internal(),
             notification: BACnetAuditNotification {
@@ -509,6 +517,8 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
             return;
         }
         self.pending = Some(PendingWrite {
+            failure: self.failure_ticket(&status, reporter.confirmed_internal(), device),
+            completion: status.begin_delivery(),
             status,
             confirmed: reporter.confirmed_internal(),
             notification: BACnetAuditNotification {
@@ -563,7 +573,11 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         let Some(route) = self.route.clone() else {
             return;
         };
-        let completion = DeliveryCompletion::new(Arc::clone(&pending.status));
+        let completion = DeliveryCompletion {
+            status: Arc::clone(&pending.status),
+            epoch: pending.completion,
+            finished: false,
+        };
         if self.comm_state.load(Ordering::Acquire) != 0 {
             return;
         }
@@ -577,9 +591,13 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         ) else {
             return;
         };
-        let Some(permit) = self.transactions.try_admit_audit() else {
-            self.resource_drop(&pending, route);
-            return;
+        let permit = match self.transactions.try_admit_audit() {
+            Ok(permit) => permit,
+            Err(tokio::sync::TryAcquireError::NoPermits) => {
+                self.resource_drop(&pending);
+                return;
+            }
+            Err(tokio::sync::TryAcquireError::Closed) => return,
         };
         let confirmed = pending.confirmed;
         let reserved = if confirmed {
@@ -591,7 +609,7 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
                 Err(NotificationReserveError::Coordinator(
                     bacnet_endpoint_core::coordinator::ReserveError::Exhausted,
                 )) => {
-                    self.resource_drop(&pending, route);
+                    self.resource_drop(&pending);
                     return;
                 }
                 Err(_) => return,
@@ -619,60 +637,6 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
             let delivered =
                 deliver(&network, &comm_state, &route, &bytes, reserved, deadline).await;
             completion.finish(delivered);
-        });
-    }
-
-    fn resource_drop(&self, pending: &PendingWrite, route: Arc<ConfirmedRecipientRoute>) {
-        let Some(epoch) = pending.status.auditing_failure_epoch() else {
-            return;
-        };
-        let BACnetRecipient::Device(device) = pending.notification.target_device else {
-            return;
-        };
-        let Some(mut worker) = self.transactions.record_audit_drop(AuditFailureBatch {
-            count: 1,
-            earliest: pending
-                .notification
-                .target_timestamp
-                .clone()
-                .expect("completed record"),
-            device,
-            status: Arc::clone(&pending.status),
-            epoch,
-            confirmed: pending.confirmed,
-            route,
-            max_apdu: self.config.max_apdu_length,
-        }) else {
-            return;
-        };
-        let network = Arc::clone(self.network);
-        let comm_state = Arc::clone(self.comm_state);
-        self.transactions.spawn(async move {
-            while let Some((batch, _permit, reserved)) = worker.next().await {
-                let completion = DeliveryCompletion::new(Arc::clone(&batch.status));
-                let deadline = tokio::time::Instant::now() + DELIVERY_TIMEOUT;
-                let invoke = reserved
-                    .as_ref()
-                    .map_or(0, |(operation, _)| operation.invoke_id());
-                let Some(bytes) = encode_notification(
-                    &batch.notification(),
-                    batch.confirmed,
-                    batch.max_apdu,
-                    invoke,
-                ) else {
-                    continue;
-                };
-                let delivered = deliver(
-                    &network,
-                    &comm_state,
-                    &batch.route,
-                    &bytes,
-                    reserved,
-                    deadline,
-                )
-                .await;
-                completion.finish(delivered);
-            }
         });
     }
 }
@@ -755,7 +719,7 @@ async fn deliver<T: TransportPort + 'static>(
 /// Cancellation, rejected worker admission and panic also leave visible failure.
 struct DeliveryCompletion {
     status: Arc<AuditReporterStatus>,
-    epoch: u64,
+    epoch: bacnet_objects::audit::AuditDeliveryToken,
     finished: bool,
 }
 
@@ -814,3 +778,6 @@ fn small_value(value: &PropertyValue) -> Option<Vec<u8>> {
     append(value, &mut bytes, &mut 64)?;
     (!bytes.is_empty()).then(|| bytes.to_vec())
 }
+
+#[path = "audit_reporter_failure.rs"]
+mod failure;

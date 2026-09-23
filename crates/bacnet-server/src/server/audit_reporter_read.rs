@@ -71,6 +71,8 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
             return None;
         }
         Some(ReadAuditIntent(PendingWrite {
+            failure: self.failure_ticket(&status, reporter.confirmed_internal(), device),
+            completion: status.begin_delivery(),
             status,
             confirmed: reporter.confirmed_internal(),
             notification: BACnetAuditNotification {

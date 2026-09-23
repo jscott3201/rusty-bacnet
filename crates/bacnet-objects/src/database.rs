@@ -93,6 +93,9 @@ impl ObjectDatabase {
         // If replacing an existing object, remove its old name from the index
         // and invalidate state owned by enrollments that monitor it.
         if let Some(old) = self.objects.get(&oid) {
+            if let Some(reporter) = old.audit_reporter_internal() {
+                reporter.status_internal().configuration_changed();
+            }
             let old_name = old.object_name().to_string();
             self.name_index.remove(&old_name);
             self.invalidate_enrollments_monitoring(&oid);
@@ -224,6 +227,9 @@ impl ObjectDatabase {
             self.invalidate_enrollments_monitoring(oid);
         }
         if let Some(mut obj) = self.objects.remove(oid) {
+            if let Some(reporter) = obj.audit_reporter_internal() {
+                reporter.status_internal().configuration_changed();
+            }
             self.enrollment_eval_sources.remove(oid);
             if obj.enrollment_eval_state_internal().is_some() {
                 if obj

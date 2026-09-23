@@ -19,30 +19,47 @@ fn failure_reporter() -> bacnet_objects::audit::AuditReporterObject {
     let mut flags = AuditOperationFlags::empty();
     flags.insert(AuditOperation::AUDITING_FAILURE);
     reporter.set_auditable_operations(flags);
+    reporter.set_issue_confirmed_notifications(true);
     reporter
 }
 
-fn failure_batch(
+fn failure_ticket(
+    owner: &NotificationTransactions,
+    reporter: &bacnet_objects::audit::AuditReporterObject,
+) -> AuditFailureTicket<Arc<ConfirmedRecipientRoute>> {
+    let status = reporter.status_internal();
+    owner
+        .audit_failure_queue()
+        .observe(AuditFailureContext {
+            device: ObjectIdentifier::new(bacnet_types::enums::ObjectType::DEVICE, 10).unwrap(),
+            epoch: status.auditing_failure_epoch().unwrap(),
+            status,
+            confirmed: reporter.confirmed_internal(),
+            peer: canonical_direct_peer(&[1]),
+            route: Arc::new(ConfirmedRecipientRoute {
+                canonical_peer: canonical_direct_peer(&[1]),
+                local_target: Some(bacnet_types::MacAddr::from_slice(&[1])),
+                remote: None,
+                freshness: None,
+            }),
+            max_apdu: 1476,
+        })
+        .unwrap()
+}
+
+fn record_failure(
+    owner: &NotificationTransactions,
     reporter: &bacnet_objects::audit::AuditReporterObject,
     count: u64,
     sequence: u16,
-) -> AuditFailureBatch {
-    let status = reporter.status_internal();
-    AuditFailureBatch {
+) -> Option<audit_failure_queue::AuditFailureWorker<Arc<ConfirmedRecipientRoute>>> {
+    let ticket = failure_ticket(owner, reporter);
+    owner.audit_failure_queue().record_drop(
+        owner,
+        ticket,
+        BACnetTimeStamp::SequenceNumber(sequence),
         count,
-        earliest: BACnetTimeStamp::SequenceNumber(sequence),
-        device: ObjectIdentifier::new(bacnet_types::enums::ObjectType::DEVICE, 10).unwrap(),
-        epoch: status.auditing_failure_epoch().unwrap(),
-        status,
-        confirmed: true,
-        route: Arc::new(ConfirmedRecipientRoute {
-            canonical_peer: canonical_direct_peer(&[1]),
-            local_target: Some(bacnet_types::MacAddr::from_slice(&[1])),
-            remote: None,
-            freshness: None,
-        }),
-        max_apdu: 1476,
-    }
+    )
 }
 
 #[derive(Default)]
@@ -61,12 +78,8 @@ async fn auditing_failure_wait_is_passive_saturates_and_wakes_on_exact_release()
     let owner = NotificationTransactions::new();
     let reporter = failure_reporter();
     let mut held: Vec<_> = (0..256).map(|_| reserve(&owner)).collect();
-    let mut worker = owner
-        .record_audit_drop(failure_batch(&reporter, u64::MAX - 1, 65535))
-        .unwrap();
-    assert!(owner
-        .record_audit_drop(failure_batch(&reporter, 5, 0))
-        .is_none());
+    let mut worker = record_failure(&owner, &reporter, u64::MAX - 1, 65535).unwrap();
+    assert!(record_failure(&owner, &reporter, 5, 0).is_none());
     let wake = Arc::new(CountWake::default());
     let waker = std::task::Waker::from(wake.clone());
     let mut cx = std::task::Context::from_waker(&waker);
@@ -75,9 +88,7 @@ async fn auditing_failure_wait_is_passive_saturates_and_wakes_on_exact_release()
         assert!(next.as_mut().poll(&mut cx).is_pending());
         assert_eq!(wake.0.load(Ordering::SeqCst), 0, "no self wake/poll loop");
         assert_eq!(owner.audit_resources(), (true, u64::MAX, 63));
-        assert!(owner
-            .record_audit_drop(failure_batch(&reporter, 1, 1))
-            .is_none());
+        assert!(record_failure(&owner, &reporter, 1, 1).is_none());
         assert_eq!(
             wake.0.load(Ordering::SeqCst),
             0,
@@ -98,9 +109,7 @@ async fn auditing_failure_wait_is_passive_saturates_and_wakes_on_exact_release()
     }
     assert!(worker.next().await.is_none());
     // An old completed guard must not clear a newly registered owner.
-    let new_owner = owner
-        .record_audit_drop(failure_batch(&reporter, 1, 2))
-        .unwrap();
+    let new_owner = record_failure(&owner, &reporter, 1, 2).unwrap();
     drop(worker);
     assert_eq!(owner.audit_resources(), (true, 1, 64));
     drop(new_owner);
@@ -114,9 +123,7 @@ async fn auditing_failure_disabled_pending_batch_cannot_reappear_after_enablemen
     let owner = NotificationTransactions::new();
     let mut reporter = failure_reporter();
     let permits: Vec<_> = (0..64).map(|_| owner.try_admit_audit().unwrap()).collect();
-    let mut worker = owner
-        .record_audit_drop(failure_batch(&reporter, 3, 0))
-        .unwrap();
+    let mut worker = record_failure(&owner, &reporter, 3, 0).unwrap();
     let wake = std::task::Waker::noop();
     let mut cx = std::task::Context::from_waker(wake);
     {
@@ -144,7 +151,7 @@ async fn auditing_failure_concurrent_drops_register_exactly_one_owner() {
         let (owner, reporter, barrier) = (owner.clone(), reporter.clone(), barrier.clone());
         producers.spawn(async move {
             barrier.wait().await;
-            owner.record_audit_drop(failure_batch(&reporter, 1, 0))
+            record_failure(&owner, &reporter, 1, 0)
         });
     }
     barrier.wait().await;
@@ -300,4 +307,162 @@ async fn notification_worker_operation_does_not_retain_owner() {
     );
     observed.await.unwrap();
     assert!(core.upgrade().is_none());
+}
+
+#[tokio::test]
+async fn auditing_failure_requester_only_release_wakes_without_notification_completion() {
+    use bacnet_endpoint_core::coordinator::{LeaseMetadata, ReleaseOutcome, TerminalPolicy};
+    let coordinator = Arc::new(OutboundTransactionCoordinator::new());
+    let owner = NotificationTransactions::with_coordinator(coordinator.clone());
+    let reporter = failure_reporter();
+    let mut held: Vec<_> = (0..256)
+        .map(|_| {
+            coordinator
+                .reserve(LeaseMetadata::requester(
+                    canonical_direct_peer(&[2]),
+                    ConfirmedServiceChoice::READ_PROPERTY,
+                    TerminalPolicy::ComplexAck,
+                ))
+                .unwrap()
+        })
+        .collect();
+    let mut worker = record_failure(&owner, &reporter, 1, 9).unwrap();
+    let wake = Arc::new(CountWake::default());
+    let waker = std::task::Waker::from(wake.clone());
+    let mut cx = std::task::Context::from_waker(&waker);
+    {
+        let mut next = std::pin::pin!(worker.next());
+        assert!(next.as_mut().poll(&mut cx).is_pending());
+        let token = held.pop().unwrap();
+        assert_eq!(
+            coordinator.release(token).unwrap(),
+            ReleaseOutcome::Released
+        );
+        assert_eq!(wake.0.load(Ordering::SeqCst), 1);
+        // Duplicate cleanup is not capacity; notification registration must not
+        // be woken by stale local completion tokens.
+        assert_ne!(
+            coordinator.release(token).unwrap(),
+            ReleaseOutcome::Released
+        );
+        assert_eq!(wake.0.load(Ordering::SeqCst), 1);
+        let Poll::Ready(Some((batch, permit, reserved))) = next.as_mut().poll(&mut cx) else {
+            panic!("requester release must admit summary")
+        };
+        assert_eq!(batch.count, 1);
+        drop((permit, reserved));
+    }
+    for token in held {
+        coordinator.release(token).unwrap();
+    }
+    assert!(worker.next().await.is_none());
+    assert_eq!(coordinator.active_count().unwrap(), 0);
+}
+
+#[tokio::test]
+async fn auditing_failure_admission_order_survives_reversed_completions_and_context_supersession() {
+    let owner = NotificationTransactions::new();
+    let mut reporter = failure_reporter();
+    let first = failure_ticket(&owner, &reporter);
+    let second = failure_ticket(&owner, &reporter);
+    let queue = owner.audit_failure_queue();
+    let mut worker = queue
+        .record_drop(&owner, second, BACnetTimeStamp::SequenceNumber(0), 1)
+        .unwrap();
+    assert!(queue
+        .record_drop(
+            &owner,
+            first.clone(),
+            BACnetTimeStamp::SequenceNumber(65535),
+            1
+        )
+        .is_none());
+    let (batch, permit, reserved) = worker.next().await.unwrap();
+    assert_eq!(batch.count, 2);
+    assert_eq!(batch.earliest, BACnetTimeStamp::SequenceNumber(65535));
+    drop((permit, reserved));
+    // Empty pending state must retain the latest context's identity. Mode ABA
+    // must not let a delayed contribution recreate the old pending batch.
+    reporter.set_issue_confirmed_notifications(false);
+    reporter.set_issue_confirmed_notifications(true);
+    let current = failure_ticket(&owner, &reporter);
+    assert!(queue
+        .record_drop(&owner, first, BACnetTimeStamp::SequenceNumber(65535), 7)
+        .is_none());
+    assert_eq!(owner.audit_resources(), (true, 0, 64));
+    assert!(queue
+        .record_drop(&owner, current, BACnetTimeStamp::SequenceNumber(1), 3)
+        .is_none());
+    let (batch, permit, reserved) = worker.next().await.unwrap();
+    assert_eq!(batch.count, 3);
+    assert_eq!(batch.earliest, BACnetTimeStamp::SequenceNumber(1));
+    drop((permit, reserved));
+    assert!(worker.next().await.is_none());
+}
+
+#[tokio::test]
+async fn auditing_failure_context_change_wakes_separately_and_never_transfers_counts() {
+    let owner = NotificationTransactions::new();
+    let held: Vec<_> = (0..256).map(|_| reserve(&owner)).collect();
+    let mut reporter = failure_reporter();
+    let old = failure_ticket(&owner, &reporter);
+    let queue = owner.audit_failure_queue();
+    let mut worker = queue
+        .record_drop(&owner, old.clone(), BACnetTimeStamp::SequenceNumber(4), 7)
+        .unwrap();
+    let wake = Arc::new(CountWake::default());
+    let waker = std::task::Waker::from(wake.clone());
+    let mut cx = std::task::Context::from_waker(&waker);
+    {
+        let mut next = std::pin::pin!(worker.next());
+        assert!(next.as_mut().poll(&mut cx).is_pending());
+        reporter.set_issue_confirmed_notifications(false);
+        let new = failure_ticket(&owner, &reporter);
+        assert_eq!(
+            wake.0.load(Ordering::SeqCst),
+            1,
+            "context change is its own wake reason"
+        );
+        assert!(queue
+            .record_drop(&owner, new, BACnetTimeStamp::SequenceNumber(5), 2)
+            .is_none());
+        assert!(queue
+            .record_drop(&owner, old, BACnetTimeStamp::SequenceNumber(4), 9)
+            .is_none());
+        let Poll::Ready(Some((batch, permit, reserved))) = next.as_mut().poll(&mut cx) else {
+            panic!("unconfirmed context requires no released invoke ID")
+        };
+        assert_eq!(batch.count, 2);
+        assert_eq!(batch.earliest, BACnetTimeStamp::SequenceNumber(5));
+        assert!(reserved.is_none());
+        assert_eq!(owner.active_count(), 256);
+        drop(permit);
+    }
+    assert!(worker.next().await.is_none());
+    drop(held);
+}
+
+#[tokio::test]
+async fn auditing_failure_timestamp_choice_changes_do_not_change_admission_order() {
+    use bacnet_types::primitives::Time;
+    let owner = NotificationTransactions::new();
+    let reporter = failure_reporter();
+    let first = failure_ticket(&owner, &reporter);
+    let second = failure_ticket(&owner, &reporter);
+    let clock_time = BACnetTimeStamp::Time(Time {
+        hour: 12,
+        minute: 0,
+        second: 0,
+        hundredths: 0,
+    });
+    let queue = owner.audit_failure_queue();
+    let mut worker = queue.record_drop(&owner, second, clock_time, 1).unwrap();
+    assert!(queue
+        .record_drop(&owner, first, BACnetTimeStamp::SequenceNumber(99), 1)
+        .is_none());
+    let (batch, permit, reserved) = worker.next().await.unwrap();
+    assert_eq!(batch.count, 2);
+    assert_eq!(batch.earliest, BACnetTimeStamp::SequenceNumber(99));
+    drop((permit, reserved));
+    assert!(worker.next().await.is_none());
 }

@@ -49,6 +49,7 @@ pub(super) enum RecipientRoute {
     InvalidDevice,
 }
 
+#[derive(PartialEq, Eq)]
 pub(super) struct ConfirmedRecipientRoute {
     pub(super) canonical_peer: bacnet_endpoint_core::coordinator::CanonicalPeer,
     pub(super) local_target: Option<MacAddr>,
