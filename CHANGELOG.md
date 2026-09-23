@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Endpoint source Device recipient (Refs #728, pre-1.0 API break):** removes
+  `StaticSourceAuditRecipient`, `static_source_audit_recipient` and ownership-only
+  source mode. Provision the built-in Device's typed recipient; configure route
+  facts with `source_audit_device_binding`. Source selection requires that value
+  even at NONE. Direct IPv4 B/IP `ClientOnly` supports trusted local changes;
+  `Both` requires the existing Device write authorizer for inbound WP. Actual
+  changes atomically admit old/new notifications; in-flight READs retain their
+  captured destination. Endpoint WPM stays unsupported. Canceled session/ingress
+  stop retains joins, and source overrides become inactive on sealing while
+  membership remains protected through task quiescence. See the
+  [bounded contract](docs/device-audit-recipient.md).
+
 - **Target Device Audit recipient (Refs #728, pre-1.0 API break):** recipient state
   moves from `AuditReporterConfig.recipient` into the built-in Device. Python uses
   `configure_audit_recipient` instead of the removed `recipient_device_instance`
@@ -17,8 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Active Device/Reporter membership is protected through shutdown quiescence.
   `ObjectDatabase::remove` and `with_object_adapter` now return `Result` to report
   protection denial. The raw mutable Device hook becomes an operation capability.
-  See the [bounded contract](docs/device-audit-recipient.md); source migration and
-  broader Audit conformance remain open.
+  See the [bounded contract](docs/device-audit-recipient.md); broader Audit
+  conformance remains open.
 
 - **One LifeSafetyOperation outcome contract (Refs #752, pre-1.0 API break):**
   `BACnetObject::apply_life_safety_operation` now returns
@@ -62,7 +74,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Bounded endpoint source ReadProperty audit reporting (Refs #727, #345):**
   Direct B/IP IPv4 `ClientOnly`/`Both` sessions can send source READ records to
-  their static recipient in either notification mode. Actual invoke IDs,
+  their Device-owned recipient in either notification mode. Actual invoke IDs,
   request-time timestamps and terminal outcomes survive caller cancellation and
   retries; ACK object/property/index must match before success is recorded.
   Source emission requires absent Monitored_Objects. Separate 64-operation and
@@ -70,8 +82,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   joined session shutdown bound retained work. Queue expiry prevents canceled
   notifications from being transmitted later; already-started sends remain
   ambiguous. Delivery failure updates Reporter health without changing the READ
-  result. Device recipient properties and full Audit Reporting conformance
-  remain out of scope. Source loss summaries are described above. See
+  result. The Device recipient extension is described above; full Audit Reporting
+  conformance remains out of scope. Source loss summaries are described above. See
   [endpoint source READ](docs/rust-api.md#bounded-endpoint-source-readproperty-reporting).
   **Pre-1.0 internal Rust API cleanup:** shared coordinator
   `LeaseOwner::ServerNotification` / `LeaseMetadata::server_notification` become

@@ -1,4 +1,4 @@
-//! Source ownership is configuration only: no traffic, records or worker lifecycle.
+//! Complete source ownership preflight, projection and retry boundaries.
 
 use super::*;
 use bacnet_objects::audit::AuditReporterObject;
@@ -16,6 +16,7 @@ struct Observations {
     starts: AtomicUsize,
     stops: AtomicUsize,
     sends: AtomicUsize,
+    bip_reads: AtomicUsize,
 }
 
 struct ObservedTransport {
@@ -24,6 +25,17 @@ struct ObservedTransport {
 }
 
 impl TransportPort for ObservedTransport {
+    fn bip_broadcast_endpoint(&self) -> Option<std::net::SocketAddrV4> {
+        self.observed.bip_reads.fetch_add(1, Ordering::SeqCst);
+        Some(std::net::SocketAddrV4::new(
+            [192, 168, 1, 255].into(),
+            if self.observed.starts.load(Ordering::SeqCst) == 0 {
+                0
+            } else {
+                47808
+            },
+        ))
+    }
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
         self.observed.starts.fetch_add(1, Ordering::SeqCst);
         self.inner.start().await
@@ -61,6 +73,15 @@ fn database() -> ObjectDatabase {
         .unwrap()
         .build_database()
         .unwrap();
+    db.get_mut(&oid(ObjectType::DEVICE, 123))
+        .unwrap()
+        .device_authority_internal()
+        .unwrap()
+        .provision_audit_recipient(bacnet_types::constructed::BACnetRecipient::Device(oid(
+            ObjectType::DEVICE,
+            456,
+        )))
+        .unwrap();
     for instance in [1, 2] {
         let mut reporter =
             AuditReporterObject::new(instance, format!("Reporter-{instance}")).unwrap();
@@ -93,6 +114,11 @@ fn session(
         SessionConfig::default(),
     )
     .unwrap();
+    let session = if role == SessionRole::Both {
+        session.with_device_writes(Arc::new(|_| true))
+    } else {
+        session
+    };
     (session, peer, observed)
 }
 
@@ -134,7 +160,7 @@ async fn success(role: SessionRole) {
     let weak = Arc::downgrade(db);
     assert_eq!(
         Arc::strong_count(db),
-        if role == SessionRole::Both { 2 } else { 1 }
+        if role == SessionRole::Both { 3 } else { 2 }
     );
     {
         let db = db.read().await;
@@ -172,7 +198,7 @@ async fn success(role: SessionRole) {
     session.stop().await.unwrap();
     assert_eq!(observed.stops.load(Ordering::SeqCst), 1);
     assert!(!session.is_running());
-    assert!(source(
+    assert!(!source(
         &*session.database.as_ref().unwrap().read().await,
         selected()
     ));
@@ -216,8 +242,10 @@ async fn rejected(
         None
     };
     for _ in 0..2 {
+        let result = session.start().await;
         assert!(
-            matches!(session.start().await, Err(Error::Encoding(message)) if message.contains(expected))
+            matches!(&result, Err(Error::Encoding(message)) if message.contains(expected)),
+            "expected {expected}: {result:?}"
         );
         assert_eq!(
             session.lifecycle.load(Ordering::Acquire),
@@ -308,7 +336,7 @@ async fn device_validation_is_atomic_and_correctable() {
             if case == "mismatch" {
                 "does not match session identity"
             } else {
-                "requires exactly one local Device"
+                "exactly one"
             },
         )
         .await;
@@ -518,5 +546,59 @@ async fn repeated_pre_start_selection_only_wraps_the_final_choice() {
         assert!(source(&db, target()));
         assert!(!db.get(&target()).unwrap().is_deleteable());
     }
+    session.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn selected_source_requires_typed_recipient_before_start() {
+    let (session, _peer, observed) = session(SessionRole::ClientOnly);
+    let mut db = database();
+    db.remove(&oid(ObjectType::DEVICE, 123)).unwrap();
+    db.add(Box::new(
+        bacnet_objects::device::DeviceObject::new(bacnet_objects::device::DeviceConfig {
+            instance: 123,
+            ..Default::default()
+        })
+        .unwrap(),
+    ))
+    .unwrap();
+    db.get_mut(&selected())
+        .unwrap()
+        .configure_audit_reporter_internal(
+            AuditLevel::NONE,
+            bacnet_types::bitstring::AuditOperationFlags::empty(),
+            false,
+            None,
+            bacnet_types::bitstring::BACnetPriorityFilter::empty(),
+        )
+        .unwrap();
+    let mut session = session
+        .with_database(db)
+        .with_source_audit_reporter(selected());
+    assert!(
+        session.start().await.is_err(),
+        "source profile must not activate without its Device value"
+    );
+    assert_eq!(observed.starts.load(Ordering::SeqCst), 0);
+    assert!(!source(
+        &*session.database.as_ref().unwrap().read().await,
+        selected()
+    ));
+    // NONE still requires provision; repairing that value leaves startup retryable.
+    session = session.with_database(database());
+    session.start().await.unwrap();
+    session.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn source_both_requires_explicit_authorizer_before_owner_installation() {
+    let (mut session, _peer, observed) = session(SessionRole::Both);
+    session.device_write_authorizer = None;
+    let mut session = session
+        .with_database(database())
+        .with_source_audit_reporter(selected());
+    rejected(&mut session, &observed, "explicit Device write authorizer").await;
+    session = session.with_device_writes(Arc::new(|_| false));
+    session.start().await.unwrap();
     session.stop().await.unwrap();
 }

@@ -505,3 +505,6 @@ async fn full_policy_route_returns_the_unrouted_envelope_on_reclaim() {
     assert_eq!(handle.stops.load(Ordering::SeqCst), 1);
     drop(ingress);
 }
+
+#[path = "endpoint_ingress_lifecycle_tests.rs"]
+mod lifecycle;

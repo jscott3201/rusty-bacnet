@@ -35,6 +35,10 @@ pub(super) fn record_drop(
             if !current
                 || db.find_by_type(ObjectType::DEVICE) != [batch.context.device]
                 || source.operations.is_closed()
+                || !source
+                    .runtime
+                    .upgrade()
+                    .is_some_and(|runtime| runtime.owner.is_active())
             {
                 continue;
             }

@@ -44,7 +44,10 @@ fn device_write_target<'a>(
     if write.object_identifier != selected
         || selected.object_type() != ObjectType::DEVICE
         || selected.instance_number() == ObjectIdentifier::MAX_INSTANCE
-        || write.property_identifier != PropertyIdentifier::DESCRIPTION
+        || !matches!(
+            write.property_identifier,
+            PropertyIdentifier::DESCRIPTION | PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT
+        )
     {
         return Err(property_error(
             ErrorClass::PROPERTY,
@@ -59,7 +62,7 @@ fn device_write_target<'a>(
 
 /// Composition-visible inbound responder (narrow service scope).
 ///
-/// Handles `ReadProperty` and optionally authorized local Device.Description
+/// Handles `ReadProperty` and optionally authorized local Device Description/active recipient
 /// `WriteProperty`, plus `Reject`/`Abort`. Full service parity is a later
 /// packet. Inbound transactions reuse the
 /// wire invoke ID directly and NEVER allocate from the shared outbound
@@ -120,10 +123,12 @@ impl EndpointResponder {
             None,
             &write.property_value,
         )?;
-        if !matches!(
-            value,
-            PropertyValue::CharacterString(_) | PropertyValue::Null
-        ) {
+        if write.property_identifier == PropertyIdentifier::DESCRIPTION
+            && !matches!(
+                value,
+                PropertyValue::CharacterString(_) | PropertyValue::Null
+            )
+        {
             return Err(Error::Protocol {
                 class: ErrorClass::PROPERTY.to_raw() as u32,
                 code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
@@ -149,12 +154,37 @@ impl EndpointResponder {
         let MutationTarget::WriteProperty(write) = &context.target else {
             unreachable!("Device write context")
         };
-        device_write_target(&mut db, *device, write)?.write_property(
-            write.property_identifier,
-            write.property_array_index,
-            value,
-            write.priority,
-        )
+        let mut authority = device_write_target(&mut db, *device, write)?;
+        if write.property_identifier == PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT {
+            let source = bacnet_objects::device::AuditWriteSource {
+                device: bacnet_types::constructed::BACnetRecipient::Address(
+                    bacnet_types::constructed::BACnetAddress {
+                        network_number: received
+                            .source_network
+                            .as_ref()
+                            .map_or(0, |source| source.network),
+                        mac_address: received.source_network.as_ref().map_or_else(
+                            || received.source_mac.clone(),
+                            |source| source.mac_address.clone(),
+                        ),
+                    },
+                ),
+                invoke_id: request.invoke_id,
+            };
+            authority.write_audit_recipient(
+                write.property_array_index,
+                value,
+                write.priority,
+                Some(&source),
+            )
+        } else {
+            authority.write_property(
+                write.property_identifier,
+                write.property_array_index,
+                value,
+                write.priority,
+            )
+        }
     }
 
     /// Handles one inbound request, preserving provenance structurally.

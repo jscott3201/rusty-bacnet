@@ -122,7 +122,8 @@ impl NotificationTransactions {
         })
     }
 
-    pub(super) fn set_audit_owner(&self, owner: &Arc<bacnet_objects::database::AuditOwnership>) {
+    #[doc(hidden)]
+    pub fn set_audit_owner(&self, owner: &Arc<bacnet_objects::database::AuditOwnership>) {
         self.workers.lock().unwrap().audit_owner = Some(Arc::downgrade(owner));
     }
     pub(super) fn audit_owner_lease(
@@ -135,11 +136,13 @@ impl NotificationTransactions {
             .as_ref()
             .and_then(std::sync::Weak::upgrade)
     }
-    pub(super) fn seal_audit_owner(&self, owner: &bacnet_objects::database::AuditOwnership) {
+    #[doc(hidden)]
+    pub fn seal_audit_owner(&self, owner: &bacnet_objects::database::AuditOwnership) {
         let _workers = self.workers.lock().unwrap();
         owner.seal();
     }
-    pub(super) fn commit_audit<F: Future<Output = ()> + Send + 'static>(
+    #[doc(hidden)]
+    pub fn commit_audit<F: Future<Output = ()> + Send + 'static>(
         &self,
         prepare_commit: impl FnOnce() -> Result<F, Error>,
     ) -> Result<(), Error> {

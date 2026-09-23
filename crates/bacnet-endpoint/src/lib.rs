@@ -48,7 +48,8 @@
 //! - Narrow server scope: the endpoint server role executes `ReadProperty`
 //!   (+ `Reject`/`Abort` + segmentation-`Abort`). Explicit
 //!   [`EndpointSession::with_device_writes`](session::EndpointSession::with_device_writes)
-//!   enables authorized writes to the one local Device's Description, with
+//!   enables authorized writes to the one local Device's Description and its
+//!   installed source Audit recipient, with
 //!   deterministic and real B/IP loopback tests. Full `bacnet-server`
 //!   dispatch parity is out of scope.
 //!
@@ -69,7 +70,8 @@
 //! # Ownership and lifecycle
 //!
 //! - [`session::EndpointSession`] is the sole lifecycle owner:
-//!   start-once/stop-once; `Drop` aborts without orphaning. Role handles
+//!   start-once/completed-stop-once; canceled stop can resume joining. `Drop`
+//!   aborts owned tasks and retains Audit membership through their quiescence. Role handles
 //!   expose no lifecycle methods.
 //! - Role handles ([`ClientRoleHandle`], [`ServerRoleHandle`]) hold only a
 //!   [`Weak`](std::sync::Weak) session token plus role state. Dropping or
@@ -79,7 +81,8 @@
 //!   drive lifecycle; `&self` borrows (`client`, `server`, counters,
 //!   `broadcast_i_am`) stay usable while running. Cancellation is
 //!   await-boundary only: aborting a pending `read_property*` future releases
-//!   its exact coordinator lease via RAII; `stop()` seals admission, cancels
+//!   its exact coordinator lease via RAII for ordinary reads. Admitted audited
+//!   reads are session-owned through their terminal outcome. `stop()` seals admission, cancels
 //!   waiters, and joins dispatch exactly once.
 //! - All fallible boundaries return typed [`bacnet_types::error::Error`];
 //!   queue-capacity, BBMD-ordering, SC identity/heartbeat, and MS/TP

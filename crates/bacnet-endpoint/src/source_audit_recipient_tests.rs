@@ -1,7 +1,7 @@
-//! Private static groundwork only: no Device property, reporting or delivery.
+//! Typed source recipient provision, route configuration and atomic preflight.
 
 use super::*;
-use crate::bip::{BipEndpointBuilder, StaticSourceAuditRecipient};
+use crate::bip::BipEndpointBuilder;
 use bacnet_types::enums::Reliability;
 use std::net::{Ipv4Addr, SocketAddrV4};
 
@@ -35,135 +35,72 @@ fn configured_session(
     Arc<Observations>,
 ) {
     let mut built = builder()
-        .static_source_audit_recipient(destination(), address())
+        .source_audit_device_binding(destination(), address())
         .build_session()
         .unwrap();
     let (mut session, peer, observed) = session(role);
-    session.static_source_audit_recipient = built.static_source_audit_recipient.take();
+    session.source_audit_bindings = std::mem::take(&mut built.source_audit_bindings);
     (session, peer, observed)
 }
 
 #[test]
-fn invalid_destinations_fail_at_build_before_any_session_or_transport_start() {
-    for (device, address, expected) in [
-        (selected(), address(), "must identify a Device"),
+fn source_bindings_validate_all_entries_and_cannot_be_discarded() {
+    for (device, endpoint) in [
+        (selected(), address()),
         (
-            oid(ObjectType::DEVICE, ObjectIdentifier::WILDCARD_INSTANCE),
+            oid(ObjectType::DEVICE, ObjectIdentifier::MAX_INSTANCE),
             address(),
-            "concrete addressable Device, not a wildcard instance",
         ),
         (
             destination(),
             SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 47808),
-            "direct unicast IPv4",
         ),
         (
             destination(),
             SocketAddrV4::new(Ipv4Addr::new(224, 0, 0, 1), 47808),
-            "direct unicast IPv4",
         ),
-        (
-            destination(),
-            SocketAddrV4::new(Ipv4Addr::new(239, 255, 255, 255), 47808),
-            "direct unicast IPv4",
-        ),
-        (
-            destination(),
-            SocketAddrV4::new(Ipv4Addr::BROADCAST, 47808),
-            "direct unicast IPv4",
-        ),
-        (
-            destination(),
-            SocketAddrV4::new(BROADCAST, 47809),
-            "direct unicast IPv4",
-        ),
-        (
-            destination(),
-            SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0),
-            "nonzero UDP port",
-        ),
+        (destination(), SocketAddrV4::new(Ipv4Addr::BROADCAST, 47808)),
+        (destination(), SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)),
     ] {
-        assert!(matches!(
-            builder().static_source_audit_recipient(device, address).build_session(),
-            Err(Error::Encoding(message)) if message.contains(expected)
-        ));
-    }
-}
-
-#[test]
-fn concrete_device_instance_boundaries_are_retained() {
-    for instance in [0, ObjectIdentifier::MAX_ADDRESSABLE_INSTANCE] {
-        let device = oid(ObjectType::DEVICE, instance);
-        let session = builder()
-            .static_source_audit_recipient(device, address())
+        assert!(builder()
+            .source_audit_device_binding(device, endpoint)
             .build_session()
-            .unwrap();
-        assert_eq!(
-            session.static_source_audit_recipient,
-            Some(StaticSourceAuditRecipient {
-                device,
-                address: address()
-            })
-        );
+            .is_err());
     }
-}
-
-#[test]
-fn only_last_pre_start_value_is_validated_and_retained_exactly() {
-    let session = builder()
-        .static_source_audit_recipient(selected(), SocketAddrV4::new(BROADCAST, 0))
-        .static_source_audit_recipient(destination(), address())
-        .build_session()
-        .unwrap();
-    assert_eq!(
-        session.static_source_audit_recipient,
-        Some(StaticSourceAuditRecipient {
-            device: destination(),
-            address: SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 42), 47809),
-        })
-    );
-    assert!(matches!(
-        builder()
-            .static_source_audit_recipient(destination(), address())
-            .static_source_audit_recipient(selected(), address())
-            .build_session(),
-        Err(Error::Encoding(message)) if message.contains("must identify a Device")
-    ));
     assert!(builder()
+        .source_audit_device_binding(destination(), address())
+        .source_audit_device_binding(destination(), address())
         .build_session()
-        .unwrap()
-        .static_source_audit_recipient
-        .is_none());
-}
-
-#[test]
-fn bare_transport_cannot_silently_discard_endpoint_configuration() {
-    assert!(matches!(
-        builder()
-            .static_source_audit_recipient(destination(), address())
-            .build_transport(),
-        Err(Error::Encoding(message)) if message.contains("requires build_session()")
-    ));
+        .is_err());
+    assert!(builder()
+        .source_audit_device_binding(destination(), address())
+        .build_transport()
+        .is_err());
+    for instance in [0, ObjectIdentifier::MAX_INSTANCE - 1] {
+        assert!(builder()
+            .source_audit_device_binding(oid(ObjectType::DEVICE, instance), address())
+            .build_session()
+            .is_ok());
+    }
 }
 
 #[tokio::test]
-async fn recipient_without_source_selection_is_atomic_and_correctable() {
-    let (session, _peer, observed) = configured_session(SessionRole::Both);
+async fn provision_and_bindings_without_source_selection_remain_inert() {
+    let (session, _peer, observed) = configured_session(SessionRole::ClientOnly);
     let mut session = session.with_database(database());
-    let recipient = session.static_source_audit_recipient;
-    rejected(
-        &mut session,
-        &observed,
-        "requires a selected source Audit Reporter",
-    )
-    .await;
-    assert_eq!(session.static_source_audit_recipient, recipient);
-    session = session.with_source_audit_reporter(selected());
     session.start().await.unwrap();
-    assert_eq!(observed.starts.load(Ordering::SeqCst), 1);
-    session.stop().await.unwrap();
-    assert_eq!(session.static_source_audit_recipient, recipient);
+    assert!(!session
+        .database
+        .as_ref()
+        .unwrap()
+        .read()
+        .await
+        .get(&oid(ObjectType::DEVICE, 123))
+        .unwrap()
+        .property_list()
+        .contains(&PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT));
     assert_eq!(observed.sends.load(Ordering::SeqCst), 0);
+    session.stop().await.unwrap();
 }
 
 #[tokio::test]
@@ -192,10 +129,10 @@ async fn recipient_preserves_all_source_preflight_failures_and_retry() {
         let (session, _peer, observed) = configured_session(SessionRole::Both);
         let mut db = database();
         let expected = match case {
-            "no database" => "requires an attached local database",
+            "no database" => "attached local database",
             "no device" => {
                 db.remove(&oid(ObjectType::DEVICE, 123)).unwrap();
-                "requires exactly one local Device"
+                "exactly one"
             }
             "two devices" => {
                 let mut other = crate::identity::DeviceIdentity::new(456, 42)
@@ -204,7 +141,7 @@ async fn recipient_preserves_all_source_preflight_failures_and_retry() {
                     .unwrap();
                 db.add(other.remove(&destination()).unwrap().unwrap())
                     .unwrap();
-                "requires exactly one local Device"
+                "exactly one"
             }
             "identity mismatch" => "does not match session identity",
             "wrong selection type" => "must be an Audit Reporter",
@@ -253,17 +190,17 @@ async fn recipient_preserves_all_source_preflight_failures_and_retry() {
         if case != "no database" {
             session = session.with_database(db);
         }
-        let recipient = session.static_source_audit_recipient;
+        let bindings = session.source_audit_bindings.clone();
         // Reuses pointer/source/deletion assertions and exact start/send counters.
         rejected(&mut session, &observed, expected).await;
-        assert_eq!(session.static_source_audit_recipient, recipient);
+        assert_eq!(session.source_audit_bindings, bindings);
         session = session
             .with_database(database())
             .with_identity(crate::identity::DeviceIdentity::new(123, 42).unwrap())
             .with_source_audit_reporter(selected());
         session.start().await.unwrap();
         session.stop().await.unwrap();
-        assert_eq!(session.static_source_audit_recipient, recipient);
+        assert_eq!(session.source_audit_bindings, bindings);
         assert_eq!(observed.starts.load(Ordering::SeqCst), 1);
         assert_eq!(observed.sends.load(Ordering::SeqCst), 0);
         assert_eq!(session.active_leases(), 0);
@@ -291,11 +228,11 @@ async fn retained_config_sets_availability_without_clearing_failure_or_sending()
             let mut session = session
                 .with_database(db)
                 .with_source_audit_reporter(selected());
-            let recipient = session.static_source_audit_recipient;
+            let bindings = session.source_audit_bindings.clone();
             session.start().await.unwrap();
             tokio::time::advance(Duration::from_secs(60)).await;
             tokio::task::yield_now().await;
-            assert_eq!(session.static_source_audit_recipient, recipient);
+            assert_eq!(session.source_audit_bindings, bindings);
             assert_eq!(observed.sends.load(Ordering::SeqCst), 0);
             assert_eq!(session.active_leases(), 0);
             {
@@ -304,7 +241,7 @@ async fn retained_config_sets_availability_without_clearing_failure_or_sending()
             }
             let weak = Arc::downgrade(session.database.as_ref().unwrap());
             session.stop().await.unwrap();
-            assert_eq!(session.static_source_audit_recipient, recipient);
+            assert_eq!(session.source_audit_bindings, bindings);
             assert_eq!(session.active_leases(), 0);
             drop(session);
             assert!(weak.upgrade().is_none());
@@ -372,24 +309,18 @@ async fn direct_bip_ipv4_client_only_and_both_start_stop_silently() {
             let mut session = builder()
                 .role(role)
                 .database(db)
-                .static_source_audit_recipient(destination(), address)
+                .source_audit_device_binding(destination(), address)
                 .build_session()
                 .unwrap();
-            // Real B/IP path also remains ready when source selection is absent.
-            assert!(
-                matches!(session.start().await, Err(Error::Encoding(message))
-                if message.contains("requires a selected source Audit Reporter"))
-            );
-            assert_eq!(
-                session.lifecycle.load(Ordering::Acquire),
-                Lifecycle::Ready as u8
-            );
+            if role == SessionRole::Both {
+                session = session.with_device_writes(Arc::new(|_| true));
+            }
             session = session.with_source_audit_reporter(selected());
-            let recipient = session.static_source_audit_recipient;
+            let bindings = session.source_audit_bindings.clone();
             session.start().await.unwrap();
             assert!(session.client().is_some());
             assert_eq!(session.server().is_some(), role == SessionRole::Both);
-            assert_eq!(session.static_source_audit_recipient, recipient);
+            assert_eq!(session.source_audit_bindings, bindings);
             {
                 let db = session.database.as_ref().unwrap().read().await;
                 assert!(source(&db, selected()));
@@ -406,12 +337,24 @@ async fn direct_bip_ipv4_client_only_and_both_start_stop_silently() {
                     PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw())
                 );
                 let device = db.get(&oid(ObjectType::DEVICE, 123)).unwrap();
-                assert!(!device
+                assert!(device
                     .property_list()
                     .contains(&PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT));
                 assert!(device
                     .read_property(PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT, None)
-                    .is_err());
+                    .is_ok());
+                assert!(device
+                    .required_properties()
+                    .contains(&PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT));
+                assert!(
+                    device.is_writable_property(PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT)
+                );
+                assert!(!device
+                    .required_properties()
+                    .contains(&PropertyIdentifier::AUDIT_LEVEL));
+                assert!(!device
+                    .required_properties()
+                    .contains(&PropertyIdentifier::AUDITABLE_OPERATIONS));
             }
             let mut bytes = [0; 2048];
             assert!(
@@ -421,7 +364,7 @@ async fn direct_bip_ipv4_client_only_and_both_start_stop_silently() {
             );
             assert_eq!(session.active_leases(), 0);
             session.stop().await.unwrap();
-            assert_eq!(session.static_source_audit_recipient, recipient);
+            assert_eq!(session.source_audit_bindings, bindings);
             drop(session);
             assert!(
                 matches!(peer.try_recv_from(&mut bytes), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock)
@@ -429,4 +372,52 @@ async fn direct_bip_ipv4_client_only_and_both_start_stop_silently() {
             assert_eq!(status.begin_delivery(), initial_delivery);
         }
     }
+}
+
+#[tokio::test]
+async fn source_post_start_broadcast_fact_invalidates_device_route_without_callbacks() {
+    let (session, _peer, observed) = session(SessionRole::ClientOnly);
+    let mut session = session
+        .with_database(database())
+        .with_source_audit_reporter(selected());
+    session
+        .source_audit_bindings
+        .push((destination(), "192.168.1.255:47808".parse().unwrap()));
+    session.start().await.unwrap();
+    assert_eq!(observed.bip_reads.load(Ordering::SeqCst), 2);
+    {
+        let mut db = session.database.as_ref().unwrap().write().await;
+        let reporter = db
+            .get(&selected())
+            .unwrap()
+            .audit_reporter_internal()
+            .unwrap();
+        assert_eq!(
+            reliability(reporter),
+            PropertyValue::Enumerated(Reliability::CONFIGURATION_ERROR.to_raw())
+        );
+        let mut bytes = bytes::BytesMut::new();
+        bacnet_encoding::constructed::encode_recipient(
+            &mut bytes,
+            &bacnet_types::constructed::BACnetRecipient::Address(
+                bacnet_types::constructed::BACnetAddress {
+                    network_number: 0,
+                    mac_address: bacnet_types::MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC0]),
+                },
+            ),
+        );
+        assert!(db
+            .get_mut(&oid(ObjectType::DEVICE, 123))
+            .unwrap()
+            .write_property(
+                PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT,
+                None,
+                PropertyValue::ApplicationData(bytes.to_vec()),
+                None
+            )
+            .is_err());
+    }
+    assert_eq!(observed.bip_reads.load(Ordering::SeqCst), 2);
+    assert_eq!(observed.sends.load(Ordering::SeqCst), 0);
+    session.stop().await.unwrap();
 }

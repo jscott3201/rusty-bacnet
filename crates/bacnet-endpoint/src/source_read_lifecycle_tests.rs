@@ -137,8 +137,13 @@ async fn source_read_whole_operation_capacity_bounds_prelease_waiters_and_stop()
     .unwrap()
     .is_err());
     // Seal while admitted caller futures wait on the DB: no task/lease/egress yet.
-    session.stop().await.unwrap();
+    let token = session.shared.token.clone();
+    let stop = session.stop();
+    tokio::pin!(stop);
+    assert!(timeout(Duration::from_millis(10), &mut stop).await.is_err());
+    assert!(!token.is_open());
     drop(guard);
+    stop.await.unwrap();
     for task in tasks {
         assert!(timeout(WAIT, task).await.unwrap().unwrap().is_err());
     }

@@ -21,6 +21,7 @@ fn oid(kind: ObjectType, instance: u32) -> ObjectIdentifier {
 }
 struct Fixture {
     source: Arc<SourceRead>,
+    _runtime: Arc<recipient::SourceRecipient>,
     owner: Arc<NotificationTransactions>,
     coordinator: Arc<OutboundTransactionCoordinator>,
     ingress: EndpointIngress<LoopbackTransport>,
@@ -30,6 +31,9 @@ struct Fixture {
 }
 impl Fixture {
     async fn new(confirmed: bool) -> Self {
+        Self::with_max(confirmed, 1476).await
+    }
+    async fn with_max(confirmed: bool, max_apdu: u16) -> Self {
         let mac = bacnet_transport::bvll::encode_bip_mac([127, 0, 0, 1], 30002);
         let (local, remote) = LoopbackTransport::pair(vec![1], mac.to_vec());
         let mut peer = NetworkLayer::new(remote);
@@ -57,20 +61,32 @@ impl Fixture {
         db.add(Box::new(reporter)).unwrap();
         let coordinator = Arc::new(OutboundTransactionCoordinator::new());
         let owner = NotificationTransactions::with_coordinator(coordinator.clone());
-        let source = SourceRead::new(
+        db.get_mut(&oid(ObjectType::DEVICE, 123))
+            .unwrap()
+            .device_authority_internal()
+            .unwrap()
+            .provision_audit_recipient(BACnetRecipient::Device(oid(ObjectType::DEVICE, 999)))
+            .unwrap();
+        let (source, runtime) = SourceRead::new(
             Arc::new(RwLock::new(db)),
             oid(ObjectType::AUDIT_REPORTER, 1),
-            StaticSourceAuditRecipient {
-                device: oid(ObjectType::DEVICE, 999),
-                address: "127.0.0.1:30002".parse().unwrap(),
-            },
+            SourceRoutes::new(
+                &[(
+                    oid(ObjectType::DEVICE, 999),
+                    "127.0.0.1:30002".parse().unwrap(),
+                )],
+                "255.255.255.255:47808".parse().unwrap(),
+            )
+            .unwrap(),
             Ipv4Addr::BROADCAST,
             receivers.egress,
             &owner,
-            1476,
-        );
+            max_apdu,
+        )
+        .unwrap();
         Self {
             source,
+            _runtime: runtime,
             owner,
             coordinator,
             ingress,
@@ -130,9 +146,9 @@ impl Fixture {
             &self.source,
             &self.owner,
             confirmed,
+            MacAddr::from_slice(self.peer.local_mac()),
             notification,
-            self.status.clone(),
-            self.status.begin_delivery(),
+            delivery::Completion::new(self.status.clone(), self.status.begin_delivery()),
             Some(self.ticket(confirmed)),
         );
     }
@@ -268,3 +284,6 @@ async fn source_failure_invalid_oversized_and_closed_records_do_not_enter_count(
         fixture.stop().await;
     }
 }
+
+#[path = "source_recipient_admission_tests.rs"]
+mod recipient_changes;

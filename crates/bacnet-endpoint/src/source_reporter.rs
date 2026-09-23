@@ -1,7 +1,8 @@
 //! Endpoint-private ownership projection. There is no source flag in bacnet-objects.
 
+use bacnet_objects::database::AuditOwnership;
 use std::borrow::Cow;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use bacnet_objects::audit::{
@@ -33,28 +34,33 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue};
 
 struct SourceReporter {
+    owner: Weak<AuditOwnership>,
     wrapped: Box<dyn BACnetObject>,
-    source_emission: bool,
 }
 
-// The only production caller is EndpointSession's complete synchronous preflight.
-// This is deliberately not pub or pub(crate): only the private session module
-// can install the adapter, and no cross-crate capability can mint source state.
-pub(super) fn install(
+// Installation belongs to the complete endpoint source owner. The weak lease
+// cannot retain database membership after that owner and its workers quiesce.
+pub(crate) fn install(
     slot: &mut Box<dyn BACnetObject>,
-    source_emission: bool,
+    owner: &Arc<AuditOwnership>,
 ) -> Result<(), Error> {
     // Allocate everything before touching the live entry. An inert built-in
     // Reporter is just a temporary move placeholder, never queried or published.
     // After the swap there is no allocation, fallible operation, await, or user
     // callback (including Drop: the overwritten placeholder is our built-in).
     let mut adapter = Box::new(SourceReporter {
+        owner: Arc::downgrade(owner),
         wrapped: Box::new(AuditReporterObject::new(0, "")?),
-        source_emission,
     });
     std::mem::swap(slot, &mut adapter.wrapped);
     *slot = adapter;
     Ok(())
+}
+
+impl SourceReporter {
+    fn active(&self) -> bool {
+        self.owner.upgrade().is_some_and(|owner| owner.is_active())
+    }
 }
 
 // Delegate every BACnetObject method, including defaulted/hidden hooks: inheriting
@@ -77,7 +83,7 @@ impl BACnetObject for SourceReporter {
         selectors: Option<Vec<BACnetObjectSelector>>,
         priorities: BACnetPriorityFilter,
     ) -> Result<(), Error> {
-        if self.source_emission && selectors.is_some() {
+        if self.active() && selectors.is_some() {
             return Err(Error::Encoding(
                 "source READ does not support Monitored_Objects".into(),
             ));
@@ -99,7 +105,7 @@ impl BACnetObject for SourceReporter {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
-        if property == PropertyIdentifier::AUDIT_SOURCE_REPORTER {
+        if self.active() && property == PropertyIdentifier::AUDIT_SOURCE_REPORTER {
             Ok(PropertyValue::Boolean(true))
         } else {
             self.wrapped.read_property(property, array_index)
@@ -113,7 +119,7 @@ impl BACnetObject for SourceReporter {
         value: PropertyValue,
         priority: Option<u8>,
     ) -> Result<(), Error> {
-        if property == PropertyIdentifier::AUDIT_SOURCE_REPORTER {
+        if self.active() && property == PropertyIdentifier::AUDIT_SOURCE_REPORTER {
             return Err(Error::Protocol {
                 class: ErrorClass::PROPERTY.to_raw() as u32,
                 code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
@@ -160,7 +166,7 @@ impl BACnetObject for SourceReporter {
     }
 
     fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
-        property != PropertyIdentifier::AUDIT_SOURCE_REPORTER
+        (!self.active() || property != PropertyIdentifier::AUDIT_SOURCE_REPORTER)
             && self.wrapped.is_writable_property(property)
     }
 
@@ -173,7 +179,7 @@ impl BACnetObject for SourceReporter {
     }
 
     fn is_deleteable(&self) -> bool {
-        false
+        !self.active() && self.wrapped.is_deleteable()
     }
 
     fn required_properties(&self) -> Cow<'static, [PropertyIdentifier]> {

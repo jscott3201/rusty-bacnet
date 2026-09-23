@@ -14,6 +14,9 @@ struct CountedTransport {
     starts: Arc<AtomicUsize>,
 }
 impl TransportPort for CountedTransport {
+    fn bip_broadcast_endpoint(&self) -> Option<std::net::SocketAddrV4> {
+        Some("255.255.255.255:47808".parse().unwrap())
+    }
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
         self.starts.fetch_add(1, Ordering::SeqCst);
         self.inner.start().await
@@ -205,6 +208,12 @@ async fn device_write_preflight_errors_are_atomic_and_retryable() {
 async fn endpoint_device_write_actual_ingress_rejects_source_reporter_and_stops() {
     let (session, mut peer, _) = session(SessionRole::Both);
     let mut db = database(&[123]);
+    db.get_mut(&oid(123))
+        .unwrap()
+        .device_authority_internal()
+        .unwrap()
+        .provision_audit_recipient(bacnet_types::constructed::BACnetRecipient::Device(oid(999)))
+        .unwrap();
     let reporter = bacnet_objects::audit::AuditReporterObject::new(1, "Source").unwrap();
     let selected = reporter.object_identifier();
     db.add(Box::new(reporter)).unwrap();

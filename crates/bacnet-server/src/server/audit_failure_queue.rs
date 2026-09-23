@@ -110,7 +110,8 @@ impl<R> AuditFailureQueue<R> {
 
 impl<R: PartialEq> AuditFailureQueue<R> {
     /// Retire pending old-generation summaries even if no new ordinary record arrives.
-    pub(in crate::server) fn recipient_changed(&self) {
+    #[doc(hidden)]
+    pub fn recipient_changed(&self) {
         let mut state = self.state.lock().unwrap();
         state.pending = None;
         state.current = None;

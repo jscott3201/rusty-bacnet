@@ -206,6 +206,9 @@ pub struct PolicyOutcome {
 
 /// Single-consumer queues produced when endpoint ingress starts.
 pub struct IngressReceivers {
+    /// Actual IPv4 B/IP broadcast endpoint after transport startup.
+    #[doc(hidden)]
+    pub bip_broadcast_endpoint: Option<std::net::SocketAddrV4>,
     /// Confirmed and unconfirmed request traffic.
     pub inbound_requests: mpsc::Receiver<ReceivedApdu>,
     /// Terminal response and segmentation traffic.
@@ -234,6 +237,7 @@ pub enum ClassifierExit {
 enum Lifecycle {
     Ready,
     Running,
+    Stopping,
     Stopped,
 }
 
@@ -260,6 +264,12 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
         }
     }
 
+    /// Pre-start link capability; never retains or exposes a transport reference.
+    #[doc(hidden)]
+    pub fn bip_broadcast_endpoint(&self) -> Option<std::net::SocketAddrV4> {
+        self.network.as_ref()?.transport().bip_broadcast_endpoint()
+    }
+
     /// Starts the transport, network layer, and classifier task once.
     pub async fn start(&mut self) -> Result<IngressReceivers, Error> {
         if self.lifecycle != Lifecycle::Ready {
@@ -278,6 +288,7 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
             .as_mut()
             .ok_or_else(|| Error::Encoding("endpoint ingress network owner is missing".into()))?;
         let apdu_rx = network.start().await?;
+        let bip_broadcast_endpoint = network.transport().bip_broadcast_endpoint();
         let (inbound_tx, inbound_requests) = mpsc::channel(self.queue_capacity);
         let (terminal_tx, terminal_or_segment) = mpsc::channel(self.queue_capacity);
         let (policy_tx, policy_outcomes) = mpsc::channel(self.queue_capacity);
@@ -308,6 +319,7 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
         self.lifecycle = Lifecycle::Running;
 
         Ok(IngressReceivers {
+            bip_broadcast_endpoint,
             inbound_requests,
             terminal_or_segment,
             policy_outcomes,
@@ -317,11 +329,10 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
 
     /// Cancels classification, stops the network layer, and reports classifier exit.
     pub async fn stop(&mut self) -> Result<ClassifierExit, Error> {
-        if self.lifecycle != Lifecycle::Running {
+        if !matches!(self.lifecycle, Lifecycle::Running | Lifecycle::Stopping) {
             return Err(Error::Encoding("endpoint ingress is not running".into()));
         }
-
-        self.lifecycle = Lifecycle::Stopped;
+        self.lifecycle = Lifecycle::Stopping;
         if let Some(open) = self.egress_open.take() {
             open.store(false, Ordering::Release);
         }
@@ -329,14 +340,20 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
             let _ = cancel_tx.send(());
         }
 
-        match self.session_task.take() {
-            Some(task) => task.await.map_err(|error| {
-                Error::Encoding(format!("endpoint ingress session failed: {error}"))
-            })?,
+        let result = match self.session_task.as_mut() {
+            Some(task) => match task.await {
+                Ok(result) => result,
+                Err(error) => Err(Error::Encoding(format!(
+                    "endpoint ingress session failed: {error}"
+                ))),
+            },
             None => Err(Error::Encoding(
                 "endpoint ingress session task is missing".into(),
             )),
-        }
+        };
+        self.session_task.take();
+        self.lifecycle = Lifecycle::Stopped;
+        result
     }
 }
 
