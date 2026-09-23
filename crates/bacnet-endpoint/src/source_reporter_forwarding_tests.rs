@@ -680,3 +680,6 @@ async fn custom_capabilities_clocks_indexes_and_private_state_are_retained() {
 
 #[path = "source_reporter_intrinsic_tests.rs"]
 mod intrinsic;
+
+#[path = "source_reporter_life_safety_tests.rs"]
+mod life_safety;

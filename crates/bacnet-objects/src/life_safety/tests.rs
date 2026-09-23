@@ -125,7 +125,8 @@ fn point_life_safety_operation_combines_silenced_components() {
     assert_eq!(
         point
             .apply_life_safety_operation(LifeSafetyOperation::SILENCE_AUDIBLE)
-            .unwrap(),
+            .unwrap()
+            .effect,
         LifeSafetyOperationEffect::Applied
     );
     assert_eq!(
@@ -141,52 +142,13 @@ fn point_life_safety_operation_combines_silenced_components() {
     assert_eq!(
         point
             .apply_life_safety_operation(LifeSafetyOperation::SILENCE_VISUAL)
-            .unwrap(),
+            .unwrap()
+            .effect,
         LifeSafetyOperationEffect::Applied
     );
     assert_eq!(
         read_enumerated(&point, PropertyIdentifier::SILENCED),
         SilencedState::ALL_SILENCED.to_raw()
-    );
-}
-
-#[test]
-fn point_silence_and_unsilence_report_only_actual_silenced_and_expected_deltas() {
-    let mut point = LifeSafetyPointObject::new(1, "LSP-1").unwrap();
-    point.set_operation_expected(LifeSafetyOperation::SILENCE);
-
-    let outcome = point
-        .apply_life_safety_operation_detailed(LifeSafetyOperation::SILENCE)
-        .unwrap();
-
-    assert_eq!(outcome.effect, LifeSafetyOperationEffect::Applied);
-    assert_eq!(
-        outcome.changed_properties,
-        vec![
-            PropertyIdentifier::SILENCED,
-            PropertyIdentifier::OPERATION_EXPECTED,
-        ]
-    );
-
-    point.set_operation_expected(LifeSafetyOperation::SILENCE);
-    let outcome = point
-        .apply_life_safety_operation_detailed(LifeSafetyOperation::SILENCE)
-        .unwrap();
-    assert_eq!(
-        outcome.changed_properties,
-        vec![PropertyIdentifier::OPERATION_EXPECTED]
-    );
-
-    point.set_operation_expected(LifeSafetyOperation::UNSILENCE);
-    let outcome = point
-        .apply_life_safety_operation_detailed(LifeSafetyOperation::UNSILENCE)
-        .unwrap();
-    assert_eq!(
-        outcome.changed_properties,
-        vec![
-            PropertyIdentifier::SILENCED,
-            PropertyIdentifier::OPERATION_EXPECTED,
-        ]
     );
 }
 
@@ -197,7 +159,8 @@ fn point_replayed_silence_without_response_cache_is_invalid_state() {
     assert_eq!(
         point
             .apply_life_safety_operation(LifeSafetyOperation::SILENCE)
-            .unwrap(),
+            .unwrap()
+            .effect,
         LifeSafetyOperationEffect::Applied
     );
 
@@ -238,7 +201,8 @@ fn point_same_state_honors_and_clears_operation_expected() {
     assert_eq!(
         point
             .apply_life_safety_operation(LifeSafetyOperation::SILENCE_VISUAL)
-            .unwrap(),
+            .unwrap()
+            .effect,
         LifeSafetyOperationEffect::Applied
     );
     assert_eq!(
@@ -287,7 +251,7 @@ fn point_life_safety_operation_covers_silence_and_unsilence_matrix() {
         point.set_silenced(initial);
         point.set_operation_expected(operation);
         assert_eq!(
-            point.apply_life_safety_operation(operation).unwrap(),
+            point.apply_life_safety_operation(operation).unwrap().effect,
             LifeSafetyOperationEffect::Applied
         );
         assert_eq!(
@@ -361,7 +325,8 @@ fn point_can_be_rearmed_through_the_local_trait_channel() {
     assert_eq!(
         object
             .apply_life_safety_operation(LifeSafetyOperation::SILENCE)
-            .unwrap(),
+            .unwrap()
+            .effect,
         LifeSafetyOperationEffect::Applied
     );
     object
@@ -370,7 +335,8 @@ fn point_can_be_rearmed_through_the_local_trait_channel() {
     assert_eq!(
         object
             .apply_life_safety_operation(LifeSafetyOperation::UNSILENCE)
-            .unwrap(),
+            .unwrap()
+            .effect,
         LifeSafetyOperationEffect::Applied
     );
     assert_eq!(
@@ -641,7 +607,8 @@ fn zone_life_safety_operation_unsilences_one_component() {
 
     assert_eq!(
         zone.apply_life_safety_operation(LifeSafetyOperation::UNSILENCE_AUDIBLE)
-            .unwrap(),
+            .unwrap()
+            .effect,
         LifeSafetyOperationEffect::Applied
     );
     assert_eq!(

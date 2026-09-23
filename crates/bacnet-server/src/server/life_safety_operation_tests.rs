@@ -262,7 +262,13 @@ async fn local_rearm_api_supports_two_operation_cycles() {
         let changed =
             handlers::handle_life_safety_operation(&mut db, &request(operation, Some(oid)))
                 .unwrap();
-        assert_eq!(changed, vec![oid]);
+        assert_eq!(
+            changed,
+            vec![crate::life_safety_cov::LifeSafetyCovChange {
+                object_identifier: oid,
+                changed_properties: vec![PropertyIdentifier::OPERATION_EXPECTED],
+            }]
+        );
     }
 
     assert_eq!(executions.load(Ordering::Acquire), 2);

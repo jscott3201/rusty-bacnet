@@ -1438,9 +1438,21 @@ Trusted runtime logic can arm or rearm a Life Safety object through
 available to custom database owners. Protocol WriteProperty and
 WritePropertyMultiple cannot forge `Operation_Expected` or `Silenced`.
 
-The additive `BACnetObject::apply_life_safety_operation_detailed` result carries
-the existing `LifeSafetyOperationEffect` plus ordered actual property deltas;
-its default delegates to the legacy hook and reports no guessed properties.
+`BACnetObject::apply_life_safety_operation` returns
+`Result<LifeSafetyOperationOutcome, Error>`: an effect plus exact committed
+property changes in stable reporting order, with no duplicates. Custom objects
+own this projection. `AlreadyApplied` means no state changed and carries no
+deltas; errors leave object state unchanged. The default hook explicitly returns
+`OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`.
+
+This pre-1.0 API replaces the coarse return value and removes
+`apply_life_safety_operation_detailed`; implementations and callers migrate to
+the sole outcome-bearing hook. The built-in Point/Zone reset executors, exact
+arming, and existing delta calculation retain their behavior. The former public
+server `handle_life_safety_operation` helper is removed; use the object hook for
+local execution or the client service API for wire requests. Confirmed dispatch
+uses one internal handler retaining exact COV changes, including successful
+operations whose only changes are private state and have no COV properties.
 The bundled server uses those deltas, trusted rearm readback, and exact WP/WPM/
 `write_local`/live-Schedule pre/post readback to route Life Safety COV after
 unlocking and after the service ACK where applicable.

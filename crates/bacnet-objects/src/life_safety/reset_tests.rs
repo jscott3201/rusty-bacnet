@@ -78,7 +78,7 @@ fn point_reset_variants_receive_exact_context_and_commit_atomically() {
         }));
 
         assert_eq!(
-            point.apply_life_safety_operation(operation).unwrap(),
+            point.apply_life_safety_operation(operation).unwrap().effect,
             LifeSafetyOperationEffect::Applied
         );
         assert_eq!(
@@ -94,7 +94,7 @@ fn point_reset_variants_receive_exact_context_and_commit_atomically() {
 }
 
 #[test]
-fn point_reset_detailed_outcome_reports_exact_committed_deltas() {
+fn point_reset_outcome_reports_exact_committed_deltas() {
     let mut point = LifeSafetyPointObject::new(1, "point").unwrap();
     point.set_present_value(LifeSafetyState::ALARM.to_raw());
     point.set_tracking_value(LifeSafetyState::FAULT.to_raw());
@@ -109,7 +109,7 @@ fn point_reset_detailed_outcome_reports_exact_committed_deltas() {
     }));
 
     let outcome = point
-        .apply_life_safety_operation_detailed(LifeSafetyOperation::RESET)
+        .apply_life_safety_operation(LifeSafetyOperation::RESET)
         .unwrap();
 
     assert_eq!(outcome.effect, LifeSafetyOperationEffect::Applied);
@@ -154,7 +154,7 @@ fn zone_reset_variants_receive_exact_context_and_commit_atomically() {
         }));
 
         assert_eq!(
-            zone.apply_life_safety_operation(operation).unwrap(),
+            zone.apply_life_safety_operation(operation).unwrap().effect,
             LifeSafetyOperationEffect::Applied
         );
         assert_eq!(
@@ -206,7 +206,7 @@ fn same_value_reset_commit_reports_only_expected_operation() {
     }));
 
     let outcome = point
-        .apply_life_safety_operation_detailed(LifeSafetyOperation::RESET)
+        .apply_life_safety_operation(LifeSafetyOperation::RESET)
         .unwrap();
 
     assert_eq!(
@@ -216,7 +216,7 @@ fn same_value_reset_commit_reports_only_expected_operation() {
 }
 
 #[test]
-fn zone_reset_detailed_outcome_never_invents_tracking_value() {
+fn zone_reset_outcome_never_invents_tracking_value() {
     let mut zone = LifeSafetyZoneObject::new(1, "zone").unwrap();
     zone.set_present_value(LifeSafetyState::ALARM.to_raw());
     zone.set_silenced(SilencedState::ALL_SILENCED);
@@ -229,7 +229,7 @@ fn zone_reset_detailed_outcome_never_invents_tracking_value() {
     }));
 
     let outcome = zone
-        .apply_life_safety_operation_detailed(LifeSafetyOperation::RESET)
+        .apply_life_safety_operation(LifeSafetyOperation::RESET)
         .unwrap();
 
     assert_eq!(

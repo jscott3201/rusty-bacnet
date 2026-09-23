@@ -86,9 +86,7 @@ fn point_silence_unsilence_leaves_event_state_and_in_alarm_untouched() {
         assert_eq!(read_event_state(&point), 0);
         assert_in_alarm_clear(&point);
 
-        let outcome = point
-            .apply_life_safety_operation_detailed(operation)
-            .unwrap();
+        let outcome = point.apply_life_safety_operation(operation).unwrap();
 
         assert_eq!(outcome.effect, LifeSafetyOperationEffect::Applied);
         assert_eq!(
@@ -161,9 +159,7 @@ fn zone_silence_unsilence_leaves_event_state_and_in_alarm_untouched() {
         assert_eq!(read_event_state(&zone), 0);
         assert_in_alarm_clear(&zone);
 
-        let outcome = zone
-            .apply_life_safety_operation_detailed(operation)
-            .unwrap();
+        let outcome = zone.apply_life_safety_operation(operation).unwrap();
 
         assert_eq!(outcome.effect, LifeSafetyOperationEffect::Applied);
         assert_eq!(
@@ -226,9 +222,7 @@ fn point_resets_leave_event_state_and_in_alarm_untouched() {
         assert_eq!(read_event_state(&point), 0);
         assert_in_alarm_clear(&point);
 
-        let outcome = point
-            .apply_life_safety_operation_detailed(operation)
-            .unwrap();
+        let outcome = point.apply_life_safety_operation(operation).unwrap();
 
         assert_eq!(outcome.effect, LifeSafetyOperationEffect::Applied);
         assert_eq!(
@@ -265,9 +259,7 @@ fn zone_resets_leave_event_state_and_in_alarm_untouched() {
         assert_eq!(read_event_state(&zone), 0);
         assert_in_alarm_clear(&zone);
 
-        let outcome = zone
-            .apply_life_safety_operation_detailed(operation)
-            .unwrap();
+        let outcome = zone.apply_life_safety_operation(operation).unwrap();
 
         assert_eq!(outcome.effect, LifeSafetyOperationEffect::Applied);
         assert_eq!(
@@ -287,4 +279,44 @@ fn zone_resets_leave_event_state_and_in_alarm_untouched() {
             "zone must never invent TRACKING_VALUE"
         );
     }
+}
+
+#[test]
+fn point_silence_and_unsilence_report_only_actual_silenced_and_expected_deltas() {
+    let mut point = LifeSafetyPointObject::new(1, "LSP-1").unwrap();
+    point.set_operation_expected(LifeSafetyOperation::SILENCE);
+
+    let outcome = point
+        .apply_life_safety_operation(LifeSafetyOperation::SILENCE)
+        .unwrap();
+
+    assert_eq!(outcome.effect, LifeSafetyOperationEffect::Applied);
+    assert_eq!(
+        outcome.changed_properties,
+        vec![
+            PropertyIdentifier::SILENCED,
+            PropertyIdentifier::OPERATION_EXPECTED,
+        ]
+    );
+
+    point.set_operation_expected(LifeSafetyOperation::SILENCE);
+    let outcome = point
+        .apply_life_safety_operation(LifeSafetyOperation::SILENCE)
+        .unwrap();
+    assert_eq!(
+        outcome.changed_properties,
+        vec![PropertyIdentifier::OPERATION_EXPECTED]
+    );
+
+    point.set_operation_expected(LifeSafetyOperation::UNSILENCE);
+    let outcome = point
+        .apply_life_safety_operation(LifeSafetyOperation::UNSILENCE)
+        .unwrap();
+    assert_eq!(
+        outcome.changed_properties,
+        vec![
+            PropertyIdentifier::SILENCED,
+            PropertyIdentifier::OPERATION_EXPECTED,
+        ]
+    );
 }

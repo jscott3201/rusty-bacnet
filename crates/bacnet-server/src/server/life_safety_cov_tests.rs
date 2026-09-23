@@ -706,6 +706,7 @@ async fn operation_ack_precedes_exact_cov_and_duplicate_replays_ack_without_seco
     assert!(matches!(apdus[0], Apdu::SimpleAck(_)));
 }
 
+mod custom_operation;
 mod event_state_pins;
 mod failures;
 mod initial;
