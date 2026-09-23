@@ -34,11 +34,11 @@ async fn resolution_transit_activity_rejection_purity_and_original_ack_timeout()
         raw(0, 0, None, None, 0, &[2, 1, 0, 0, 7, 0, 150])
     );
     assert_eq!(activity.load(Ordering::Acquire), 0);
-    heartbeat::sweep(&hub.clients, &ids, &ClockIo(AtomicU64::new(100))).await;
+    heartbeat::sweep(&hub.clients, &ids, &ClockIo(AtomicU64::new(100_000))).await;
     assert_eq!(recv(&mut a).await, [10, 0, 0x22, 0x33]);
     let pending = Some(heartbeat::PendingHeartbeat {
         message_id: 0x2233,
-        published_at: 100,
+        published_at: 100_000,
     });
     let before = Snapshot::capture(hub.clients.lock().await.get(&[0x42; 6]).unwrap());
     for function in [2, 3] {
@@ -92,7 +92,7 @@ async fn resolution_transit_activity_rejection_purity_and_original_ack_timeout()
             );
         }
     }
-    heartbeat::sweep(&hub.clients, &ids, &ClockIo(AtomicU64::new(105))).await;
+    heartbeat::sweep(&hub.clients, &ids, &ClockIo(AtomicU64::new(105_000))).await;
     assert_eq!(
         hub.clients
             .lock()
@@ -103,7 +103,7 @@ async fn resolution_transit_activity_rejection_purity_and_original_ack_timeout()
             .pending,
         pending
     );
-    heartbeat::sweep(&hub.clients, &ids, &ClockIo(AtomicU64::new(106))).await;
+    heartbeat::sweep(&hub.clients, &ids, &ClockIo(AtomicU64::new(106_000))).await;
     until(|| a.deadline.close_started.load(Ordering::Acquire)).await;
     until(|| hub.active.load(Ordering::Acquire) == 2).await;
     assert_eq!(ids.load(Ordering::Acquire), 0x2234);
@@ -162,7 +162,7 @@ async fn resolution_transit_held_source_target_retirement_and_replacement() {
                                 generation: 0,
                             },
                             heartbeat::Retirement::SendFailed,
-                            &ClockIo(AtomicU64::new(106))
+                            &ClockIo(AtomicU64::new(106_000))
                         )
                         .await
                     );

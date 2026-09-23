@@ -75,6 +75,7 @@ pub(super) async fn serve(
     admission: Arc<super::admission::AdmissionRuntime>,
     tls_client_verified: bool,
     graceful: super::graceful::GracefulCtx,
+    timing: super::timing::HubTiming,
 ) {
     let mut lease = super::retirement::Lease::new();
     let closed = lease.closed.clone();
@@ -91,6 +92,7 @@ pub(super) async fn serve(
             admission,
             tls_client_verified,
             graceful,
+            timing,
         );
         let handler = async {
             tokio::select! {

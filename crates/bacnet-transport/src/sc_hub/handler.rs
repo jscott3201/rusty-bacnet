@@ -18,12 +18,13 @@ pub(super) async fn run(
     admission: Arc<super::admission::AdmissionRuntime>,
     tls_client_verified: bool,
     graceful: super::graceful::GracefulCtx,
+    timing: super::timing::HubTiming,
 ) {
     let (hub_vmac, hub_uuid) = hub;
     let (clients, lease) = clients;
     let close_requested = lease.closed.clone();
     let close_notify = lease.notify.clone();
-    let client_activity: Arc<AtomicU64> = Arc::new(AtomicU64::new(now_secs()));
+    let client_activity: Arc<AtomicU64> = Arc::new(AtomicU64::new(timing.now_ms()));
     // Owner-local bound for malformed-frame diagnostics only. Fresh per
     // connection so one peer's flood cannot suppress another connection's
     // first diagnostic. NAK/relay/silence decisions are unchanged.
@@ -206,7 +207,7 @@ pub(super) async fn run(
                 }
                 // Accepted transit follows the existing NPDU activity policy,
                 // including absent/oversized recipient drops. No probe mutation.
-                client_activity.store(now_secs(), Ordering::Release);
+                client_activity.store(timing.now_ms(), Ordering::Release);
                 if !broadcast_rate.admit(target, registered_vmac) {
                     continue;
                 }
@@ -217,6 +218,7 @@ pub(super) async fn run(
                     target,
                     &clients,
                     &write,
+                    timing.unicast_send_budget,
                 )
                 .await
                     == ResultRelayDisposition::CloseSource
@@ -251,7 +253,7 @@ pub(super) async fn run(
                 // Opaque options/body (including zero-byte ACK URI lists) are
                 // not NPDUs or endpoint fields to validate here. Accepted transit
                 // follows NPDU/Unknown activity even for missing/capped targets.
-                client_activity.store(now_secs(), Ordering::Release);
+                client_activity.store(timing.now_ms(), Ordering::Release);
                 if super::opaque_relay::relay(
                     &data,
                     &sc_msg,
@@ -259,6 +261,7 @@ pub(super) async fn run(
                     target,
                     &clients,
                     &write,
+                    timing.unicast_send_budget,
                 )
                 .await
                     == ResultRelayDisposition::CloseSource
@@ -293,7 +296,7 @@ pub(super) async fn run(
                     continue;
                 }
                 // Accepted transit follows NPDU/Unknown activity even for missing/capped targets.
-                client_activity.store(now_secs(), Ordering::Release);
+                client_activity.store(timing.now_ms(), Ordering::Release);
                 if super::opaque_relay::relay(
                     &data,
                     &sc_msg,
@@ -301,6 +304,7 @@ pub(super) async fn run(
                     target,
                     &clients,
                     &write,
+                    timing.unicast_send_budget,
                 )
                 .await
                     == ResultRelayDisposition::CloseSource
@@ -335,7 +339,7 @@ pub(super) async fn run(
                 }
                 // Accepted transit follows the existing NPDU activity policy,
                 // including absent/oversized recipient drops. No probe mutation.
-                client_activity.store(now_secs(), Ordering::Release);
+                client_activity.store(timing.now_ms(), Ordering::Release);
                 if !broadcast_rate.admit(target, registered_vmac) {
                     continue;
                 }
@@ -346,6 +350,7 @@ pub(super) async fn run(
                     target,
                     &clients,
                     &write,
+                    timing.unicast_send_budget,
                 )
                 .await
                     == ResultRelayDisposition::CloseSource
@@ -364,8 +369,11 @@ pub(super) async fn run(
 
         // Decoded remaining BVLC messages that pass response/Connect/control admission,
         // registered NPDU payload presence and local capacity checks count as activity.
-        // WebSocket control, oversized, and undecodable frames do not.
-        client_activity.store(now_secs(), std::sync::atomic::Ordering::Release);
+        // WebSocket control, oversized, and undecodable frames do not. ACK activity
+        // belongs to the matching-pending transition under the registry lock.
+        if sc_msg.function != ScFunction::HeartbeatAck {
+            client_activity.store(timing.now_ms(), Ordering::Release);
+        }
 
         match sc_msg.function {
             ScFunction::ConnectRequest => {
@@ -546,20 +554,7 @@ pub(super) async fn run(
             }
 
             ScFunction::HeartbeatRequest => {
-                let ack = ScMessage {
-                    function: ScFunction::HeartbeatAck,
-                    message_id: sc_msg.message_id,
-                    originating_vmac: None,
-                    destination_vmac: None,
-                    dest_options: Vec::new(),
-                    data_options: Vec::new(),
-                    payload: Bytes::new(),
-                };
-                let mut buf = BytesMut::new();
-                encode_sc_message(&mut buf, &ack);
-
-                let mut w = write.lock().await;
-                if let Err(e) = w.send(Message::Binary(buf.to_vec().into())).await {
+                if let Err(e) = heartbeat::send_ack(sc_msg.message_id, &write).await {
                     warn!("Hub: failed to send HeartbeatAck to {peer_addr}: {e}");
                     break;
                 }
@@ -572,6 +567,7 @@ pub(super) async fn run(
                         registered_vmac,
                         &write,
                         sc_msg.message_id,
+                        timing.now_ms(),
                     )
                     .await;
                     on_heartbeat_ack();
@@ -759,7 +755,7 @@ pub(super) async fn run(
                                 // already buffered bytes cannot be retracted.
                                 let frame = Message::Binary(relay_bytes.into());
                                 if let Err(_) | Ok(Err(_)) = tokio::time::timeout(
-                                    std::time::Duration::from_secs(5),
+                                    timing.unicast_send_budget,
                                     send(&target, &clients, frame, &SocketIo),
                                 )
                                 .await

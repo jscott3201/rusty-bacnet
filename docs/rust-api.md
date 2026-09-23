@@ -391,14 +391,37 @@ RESOURCES/OTHER NAK and admin-denial counter. Policies remain synchronous,
 nonblocking and panic-deny; they must not perform I/O or reenter the registry.
 
 
-Each admitted NPDU or addressed opaque unicast relay has one five-second local
-attempt, including destination sink acquisition and WebSocket send. A timeout
+Each admitted NPDU or addressed opaque unicast relay has one configurable local
+attempt (five seconds by default), including destination sink acquisition and WebSocket send. A timeout
 lets that source process its next frame; it does not retry, fabricate a Result,
 or retire the destination solely for timing out. Terminal send errors retain the
 existing captured-connection retirement rules, and heartbeat liveness is separate.
 Cancellation cannot retract bytes already buffered by the WebSocket. Broadcast
 and forwarded Result attempts retain their existing bounds; the graceful shutdown
 budget may force cleanup before a blocked relay's send deadline.
+
+`ScHubTlsConfig::with_unicast_send_budget(Duration)` validates this separate
+NPDU/opaque budget; `validate_unicast_send_budget` supports preflight before
+loading TLS files. `ScHubProbePolicy::new(scan_interval, idle_age, ack_age,
+send_budget)` configures the optional accepting-Hub probe through
+`with_probe_policy`. Defaults are 30s/60s/5s/5s. Both policies require positive
+whole milliseconds, at most `i64::MAX` milliseconds to reserve tick headroom,
+and a future instant representable by the platform monotonic clock.
+
+Each Hub owns one monotonic origin. A scan probes only after idle age strictly
+exceeds its threshold; pending ACK age starts at reservation, before sink
+acquisition, and retirement requires a later scan to observe strictly exceeded
+ACK age. Serial send work or scheduling delays can postpone that scan; ACK age
+is not a hard closure deadline. Missed ticks are skipped. Only a matching valid
+ACK clears pending and refreshes activity. Wrong-ID or malformed ACKs do not.
+The probe send budget includes acquisition and send. These are local Hub
+policies, separate from the initiating node's normative 3–300s heartbeat range.
+
+`ScHubBroadcastRatePolicy::new(sender_burst, sender_per_second, global_burst,
+global_per_second)` checks the existing continuously refilled broadcast policy
+before I/O. `with_broadcast_rate_policy` applies it unchanged; rates and bursts
+must be in `1..=u64::MAX / 1_000_000_000`. Existing sender/global exhaustion
+counters and silent-drop semantics remain. See [Hub operator policy evidence](conformance/standard-135-2020-ledger.md#hub-operator-timing-and-broadcast-policy).
 
 With `sc-tls`, every public hub startup requires `ScHubTlsConfig`:
 explicit nonempty CA trust anchors, mandatory WebPKI client verification, and

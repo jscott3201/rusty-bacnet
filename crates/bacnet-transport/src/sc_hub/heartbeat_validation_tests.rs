@@ -51,7 +51,7 @@ async fn heartbeat_invalid_ack_preserves_probe_and_activity() {
     sweep(
         &clients,
         &AtomicU16::new(0x2233),
-        &ClockIo(AtomicU64::new(100)),
+        &ClockIo(AtomicU64::new(100_000)),
     )
     .await;
     assert_eq!(recv_raw(&mut live).await, [0x0A, 0, 0x22, 0x33]);
@@ -87,7 +87,7 @@ async fn heartbeat_envelopes_obey_nak_precedence_addressing_and_silence() {
     sweep(
         &clients,
         &AtomicU16::new(0x2233),
-        &ClockIo(AtomicU64::new(100)),
+        &ClockIo(AtomicU64::new(100_000)),
     )
     .await;
     assert_eq!(recv_raw(&mut live).await, [0x0A, 0, 0x22, 0x33]);

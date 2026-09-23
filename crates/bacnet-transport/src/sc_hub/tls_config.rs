@@ -93,6 +93,8 @@ pub struct ScHubTlsConfig {
     admission_limits: super::ScHubAdmissionLimits,
     admission_policy: Option<super::ScHubAdmissionPolicy>,
     graceful_timeouts: super::ScHubGracefulTimeouts,
+    probe_policy: super::ScHubProbePolicy,
+    unicast_send_budget: std::time::Duration,
 }
 
 impl ScHubTlsConfig {
@@ -144,6 +146,8 @@ impl ScHubTlsConfig {
             admission_limits: super::ScHubAdmissionLimits::default(),
             admission_policy: None,
             graceful_timeouts: super::ScHubGracefulTimeouts::default(),
+            probe_policy: super::ScHubProbePolicy::default(),
+            unicast_send_budget: std::time::Duration::from_secs(5),
         })
     }
 
@@ -246,6 +250,27 @@ impl ScHubTlsConfig {
         self.graceful_timeouts
     }
 
+    /// Configure optional Hub-originated probes, independently of node keepalive.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use bacnet_transport::sc_hub::{ScHubProbePolicy, ScHubTlsConfig};
+    /// fn configure(tls: ScHubTlsConfig) -> Result<ScHubTlsConfig, bacnet_types::error::Error> {
+    ///     let probe = ScHubProbePolicy::new(Duration::from_secs(2),
+    ///         Duration::from_secs(10), Duration::from_secs(3), Duration::from_secs(1))?;
+    ///     tls.with_probe_policy(probe).with_unicast_send_budget(Duration::from_millis(750))
+    /// }
+    /// ```
+    pub fn with_probe_policy(mut self, policy: super::ScHubProbePolicy) -> Self {
+        self.probe_policy = policy;
+        self
+    }
+
+    /// The configured scan-driven Hub probe policy.
+    pub fn probe_policy(&self) -> super::ScHubProbePolicy {
+        self.probe_policy
+    }
+
     pub(super) fn into_acceptor(self) -> TlsAcceptor {
         TlsAcceptor::from(self.inner)
     }
@@ -254,5 +279,34 @@ impl ScHubTlsConfig {
 impl fmt::Debug for ScHubTlsConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ScHubTlsConfig").finish_non_exhaustive()
+    }
+}
+
+impl ScHubTlsConfig {
+    /// Validate the NPDU/opaque unicast budget before TLS file I/O or bind.
+    /// Positive whole milliseconds must be at most `i64::MAX` (elapsed-tick
+    /// headroom) and fit the platform monotonic clock.
+    pub fn validate_unicast_send_budget(
+        budget: std::time::Duration,
+    ) -> Result<(), bacnet_types::error::Error> {
+        super::timing::validate_milliseconds("unicast send budget", budget)
+    }
+
+    /// Set one acquisition-plus-send budget for NPDU and opaque unicast.
+    /// Defaults to five seconds. Timeout does not retire, retry or fabricate a
+    /// Result; it cannot retract already buffered WebSocket bytes. Broadcast
+    /// fanout and BVLC-Result forwarding retain their separate existing budgets.
+    pub fn with_unicast_send_budget(
+        mut self,
+        budget: std::time::Duration,
+    ) -> Result<Self, bacnet_types::error::Error> {
+        Self::validate_unicast_send_budget(budget)?;
+        self.unicast_send_budget = budget;
+        Ok(self)
+    }
+
+    /// Configured NPDU/opaque unicast acquisition-plus-send budget.
+    pub fn unicast_send_budget(&self) -> std::time::Duration {
+        self.unicast_send_budget
     }
 }

@@ -6,9 +6,23 @@ use super::unknown_transit_tests::{barrier, raw, recv, send, stopped};
 use super::*;
 use std::time::Duration;
 
-async fn blocked_unicast(function: u8) {
+async fn blocked_unicast(function: u8, budget: Duration) {
     let tls = TestTls::new();
-    let mut hub = CountedHub::start(&tls, ScHubHandshakeTimeouts::default()).await;
+    let config = tls
+        .hub_config
+        .clone()
+        .with_unicast_send_budget(budget)
+        .unwrap();
+    let running = ScHub::start("127.0.0.1:0", config, [0x10; 6], [0x10; 16])
+        .await
+        .unwrap();
+    let mut hub = CountedHub {
+        address: running.local_addr().unwrap(),
+        active: running.active.clone(),
+        clients: running.clients.clone(),
+        admission: running.admission.clone(),
+        hub: running,
+    };
     let mut source = ControlledPeer::open(&tls, &hub).await;
     source.connect(0x42).await;
     let mut blocked = ControlledPeer::open(&tls, &hub).await;
@@ -35,7 +49,7 @@ async fn blocked_unicast(function: u8) {
         raw(function, 24, None, Some([0x44; 6]), 0, &[1, 1]),
     ))
     .await;
-    tokio::time::advance(Duration::from_millis(4_999)).await;
+    tokio::time::advance(budget - Duration::from_millis(1)).await;
     assert_eq!(source.deadline.received.load(Ordering::Acquire), 2);
     tokio::time::advance(Duration::from_millis(2)).await;
     assert_eq!(
@@ -78,10 +92,20 @@ async fn blocked_unicast(function: u8) {
 
 #[tokio::test]
 async fn npdu_unicast_deadline_releases_source_without_retiring_or_replaying_target() {
-    blocked_unicast(0x01).await;
+    blocked_unicast(0x01, Duration::from_secs(5)).await;
 }
 
 #[tokio::test]
 async fn opaque_unicast_deadline_releases_source_without_retiring_or_replaying_target() {
-    blocked_unicast(0x0D).await;
+    blocked_unicast(0x0D, Duration::from_secs(5)).await;
+}
+
+#[tokio::test]
+async fn npdu_unicast_custom_budget_covers_sink_acquisition() {
+    blocked_unicast(0x01, Duration::from_millis(37)).await;
+}
+
+#[tokio::test]
+async fn opaque_unicast_custom_budget_covers_sink_acquisition() {
+    blocked_unicast(0x0D, Duration::from_millis(73)).await;
 }

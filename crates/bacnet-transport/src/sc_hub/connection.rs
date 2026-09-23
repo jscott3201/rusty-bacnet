@@ -44,15 +44,16 @@ pub(super) async fn accept_loop_with_counter(
     // implement or replace the initiating node's Annex AB.6.3 keepalive duty.
     // Exits cooperatively on shutdown so a graceful drain can complete without
     // aborting this sleep; forceful drain still aborts if needed.
-    const HEARTBEAT_CHECK_INTERVAL_SECS: u64 = 30;
+    let timing = tasks.timing;
     {
         let clients_for_hb = clients.clone();
+        #[cfg(test)]
+        let scans = tasks.probe_scans.clone();
         let mut hb_shutdown = tasks.subscribe();
         let next_msg_id = std::sync::atomic::AtomicU16::new(0x8000); // hub message IDs start high
         tasks.spawner().spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(
-                HEARTBEAT_CHECK_INTERVAL_SECS,
-            ));
+            let mut interval = tokio::time::interval(timing.policy.scan_interval());
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 if *hb_shutdown.borrow() {
                     break;
@@ -60,7 +61,9 @@ pub(super) async fn accept_loop_with_counter(
                 tokio::select! {
                     _ = hb_shutdown.changed() => {}
                     _ = interval.tick() => {
-                        heartbeat::sweep(&clients_for_hb, &next_msg_id, &heartbeat::SocketIo).await;
+                        #[cfg(test)]
+                        scans.fetch_add(1, Ordering::Release);
+                        heartbeat::sweep(&clients_for_hb, &next_msg_id, &heartbeat::SocketIo(timing)).await;
                     }
                 }
             }
@@ -127,6 +130,7 @@ pub(super) async fn accept_loop_with_counter(
                     admission_permit,
                     admission_runtime,
                     graceful,
+                    timing,
                 ),
             ));
     }
@@ -183,6 +187,7 @@ pub(super) async fn serve_connection(
     admission: Admission,
     runtime: Arc<super::admission::AdmissionRuntime>,
     graceful: super::graceful::GracefulCtx,
+    timing: super::timing::HubTiming,
 ) {
     let (hub_vmac, hub_uuid) = hub;
     let tls_deadline = admission.tls_deadline;
@@ -263,6 +268,7 @@ pub(super) async fn serve_connection(
         runtime,
         tls_client_verified,
         graceful,
+        timing,
     )
     .await;
 }

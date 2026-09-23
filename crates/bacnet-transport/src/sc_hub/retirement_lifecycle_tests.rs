@@ -93,7 +93,7 @@ async fn retirement_releases_multiple_target_waiters_without_retiring_sources() 
             &hub.clients,
             &attempt,
             heartbeat::Retirement::SendFailed,
-            &ClockIo(AtomicU64::new(106))
+            &ClockIo(AtomicU64::new(106_000))
         )
         .await
     );

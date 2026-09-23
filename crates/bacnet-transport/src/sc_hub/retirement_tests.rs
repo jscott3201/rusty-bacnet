@@ -20,14 +20,14 @@ async fn heartbeat_retirement_interrupts_blocked_ack_and_releases_admission() {
         client.heartbeat.generation = 1;
         client.heartbeat.pending = Some(heartbeat::PendingHeartbeat {
             message_id: 23,
-            published_at: 100,
+            published_at: 100_000,
         });
     }
     tokio::time::pause();
     heartbeat::sweep(
         &hub.clients,
         &std::sync::atomic::AtomicU16::new(24),
-        &ClockIo(AtomicU64::new(106)),
+        &ClockIo(AtomicU64::new(106_000)),
     )
     .await;
     assert!(!hub.clients.lock().await.contains_key(&[0x42; 6]));
@@ -70,7 +70,7 @@ async fn retired_target_unblocks_healthy_sender_waiting_on_its_sink() {
             &hub.clients,
             &attempt,
             heartbeat::Retirement::SendFailed,
-            &ClockIo(AtomicU64::new(106))
+            &ClockIo(AtomicU64::new(106_000))
         )
         .await
     );

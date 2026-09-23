@@ -20,7 +20,7 @@ const TOKEN: u64 = 1_000_000_000;
 /// request to at most 255 recipient writes. Buckets start full and never queue.
 ///
 /// These generous local defaults use a one-second tuning scale (the node's
-/// solicited-advertisement interval), well below the existing 30-second heartbeat
+/// solicited-advertisement interval), well below the default 30-second Hub probe scan
 /// interval and 6-second transaction retry timeout. Even a single sender may
 /// relay 768 broadcasts per retry interval after its initial burst. They are not
 /// normative BACnet rates or a measured site capacity guarantee.
@@ -62,6 +62,23 @@ impl Default for ScHubBroadcastRatePolicy {
 }
 
 impl ScHubBroadcastRatePolicy {
+    /// Check all four bounds before TLS file I/O or binding a socket.
+    pub fn new(
+        sender_burst: u64,
+        sender_per_second: u64,
+        global_burst: u64,
+        global_per_second: u64,
+    ) -> Result<Self, Error> {
+        let policy = Self {
+            sender_burst,
+            sender_per_second,
+            global_burst,
+            global_per_second,
+        };
+        policy.validate()?;
+        Ok(policy)
+    }
+
     fn validate(self) -> Result<(), Error> {
         for (name, value) in [
             ("sender_burst", self.sender_burst),

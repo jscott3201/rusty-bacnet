@@ -98,7 +98,7 @@ async fn empty_npdu_hub_routing_options_no_fanout_or_activity_then_healthy_relay
     heartbeat::sweep(
         &clients,
         &AtomicU16::new(0x2233),
-        &ClockIo(AtomicU64::new(100)),
+        &ClockIo(AtomicU64::new(100_000)),
     )
     .await;
     assert_eq!(recv(&mut source).await, [0x0A, 0, 0x22, 0x33]);
@@ -238,7 +238,7 @@ async fn empty_npdu_hub_does_not_defer_idle_or_original_heartbeat_timeout() {
                 .load(Ordering::Acquire),
             0
         );
-        heartbeat::sweep(&clients, &ids, &ClockIo(AtomicU64::new(now))).await;
+        heartbeat::sweep(&clients, &ids, &ClockIo(AtomicU64::new(now * 1000))).await;
         if now == 100 {
             assert_eq!(recv(&mut live).await, [0x0A, 0, 0x22, 0x33]);
         }
@@ -253,7 +253,7 @@ async fn empty_npdu_hub_does_not_defer_idle_or_original_heartbeat_timeout() {
                     .pending,
                 Some(heartbeat::PendingHeartbeat {
                     message_id: 0x2233,
-                    published_at: 100
+                    published_at: 100_000
                 })
             );
         }

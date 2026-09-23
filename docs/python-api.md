@@ -1944,6 +1944,11 @@ hub = ScHub(
     handshake_tls_ms=10000,            # TCP-admission to TLS handshake budget
     handshake_websocket_upgrade_ms=10000,
     handshake_connect_request_ms=10000,  # 5s minimum per Annex AB.6.2.3
+    probe_scan_interval_ms=30000, probe_idle_age_ms=60000,
+    probe_ack_age_ms=5000, probe_send_budget_ms=5000,
+    unicast_send_budget_ms=5000,          # NPDU/opaque acquisition + send
+    broadcast_sender_burst=1024, broadcast_sender_per_second=128,
+    broadcast_global_burst=4096, broadcast_global_per_second=512,
 )
 ```
 
@@ -1965,6 +1970,28 @@ at construction, before credential I/O or binding. Non-string values — includi
 where attaching the GIL could deadlock, so no Python callback can be
 installed. There are no deny-lists, issuance/rotation orchestration, or
 distributed-admin features.
+
+The `probe_*_ms` settings configure optional accepting-Hub probes, not the
+initiating node's Annex AB keepalive. They share one native monotonic clock.
+Idle and pending-ACK ages must be strictly exceeded at a scan; ACK age begins at
+reservation before sending. Delayed scans are skipped, and serial sends can
+postpone detection, so `probe_ack_age_ms` is not a hard closure deadline. A valid
+matching ACK clears pending and refreshes activity; wrong/invalid ACKs do not.
+`probe_send_budget_ms` includes sink acquisition and send.
+`unicast_send_budget_ms` independently bounds NPDU/opaque unicast attempts;
+timeout does not retire, retry, or fabricate a Result and cannot retract buffered
+bytes. Broadcast fanout and forwarded Results retain separate existing bounds.
+
+Probe and unicast values are positive integers in milliseconds, at most
+`2**63 - 1` with platform monotonic representability also checked. Zero/excessive
+values raise `ValueError`; negative/out-of-u64 integers raise `OverflowError`;
+nonintegers raise `TypeError`. These are local representation bounds, not
+normative BACnet probe ranges. Broadcast burst/refill fields use the existing
+native rate policy with bounds `1..=(2**64 - 1)//1_000_000_000`; one token admits
+one broadcast request, not one recipient. Exhaustion silently drops and updates
+`broadcast_sender_exhausted` or `broadcast_global_exhausted`. All these settings
+are validated in the constructor before file I/O or bind. [Executed scope](conformance/standard-135-2020-ledger.md#hub-operator-timing-and-broadcast-policy)
+includes installed mutual-TLS probe and rate/counter tests.
 
 The UUID identifies the hosting **device**, while VMAC identifies its hosting
 **port**; Connect-Accept carries their exact configured bytes (base 2020 AB.2.11,

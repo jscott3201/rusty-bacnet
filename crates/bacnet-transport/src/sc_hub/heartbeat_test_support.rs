@@ -192,7 +192,10 @@ pub(super) fn frame(function: ScFunction, message_id: u16) -> ScMessage {
 pub(super) struct ClockIo(pub AtomicU64);
 
 impl HeartbeatIo for ClockIo {
-    fn now_secs(&self) -> u64 {
+    fn policy(&self) -> ScHubProbePolicy {
+        ScHubProbePolicy::default()
+    }
+    fn now_ms(&self) -> u64 {
         self.0.load(Ordering::Acquire)
     }
     async fn send(&self, sink: &mut WsSink, frame: Message) -> Result<(), Error> {
@@ -219,7 +222,10 @@ impl GatedIo {
 }
 
 impl HeartbeatIo for GatedIo {
-    fn now_secs(&self) -> u64 {
+    fn policy(&self) -> ScHubProbePolicy {
+        ScHubProbePolicy::default()
+    }
+    fn now_ms(&self) -> u64 {
         self.now.load(Ordering::Acquire)
     }
     async fn send(&self, sink: &mut WsSink, frame: Message) -> Result<(), Error> {
@@ -231,5 +237,15 @@ impl HeartbeatIo for GatedIo {
         } else {
             Ok(())
         }
+    }
+}
+
+// Controlled sweeps in these fixtures use t=100s. Give real handler activity
+// the same monotonic epoch, rather than mixing elapsed ticks with Unix time.
+pub(super) fn probe_runtime() -> super::timing::HubTiming {
+    super::timing::HubTiming {
+        origin: tokio::time::Instant::now() - Duration::from_secs(100),
+        policy: ScHubProbePolicy::default(),
+        unicast_send_budget: Duration::from_secs(5),
     }
 }

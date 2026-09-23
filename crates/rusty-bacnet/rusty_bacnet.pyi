@@ -2550,6 +2550,18 @@ class ScHub:
     standard NAK. UUID equality is not certificate identity proof. Graceful per-peer ack /
     close / overall millisecond bounds and handshake TLS / WebSocket-upgrade /
     Connect-Request millisecond bounds (out-of-range values raise ValueError).
+    Optional Hub probes use ``probe_scan_interval_ms`` / ``probe_idle_age_ms`` /
+    ``probe_ack_age_ms`` / ``probe_send_budget_ms`` (defaults 30000/60000/5000/5000).
+    Strictly exceeded ages are checked at scans; ACK age starts at reservation,
+    not completed send, and is not a hard closure deadline. Delayed ticks are
+    skipped. Only matching valid ACKs refresh activity. Node keepalive is separate.
+    ``unicast_send_budget_ms`` independently bounds NPDU/opaque acquisition+send
+    (default 5000), without timeout-driven retirement, retry or fabricated Result.
+    These values must be positive whole milliseconds <=2**63-1 and fit the native
+    monotonic clock. Broadcast sender/global burst/per-second settings use native
+    token buckets: bounds 1..=(2**64-1)//1_000_000_000, silent drops, existing counters.
+    All are constructor-validated before I/O. Negative/over-u64 integers raise
+    OverflowError, nonintegers TypeError, other invalid bounds ValueError.
     ``stop()`` is forceful and idempotent; ``shutdown_gracefully()`` runs the
     Disconnect/Ack/close exchange and consumes the hub; dropping the hub
     without awaiting close only seals admission and cannot guarantee cleanup.
@@ -2573,6 +2585,15 @@ class ScHub:
         handshake_tls_ms: int = 10000,
         handshake_websocket_upgrade_ms: int = 10000,
         handshake_connect_request_ms: int = 10000,
+        probe_scan_interval_ms: int = 30000,
+        probe_idle_age_ms: int = 60000,
+        probe_ack_age_ms: int = 5000,
+        probe_send_budget_ms: int = 5000,
+        broadcast_sender_burst: int = 1024,
+        broadcast_sender_per_second: int = 128,
+        broadcast_global_burst: int = 4096,
+        broadcast_global_per_second: int = 512,
+        unicast_send_budget_ms: int = 5000,
     ) -> None: ...
 
     async def start(self) -> None:

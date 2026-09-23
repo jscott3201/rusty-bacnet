@@ -355,6 +355,12 @@ Annex AB security profile or qualification of your credential provisioning.
   Default known-UUID replacement remains, and UUID equality is not certificate
   identity proof. See [conflict-aware admission](docs/conformance/standard-135-2020-ledger.md#hub-conflict-aware-admission).
 
+- Rust and Python Hub configuration supports monotonic, scan-driven optional
+  probes, a separate NPDU/opaque unicast send budget (default five seconds), and
+  sender/global broadcast-rate limits. Probe ACK age is checked on later scans;
+  it is not a hard closure deadline or a replacement for node keepalive.
+  See [Hub operator policy](docs/conformance/standard-135-2020-ledger.md#hub-operator-timing-and-broadcast-policy).
+
 - After TLS/WebSocket establishment, an all-zero peer UUID in Connect-Request is
   rejected before registration/replacement; eligible Requests receive
   `COMMUNICATION/PARAMETER_OUT_OF_RANGE` (7/80), not a duplicate-VMAC error.

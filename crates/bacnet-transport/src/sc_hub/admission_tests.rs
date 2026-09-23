@@ -45,6 +45,7 @@ impl Peer {
             runtime,
             verified,
             super::tasks::Tasks::new().graceful_ctx(),
+            super::timing::HubTiming::new(super::ScHubProbePolicy::default()),
         );
         let task = tokio::spawn(async move {
             let _permit = permit;

@@ -32,7 +32,8 @@ impl ControlledPeer {
             || {},
             hub.admission.clone(),
             true,
-            super::tasks::Tasks::new().graceful_ctx(),
+            hub.hub.tasks.graceful_ctx(),
+            hub.hub.tasks.timing,
         );
         assert!(hub.hub.tasks.spawner().spawn(async move {
             let _admission = admission;
@@ -179,7 +180,7 @@ async fn stop_cancels_live_heartbeat_sweep_waiting_on_sink() {
     let socket = Arc::downgrade(&peer.sink);
     let held = peer.sink.lock_owned().await;
     tokio::time::pause();
-    tokio::time::advance(Duration::from_secs(30)).await;
+    tokio::time::advance(Duration::from_secs(90)).await;
     poll_io(async {
         loop {
             if hub

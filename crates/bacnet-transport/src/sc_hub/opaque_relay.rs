@@ -8,6 +8,7 @@ pub(super) async fn relay(
     target: HubRelayTarget,
     clients: &Clients,
     source_sink: &Arc<Mutex<WsSink>>,
+    unicast_send_budget: std::time::Duration,
 ) -> ResultRelayDisposition {
     let Some(frame) = encode_hub_relay_frame(wire, msg, source, target) else {
         return ResultRelayDisposition::Continue;
@@ -32,6 +33,11 @@ pub(super) async fn relay(
             })
             .collect()
     };
+    let budget = if matches!(target, HubRelayTarget::Unicast(_)) {
+        unicast_send_budget
+    } else {
+        std::time::Duration::from_secs(5)
+    };
     let sends = sinks.into_iter().map(|sink| {
         let frame = frame.clone();
         async move {
@@ -44,7 +50,7 @@ pub(super) async fn relay(
             // Each destination gets one bounded attempt, including sink lock
             // acquisition. Timeout does not retire, retry or roll back bytes
             // already buffered by the WebSocket; liveness remains independent.
-            match tokio::time::timeout(std::time::Duration::from_secs(5), send).await {
+            match tokio::time::timeout(budget, send).await {
                 Ok(Ok(())) => {}
                 Ok(Err(error)) => {
                     warn!("Hub: opaque relay failed to {:02x?}: {error}", sink.vmac);

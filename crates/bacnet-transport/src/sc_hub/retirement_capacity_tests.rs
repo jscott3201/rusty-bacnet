@@ -73,7 +73,7 @@ async fn replacement_and_heartbeat_retirement_each_recover_beyond_512_blocked_re
                         &hub.clients,
                         &attempt,
                         heartbeat::Retirement::SendFailed,
-                        &ClockIo(AtomicU64::new(now_secs()))
+                        &ClockIo(AtomicU64::new(0))
                     )
                     .await
                 );
