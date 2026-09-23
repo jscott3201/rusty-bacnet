@@ -73,3 +73,30 @@ pub(super) async fn send(
     }
     result
 }
+
+/// One admitted unicast attempt. Counts only observed timeout/error outcomes;
+/// retirement skips remain silent. Cancellation never fabricates an outcome.
+pub(super) async fn unicast(
+    source: Vmac,
+    target: &HubRelaySink,
+    clients: &Clients,
+    frame: Message,
+    budget: std::time::Duration,
+    io: &impl RelayIo,
+) {
+    match tokio::time::timeout(budget, send(target, clients, frame, io)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            if source != target.vmac {
+                super::outcomes::increment(&clients.outcomes.unicast_send_error);
+            }
+            warn!("Hub: unicast relay failed to {:02x?}: {error}", target.vmac);
+        }
+        Err(_) => {
+            if source != target.vmac {
+                super::outcomes::increment(&clients.outcomes.unicast_send_timeout);
+            }
+            warn!("Hub: unicast relay timed out to {:02x?}", target.vmac);
+        }
+    }
+}

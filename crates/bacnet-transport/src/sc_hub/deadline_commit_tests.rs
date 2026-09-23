@@ -31,6 +31,13 @@ async fn connect_deadline_releases_held_registry_without_evicting_uuid_owner() {
         ([0x22; 16], 1476, 1476)
     );
     assert!(!peer.deadline.is_committed());
+    assert_eq!(
+        clients.outcomes.snapshot(),
+        ScHubOutcomeCounts {
+            connect_timeouts: 1,
+            ..ScHubOutcomeCounts::default()
+        }
+    );
     drop(map);
     assert!(matches!(peer.next().await, Message::Close(_)));
     tokio::time::resume();
@@ -56,6 +63,13 @@ async fn connect_deadline_exact_expiry_beats_ready_registry_and_request() {
     poll_io(&mut peer.task).await.unwrap();
     assert!(clients.lock().await.is_empty());
     assert!(!peer.deadline.is_committed());
+    assert_eq!(
+        clients.outcomes.snapshot(),
+        ScHubOutcomeCounts {
+            connect_timeouts: 1,
+            ..ScHubOutcomeCounts::default()
+        }
+    );
     assert!(matches!(peer.next().await, Message::Close(_)));
 }
 
@@ -88,7 +102,7 @@ async fn connect_commit_survives_ready_expiry_and_blocked_accept_then_cleans_up(
     let started = std::time::Instant::now();
     loop {
         assert!(futures_util::poll!(&mut handler).is_pending());
-        if clients.try_lock().unwrap().contains_key(&[0x42; 6]) {
+        if clients.lock().await.contains_key(&[0x42; 6]) {
             break;
         }
         assert!(started.elapsed() < Duration::from_secs(5));
@@ -101,6 +115,7 @@ async fn connect_commit_survives_ready_expiry_and_blocked_accept_then_cleans_up(
         futures_util::poll!(&mut handler).is_pending(),
         "old deadline cancelled committed handler"
     );
+    assert_eq!(clients.outcomes.snapshot(), ScHubOutcomeCounts::default());
     let map = clients.lock().await;
     let client = map.get(&[0x42; 6]).unwrap();
     assert!(!client.closed.load(Ordering::Acquire));

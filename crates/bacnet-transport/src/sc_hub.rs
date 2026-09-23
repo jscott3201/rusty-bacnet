@@ -12,7 +12,6 @@
 //!    No node URI parsing, discovery, or direct-connection support is implied.
 //! 3. **Heartbeat** — responds to `HeartbeatRequest` with `HeartbeatAck`.
 
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -42,6 +41,7 @@ mod heartbeat;
 mod helpers;
 mod malformed_diag;
 mod opaque_relay;
+mod outcomes;
 mod proprietary_transit;
 mod relay;
 mod relay_send;
@@ -59,6 +59,7 @@ pub use admission::{
 };
 pub use broadcast_rate::{ScHubBroadcastDropCounts, ScHubBroadcastRatePolicy};
 pub use graceful::{ScHubGracefulTimeouts, ScHubShutdownOutcome};
+pub use outcomes::ScHubOutcomeCounts;
 pub use timeouts::ScHubHandshakeTimeouts;
 pub use timing::ScHubProbePolicy;
 pub use tls_config::ScHubTlsConfig;
@@ -112,7 +113,7 @@ struct HubRelaySink {
 }
 
 /// Shared state for the hub: connected clients keyed by VMAC.
-type Clients = Arc<Mutex<HashMap<Vmac, HubClient>>>;
+type Clients = Arc<client::ClientRegistry>;
 
 /// A minimal BACnet/SC hub.
 ///
@@ -287,7 +288,7 @@ impl ScHub {
 
         debug!("BACnet/SC hub listening on {local_addr}");
 
-        let clients: Clients = Arc::new(Mutex::new(HashMap::new()));
+        let clients: Clients = Arc::new(client::ClientRegistry::default());
         let active = Arc::new(AtomicUsize::new(0));
 
         let tasks = tasks::Tasks::new();
@@ -385,6 +386,7 @@ impl ScHub {
             handshake_count,
             admin_denied: self.admission.denied(),
             broadcast_drops: self.tasks.broadcast.drop_counts(),
+            outcomes: self.clients.outcomes.snapshot(),
         }
     }
 
@@ -609,3 +611,6 @@ mod resolution_transit_tests;
 
 #[cfg(test)]
 mod probe_tests;
+
+#[cfg(test)]
+mod outcome_tests;

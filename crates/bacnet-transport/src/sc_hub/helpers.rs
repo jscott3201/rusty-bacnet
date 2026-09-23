@@ -3,9 +3,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::sc_frame::encode_sc_message;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
+use futures_util::SinkExt;
 use tokio::sync::Mutex;
+use tokio_tungstenite::tungstenite::Message;
 
 use crate::sc_frame::{ScFunction, ScMessage, Vmac, BACNET_SC_HUB_SUBPROTOCOL, BROADCAST_VMAC};
 
@@ -156,4 +159,26 @@ pub(super) fn build_bvlc_result_nak(
             error_code[1],
         ]),
     }
+}
+
+/// Preserve the selected refusal's wire response outside the registration lock.
+pub(super) async fn send_connect_nak(
+    sink: &Arc<Mutex<WsSink>>,
+    message_id: u16,
+    error_class: ErrorClass,
+    error_code: ErrorCode,
+) {
+    let result = build_bvlc_result_nak(
+        message_id,
+        ScFunction::ConnectRequest,
+        error_class,
+        error_code,
+    );
+    let mut buf = BytesMut::new();
+    encode_sc_message(&mut buf, &result);
+    let _ = sink
+        .lock()
+        .await
+        .send(Message::Binary(buf.to_vec().into()))
+        .await;
 }

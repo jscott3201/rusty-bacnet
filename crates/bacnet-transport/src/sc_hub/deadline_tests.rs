@@ -84,6 +84,13 @@ async fn hub_default_deadline_releases_silent_and_partial_tls() {
     })
     .await;
     hub.stop().await;
+    assert_eq!(
+        hub.status().await.outcomes,
+        ScHubOutcomeCounts {
+            tls_timeouts: 2,
+            ..ScHubOutcomeCounts::default()
+        }
+    );
     assert!(
         closed.is_ok(),
         "default TLS deadline did not release stalled connections"

@@ -423,6 +423,19 @@ before I/O. `with_broadcast_rate_policy` applies it unchanged; rates and bursts
 must be in `1..=u64::MAX / 1_000_000_000`. Existing sender/global exhaustion
 counters and silent-drop semantics remain. See [Hub operator policy evidence](conformance/standard-135-2020-ledger.md#hub-operator-timing-and-broadcast-policy).
 
+`ScHub::status().await.outcomes` is a fixed `ScHubOutcomeCounts` snapshot:
+committed UUID replacements, selected VMAC/capacity refusals, ordered accept
+limit drops, TLS/WebSocket/Connect timeouts, eligible NPDU/opaque unicast
+missing-target/length-limit/send-timeout/send-error outcomes, and actual
+matching-generation heartbeat retirements. Each `u64` saturates, starts at zero
+for each Hub, and never controls policy. Refusals count decisions, not delivered
+NAKs; a later Connect timeout can also count. Snapshots are not transactional.
+Malformed, pre-registration, stale-source, self/local, broadcast, and forwarded
+Result paths are excluded from unicast counters. Retirement skips do not imply
+send success. Existing admin/broadcast counters retain their meanings.
+Rust status remains available after stop; a new Hub using the same address and
+config owns fresh counters. See [Hub outcome evidence](conformance/standard-135-2020-ledger.md#hub-outcome-status).
+
 With `sc-tls`, every public hub startup requires `ScHubTlsConfig`:
 explicit nonempty CA trust anchors, mandatory WebPKI client verification, and
 TLS 1.3-only local policy. Its fallible `from_der` constructor performs no file or

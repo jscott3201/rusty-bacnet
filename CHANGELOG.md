@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **SC Hub outcome status (Refs #770, #476):** Rust `ScHubStatus` and Python's
+  typed status dictionary include fixed per-start saturating decision counters.
+  Actual committed replacement and matching-generation heartbeat removal count;
+  canceled/stale work does not. Existing policy, admin/broadcast counts and
+  shutdown behavior remain. Real TLS tests cover a Hub restarting on the same
+  address/config with established peers and independent counters. This extends
+  the unfrozen pre-1.0 status shape; no broader Annex AB support is claimed.
+
 - **SC Hub operator timing and rate configuration (Refs #769, #476):**
   `ScHubProbePolicy` replaces wall-clock seconds and fixed probe constants with
   one per-Hub monotonic millisecond origin, checked scan/idle/ACK/send settings,

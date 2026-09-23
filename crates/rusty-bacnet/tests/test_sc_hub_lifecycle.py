@@ -7,6 +7,7 @@ the vacuous no-callback registry (no Python callable can reach the native
 registry lock).
 """
 import asyncio
+import ast
 import inspect
 import socket
 import subprocess
@@ -32,6 +33,24 @@ STATUS_KEYS = {
     "admin_denied",
     "broadcast_sender_exhausted",
     "broadcast_global_exhausted",
+    "outcomes",
+}
+
+
+OUTCOME_KEYS = {
+    "connect_timeouts",
+    "handshake_accept_drops",
+    "heartbeat_retirements",
+    "registered_capacity_rejections",
+    "tls_timeouts",
+    "total_active_accept_drops",
+    "unicast_no_target",
+    "unicast_send_error",
+    "unicast_send_timeout",
+    "unicast_target_limit",
+    "uuid_replacements",
+    "vmac_collision_rejections",
+    "websocket_timeouts",
 }
 
 
@@ -50,6 +69,17 @@ def hub_kwargs(**overrides: Any) -> Any:
 
 class HubConstructorTests(unittest.TestCase):
     """Sync constructor validation: everything fails before bind, without I/O."""
+
+    def test_outcome_stub_matches_exact_runtime_shape_oracle(self):
+        tree = ast.parse((Path(__file__).resolve().parents[1] / "rusty_bacnet.pyi").read_text())
+        classes = {node.name: node for node in tree.body if isinstance(node, ast.ClassDef)}
+        fields = {node.target.id: ast.unparse(node.annotation)
+                  for node in classes["ScHubOutcomeCounts"].body if isinstance(node, ast.AnnAssign)}
+        self.assertEqual(fields, dict.fromkeys(OUTCOME_KEYS, "int"))
+        status_fields = {node.target.id: ast.unparse(node.annotation)
+                         for node in classes["ScHubStatus"].body if isinstance(node, ast.AnnAssign)}
+        self.assertEqual(set(status_fields), STATUS_KEYS)
+        self.assertEqual(status_fields["outcomes"], "ScHubOutcomeCounts")
 
     def test_probe_and_broadcast_configuration_validates_without_io(self):
         with socket.socket() as occupied:
@@ -225,14 +255,15 @@ class HubLifecycleTests(HubTlsFixture):
             self.assertIs(status["listening"], True)
             self.assertEqual(status["max_clients"], 7)
             self.assertEqual(status["max_handshakes"], 9)
-            for key in STATUS_KEYS - {"listening"}:
+            for key in STATUS_KEYS - {"listening", "outcomes"}:
                 self.assertIsInstance(status[key], int)
             self.assertEqual(status["client_count"], 0)
             self.assertEqual(status["handshake_count"], 0)
             self.assertEqual(status["admin_denied"], 0)
+            self.assertEqual(status["outcomes"], dict.fromkeys(OUTCOME_KEYS, 0))
             # Redacted by construction: no key/cert/VMAC/UUID material.
             blob = repr(status).lower()
-            for token in ("key", "cert", "pem", "vmac", "uuid", "BEGIN"):
+            for token in ("key", "cert", "pem", HUB_UUID.hex(), repr(HUB_VMAC).lower(), "begin"):
                 self.assertNotIn(token, blob)
         finally:
             await asyncio.wait_for(hub.stop(), 5)

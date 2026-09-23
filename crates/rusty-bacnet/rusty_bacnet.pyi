@@ -2493,6 +2493,22 @@ class BACnetServer:
 # SC Hub
 # ---------------------------------------------------------------------------
 
+class ScHubOutcomeCounts(TypedDict):
+    """Per-start saturating outcomes; selected refusals are not delivered NAK counts."""
+    uuid_replacements: int
+    vmac_collision_rejections: int
+    registered_capacity_rejections: int
+    total_active_accept_drops: int
+    handshake_accept_drops: int
+    tls_timeouts: int
+    websocket_timeouts: int
+    connect_timeouts: int
+    unicast_no_target: int
+    unicast_target_limit: int
+    unicast_send_timeout: int
+    unicast_send_error: int
+    heartbeat_retirements: int
+
 class ScHubStatus(TypedDict):
     """Bounded hub snapshot: counts and kind labels only (no keys/VMAC maps)."""
     listening: bool
@@ -2503,6 +2519,7 @@ class ScHubStatus(TypedDict):
     admin_denied: int
     broadcast_sender_exhausted: int
     broadcast_global_exhausted: int
+    outcomes: ScHubOutcomeCounts
 
 class ScHub:
     """BACnet/SC Hub for relaying messages between SC nodes.

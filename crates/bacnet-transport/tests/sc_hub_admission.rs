@@ -215,6 +215,8 @@ async fn handshake_cap_rejects_before_client_cap_is_reached() {
         ));
         let settled = hub.status().await;
         assert_eq!((settled.client_count, settled.handshake_count), (1, 2));
+        assert_eq!(settled.outcomes.handshake_accept_drops, 1);
+        assert_eq!(settled.outcomes.total_active_accept_drops, 0);
     })
     .catch_unwind()
     .await;
