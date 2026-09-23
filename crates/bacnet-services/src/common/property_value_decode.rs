@@ -14,19 +14,25 @@ pub(crate) enum PropertyValueDecodeStage {
     Priority,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PropertyValueDecodeFailure {
+    Syntax(RejectReason),
+    PriorityOutOfRange,
+}
+
 #[derive(Debug)]
 pub(crate) struct PropertyValueDecodeError {
     pub(crate) error: Error,
     pub(crate) offset: usize,
     pub(crate) stage: PropertyValueDecodeStage,
-    pub(crate) reject_reason: RejectReason,
+    pub(crate) kind: PropertyValueDecodeFailure,
     pub(crate) property_identifier: Option<PropertyIdentifier>,
     pub(crate) property_array_index: Option<u32>,
     pub(crate) reference_complete: bool,
 }
 
 impl PropertyValueDecodeError {
-    fn new(
+    fn syntax(
         error: Error,
         offset: usize,
         stage: PropertyValueDecodeStage,
@@ -39,7 +45,7 @@ impl PropertyValueDecodeError {
             error,
             offset,
             stage,
-            reject_reason,
+            kind: PropertyValueDecodeFailure::Syntax(reject_reason),
             property_identifier,
             property_array_index,
             reference_complete,
@@ -139,7 +145,7 @@ impl BACnetPropertyValue {
     ) -> Result<(Self, usize), PropertyValueDecodeError> {
         let start = offset;
         let (tag, content_start) = tags::decode_tag(data, offset).map_err(|error| {
-            PropertyValueDecodeError::new(
+            PropertyValueDecodeError::syntax(
                 error,
                 offset,
                 PropertyValueDecodeStage::PropertyIdentifier,
@@ -150,7 +156,7 @@ impl BACnetPropertyValue {
             )
         })?;
         if !tag.is_context(0) {
-            return Err(PropertyValueDecodeError::new(
+            return Err(PropertyValueDecodeError::syntax(
                 Error::decoding(
                     offset,
                     "BACnetPropertyValue property-id expected context tag 0",
@@ -166,7 +172,7 @@ impl BACnetPropertyValue {
         let property_end = content_start
             .checked_add(tag.length as usize)
             .ok_or_else(|| {
-                PropertyValueDecodeError::new(
+                PropertyValueDecodeError::syntax(
                     Error::decoding(
                         content_start,
                         "BACnetPropertyValue property-id length overflow",
@@ -180,7 +186,7 @@ impl BACnetPropertyValue {
                 )
             })?;
         if property_end > data.len() {
-            return Err(PropertyValueDecodeError::new(
+            return Err(PropertyValueDecodeError::syntax(
                 Error::decoding(content_start, "BACnetPropertyValue property-id truncated"),
                 content_start,
                 PropertyValueDecodeStage::PropertyIdentifier,
@@ -192,7 +198,7 @@ impl BACnetPropertyValue {
         }
         let prop_id =
             primitives::decode_unsigned(&data[content_start..property_end]).map_err(|error| {
-                PropertyValueDecodeError::new(
+                PropertyValueDecodeError::syntax(
                     error,
                     content_start,
                     PropertyValueDecodeStage::PropertyIdentifier,
@@ -203,7 +209,7 @@ impl BACnetPropertyValue {
                 )
             })?;
         let prop_id = u32::try_from(prop_id).map_err(|_| {
-            PropertyValueDecodeError::new(
+            PropertyValueDecodeError::syntax(
                 Error::decoding(start, "BACnetPropertyValue property-id exceeds u32"),
                 start,
                 PropertyValueDecodeStage::PropertyIdentifier,
@@ -219,7 +225,7 @@ impl BACnetPropertyValue {
         let mut array_index = None;
         if offset < data.len() {
             let (tag, content_start) = tags::decode_tag(data, offset).map_err(|error| {
-                PropertyValueDecodeError::new(
+                PropertyValueDecodeError::syntax(
                     error,
                     offset,
                     PropertyValueDecodeStage::ArrayIndex,
@@ -233,7 +239,7 @@ impl BACnetPropertyValue {
                 let end = content_start
                     .checked_add(tag.length as usize)
                     .ok_or_else(|| {
-                        PropertyValueDecodeError::new(
+                        PropertyValueDecodeError::syntax(
                             Error::decoding(
                                 content_start,
                                 "BACnetPropertyValue array-index length overflow",
@@ -247,7 +253,7 @@ impl BACnetPropertyValue {
                         )
                     })?;
                 if end > data.len() {
-                    return Err(PropertyValueDecodeError::new(
+                    return Err(PropertyValueDecodeError::syntax(
                         Error::decoding(content_start, "BACnetPropertyValue array-index truncated"),
                         content_start,
                         PropertyValueDecodeStage::ArrayIndex,
@@ -259,7 +265,7 @@ impl BACnetPropertyValue {
                 }
                 let value =
                     primitives::decode_unsigned(&data[content_start..end]).map_err(|error| {
-                        PropertyValueDecodeError::new(
+                        PropertyValueDecodeError::syntax(
                             error,
                             content_start,
                             PropertyValueDecodeStage::ArrayIndex,
@@ -270,7 +276,7 @@ impl BACnetPropertyValue {
                         )
                     })?;
                 let value = u32::try_from(value).map_err(|_| {
-                    PropertyValueDecodeError::new(
+                    PropertyValueDecodeError::syntax(
                         Error::decoding(offset, "BACnetPropertyValue array-index exceeds u32"),
                         offset,
                         PropertyValueDecodeStage::ArrayIndex,
@@ -286,7 +292,7 @@ impl BACnetPropertyValue {
         }
 
         let (tag, tag_end) = tags::decode_tag(data, offset).map_err(|error| {
-            PropertyValueDecodeError::new(
+            PropertyValueDecodeError::syntax(
                 error,
                 offset,
                 PropertyValueDecodeStage::Value,
@@ -297,7 +303,7 @@ impl BACnetPropertyValue {
             )
         })?;
         if !tag.is_opening_tag(2) {
-            return Err(PropertyValueDecodeError::new(
+            return Err(PropertyValueDecodeError::syntax(
                 Error::decoding(offset, "BACnetPropertyValue expected opening tag 2"),
                 offset,
                 PropertyValueDecodeStage::Value,
@@ -312,7 +318,7 @@ impl BACnetPropertyValue {
                 |error| {
                     let reject_reason = value_failure_reason(&error);
                     let offset = error_offset(&error, tag_end);
-                    PropertyValueDecodeError::new(
+                    PropertyValueDecodeError::syntax(
                         error,
                         offset,
                         PropertyValueDecodeStage::Value,
@@ -328,7 +334,7 @@ impl BACnetPropertyValue {
         let mut priority = None;
         if offset < data.len() {
             let (tag, new_pos) = tags::decode_tag(data, offset).map_err(|error| {
-                PropertyValueDecodeError::new(
+                PropertyValueDecodeError::syntax(
                     error,
                     offset,
                     PropertyValueDecodeStage::Priority,
@@ -340,7 +346,7 @@ impl BACnetPropertyValue {
             })?;
             if tag.is_context(3) {
                 let end = new_pos.checked_add(tag.length as usize).ok_or_else(|| {
-                    PropertyValueDecodeError::new(
+                    PropertyValueDecodeError::syntax(
                         Error::decoding(new_pos, "BACnetPropertyValue priority length overflow"),
                         new_pos,
                         PropertyValueDecodeStage::Priority,
@@ -351,7 +357,7 @@ impl BACnetPropertyValue {
                     )
                 })?;
                 if end > data.len() {
-                    return Err(PropertyValueDecodeError::new(
+                    return Err(PropertyValueDecodeError::syntax(
                         Error::decoding(new_pos, "BACnetPropertyValue truncated at priority"),
                         new_pos,
                         PropertyValueDecodeStage::Priority,
@@ -362,7 +368,7 @@ impl BACnetPropertyValue {
                     ));
                 }
                 let prio = primitives::decode_unsigned(&data[new_pos..end]).map_err(|error| {
-                    PropertyValueDecodeError::new(
+                    PropertyValueDecodeError::syntax(
                         error,
                         new_pos,
                         PropertyValueDecodeStage::Priority,
@@ -373,18 +379,18 @@ impl BACnetPropertyValue {
                     )
                 })?;
                 if !(1..=16).contains(&prio) {
-                    return Err(PropertyValueDecodeError::new(
-                        Error::decoding(
+                    return Err(PropertyValueDecodeError {
+                        error: Error::decoding(
                             new_pos,
                             format!("BACnetPropertyValue priority {prio} out of range 1-16"),
                         ),
-                        new_pos,
-                        PropertyValueDecodeStage::Priority,
-                        RejectReason::PARAMETER_OUT_OF_RANGE,
-                        Some(property_identifier),
-                        array_index,
-                        true,
-                    ));
+                        offset: new_pos,
+                        stage: PropertyValueDecodeStage::Priority,
+                        kind: PropertyValueDecodeFailure::PriorityOutOfRange,
+                        property_identifier: Some(property_identifier),
+                        property_array_index: array_index,
+                        reference_complete: true,
+                    });
                 }
                 priority = Some(prio as u8);
                 if boundaries
@@ -453,7 +459,7 @@ fn boundary_error(
             Err(error) => (RejectReason::INVALID_DATA_ENCODING, error),
         }
     };
-    PropertyValueDecodeError::new(
+    PropertyValueDecodeError::syntax(
         error,
         offset,
         PropertyValueDecodeStage::Priority,

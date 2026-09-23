@@ -98,14 +98,21 @@ pub(crate) fn handle_write_property_multiple_observed(
             Ok(None) => {
                 return WritePropertyMultipleOutcome::Success { committed_oids };
             }
-            Err(cursor_error) if committed_oids.is_empty() => {
-                return WritePropertyMultipleOutcome::Reject {
-                    reason: cursor_error.reject_reason,
-                };
-            }
             Err(cursor_error) => {
+                use bacnet_services::wpm::WritePropertyMultipleFailureKind;
+                let code = match cursor_error.kind {
+                    WritePropertyMultipleFailureKind::PriorityOutOfRange => {
+                        ErrorCode::PARAMETER_OUT_OF_RANGE
+                    }
+                    WritePropertyMultipleFailureKind::Syntax(reason)
+                        if committed_oids.is_empty() =>
+                    {
+                        return WritePropertyMultipleOutcome::Reject { reason };
+                    }
+                    WritePropertyMultipleFailureKind::Syntax(_) => ErrorCode::INVALID_TAG,
+                };
                 return WritePropertyMultipleOutcome::Error {
-                    error: protocol_error(ErrorClass::SERVICES, ErrorCode::INVALID_TAG),
+                    error: protocol_error(ErrorClass::SERVICES, code),
                     first_failed_write_attempt: cursor_error
                         .first_failed_write_attempt
                         .unwrap_or_else(wpm_undecodable_coordinate),

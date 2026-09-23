@@ -6,7 +6,8 @@ use bacnet_types::enums::RejectReason;
 use bacnet_types::primitives::ObjectIdentifier;
 
 use crate::common::{
-    BACnetPropertyValue, PropertyValueDecodeError, PropertyValueDecodeStage, MAX_DECODED_ITEMS,
+    BACnetPropertyValue, PropertyValueDecodeError, PropertyValueDecodeFailure,
+    PropertyValueDecodeStage, MAX_DECODED_ITEMS,
 };
 
 /// Stable request-decoding stage reported by the incremental WPM cursor.
@@ -30,15 +31,24 @@ pub enum WritePropertyMultipleDecodeStage {
     ItemLimit,
 }
 
-/// A classified WPM syntax failure.
+/// Classification retained independently of the number of writes executed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WritePropertyMultipleFailureKind {
+    /// Malformed request grammar, with its pre-write Clause 18.9 Reject reason.
+    Syntax(RejectReason),
+    /// A valid Unsigned priority outside 1..=16 (Clause 15.10 service Error).
+    PriorityOutOfRange,
+}
+
+/// A classified WPM request failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WritePropertyMultipleCursorError {
     /// Zero-based byte offset where decoding failed.
     pub offset: usize,
     /// Stable request stage that failed.
     pub stage: WritePropertyMultipleDecodeStage,
-    /// Narrow Clause 18.9 Reject classification for a pre-write failure.
-    pub reject_reason: RejectReason,
+    /// Syntax or semantic priority failure; service execution selects the response.
+    pub kind: WritePropertyMultipleFailureKind,
     /// Complete failed coordinate, present only after every member decoded.
     pub first_failed_write_attempt: Option<BACnetObjectPropertyReference>,
     /// Human-readable local diagnostic; not encoded on the wire.
@@ -133,7 +143,7 @@ impl<'a> WritePropertyMultipleCursor<'a> {
                 }
                 State::Properties(oid) => {
                     if self.offset >= self.data.len() {
-                        return self.fail(self.error(
+                        return self.fail(self.syntax_error(
                             self.offset,
                             WritePropertyMultipleDecodeStage::PropertyListEnd,
                             RejectReason::MISSING_REQUIRED_PARAMETER,
@@ -144,7 +154,7 @@ impl<'a> WritePropertyMultipleCursor<'a> {
                     let (tag, tag_end) = match tags::decode_tag(self.data, self.offset) {
                         Ok(decoded) => decoded,
                         Err(error) => {
-                            return self.fail(self.error(
+                            return self.fail(self.syntax_error(
                                 self.offset,
                                 WritePropertyMultipleDecodeStage::PropertyIdentifier,
                                 RejectReason::INVALID_DATA_ENCODING,
@@ -159,7 +169,7 @@ impl<'a> WritePropertyMultipleCursor<'a> {
                         return Ok(Some(WritePropertyMultipleEvent::ObjectEnd));
                     }
                     if tag.is_closing {
-                        return self.fail(self.error(
+                        return self.fail(self.syntax_error(
                             self.offset,
                             WritePropertyMultipleDecodeStage::PropertyListEnd,
                             RejectReason::INVALID_TAG,
@@ -204,7 +214,7 @@ impl<'a> WritePropertyMultipleCursor<'a> {
     ) -> Result<ObjectIdentifier, WritePropertyMultipleCursorError> {
         let start = self.offset;
         let (tag, content_start) = tags::decode_tag(self.data, start).map_err(|error| {
-            self.error(
+            self.syntax_error(
                 start,
                 WritePropertyMultipleDecodeStage::ObjectIdentifier,
                 RejectReason::INVALID_DATA_ENCODING,
@@ -218,7 +228,7 @@ impl<'a> WritePropertyMultipleCursor<'a> {
             } else {
                 RejectReason::INVALID_TAG
             };
-            return Err(self.error(
+            return Err(self.syntax_error(
                 start,
                 WritePropertyMultipleDecodeStage::ObjectIdentifier,
                 reason,
@@ -230,7 +240,7 @@ impl<'a> WritePropertyMultipleCursor<'a> {
             .checked_add(tag.length as usize)
             .filter(|end| *end <= self.data.len())
             .ok_or_else(|| {
-                self.error(
+                self.syntax_error(
                     content_start,
                     WritePropertyMultipleDecodeStage::ObjectIdentifier,
                     RejectReason::INVALID_DATA_ENCODING,
@@ -239,7 +249,7 @@ impl<'a> WritePropertyMultipleCursor<'a> {
                 )
             })?;
         if tag.length != 4 {
-            return Err(self.error(
+            return Err(self.syntax_error(
                 content_start,
                 WritePropertyMultipleDecodeStage::ObjectIdentifier,
                 RejectReason::INVALID_DATA_ENCODING,
@@ -248,7 +258,7 @@ impl<'a> WritePropertyMultipleCursor<'a> {
             ));
         }
         let oid = ObjectIdentifier::decode(&self.data[content_start..end]).map_err(|error| {
-            self.error(
+            self.syntax_error(
                 content_start,
                 WritePropertyMultipleDecodeStage::ObjectIdentifier,
                 RejectReason::INVALID_DATA_ENCODING,
@@ -262,7 +272,7 @@ impl<'a> WritePropertyMultipleCursor<'a> {
 
     fn decode_property_list_opening(&mut self) -> Result<(), WritePropertyMultipleCursorError> {
         if self.offset >= self.data.len() {
-            return Err(self.error(
+            return Err(self.syntax_error(
                 self.offset,
                 WritePropertyMultipleDecodeStage::PropertyList,
                 RejectReason::MISSING_REQUIRED_PARAMETER,
@@ -272,7 +282,7 @@ impl<'a> WritePropertyMultipleCursor<'a> {
         }
         let start = self.offset;
         let (tag, end) = tags::decode_tag(self.data, start).map_err(|error| {
-            self.error(
+            self.syntax_error(
                 start,
                 WritePropertyMultipleDecodeStage::PropertyList,
                 RejectReason::INVALID_DATA_ENCODING,
@@ -281,7 +291,7 @@ impl<'a> WritePropertyMultipleCursor<'a> {
             )
         })?;
         if !tag.is_opening_tag(1) {
-            return Err(self.error(
+            return Err(self.syntax_error(
                 start,
                 WritePropertyMultipleDecodeStage::PropertyList,
                 if tag.class == TagClass::Application {
@@ -320,17 +330,24 @@ impl<'a> WritePropertyMultipleCursor<'a> {
                     .to_raw(),
                 property_array_index: error.property_array_index,
             });
-        self.error(
-            error.offset,
+        WritePropertyMultipleCursorError {
+            offset: error.offset,
             stage,
-            error.reject_reason,
-            reference,
-            error.error.to_string(),
-        )
+            kind: match error.kind {
+                PropertyValueDecodeFailure::Syntax(reason) => {
+                    WritePropertyMultipleFailureKind::Syntax(reason)
+                }
+                PropertyValueDecodeFailure::PriorityOutOfRange => {
+                    WritePropertyMultipleFailureKind::PriorityOutOfRange
+                }
+            },
+            first_failed_write_attempt: reference,
+            message: error.error.to_string(),
+        }
     }
 
     fn limit_error(&self, message: &str) -> WritePropertyMultipleCursorError {
-        self.error(
+        self.syntax_error(
             self.offset,
             WritePropertyMultipleDecodeStage::ItemLimit,
             RejectReason::TOO_MANY_ARGUMENTS,
@@ -339,7 +356,7 @@ impl<'a> WritePropertyMultipleCursor<'a> {
         )
     }
 
-    fn error(
+    fn syntax_error(
         &self,
         offset: usize,
         stage: WritePropertyMultipleDecodeStage,
@@ -350,7 +367,7 @@ impl<'a> WritePropertyMultipleCursor<'a> {
         WritePropertyMultipleCursorError {
             offset,
             stage,
-            reject_reason,
+            kind: WritePropertyMultipleFailureKind::Syntax(reject_reason),
             first_failed_write_attempt,
             message: message.into(),
         }
@@ -493,25 +510,25 @@ mod tests {
         let mut wrong_context = object_bytes.clone();
         wrong_context[0] = 0x1c;
         assert_eq!(
-            first_error(&wrong_context).reject_reason,
-            RejectReason::INVALID_TAG
+            first_error(&wrong_context).kind,
+            WritePropertyMultipleFailureKind::Syntax(RejectReason::INVALID_TAG)
         );
 
         assert_eq!(
-            first_error(&object_bytes).reject_reason,
-            RejectReason::MISSING_REQUIRED_PARAMETER
+            first_error(&object_bytes).kind,
+            WritePropertyMultipleFailureKind::Syntax(RejectReason::MISSING_REQUIRED_PARAMETER)
         );
 
         let mut wrong_type = BytesMut::new();
         primitives::encode_app_object_id(&mut wrong_type, &object);
         assert_eq!(
-            first_error(&wrong_type).reject_reason,
-            RejectReason::INVALID_PARAMETER_DATA_TYPE
+            first_error(&wrong_type).kind,
+            WritePropertyMultipleFailureKind::Syntax(RejectReason::INVALID_PARAMETER_DATA_TYPE)
         );
 
         assert_eq!(
-            first_error(&[0x0c, 0, 0, 0]).reject_reason,
-            RejectReason::INVALID_DATA_ENCODING
+            first_error(&[0x0c, 0, 0, 0]).kind,
+            WritePropertyMultipleFailureKind::Syntax(RejectReason::INVALID_DATA_ENCODING)
         );
 
         let invalid_priority = encode(vec![WriteAccessSpecification {
@@ -522,7 +539,10 @@ mod tests {
             }],
         }]);
         let error = first_error(&invalid_priority);
-        assert_eq!(error.reject_reason, RejectReason::PARAMETER_OUT_OF_RANGE);
+        assert_eq!(
+            error.kind,
+            WritePropertyMultipleFailureKind::PriorityOutOfRange
+        );
         assert_eq!(error.stage, WritePropertyMultipleDecodeStage::Priority);
         assert!(error.first_failed_write_attempt.is_some());
 
@@ -533,7 +553,10 @@ mod tests {
         unexpected.truncate(unexpected.len() - 1);
         unexpected.extend_from_slice(&[0x49, 0x00, 0x1f]);
         let error = first_error(&unexpected);
-        assert_eq!(error.reject_reason, RejectReason::INVALID_TAG);
+        assert_eq!(
+            error.kind,
+            WritePropertyMultipleFailureKind::Syntax(RejectReason::INVALID_TAG)
+        );
         assert!(error.first_failed_write_attempt.is_some());
 
         let mut malformed_value = object_bytes.clone();
@@ -546,8 +569,8 @@ mod tests {
         tags::encode_opening_tag(&mut malformed_value, 2);
         malformed_value.extend_from_slice(&[0x75, 10, b'x', 0x2f, 0x1f]);
         assert_eq!(
-            first_error(&malformed_value).reject_reason,
-            RejectReason::INVALID_DATA_ENCODING
+            first_error(&malformed_value).kind,
+            WritePropertyMultipleFailureKind::Syntax(RejectReason::INVALID_DATA_ENCODING)
         );
     }
 
@@ -589,7 +612,10 @@ mod tests {
                 .collect(),
         }]);
         let error = first_error(&data);
-        assert_eq!(error.reject_reason, RejectReason::TOO_MANY_ARGUMENTS);
+        assert_eq!(
+            error.kind,
+            WritePropertyMultipleFailureKind::Syntax(RejectReason::TOO_MANY_ARGUMENTS)
+        );
         assert_eq!(error.stage, WritePropertyMultipleDecodeStage::ItemLimit);
     }
 
@@ -600,6 +626,9 @@ mod tests {
         primitives::encode_ctx_object_id(&mut data, 0, &object);
         tags::encode_opening_tag(&mut data, 1);
         tags::encode_closing_tag(&mut data, 2);
-        assert_eq!(first_error(&data).reject_reason, RejectReason::INVALID_TAG);
+        assert_eq!(
+            first_error(&data).kind,
+            WritePropertyMultipleFailureKind::Syntax(RejectReason::INVALID_TAG)
+        );
     }
 }

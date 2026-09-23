@@ -28,6 +28,8 @@ mod mutation_provenance_tests;
 #[cfg(test)]
 mod mutation_tests;
 #[cfg(test)]
+mod mutation_wpm_priority_tests;
+#[cfg(test)]
 mod mutation_wpm_tests;
 mod read_range;
 mod unconfirmed;

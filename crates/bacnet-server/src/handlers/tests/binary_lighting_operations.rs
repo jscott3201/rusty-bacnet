@@ -107,16 +107,6 @@ fn assert_priority_range_error(error: Error) {
     );
 }
 
-fn assert_services_invalid_tag(error: Error) {
-    match error {
-        Error::Protocol { class, code } => {
-            assert_eq!(class, ErrorClass::SERVICES.to_raw() as u32);
-            assert_eq!(code, ErrorCode::INVALID_TAG.to_raw() as u32);
-        }
-        other => panic!("expected SERVICES/INVALID_TAG, got {other:?}"),
-    }
-}
-
 fn configure_eligible_warn_off(db: &mut ObjectDatabase, oid: ObjectIdentifier, seconds: u64) {
     for (property, value, priority) in [
         (
@@ -240,7 +230,7 @@ fn write_property_priority_errors_are_atomic_and_wpm_keeps_prior_prefix() {
         assert_eq!(blink_count(&db, oid), 1);
     }
 
-    assert_services_invalid_tag(
+    assert_priority_range_error(
         wpm(
             &mut db,
             oid,
@@ -264,7 +254,7 @@ fn write_property_priority_errors_are_atomic_and_wpm_keeps_prior_prefix() {
     assert_eq!(
         read(&db, oid, PropertyIdentifier::PRIORITY_ARRAY, Some(4)),
         PropertyValue::Enumerated(1),
-        "the valid WPM prefix commits before malformed priority syntax"
+        "the valid WPM prefix commits before an out-of-range priority"
     );
     assert_eq!(
         read(&db, oid, PropertyIdentifier::EGRESS_ACTIVE, None),

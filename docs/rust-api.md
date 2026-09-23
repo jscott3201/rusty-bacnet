@@ -143,6 +143,16 @@ let spec = ReadAccessSpecification {
 };
 ```
 
+The low-level `WritePropertyMultipleCursorError.kind` distinguishes
+`WritePropertyMultipleFailureKind::Syntax(RejectReason)` from
+`PriorityOutOfRange`. This replaces the former `reject_reason` field. The
+bundled server returns a formal WPM Error with `SERVICES / PARAMETER_OUT_OF_RANGE`
+for a valid Unsigned priority outside 1..16, retaining the failed coordinate and
+any successful prefix. Syntax failures retain initial Reject and post-prefix
+`INVALID_TAG` behavior. Whole-request `WritePropertyMultipleRequest::decode`
+returns `Error::Decoding` for either failure. Executed scope and evidence are
+recorded in `BACNET-15-WPM-ORDERED-PREFIX-ERROR` in the conformance ledger.
+
 ### COV
 
 ```rust
