@@ -169,7 +169,7 @@ pub async fn poll_trend_logs(db: &Arc<RwLock<ObjectDatabase>>, state: &TrendLogS
         let record = make_record(datum);
 
         if let Some(trend_obj) = db_write.get_mut(&trend_oid) {
-            if let Err(error) = trend_obj.try_add_trend_record_internal(record) {
+            if let Err(error) = trend_obj.add_trend_record(record) {
                 warn!(object = %trend_oid, %error, "trend-log record insertion failed");
                 continue;
             }
@@ -183,9 +183,32 @@ pub async fn poll_trend_logs(db: &Arc<RwLock<ObjectDatabase>>, state: &TrendLogS
 mod tests {
     use super::*;
     use bacnet_objects::analog::AnalogValueObject;
+    use bacnet_objects::clock::{ClockFrame, ClockReader};
     use bacnet_objects::traits::BACnetObject;
     use bacnet_objects::trend::TrendLogObject;
     use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
+
+    struct FixedClock;
+    impl ClockReader for FixedClock {
+        fn read_clock(&self) -> Option<ClockFrame> {
+            Some(ClockFrame {
+                local_date: Date {
+                    year: 126,
+                    month: 8,
+                    day: 31,
+                    day_of_week: 1,
+                },
+                local_time: Time {
+                    hour: 12,
+                    minute: 0,
+                    second: 0,
+                    hundredths: 0,
+                },
+                utc_offset: 0,
+                daylight_savings_status: false,
+            })
+        }
+    }
 
     #[test]
     fn property_value_to_datum_real() {
@@ -260,8 +283,8 @@ mod tests {
         let state = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
         poll_trend_logs(&db, &state).await;
 
-        let db = db.read().await;
-        let trend = db.get(&trend_oid).unwrap();
+        let guard = db.read().await;
+        let trend = guard.get(&trend_oid).unwrap();
         assert_eq!(
             trend
                 .read_property(PropertyIdentifier::RECORD_COUNT, None)
@@ -280,7 +303,38 @@ mod tests {
                 .unwrap(),
             PropertyValue::Boolean(true)
         );
-        drop(db);
+        drop(guard);
         assert!(!state.lock().await.contains_key(&trend_oid));
+
+        db.write()
+            .await
+            .set_clock_reader(Some(Arc::new(FixedClock)));
+        poll_trend_logs(&db, &state).await;
+        let guard = db.read().await;
+        let trend = guard.get(&trend_oid).unwrap();
+        assert_eq!(
+            trend
+                .read_property(PropertyIdentifier::RECORD_COUNT, None)
+                .unwrap(),
+            PropertyValue::Unsigned(1)
+        );
+        assert_eq!(
+            trend
+                .read_property(PropertyIdentifier::TOTAL_RECORD_COUNT, None)
+                .unwrap(),
+            PropertyValue::Unsigned(1)
+        );
+        assert_eq!(
+            trend
+                .read_property(PropertyIdentifier::LOG_ENABLE, None)
+                .unwrap(),
+            PropertyValue::Boolean(false)
+        );
+        assert_eq!(
+            trend.log_record_identities_internal().unwrap()[0].sequence_number(),
+            1
+        );
+        drop(guard);
+        assert!(state.lock().await.contains_key(&trend_oid));
     }
 }

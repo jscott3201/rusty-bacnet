@@ -784,6 +784,22 @@ properties.
 | `AuditLogObject` | `::new(instance, name, buffer_size, persistence)` |
 | `AuditReporterObject` | `::new(instance, name)` |
 
+`TrendLogObject::add_record`, `TrendLogMultipleObject::add_record`, and
+`EventLogObject::add_record` return `Result<(), Error>`. Handle or propagate that
+result: a required stop-before-full status transition fails atomically with
+`DEVICE / OPERATIONAL_PROBLEM` when its clock is missing or invalid. `Ok(())`
+means the operation was accepted; disabled logging can ignore the ordinary
+record, zero-capacity logging can count without storing it, and a status
+transition can replace it.
+
+The pre-1.0 `BACnetObject` contract now has one fallible `add_trend_record` hook.
+The void hook and `try_add_trend_record_internal` adapter have been replaced.
+Custom implementations return their insertion result directly; the default
+returns `OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`. The server poller
+retries failed insertions without advancing its last-log time. Bounded evidence
+is recorded in `BACNET-12-LOG-STATUS-LIFECYCLE`; complete log-family conformance
+is not claimed.
+
 Trusted local configuration through `dyn BACnetObject` uses one atomic
 `configure_audit_reporter_internal(level, operations, confirmed, selectors, priorities)`
 contract. Custom Reporter objects override that full method; objects that do not

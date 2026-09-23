@@ -60,8 +60,13 @@ impl EventLogObject {
     }
 
     /// Add a BACnetLogRecord to the event log buffer.
-    pub fn add_record(&mut self, record: BACnetLogRecord) {
-        let _ = self.try_add_record_internal(record);
+    ///
+    /// Success does not guarantee a resident ordinary record: disabled logging
+    /// is ignored, zero-capacity logging may only count, and a stop-before-full
+    /// transition records status instead. Missing/invalid status clocks fail
+    /// atomically with DEVICE / OPERATIONAL_PROBLEM.
+    pub fn add_record(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
+        self.lifecycle().try_add_ordinary(record).map(|_| ())
     }
 
     /// Get the current buffer contents.
@@ -77,10 +82,6 @@ impl EventLogObject {
     /// Set the description string.
     pub fn set_description(&mut self, desc: impl Into<String>) {
         self.description = desc.into();
-    }
-
-    fn try_add_record_internal(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
-        self.lifecycle().try_add_ordinary(record).map(|_| ())
     }
 
     fn lifecycle(&mut self) -> LogLifecycle<'_> {

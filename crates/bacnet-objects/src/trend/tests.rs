@@ -43,8 +43,8 @@ fn make_record(hour: u8, value: f32) -> BACnetLogRecord {
 #[test]
 fn trendlog_add_records() {
     let mut tl = TrendLogObject::new(1, "TL-1", 100).unwrap();
-    tl.add_record(make_record(10, 72.5));
-    tl.add_record(make_record(11, 73.0));
+    tl.add_record(make_record(10, 72.5)).unwrap();
+    tl.add_record(make_record(11, 73.0)).unwrap();
     assert_eq!(tl.records().len(), 2);
     let val = tl
         .read_property(PropertyIdentifier::RECORD_COUNT, None)
@@ -75,7 +75,8 @@ fn trendlog_ring_buffer_wraps() {
             },
             log_datum: LogDatum::UnsignedValue(i as u64),
             status_flags: None,
-        });
+        })
+        .unwrap();
     }
     assert_eq!(tl.records().len(), 3);
     // Oldest records should have been evicted; first remaining is hour=2
@@ -98,7 +99,7 @@ fn trendlog_stop_when_full() {
     )
     .unwrap();
     for i in 0..5u8 {
-        tl.add_record(make_record(i, i as f32));
+        tl.add_record(make_record(i, i as f32)).unwrap();
     }
     assert_eq!(tl.records().len(), 2);
     assert_eq!(
@@ -119,7 +120,7 @@ fn trendlog_disable_logging() {
         None,
     )
     .unwrap();
-    tl.add_record(make_record(10, 72.5));
+    tl.add_record(make_record(10, 72.5)).unwrap();
     assert_eq!(tl.records().len(), 1);
     assert_eq!(tl.records()[0].log_datum, LogDatum::LogStatus(0b001));
 }
@@ -128,7 +129,7 @@ fn trendlog_disable_logging() {
 fn trendlog_clear_buffer() {
     let mut tl = TrendLogObject::new(1, "TL-1", 100).unwrap();
     bind_clock(&mut tl);
-    tl.add_record(make_record(10, 72.5));
+    tl.add_record(make_record(10, 72.5)).unwrap();
     assert_eq!(tl.records().len(), 1);
     tl.write_property(
         PropertyIdentifier::RECORD_COUNT,
@@ -198,8 +199,8 @@ fn trendlog_description_in_property_list() {
 #[test]
 fn trendlog_read_log_buffer() {
     let mut tl = TrendLogObject::new(1, "TL-1", 100).unwrap();
-    tl.add_record(make_record(10, 72.5));
-    tl.add_record(make_record(11, 73.0));
+    tl.add_record(make_record(10, 72.5)).unwrap();
+    tl.add_record(make_record(11, 73.0)).unwrap();
     let val = tl
         .read_property(PropertyIdentifier::LOG_BUFFER, None)
         .unwrap();
@@ -246,7 +247,7 @@ fn trendlog_log_buffer_overflow_stop_when_full() {
     )
     .unwrap();
     for i in 0..5u8 {
-        tl.add_record(make_record(i, i as f32 * 10.0));
+        tl.add_record(make_record(i, i as f32 * 10.0)).unwrap();
     }
     // Buffer capped at 3; only first 3 records accepted
     let val = tl
@@ -336,19 +337,22 @@ fn trendlog_log_buffer_various_datum_types() {
         time,
         log_datum: LogDatum::BooleanValue(true),
         status_flags: None,
-    });
+    })
+    .unwrap();
     tl.add_record(BACnetLogRecord {
         date,
         time,
         log_datum: LogDatum::EnumValue(42),
         status_flags: Some(0b0100),
-    });
+    })
+    .unwrap();
     tl.add_record(BACnetLogRecord {
         date,
         time,
         log_datum: LogDatum::NullValue,
         status_flags: None,
-    });
+    })
+    .unwrap();
 
     let val = tl
         .read_property(PropertyIdentifier::LOG_BUFFER, None)
@@ -402,8 +406,8 @@ fn trendlog_multiple_create() {
 #[test]
 fn trendlog_multiple_add_records() {
     let mut tlm = TrendLogMultipleObject::new(1, "TLM-1", 100).unwrap();
-    tlm.add_record(make_record(10, 72.5));
-    tlm.add_record(make_record(11, 73.0));
+    tlm.add_record(make_record(10, 72.5)).unwrap();
+    tlm.add_record(make_record(11, 73.0)).unwrap();
     assert_eq!(tlm.records().len(), 2);
     assert_eq!(
         tlm.read_property(PropertyIdentifier::RECORD_COUNT, None)
@@ -436,7 +440,8 @@ fn trendlog_multiple_ring_buffer() {
             },
             log_datum: LogDatum::UnsignedValue(i as u64),
             status_flags: None,
-        });
+        })
+        .unwrap();
     }
     assert_eq!(tlm.records().len(), 3);
     assert_eq!(tlm.records()[0].time.hour, 2);
@@ -450,7 +455,7 @@ fn trendlog_multiple_ring_buffer() {
 #[test]
 fn trendlog_multiple_read_log_buffer() {
     let mut tlm = TrendLogMultipleObject::new(1, "TLM-1", 100).unwrap();
-    tlm.add_record(make_record(10, 72.5));
+    tlm.add_record(make_record(10, 72.5)).unwrap();
     let val = tlm
         .read_property(PropertyIdentifier::LOG_BUFFER, None)
         .unwrap();
@@ -552,7 +557,7 @@ fn trendlog_multiple_write_log_enable() {
         PropertyValue::Boolean(false)
     );
     // Records should not be added when disabled
-    tlm.add_record(make_record(10, 72.5));
+    tlm.add_record(make_record(10, 72.5)).unwrap();
     assert_eq!(tlm.records().len(), 1);
     assert_eq!(tlm.records()[0].log_datum, LogDatum::LogStatus(0b001));
 }

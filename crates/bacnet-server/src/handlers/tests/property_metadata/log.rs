@@ -43,9 +43,9 @@ fn log_objects(capacity: u32, configured: bool) -> [Box<dyn BACnetObject>; 3] {
                 log_datum,
                 status_flags,
             };
-            trend.add_record(record.clone());
-            multiple.add_record(record.clone());
-            event.add_record(record);
+            trend.add_record(record.clone()).unwrap();
+            multiple.add_record(record.clone()).unwrap();
+            event.add_record(record).unwrap();
         }
     }
     let mut objects: [Box<dyn BACnetObject>; 3] =
