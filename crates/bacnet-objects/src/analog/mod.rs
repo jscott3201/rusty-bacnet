@@ -11,7 +11,6 @@ use std::borrow::Cow;
 
 use crate::common::{self, read_common_properties};
 use crate::event::{history::EventHistory, OutOfRangeDetector};
-use crate::rollback::impl_intrinsic_write_rollback;
 use crate::traits::{BACnetObject, ReliabilityEvaluation};
 
 #[derive(Clone, Copy)]

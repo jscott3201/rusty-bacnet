@@ -205,28 +205,23 @@ fn acked_transitions_internal_commit_and_acknowledgment_bypass_property_writes()
 }
 
 #[test]
-fn acked_transitions_denial_preserves_local_rollback_tokens() {
+fn acked_transitions_denial_preserves_state_before_and_after_detection_reset() {
     for mut object in objects() {
         seed_unacknowledged(&mut *object);
         let before = snapshot(&*object);
-        let disabled = PropertyValue::Boolean(false);
-        let rollback = object
-            .capture_write_property_rollback(PropertyIdentifier::EVENT_DETECTION_ENABLE, &disabled)
-            .expect("each family preserves detection-reset state for local callers");
+        assert_denied(&mut *object, bits(0x00), None);
+        assert_eq!(snapshot(&*object), before, "{}", object.object_name());
         object
             .write_property(
                 PropertyIdentifier::EVENT_DETECTION_ENABLE,
                 None,
-                disabled,
+                PropertyValue::Boolean(false),
                 None,
             )
             .unwrap();
-        assert_eq!(snapshot(&*object)[1], bits(0xe0));
+        let reset = snapshot(&*object);
+        assert_eq!(reset[1], bits(0xe0));
         assert_denied(&mut *object, bits(0x00), None);
-        // Compatibility hooks remain local-only; WPM must NOT invoke this
-        // restore because its successful detection-disable prefix is committed.
-        object.restore_write_property_rollback(rollback).unwrap();
-        assert_eq!(snapshot(&*object), before, "{}", object.object_name());
-        assert_denied(&mut *object, bits(0xe0), None);
+        assert_eq!(snapshot(&*object), reset, "{}", object.object_name());
     }
 }

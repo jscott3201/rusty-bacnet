@@ -11,7 +11,7 @@ use bacnet_types::MacAddr;
 use std::borrow::Cow;
 
 use crate::common::{self, read_common_properties};
-use crate::traits::{BACnetObject, WritePropertyRollback};
+use crate::traits::BACnetObject;
 
 mod metadata;
 
@@ -49,10 +49,6 @@ pub struct NetworkPortObject {
     ip_subnet_mask: Vec<u8>,
     /// BACnet/IP UDP port number.
     ip_udp_port: u16,
-}
-
-struct NetworkPortWriteRollback {
-    changes_pending: bool,
 }
 
 impl NetworkPortObject {
@@ -267,35 +263,6 @@ impl BACnetObject for NetworkPortObject {
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
-    }
-
-    fn capture_write_property_rollback(
-        &mut self,
-        property: PropertyIdentifier,
-        _value: &PropertyValue,
-    ) -> Option<WritePropertyRollback> {
-        matches!(
-            property,
-            PropertyIdentifier::IP_ADDRESS
-                | PropertyIdentifier::IP_DEFAULT_GATEWAY
-                | PropertyIdentifier::IP_SUBNET_MASK
-                | PropertyIdentifier::BACNET_IP_UDP_PORT
-        )
-        .then(|| {
-            WritePropertyRollback::new(NetworkPortWriteRollback {
-                changes_pending: self.changes_pending,
-            })
-        })
-    }
-
-    fn restore_write_property_rollback(
-        &mut self,
-        rollback: WritePropertyRollback,
-    ) -> Result<(), Error> {
-        self.changes_pending = rollback
-            .downcast::<NetworkPortWriteRollback>()?
-            .changes_pending;
-        Ok(())
     }
 
     /// NetworkPort is not createable or deleteable at runtime.

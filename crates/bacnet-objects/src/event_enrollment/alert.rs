@@ -7,10 +7,9 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use crate::common;
 use crate::event::history::EventHistory;
 use crate::property_metadata::PropertyMetadata;
-use crate::traits::{BACnetObject, WritePropertyRollback};
+use crate::traits::BACnetObject;
 
 use super::metadata;
-use super::state::AlertEnrollmentWriteRollback;
 
 /// BACnet AlertEnrollment object (type 52).
 ///
@@ -236,38 +235,6 @@ impl BACnetObject for AlertEnrollmentObject {
             return result;
         }
         Err(common::write_access_denied_error())
-    }
-
-    fn capture_write_property_rollback(
-        &mut self,
-        property: PropertyIdentifier,
-        _value: &PropertyValue,
-    ) -> Option<WritePropertyRollback> {
-        (property == PropertyIdentifier::EVENT_DETECTION_ENABLE).then(|| {
-            WritePropertyRollback::new(AlertEnrollmentWriteRollback {
-                enabled: self.event_detection_enable,
-                event_state: self.event_state,
-                acked_transitions: self.acked_transitions,
-                event_history: self.event_history.clone(),
-            })
-        })
-    }
-
-    fn restore_write_property_rollback(
-        &mut self,
-        rollback: WritePropertyRollback,
-    ) -> Result<(), Error> {
-        let AlertEnrollmentWriteRollback {
-            enabled,
-            event_state,
-            acked_transitions,
-            event_history,
-        } = rollback.downcast::<AlertEnrollmentWriteRollback>()?;
-        self.event_detection_enable = enabled;
-        self.event_state = event_state;
-        self.acked_transitions = acked_transitions;
-        self.event_history = event_history;
-        Ok(())
     }
 
     fn set_event_state_internal(&mut self, state: EventState) -> Result<(), Error> {

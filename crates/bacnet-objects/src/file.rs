@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use crate::clock::ClockReader;
 use crate::common::{self, read_common_properties};
-use crate::traits::{BACnetObject, WritePropertyRollback};
+use crate::traits::BACnetObject;
 
 mod metadata;
 mod resize;
@@ -683,21 +683,6 @@ impl BACnetObject for FileObject {
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
-    }
-
-    fn capture_write_property_rollback(
-        &mut self,
-        property: PropertyIdentifier,
-        value: &PropertyValue,
-    ) -> Option<WritePropertyRollback> {
-        resize::capture(self, property, value)
-    }
-
-    fn restore_write_property_rollback(
-        &mut self,
-        rollback: WritePropertyRollback,
-    ) -> Result<(), Error> {
-        resize::restore(self, rollback)
     }
 
     fn bind_clock_internal(&mut self, clock: Option<Arc<dyn ClockReader>>) {

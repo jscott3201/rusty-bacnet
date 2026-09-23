@@ -12,8 +12,8 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use crate::clock::ClockReader;
 use crate::common::{self, read_common_properties};
 use crate::log_buffer::{LogRecordBuffer, LogRecordIdentity, LogRecordProfile};
-use crate::log_lifecycle::{LogLifecycle, LogLifecycleSnapshot};
-use crate::traits::{BACnetObject, WritePropertyRollback};
+use crate::log_lifecycle::LogLifecycle;
+use crate::traits::BACnetObject;
 
 mod metadata;
 
@@ -194,38 +194,6 @@ impl BACnetObject for EventLogObject {
 
     fn bind_clock_internal(&mut self, clock: Option<Arc<dyn ClockReader>>) {
         self.clock = clock;
-    }
-
-    fn capture_write_property_rollback(
-        &mut self,
-        property: PropertyIdentifier,
-        value: &PropertyValue,
-    ) -> Option<WritePropertyRollback> {
-        ((property == PropertyIdentifier::RECORD_COUNT
-            && matches!(value, PropertyValue::Unsigned(0)))
-            || (matches!(
-                property,
-                PropertyIdentifier::LOG_ENABLE | PropertyIdentifier::STOP_WHEN_FULL
-            ) && matches!(value, PropertyValue::Boolean(_))))
-        .then(|| {
-            WritePropertyRollback::new(LogLifecycleSnapshot::capture(
-                &self.log_buffer,
-                self.log_enable,
-                self.stop_when_full,
-            ))
-        })
-    }
-
-    fn restore_write_property_rollback(
-        &mut self,
-        rollback: WritePropertyRollback,
-    ) -> Result<(), Error> {
-        rollback.downcast::<LogLifecycleSnapshot>()?.restore(
-            &mut self.log_buffer,
-            &mut self.log_enable,
-            &mut self.stop_when_full,
-        );
-        Ok(())
     }
 
     fn log_record_identities_internal(&self) -> Option<Vec<LogRecordIdentity>> {

@@ -14,7 +14,7 @@ use crate::event::{
     EnrollmentSummaryCapability, EventTransitionCommit, EventTransitionCommitError,
 };
 use crate::property_metadata::PropertyMetadata;
-use crate::traits::{BACnetObject, WritePropertyRollback};
+use crate::traits::BACnetObject;
 
 mod alert;
 mod metadata;
@@ -22,7 +22,6 @@ mod parameters;
 mod state;
 mod transition;
 pub use alert::AlertEnrollmentObject;
-use state::EventEnrollmentWriteRollback;
 pub use state::{EventEnrollmentEvalState, EventEnrollmentMonitoredSource, EventEnrollmentPending};
 pub use transition::EventEnrollmentReliabilityCommit;
 
@@ -588,85 +587,6 @@ impl BACnetObject for EventEnrollmentObject {
     }
 
     transition::impl_event_enrollment_transition_commit!();
-
-    fn capture_write_property_rollback(
-        &mut self,
-        property: PropertyIdentifier,
-        _value: &PropertyValue,
-    ) -> Option<WritePropertyRollback> {
-        match property {
-            PropertyIdentifier::EVENT_DETECTION_ENABLE => Some(WritePropertyRollback::new(
-                EventEnrollmentWriteRollback::Detection {
-                    enabled: self.event_detection_enable,
-                    event_state: self.event_state,
-                    acked_transitions: self.acked_transitions,
-                    event_history: self.event_history.clone(),
-                    monitored_reference: self.monitored_reference,
-                    evaluation: EventEnrollmentEvalState {
-                        pending: self.pending.clone(),
-                        cov_baseline: self.cov_baseline.clone(),
-                        last_offnormal_value: self.last_offnormal_value,
-                    },
-                },
-            )),
-            PropertyIdentifier::EVENT_PARAMETERS => Some(WritePropertyRollback::new(
-                EventEnrollmentWriteRollback::EventParameters {
-                    value: self.event_parameters.clone(),
-                    pending: self.pending.clone(),
-                },
-            )),
-            PropertyIdentifier::FAULT_PARAMETERS => Some(WritePropertyRollback::new(
-                EventEnrollmentWriteRollback::FaultParameters(self.fault_parameters.clone()),
-            )),
-            PropertyIdentifier::TIME_DELAY_NORMAL => Some(WritePropertyRollback::new(
-                EventEnrollmentWriteRollback::TimeDelayNormal {
-                    value: self.time_delay_normal,
-                    pending: self.pending.clone(),
-                },
-            )),
-            _ => None,
-        }
-    }
-
-    fn restore_write_property_rollback(
-        &mut self,
-        rollback: WritePropertyRollback,
-    ) -> Result<(), Error> {
-        match rollback.downcast::<EventEnrollmentWriteRollback>()? {
-            EventEnrollmentWriteRollback::Detection {
-                enabled,
-                event_state,
-                acked_transitions,
-                event_history,
-                monitored_reference,
-                evaluation,
-            } => {
-                self.event_detection_enable = enabled;
-                self.event_state = event_state;
-                self.acked_transitions = acked_transitions;
-                self.event_history = event_history;
-                self.monitored_reference = monitored_reference;
-                self.pending = evaluation.pending;
-                self.cov_baseline = evaluation.cov_baseline;
-                self.last_offnormal_value = evaluation.last_offnormal_value;
-                Ok(())
-            }
-            EventEnrollmentWriteRollback::EventParameters { value, pending } => {
-                self.event_parameters = value;
-                self.pending = pending;
-                Ok(())
-            }
-            EventEnrollmentWriteRollback::FaultParameters(value) => {
-                self.fault_parameters = value;
-                Ok(())
-            }
-            EventEnrollmentWriteRollback::TimeDelayNormal { value, pending } => {
-                self.time_delay_normal = value;
-                self.pending = pending;
-                Ok(())
-            }
-        }
-    }
 
     /// Mirrors the `write_property` arms above, so PICS reports what dispatch
     /// actually accepts.

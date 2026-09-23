@@ -1,15 +1,5 @@
-use bacnet_types::constructed::{BACnetEventParameter, FaultParameters};
 use bacnet_types::enums::{EventState, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
-
-use crate::event::history::EventHistory;
-
-pub(super) struct AlertEnrollmentWriteRollback {
-    pub(super) enabled: bool,
-    pub(super) event_state: u32,
-    pub(super) acked_transitions: u8,
-    pub(super) event_history: EventHistory,
-}
 
 /// Effective object, property, and optional array index that own an Event
 /// Enrollment object's private evaluation state.
@@ -82,24 +72,4 @@ pub struct EventEnrollmentEvalState {
     /// re-indication only for a different alarm value; retaining the BACnet
     /// datatype keeps equal numeric values from different domains distinct.
     pub last_offnormal_value: Option<u64>,
-}
-
-pub(super) enum EventEnrollmentWriteRollback {
-    Detection {
-        enabled: bool,
-        event_state: u32,
-        acked_transitions: u8,
-        event_history: EventHistory,
-        monitored_reference: Option<EventEnrollmentMonitoredSource>,
-        evaluation: EventEnrollmentEvalState,
-    },
-    EventParameters {
-        value: BACnetEventParameter,
-        pending: Option<EventEnrollmentPending>,
-    },
-    FaultParameters(Option<FaultParameters>),
-    TimeDelayNormal {
-        value: Option<u32>,
-        pending: Option<EventEnrollmentPending>,
-    },
 }

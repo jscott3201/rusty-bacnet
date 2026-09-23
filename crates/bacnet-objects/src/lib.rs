@@ -31,7 +31,6 @@ pub mod program;
 pub mod property_metadata;
 pub(crate) mod reference;
 pub(crate) mod reliability_inhibit;
-pub(crate) mod rollback;
 pub mod schedule;
 pub mod staging;
 pub mod timer;

@@ -223,16 +223,22 @@ fn configuration_setters_cancel_pending_countdowns() {
         .is_none());
 
     seed(&mut ee);
-    let rollback = ee
-        .capture_write_property_rollback(PropertyIdentifier::EVENT_PARAMETERS, &PropertyValue::Null)
+    let before = ee
+        .read_property(PropertyIdentifier::EVENT_PARAMETERS, None)
         .unwrap();
-    ee.set_event_parameters(BACnetEventParameter::OutOfRange {
-        time_delay: 4,
-        low_limit: 0.0,
-        high_limit: 1.0,
-        deadband: 0.0,
-    });
-    ee.restore_write_property_rollback(rollback).unwrap();
+    assert!(ee
+        .write_property(
+            PropertyIdentifier::EVENT_PARAMETERS,
+            None,
+            PropertyValue::Unsigned(1),
+            None
+        )
+        .is_err());
+    assert_eq!(
+        ee.read_property(PropertyIdentifier::EVENT_PARAMETERS, None)
+            .unwrap(),
+        before
+    );
     assert_eq!(
         ee.enrollment_eval_state_internal().unwrap().pending,
         Some(pending)

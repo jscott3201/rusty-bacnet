@@ -303,15 +303,6 @@ impl BACnetObject for AnalogOutputObject {
         event_detection_enable,
         OutOfRangeDetector::ALGORITHM
     );
-    impl_intrinsic_write_rollback!(
-        event_detector,
-        event_detection_enable,
-        event_history,
-        reliability_inhibit,
-        reliability,
-        out_of_service,
-        reliability_before_out_of_service
-    );
 
     fn acknowledge_alarm(&mut self, transition_bit: u8) -> Result<(), bacnet_types::error::Error> {
         self.event_detector.acked_transitions |= transition_bit & 0x07;

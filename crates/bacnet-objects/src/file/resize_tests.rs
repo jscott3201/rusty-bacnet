@@ -2,7 +2,6 @@
 
 use super::*;
 use crate::clock::{ClockFrame, ClockReader};
-use crate::traits::WritePropertyRollback;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn protocol_pair(error: Error) -> (u32, u32) {
@@ -425,7 +424,7 @@ fn empty_record_growth_is_a_metadata_change_even_when_file_size_is_unchanged() {
 }
 
 #[test]
-fn resize_writability_and_rollback_capture_follow_runtime_eligibility() {
+fn resize_writability_and_failure_atomicity_follow_runtime_eligibility() {
     let mut stream = stream_file(&[1, 2, 3]);
     for property in [
         PropertyIdentifier::DESCRIPTION,
@@ -437,45 +436,50 @@ fn resize_writability_and_rollback_capture_follow_runtime_eligibility() {
         assert!(stream.is_writable_property(property), "{property:?}");
     }
     assert!(!stream.is_writable_property(PropertyIdentifier::RECORD_COUNT));
-    assert!(
-        stream
-            .capture_write_property_rollback(
+    let before = state(&stream);
+    assert_eq!(
+        protocol_pair(
+            write_resize(
+                &mut stream,
                 PropertyIdentifier::FILE_SIZE,
-                &PropertyValue::Unsigned(2),
+                PropertyValue::Boolean(false)
             )
-            .is_some()
+            .unwrap_err()
+        ),
+        invalid_type_pair()
     );
-    assert!(
-        stream
-            .capture_write_property_rollback(
-                PropertyIdentifier::FILE_SIZE,
-                &PropertyValue::Unsigned(3),
-            )
-            .is_none()
-    );
-    assert!(stream
-        .capture_write_property_rollback(
-            PropertyIdentifier::FILE_SIZE,
-            &PropertyValue::Boolean(false),
-        )
-        .is_none());
-
+    assert_eq!(state(&stream), before);
+    write_resize(
+        &mut stream,
+        PropertyIdentifier::FILE_SIZE,
+        PropertyValue::Unsigned(3),
+    )
+    .unwrap();
+    assert_eq!(state(&stream), before);
+    write_resize(
+        &mut stream,
+        PropertyIdentifier::FILE_SIZE,
+        PropertyValue::Unsigned(2),
+    )
+    .unwrap();
+    assert_eq!(stream.data(), &[1, 2]);
     let mut record = record_file(vec![vec![1], vec![2]]);
     assert!(!record.is_writable_property(PropertyIdentifier::FILE_SIZE));
     assert!(record.is_writable_property(PropertyIdentifier::RECORD_COUNT));
     record.set_read_only(true);
     assert!(!record.is_writable_property(PropertyIdentifier::FILE_SIZE));
     assert!(!record.is_writable_property(PropertyIdentifier::RECORD_COUNT));
-    assert!(record
-        .capture_write_property_rollback(
-            PropertyIdentifier::RECORD_COUNT,
-            &PropertyValue::Unsigned(1),
-        )
-        .is_none());
-
-    let expected = state(&stream);
-    assert!(stream
-        .restore_write_property_rollback(WritePropertyRollback::new("wrong token"))
-        .is_err());
-    assert_eq!(state(&stream), expected);
+    let before = state(&record);
+    assert_eq!(
+        protocol_pair(
+            write_resize(
+                &mut record,
+                PropertyIdentifier::RECORD_COUNT,
+                PropertyValue::Unsigned(1)
+            )
+            .unwrap_err()
+        ),
+        write_denied_pair()
+    );
+    assert_eq!(state(&record), before);
 }

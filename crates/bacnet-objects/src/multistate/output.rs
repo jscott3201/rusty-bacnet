@@ -165,19 +165,6 @@ impl BACnetObject for MultiStateOutputObject {
         event_detection_enable,
         CommandFailureDetector::ALGORITHM
     );
-    impl_intrinsic_write_rollback!(
-        event_detector,
-        event_detection_enable,
-        event_history,
-        reliability_inhibit,
-        reliability,
-        out_of_service,
-        reliability_before_out_of_service;
-        reliability_evaluator,
-        priority_array,
-        relinquish_default,
-        present_value
-    );
 
     fn acknowledge_alarm_correlated_internal(
         &mut self,

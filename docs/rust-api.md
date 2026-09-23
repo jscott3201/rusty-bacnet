@@ -726,6 +726,14 @@ trait BACnetObject {
 }
 ```
 
+The pre-1.0 object API removes `WritePropertyRollback` and the
+`capture_write_property_rollback` / `restore_write_property_rollback` hooks.
+Implementors validate writes and preserve their own state on failure. The bundled
+WritePropertyMultiple service retains every successful prefix write, reports the
+first failure, and leaves the remaining suffix unprocessed; it does not restore
+previous values. Built-in persistence and File resize candidates retain their
+existing commit boundaries. No replacement token API is needed.
+
 ### ObjectDatabase
 
 ```rust
