@@ -30,8 +30,11 @@ codec continues to represent the wider protocol grammar.
 
 In the standalone target, direct database object writes, trusted `write_local`,
 and authorized network WP/WPM share the same mutation owner. The endpoint source
-installs its owner for trusted local writes in `ClientOnly`, and adds authorized
-network WP in `Both`. An actual change prepares and reserves two
+exposes `EndpointSession::write_audit_recipient(Some(value))` for trusted local
+changes in running `ClientOnly` and `Both` sessions; `None` performs unchanged
+NULL relinquishment. The call uses the actual Device mutation owner and rechecks
+sealed state after taking the database lock. It does not call the inbound network
+authorizer. `Both` additionally accepts authorized network WP. An actual change prepares and reserves two
 bounded notification attempts before committing the property, its Reporter
 generation, and an owned delivery worker. Both attempts carry the same WRITE
 record: local target Device/Object, recipient property, new Target_Value and old
@@ -82,14 +85,18 @@ Evidence is in `server::audit_reporter_tests::recipient_changes`, the startup an
 identity suites, the real UDP `device_recipient_bip_address_change_delivers_to_both_real_loggers`
 test, and installed Python `test_audit_api.py` provisioning/loopback cases.
 Endpoint source evidence is in `source_recipient_tests`, its admission/lifecycle
-modules, and the ingress canceled-stop test.
+modules, the external `source_recipient_public` test, startup cleanup cancellation
+cases and the ingress canceled-stop test.
 
 The complete endpoint source profile replaces the old static selector and
 ownership-only mode. Select `with_source_audit_reporter` with a typed Device
 provision even at NONE. `ClientOnly` and explicitly authorized `Both` are supported;
 `ServerOnly`, non-B/IP links and Monitored_Objects are rejected before startup.
 With no source selection, provision and bindings remain inert. Startup sends no
-notifications. Ordinary source READ captures the selected route at admission;
+notifications. Preflight validation errors leave configuration retryable. A
+profile initialization error after ingress starts joins cleanup and leaves a
+terminal session. Canceling that cleanup leaves `Stopping`; another `stop` or
+Drop completes teardown rather than permitting restart. Ordinary source READ captures the selected route at admission;
 an in-flight request and its loss context retain that route after a later change.
 A missing Device route suppresses ordinary records without changing READ results
 or consuming audit resources. Direct Address choices require no Device binding.

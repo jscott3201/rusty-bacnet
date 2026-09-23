@@ -1,6 +1,38 @@
 //! Complete source profile preflight, before mutation or ingress ownership.
 use super::*;
 impl<T: TransportPort + 'static> EndpointSession<T> {
+    /// Write the active source profile's Device Audit recipient as a trusted local operation.
+    ///
+    /// `Some(value)` validates and changes the actual Device value, atomically
+    /// admitting its old/new notifications. `None` is NULL relinquishment: it
+    /// succeeds unchanged after the same live-owner checks. Equal values are also
+    /// no-ops. This is runtime mutation, not initial provisioning or route setup.
+    ///
+    /// Available in a running `ClientOnly` or `Both` source session. Local calls
+    /// identify the local Device and have no network invoke ID; they do not invoke
+    /// the inbound network authorizer. Unavailable routes or precommit resource
+    /// failures leave state unchanged. Success establishes commit and owned
+    /// delivery admission, not remote receipt. The session's sealed state is
+    /// rechecked after acquiring the database; pre-start, stopping, stopped and
+    /// sessions without a source owner reject the operation.
+    pub async fn write_audit_recipient(
+        &self,
+        recipient: Option<bacnet_types::constructed::BACnetRecipient>,
+    ) -> Result<(), Error> {
+        let unavailable = || Error::Encoding("endpoint source Audit owner is not running".into());
+        if !self.is_running() {
+            return Err(unavailable());
+        }
+        let database = self.database.as_ref().ok_or_else(unavailable)?;
+        let mut db = database.write().await;
+        let runtime = self
+            .source_recipient
+            .as_ref()
+            .filter(|runtime| self.is_running() && runtime.owner.is_active())
+            .ok_or_else(unavailable)?;
+        runtime.write_local(&mut db, recipient)
+    }
+
     pub(super) fn prepare_source_audit_reporter(
         &mut self,
     ) -> Result<Option<crate::source_read::recipient::SourceRoutes>, Error> {

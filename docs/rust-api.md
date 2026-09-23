@@ -1844,6 +1844,8 @@ let mut session = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROA
     ).build_session()?.with_source_audit_reporter(source);
 session.start().await?;
 // Use session.client().unwrap().read_property(...) for a direct IPv4 target.
+// Trusted runtime writes use the same Device owner; None relinquishes unchanged.
+session.write_audit_recipient(None).await?;
 session.stop().await?;
 # Ok(())
 # }

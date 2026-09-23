@@ -165,7 +165,8 @@ async fn source_recipient_local_and_authorized_wire_pair_bypass_ordinary_filters
                     matches!(wire(&session,&peer,&mut replies,value(&next),71).await,Apdu::SimpleAck(a) if a.invoke_id==71)
                 );
             } else {
-                local(&session, PropertyValue::ApplicationData(value(&next)))
+                session
+                    .write_audit_recipient(Some(next.clone()))
                     .await
                     .unwrap();
             }

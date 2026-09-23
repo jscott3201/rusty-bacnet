@@ -90,6 +90,26 @@ pub(crate) struct SourceRecipient {
     pub(super) failures: Arc<AuditFailureQueue<MacAddr>>,
 }
 impl SourceRecipient {
+    pub(crate) fn write_local(
+        &self,
+        db: &mut ObjectDatabase,
+        recipient: Option<BACnetRecipient>,
+    ) -> Result<(), Error> {
+        let value = match recipient {
+            None => PropertyValue::Null,
+            Some(recipient) => {
+                let mut bytes = bytes::BytesMut::new();
+                bacnet_encoding::constructed::encode_recipient(&mut bytes, &recipient);
+                PropertyValue::ApplicationData(bytes.to_vec())
+            }
+        };
+        db.get_mut(&self.device)
+            .and_then(|object| object.device_authority_internal())
+            .filter(|authority| authority.object_identifier() == self.device)
+            .ok_or_else(denied)?
+            .write_audit_recipient(None, value, None, None)
+    }
+
     pub(crate) fn seal(&self) {
         if let Some(notifications) = self.notifications.upgrade() {
             notifications.seal_audit_owner(&self.owner);

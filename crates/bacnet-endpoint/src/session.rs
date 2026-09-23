@@ -66,6 +66,8 @@ use tokio::task::JoinHandle;
 mod source_profile;
 #[path = "source_reporter.rs"]
 pub(crate) mod source_reporter;
+#[path = "session_start.rs"]
+mod startup;
 
 #[path = "device_writes.rs"]
 mod device_writes;
@@ -356,8 +358,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     ///
     /// [`start`](Self::start) requires exactly one concrete local built-in Device
     /// matching the optional identity, and one selected Reporter capability with
-    /// no conflicting source Reporter. Validation failure changes no source flags
-    /// and leaves configuration retryable. Successful startup installs the Device
+    /// no conflicting source Reporter. Preflight validation changes no source flags
+    /// and leaves configuration retryable; post-ingress failure joins terminal cleanup.
+    /// Successful startup installs the Device
     /// recipient mutation owner and source projection without sending traffic.
     /// Device/Reporter membership is protected until owned frames quiesce. The
     /// private adapter forwards the original object behavior when sealed/released.
@@ -433,6 +436,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// binding again. Takes `&mut self` so only the owner can start.
     /// Source-profile validation runs before lifecycle consumption or ingress
     /// startup; its errors leave the session ready for correction and retry.
+    /// Profile initialization errors after ingress starts cancel and join ingress
+    /// before returning, leaving the session terminal. Canceling that cleanup
+    /// leaves a stopping session whose teardown can resume with [`stop`](Self::stop).
     pub async fn start(&mut self) -> Result<(), Error> {
         if self.lifecycle.load(Ordering::Acquire) != Lifecycle::Ready as u8 {
             return Err(Error::Encoding(
@@ -440,7 +446,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             ));
         }
         let device_write_target = self.validate_device_writes()?;
-        let mut source_routes = self.prepare_source_audit_reporter()?;
+        let source_routes = self.prepare_source_audit_reporter()?;
         self.commit_device_write_profile(device_write_target);
         if self.lifecycle.compare_exchange(
             Lifecycle::Ready as u8,
@@ -458,106 +464,12 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             .as_mut()
             .ok_or_else(|| Error::Encoding("endpoint session ingress owner is missing".into()))?;
         let receivers = ingress.start().await?;
-        let egress = receivers.egress.clone();
-
-        // Role registration shares ONE coordinator + ONE egress. No second
-        // demultiplexer, no role-side Invoke-ID allocation: the requester and
-        // notification pool reserve from `self.coordinator`; the responder
-        // reuses the wire invoke ID directly.
-        let notifications = (matches!(self.role, SessionRole::ServerOnly | SessionRole::Both)
-            || self.source_audit_reporter.is_some())
-        .then(|| NotificationTransactions::with_coordinator(Arc::clone(&self.coordinator)));
-        let (source_read, source_recipient) = if let Some(selected) = self.source_audit_reporter {
-            let broadcast = receivers.bip_broadcast_endpoint.ok_or_else(|| {
-                Error::Encoding("source Audit lost its B/IP capability at startup".into())
-            })?;
-            let mut routes = source_routes.take().expect("preflight routes");
-            routes.finalize(broadcast);
-            let (source, recipient) = crate::source_read::SourceRead::new(
-                Arc::clone(self.database.as_ref().expect("validated source database")),
-                selected,
-                routes,
-                *broadcast.ip(),
-                egress.clone(),
-                notifications.as_ref().expect("source worker owner"),
-                self.client_config.max_apdu_length,
-            )?;
-            (Some(source), Some(recipient))
-        } else {
-            (None, None)
-        };
-        let (requester, client_handle) =
-            if matches!(self.role, SessionRole::ClientOnly | SessionRole::Both) {
-                let requester = EndpointRequester::new(
-                    egress.clone(),
-                    Arc::clone(&self.coordinator),
-                    self.client_config.clone(),
-                )?;
-                let mut handle = ClientRoleHandle::new(&self.shared.token, requester.clone());
-                if let Some(source) = &source_read {
-                    handle = handle.with_source_read(source);
-                }
-                (Some(requester), Some(handle))
-            } else {
-                (None, None)
-            };
-        let (responder, server_handle) =
-            if matches!(self.role, SessionRole::ServerOnly | SessionRole::Both) {
-                let db = self
-                    .database
-                    .get_or_insert_with(|| Arc::new(RwLock::new(ObjectDatabase::new())));
-                let mut responder = EndpointResponder::new(Arc::clone(db), egress.clone());
-                if let Some(device) = device_write_target {
-                    responder = responder.with_device_writes(
-                        device,
-                        self.device_write_authorizer
-                            .clone()
-                            .expect("validated authorizer"),
-                    );
-                }
-                let responder = Arc::new(responder);
-                let handle = ServerRoleHandle::new(
-                    &self.shared.token,
-                    Arc::clone(&responder),
-                    Arc::clone(notifications.as_ref().expect("server worker owner")),
-                );
-                (Some(responder), Some(handle))
-            } else {
-                (None, None)
-            };
-
-        let (cancel_tx, cancel_rx) = oneshot::channel();
-        let dispatch = DispatchParts {
-            inbound: receivers.inbound_requests,
-            terminal: receivers.terminal_or_segment,
-            policy: receivers.policy_outcomes,
-            requester: requester.clone(),
-            responder: responder.clone(),
-            notifications: notifications.clone(),
-            coordinator: Arc::clone(&self.coordinator),
-            shared: Arc::clone(&self.shared),
-        };
-        let audit_lease = source_recipient
-            .as_ref()
-            .map(|runtime| Arc::clone(&runtime.owner));
-        let task = tokio::spawn(async move {
-            let _audit_lease = audit_lease;
-            dispatch_loop(dispatch, cancel_rx).await
-        });
-
-        // Dispatch owns the three ingress receivers (single consumer); the
-        // session retains one egress clone for the identity I-Am path while
-        // the receiver halves move into dispatch. No second demultiplexer.
-        self.egress = Some(egress);
-        self.source_read = source_read;
-        self.source_recipient = source_recipient;
-        self.requester = requester;
-        self.responder = responder;
-        self.notifications = notifications;
-        self.client_handle = client_handle;
-        self.server_handle = server_handle;
-        self.dispatch_task = Some(task);
-        self.cancel_tx = Some(cancel_tx);
+        if let Err(error) = self.start_roles(receivers, source_routes, device_write_target) {
+            // Keep cleanup ownership in self before awaiting. Cancellation leaves
+            // Stopping plus intact joins; stop/Drop can still finish teardown.
+            let _ = self.stop().await;
+            return Err(error);
+        }
         Ok(())
     }
 

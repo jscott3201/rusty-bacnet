@@ -421,3 +421,42 @@ async fn source_post_start_broadcast_fact_invalidates_device_route_without_callb
     assert_eq!(observed.sends.load(Ordering::SeqCst), 0);
     session.stop().await.unwrap();
 }
+
+#[tokio::test]
+async fn source_post_start_address_rejection_joins_ingress_and_is_terminal() {
+    let (session, _peer, observed) = session(SessionRole::ClientOnly);
+    let mut db = database();
+    db.get_mut(&oid(ObjectType::DEVICE, 123))
+        .unwrap()
+        .device_authority_internal()
+        .unwrap()
+        .provision_audit_recipient(bacnet_types::constructed::BACnetRecipient::Address(
+            bacnet_types::constructed::BACnetAddress {
+                network_number: 0,
+                mac_address: bacnet_types::MacAddr::from_slice(&[192, 168, 1, 255, 0xBA, 0xC0]),
+            },
+        ))
+        .unwrap();
+    let mut session = session
+        .with_database(db)
+        .with_source_audit_reporter(selected());
+    assert!(session.start().await.is_err());
+    assert_eq!(observed.starts.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        observed.stops.load(Ordering::SeqCst),
+        1,
+        "post-start failure must join ingress before returning"
+    );
+    assert!(!session.is_running());
+    assert_eq!(
+        session.lifecycle.load(Ordering::Acquire),
+        Lifecycle::Stopped as u8
+    );
+    assert!(session.client().is_none() && session.server().is_none());
+    assert_eq!(session.active_leases(), 0);
+    assert!(!source(
+        &*session.database.as_ref().unwrap().read().await,
+        selected()
+    ));
+    assert!(session.start().await.is_err());
+}

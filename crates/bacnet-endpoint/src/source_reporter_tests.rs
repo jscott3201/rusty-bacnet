@@ -602,3 +602,6 @@ async fn source_both_requires_explicit_authorizer_before_owner_installation() {
     session.start().await.unwrap();
     session.stop().await.unwrap();
 }
+
+#[path = "source_start_cleanup_tests.rs"]
+mod start_cleanup;

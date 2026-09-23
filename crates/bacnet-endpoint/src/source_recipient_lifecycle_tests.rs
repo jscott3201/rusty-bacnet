@@ -166,3 +166,33 @@ async fn source_recipient_protected_topology_preserves_pending_failure_then_rele
     peer.stop().await.unwrap();
     sink.stop().await.unwrap();
 }
+
+#[tokio::test]
+async fn public_recipient_write_rechecks_sealed_owner_after_database_wait() {
+    let (mut sink, mut records) = network().await;
+    let mut session = session(database(false), SessionRole::ClientOnly, &sink);
+    session.start().await.unwrap();
+    let db = session.database.as_ref().unwrap().clone();
+    let guard = db.write().await;
+    let before = guard
+        .get(&oid(ObjectType::DEVICE, 123))
+        .unwrap()
+        .read_property(PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT, None)
+        .unwrap();
+    {
+        let write = session.write_audit_recipient(Some(direct(&sink)));
+        tokio::pin!(write);
+        tokio::select! {
+            biased;
+            result = &mut write => panic!("write escaped held database: {result:?}"),
+            () = std::future::ready(()) => {}
+        }
+        session.source_recipient.as_ref().unwrap().seal();
+        drop(guard);
+        assert!(write.await.is_err());
+    }
+    assert_eq!(current(&session).await, before);
+    assert!(records.try_recv().is_err());
+    session.stop().await.unwrap();
+    sink.stop().await.unwrap();
+}
