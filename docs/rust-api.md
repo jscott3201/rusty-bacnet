@@ -743,8 +743,27 @@ let mut db = ObjectDatabase::new();
 db.add(Box::new(analog_input));
 
 let obj = db.get(&oid);                // Option<&dyn BACnetObject>
-let obj = db.get_mut(&oid);            // Option<&mut Box<dyn BACnetObject>>
+let obj = db.get_mut(&oid);            // Option<&mut dyn BACnetObject>
 ```
+
+The pre-1.0 database API now returns `&mut dyn BACnetObject` from `get_mut`.
+Structural replacement goes through `add`/`remove`; the scoped
+`with_object_adapter` callback supports trusted identity-preserving wrappers
+without rebinding clocks or changing indexes. It retires polling ownership before
+invocation, including callback errors and unwinds, and cannot return a slot borrow.
+
+Trend polling state now belongs to the database; the separate `TrendLogState`
+argument is removed. A synchronous database poll selects, reads and appends under
+one caller-owned exclusive guard. `Log_Interval` is in hundredths of a second
+(raw 1 is 10 ms, raw 50 is 500 ms). Successful attempts anchor the next interval
+to actual completion, with no catch-up burst. The server sleeps until the earliest
+due time, capped at 100 ms to reconcile changed configuration. Invalid clocks and
+insertion errors retry after 100 ms without advancing the last success. An overdue
+entry after slow synchronous work yields for 1 ms instead of spinning. These are
+local scheduling policies, not hard real-time guarantees. Custom polling callers
+must bind the database's monotonic clock as well as its Device clock. The bundled
+server binds both. Existing disabled/count-only accepted outcomes still advance
+the schedule; remote/indexed reference execution is not added.
 
 ### Object Types (62)
 

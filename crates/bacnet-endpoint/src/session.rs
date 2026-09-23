@@ -499,11 +499,10 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         }
         // Only this fully validated owner can install the private adapter. The
         // existing slot is wrapped in place: no remove/add, rebind or index churn.
-        source_reporter::install(
-            db.get_mut(&selected)
-                .expect("selected Reporter was validated"),
-            self.static_source_audit_recipient.is_some(),
-        )
+        db.with_object_adapter(&selected, |slot| {
+            source_reporter::install(slot, self.static_source_audit_recipient.is_some())
+        })
+        .expect("selected Reporter was validated")
     }
 
     /// Starts ingress, roles and the single dispatch consumer once.

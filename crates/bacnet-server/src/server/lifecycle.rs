@@ -626,16 +626,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             None
         };
 
-        let db_trend = Arc::clone(&db);
-        let trend_log_state: crate::trend_log::TrendLogState =
-            Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
-        let trend_log_task = Some(tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(1));
-            loop {
-                interval.tick().await;
-                crate::trend_log::poll_trend_logs(&db_trend, &trend_log_state).await;
-            }
-        }));
+        let trend_log_task = Some(tokio::spawn(crate::trend_log::run(Arc::clone(&db))));
 
         let db_schedule = Arc::clone(&db);
         let network_schedule = Arc::clone(&network);
