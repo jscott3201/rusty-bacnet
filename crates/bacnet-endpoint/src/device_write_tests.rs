@@ -410,6 +410,21 @@ async fn bip_device_write_authorized_round_trip_and_service_readback() {
         read(&session, PropertyIdentifier::DESCRIPTION).await,
         PropertyValue::CharacterString("B/IP update".into())
     );
+    client
+        .write_property(
+            &mac,
+            oid(123),
+            PropertyIdentifier::DESCRIPTION,
+            None,
+            vec![0],
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        read(&session, PropertyIdentifier::DESCRIPTION).await,
+        PropertyValue::CharacterString("B/IP update".into())
+    );
     let ack = client
         .read_property(
             &mac,

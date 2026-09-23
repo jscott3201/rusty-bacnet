@@ -2,6 +2,7 @@ use super::*;
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_endpoint_core::endpoint_ingress::EndpointIngress;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
+use bacnet_objects::traits::BACnetObject;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::TransportProvenance;
 use std::sync::atomic::AtomicUsize;
@@ -181,6 +182,189 @@ async fn endpoint_device_write_default_refusal_and_panic_never_mutate() {
 }
 
 #[tokio::test]
+async fn endpoint_device_write_null_relinquishment_is_authorized_noop() {
+    for allow in [false, true] {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = calls.clone();
+        let (responder, mut ingress) = fixture(Some(Arc::new(move |_| {
+            observed.fetch_add(1, Ordering::SeqCst);
+            allow
+        })))
+        .await;
+        responder
+            .db
+            .write()
+            .await
+            .get_mut(&device())
+            .unwrap()
+            .device_mut_internal()
+            .unwrap()
+            .set_description("retained");
+        let mut write = write();
+        write.property_value = vec![0];
+        let (response, _) = reply(&responder, received(request(&write))).await;
+        if allow {
+            assert!(matches!(response,Apdu::SimpleAck(ack) if ack.invoke_id == 71));
+        } else {
+            assert_error(
+                response,
+                ErrorClass::SERVICES,
+                ErrorCode::SERVICE_REQUEST_DENIED,
+            );
+        }
+        assert_eq!(
+            description(&responder).await,
+            PropertyValue::CharacterString("retained".into())
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        ingress.stop().await.unwrap();
+    }
+}
+
+struct TrapObject {
+    oid: ObjectIdentifier,
+    writes: Arc<AtomicUsize>,
+    authority: Option<DeviceObject>,
+}
+impl BACnetObject for TrapObject {
+    fn object_identifier(&self) -> ObjectIdentifier {
+        self.oid
+    }
+    fn object_name(&self) -> &str {
+        "write trap"
+    }
+    fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
+        std::borrow::Cow::Borrowed(&[PropertyIdentifier::DESCRIPTION])
+    }
+    fn read_property(&self, _: PropertyIdentifier, _: Option<u32>) -> Result<PropertyValue, Error> {
+        Ok(PropertyValue::CharacterString("trap".into()))
+    }
+    fn write_property(
+        &mut self,
+        _: PropertyIdentifier,
+        _: Option<u32>,
+        _: PropertyValue,
+        _: Option<u8>,
+    ) -> Result<(), Error> {
+        self.writes.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+    fn device_mut_internal(&mut self) -> Option<&mut DeviceObject> {
+        self.authority.as_mut()
+    }
+}
+
+#[tokio::test]
+async fn endpoint_device_write_revalidates_lower_level_authority_before_policy() {
+    for case in [
+        "non-device",
+        "custom-device",
+        "mismatched-authority",
+        "removed",
+        "other-device",
+    ] {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = calls.clone();
+        let writes = Arc::new(AtomicUsize::new(0));
+        let (mut responder, mut ingress) = fixture(Some(Arc::new(move |_| {
+            observed.fetch_add(1, Ordering::SeqCst);
+            true
+        })))
+        .await;
+        let target = if case == "non-device" {
+            ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 123).unwrap()
+        } else if case == "other-device" {
+            ObjectIdentifier::new(ObjectType::DEVICE, 456).unwrap()
+        } else {
+            device()
+        };
+        {
+            let mut db = responder.db.write().await;
+            db.remove(&device());
+            if case != "removed" {
+                db.add(Box::new(TrapObject {
+                    oid: target,
+                    writes: writes.clone(),
+                    authority: if case == "mismatched-authority" {
+                        Some(
+                            DeviceObject::new(DeviceConfig {
+                                instance: 456,
+                                ..Default::default()
+                            })
+                            .unwrap(),
+                        )
+                    } else {
+                        None
+                    },
+                }))
+                .unwrap();
+            }
+        }
+        if case == "non-device" {
+            responder = responder.with_device_writes(
+                target,
+                Arc::new(move |_| panic!("non-Device reached policy")),
+            );
+        }
+        let mut write = write();
+        write.object_identifier = target;
+        let response = reply(&responder, received(request(&write))).await.0;
+        if case == "removed" {
+            assert_error(response, ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT);
+        } else {
+            assert_error(
+                response,
+                ErrorClass::PROPERTY,
+                ErrorCode::WRITE_ACCESS_DENIED,
+            );
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(writes.load(Ordering::SeqCst), 0);
+        ingress.stop().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn endpoint_device_write_revalidates_replacement_after_authorization() {
+    for remove_only in [false, true] {
+        let (mut responder, mut ingress) = fixture(Some(Arc::new(|_| true))).await;
+        let db = responder.db.clone();
+        let writes = Arc::new(AtomicUsize::new(0));
+        let observed = writes.clone();
+        responder = responder.with_device_writes(
+            device(),
+            Arc::new(move |_| {
+                // Deterministically model an independently owned database replacement
+                // between preflight and commit; no database guard may span policy.
+                let mut db = db.try_write().expect("authorizer must run without DB lock");
+                db.remove(&device());
+                if !remove_only {
+                    db.add(Box::new(TrapObject {
+                        oid: device(),
+                        writes: observed.clone(),
+                        authority: None,
+                    }))
+                    .unwrap();
+                }
+                true
+            }),
+        );
+        let response = reply(&responder, received(request(&write()))).await.0;
+        if remove_only {
+            assert_error(response, ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT);
+        } else {
+            assert_error(
+                response,
+                ErrorClass::PROPERTY,
+                ErrorCode::WRITE_ACCESS_DENIED,
+            );
+        }
+        assert_eq!(writes.load(Ordering::SeqCst), 0);
+        ingress.stop().await.unwrap();
+    }
+}
+
+#[tokio::test]
 async fn endpoint_device_write_rejects_scope_index_type_priority_and_malformed_before_policy() {
     let calls = Arc::new(AtomicUsize::new(0));
     let observed = calls.clone();
@@ -198,8 +382,8 @@ async fn endpoint_device_write_rejects_scope_index_type_priority_and_malformed_b
         write.object_identifier = oid;
         cases.push((
             request(&write),
-            ErrorClass::PROPERTY,
-            ErrorCode::WRITE_ACCESS_DENIED,
+            ErrorClass::OBJECT,
+            ErrorCode::UNKNOWN_OBJECT,
         ));
     }
     for property in [
@@ -211,7 +395,11 @@ async fn endpoint_device_write_rejects_scope_index_type_priority_and_malformed_b
         cases.push((
             request(&write),
             ErrorClass::PROPERTY,
-            ErrorCode::WRITE_ACCESS_DENIED,
+            if property == PropertyIdentifier::OBJECT_NAME {
+                ErrorCode::WRITE_ACCESS_DENIED
+            } else {
+                ErrorCode::UNKNOWN_PROPERTY
+            },
         ));
     }
     for index in [0, 1] {
@@ -224,7 +412,6 @@ async fn endpoint_device_write_rejects_scope_index_type_priority_and_malformed_b
         ));
     }
     for value in [
-        vec![0x00],
         vec![0x21, 0x01],
         [write().property_value.as_slice(), &[0x00]].concat(),
     ] {
@@ -246,7 +433,11 @@ async fn endpoint_device_write_rejects_scope_index_type_priority_and_malformed_b
     for priority in [0, 17] {
         let mut write = write();
         write.priority = Some(priority);
-        cases.push((request(&write), ErrorClass::SERVICES, ErrorCode::OTHER));
+        cases.push((
+            request(&write),
+            ErrorClass::SERVICES,
+            ErrorCode::PARAMETER_OUT_OF_RANGE,
+        ));
     }
     let mut malformed = request(&write());
     malformed.service_request = Bytes::from_static(&[0x0c]);

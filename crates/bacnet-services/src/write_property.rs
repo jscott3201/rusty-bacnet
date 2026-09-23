@@ -2,7 +2,7 @@
 
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags::{self, TagClass};
-use bacnet_types::enums::PropertyIdentifier;
+use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
@@ -140,23 +140,17 @@ impl WritePropertyRequest {
             if end > data.len() {
                 return Err(Error::decoding(pos, "WriteProperty truncated at priority"));
             }
-            let prio =
-                primitives::decode_unsigned_u8(&data[pos..end]).map_err(|error| match error {
-                    Error::Decoding { message, .. } => {
-                        Error::decoding(pos, format!("WriteProperty priority: {message}"))
-                    }
-                    other => other,
-                })?;
-            if !(1..=16).contains(&prio) {
-                return Err(Error::decoding(
-                    pos,
-                    format!("WriteProperty priority {prio} out of range 1-16"),
-                ));
-            }
+            let prio = primitives::decode_unsigned(&data[pos..end])?;
             if end != data.len() {
                 return Err(Error::decoding(end, "WriteProperty has trailing data"));
             }
-            priority = Some(prio);
+            if !(1..=16).contains(&prio) {
+                return Err(Error::Protocol {
+                    class: ErrorClass::SERVICES.to_raw() as u32,
+                    code: ErrorCode::PARAMETER_OUT_OF_RANGE.to_raw() as u32,
+                });
+            }
+            priority = Some(prio as u8);
         }
 
         Ok(Self {
@@ -364,8 +358,8 @@ mod tests {
     }
 
     #[test]
-    fn write_property_rejects_overflow_before_priority_range_validation() {
-        let mut values = vec![256, 65_536, 4_294_967_296, u64::MAX];
+    fn write_property_priority_range_errors_are_typed_for_all_unsigned_widths() {
+        let mut values = vec![0, 17, 255, 256, 65_536, 4_294_967_296, u64::MAX];
         for low_byte in 1..=16 {
             for high_bits in [0x100, 0x1_0000, 0x1_0000_0000, 0x8000_0000_0000_0000] {
                 values.push(high_bits | low_byte);
@@ -375,17 +369,20 @@ mod tests {
             let buf = encode_fields(0, 1, 85, None, Some((4, value)), false);
             let error = WritePropertyRequest::decode(&buf).unwrap_err();
             assert!(
-                matches!(error, Error::Decoding { ref message, .. } if message.contains("exceeds u8")),
-                "priority {value} must fail typed decoding, got {error:?}"
+                matches!(error, Error::Protocol { class, code }
+                    if class == ErrorClass::SERVICES.to_raw() as u32
+                        && code == ErrorCode::PARAMETER_OUT_OF_RANGE.to_raw() as u32),
+                "priority {value} must fail semantic range validation, got {error:?}"
             );
         }
-        for value in [0, 17, 255] {
-            let buf = encode_fields(0, 1, 85, None, Some((4, value)), false);
-            let error = WritePropertyRequest::decode(&buf).unwrap_err();
-            assert!(
-                matches!(error, Error::Decoding { ref message, .. } if message.contains("out of range")),
-                "priority {value} must fail range validation, got {error:?}"
-            );
+        for length in [0, 9] {
+            let mut buf = encode_fields(0, 1, 85, None, None, false);
+            tags::encode_tag(&mut buf, 4, TagClass::Context, length);
+            buf.extend_from_slice(&vec![0; length as usize]);
+            assert!(matches!(
+                WritePropertyRequest::decode(&buf),
+                Err(Error::Decoding { .. })
+            ));
         }
     }
 

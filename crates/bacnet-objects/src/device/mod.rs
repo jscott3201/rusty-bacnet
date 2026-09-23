@@ -544,11 +544,22 @@ impl BACnetObject for DeviceObject {
     fn write_property(
         &mut self,
         property: PropertyIdentifier,
-        _array_index: Option<u32>,
+        array_index: Option<u32>,
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
         if property == PropertyIdentifier::DESCRIPTION {
+            if array_index.is_some() {
+                return Err(Error::Protocol {
+                    class: ErrorClass::PROPERTY.to_raw() as u32,
+                    code: ErrorCode::PROPERTY_IS_NOT_AN_ARRAY.to_raw() as u32,
+                });
+            }
+            // Clause 15.9: relinquishing a non-commandable writable property
+            // succeeds without changing its value when no other error exists.
+            if value == PropertyValue::Null {
+                return Ok(());
+            }
             if let PropertyValue::CharacterString(_) = &value {
                 self.properties.insert(property, value);
                 return Ok(());

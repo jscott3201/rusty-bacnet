@@ -16,6 +16,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// context. A refusal or panic denies the request before mutation. It must
     /// be fast, nonblocking and side-effect-free; see [`MutationAuthorizer`].
     /// Other objects/properties and WritePropertyMultiple remain unsupported.
+    /// An authorized NULL relinquishment succeeds without changing Description.
     /// This grants no Audit Reporting or recipient-change capability.
     ///
     /// Startup requires a server role and exactly one concrete built-in Device

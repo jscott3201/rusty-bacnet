@@ -8,6 +8,8 @@ use bacnet_encoding::apdu::{decode_apdu, encode_apdu};
 use bacnet_encoding::npdu::{encode_npdu, Npdu};
 use bacnet_endpoint_core::endpoint_ingress::{EndpointApduDestination, EndpointEgress};
 use bacnet_network::layer::ReceivedApdu;
+use bacnet_objects::device::DeviceObject;
+use bacnet_objects::traits::BACnetObject;
 use bacnet_services::write_property::WritePropertyRequest;
 
 use super::confirmed_response;
@@ -16,6 +18,45 @@ use super::*;
 #[allow(dead_code)]
 fn shutdown_error() -> Error {
     Error::Encoding("endpoint shutdown".into())
+}
+
+fn property_error(class: ErrorClass, code: ErrorCode) -> Error {
+    Error::Protocol {
+        class: class.to_raw() as u32,
+        code: code.to_raw() as u32,
+    }
+}
+
+/// Check existence, scope and typed authority under the database write guard.
+/// The callback runs between preflight and the identical commit-time check.
+fn device_write_target<'a>(
+    db: &'a mut ObjectDatabase,
+    selected: ObjectIdentifier,
+    write: &WritePropertyRequest,
+) -> Result<&'a mut DeviceObject, Error> {
+    let object = db
+        .get_mut(&write.object_identifier)
+        .ok_or_else(|| property_error(ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT))?;
+    if !object.property_list().contains(&write.property_identifier) {
+        return Err(property_error(
+            ErrorClass::PROPERTY,
+            ErrorCode::UNKNOWN_PROPERTY,
+        ));
+    }
+    if write.object_identifier != selected
+        || selected.object_type() != ObjectType::DEVICE
+        || selected.instance_number() == ObjectIdentifier::MAX_INSTANCE
+        || write.property_identifier != PropertyIdentifier::DESCRIPTION
+    {
+        return Err(property_error(
+            ErrorClass::PROPERTY,
+            ErrorCode::WRITE_ACCESS_DENIED,
+        ));
+    }
+    object
+        .device_mut_internal()
+        .filter(|device| device.object_identifier() == selected)
+        .ok_or_else(|| property_error(ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED))
 }
 
 /// Composition-visible inbound responder (narrow service scope).
@@ -63,13 +104,12 @@ impl EndpointResponder {
     ) -> Result<(), Error> {
         let (device, authorizer) = self.device_writes.as_ref().expect("enabled Device writes");
         let write = WritePropertyRequest::decode(&request.service_request)?;
-        if write.object_identifier != *device
-            || write.property_identifier != PropertyIdentifier::DESCRIPTION
         {
-            return Err(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
-            });
+            let mut db = self.db.write().await;
+            if !self.open.load(Ordering::Acquire) {
+                return Err(shutdown_error());
+            }
+            device_write_target(&mut db, *device, &write)?;
         }
         if write.property_array_index.is_some() {
             return Err(Error::Protocol {
@@ -82,7 +122,10 @@ impl EndpointResponder {
             None,
             &write.property_value,
         )?;
-        if !matches!(value, PropertyValue::CharacterString(_)) {
+        if !matches!(
+            value,
+            PropertyValue::CharacterString(_) | PropertyValue::Null
+        ) {
             return Err(Error::Protocol {
                 class: ErrorClass::PROPERTY.to_raw() as u32,
                 code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
@@ -105,8 +148,15 @@ impl EndpointResponder {
         if !self.open.load(Ordering::Acquire) {
             return Err(shutdown_error());
         }
-        handlers::handle_write_property(&mut db, &request.service_request)?;
-        Ok(())
+        let MutationTarget::WriteProperty(write) = &context.target else {
+            unreachable!("Device write context")
+        };
+        device_write_target(&mut db, *device, write)?.write_property(
+            write.property_identifier,
+            write.property_array_index,
+            value,
+            write.priority,
+        )
     }
 
     /// Handles one inbound request, preserving provenance structurally.

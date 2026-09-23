@@ -1702,8 +1702,13 @@ and contain only ReadProperty/WriteProperty service bits. Configuration
 validation precedes transport startup and any profile/source-ownership changes.
 The enabled Device and identity advertise exactly RP+WP, including sessions
 without an identity. Default sessions keep their existing RP-only responder.
-Valid priorities 1–16 are ignored for noncommandable Description; array indices,
-invalid priorities and non-string values fail. Other targets, properties and
+Valid priorities 1–16 are ignored for noncommandable Description. Authorized
+NULL relinquishment succeeds without changing its value. Array indices,
+out-of-range priorities and other non-string values fail; numeric priority
+range errors use SERVICES/PARAMETER_OUT_OF_RANGE. Missing objects/properties
+return UNKNOWN_OBJECT/UNKNOWN_PROPERTY; known out-of-scope writes are denied.
+Typed Device authority is revalidated under the commit lock, including when
+the lower-level responder is used directly. Other targets, properties and
 WritePropertyMultiple remain excluded, including source Reporter configuration.
 
 Deterministic request/reply tests cover authorization, framing, routing,

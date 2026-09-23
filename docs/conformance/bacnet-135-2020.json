@@ -38,7 +38,10 @@
     "crates/bacnet-endpoint/src/device_write_tests.rs::bip_device_write_authorized_round_trip_and_service_readback",
     "crates/bacnet-server/src/server/requests/endpoint_device_write_tests.rs::endpoint_device_write_authorizes_exact_context_and_preserves_reply_tx",
     "crates/bacnet-server/src/server/requests/endpoint_device_write_tests.rs::endpoint_device_write_direct_and_routed_egress_preserve_destination",
-    "crates/bacnet-endpoint/src/source_reporter_forwarding_tests.rs::typed_device_authority_is_forwarded_without_copying"
+    "crates/bacnet-endpoint/src/source_reporter_forwarding_tests.rs::typed_device_authority_is_forwarded_without_copying",
+    "crates/bacnet-server/src/handlers/tests/audit_recipient_writes.rs::recipient_null_relinquishment_is_noop_and_wpm_continues",
+    "crates/bacnet-server/src/server/requests/endpoint_device_write_tests.rs::endpoint_device_write_null_relinquishment_is_authorized_noop",
+    "crates/bacnet-server/src/handlers/tests/device_description_writes.rs::device_description_full_handler_null_is_noop_and_priority_range_is_typed"
    ],
    "negative_tests": [
     "crates/bacnet-endpoint/src/device_write_tests.rs::device_write_preflight_errors_are_atomic_and_retryable",
@@ -47,14 +50,17 @@
     "crates/bacnet-server/src/server/requests/endpoint_device_write_tests.rs::endpoint_device_write_default_refusal_and_panic_never_mutate",
     "crates/bacnet-server/src/server/requests/endpoint_device_write_tests.rs::endpoint_device_write_rejects_scope_index_type_priority_and_malformed_before_policy",
     "crates/bacnet-server/src/server/requests/endpoint_device_write_tests.rs::endpoint_device_write_group_silence_segment_abort_and_wpm_reject",
-    "crates/bacnet-server/src/server/requests/endpoint_device_write_tests.rs::endpoint_device_write_shutdown_while_waiting_for_database_never_commits"
+    "crates/bacnet-server/src/server/requests/endpoint_device_write_tests.rs::endpoint_device_write_shutdown_while_waiting_for_database_never_commits",
+    "crates/bacnet-server/src/server/requests/endpoint_device_write_tests.rs::endpoint_device_write_revalidates_lower_level_authority_before_policy",
+    "crates/bacnet-server/src/server/requests/endpoint_device_write_tests.rs::endpoint_device_write_revalidates_replacement_after_authorization",
+    "crates/bacnet-services/src/write_property.rs::write_property_priority_range_errors_are_typed_for_all_unsigned_widths"
    ],
    "benchmarks": [],
    "public_claims": [
     "docs/rust-api.md authorized endpoint Device writes",
     "crates/bacnet-endpoint/src/lib.rs narrow server scope"
    ],
-   "notes": "Refs #737, #431, #524. Mandatory Rust MutationAuthorizer opt-in; absence preserves the existing RP-only responder. Scope is one concrete built-in Device.Description. Local configuration preflight validates server role, unique Device authority and optional matching identity before mutation or transport startup. Enabled Device and identity advertise RP+WP; unsupported explicit identity service bits fail. Device broad standalone defaults are replaced by actual endpoint execution profile. Callback refusal or panic denies without mutation; context retains immediate peer, claimed routed source, provenance and invoke ID. Group silence, segmentation Abort, reply_tx and direct/routed response paths are preserved. Clause 15.9 priority1-16 is ignored for noncommandable Description; invalid priority, array index and type fail. Deterministic and B/IP loopback evidence only. General database writes, WPM, inbound completed-response replay cache, dynamic Audit_Notification_Recipient and its mandatory change notifications, Python callback APIs, full endpoint mutation parity, BIBB/BTL and Audit conformance remain excluded. No full-protocol status promotion."
+   "notes": "Refs #737, #431, #524. Mandatory Rust MutationAuthorizer opt-in; absence preserves the existing RP-only responder. Scope is one concrete built-in Device.Description. Local configuration preflight validates server role, unique Device authority and optional matching identity before mutation or transport startup. Enabled Device and identity advertise RP+WP; unsupported explicit identity service bits fail. Device broad standalone defaults are replaced by actual endpoint execution profile. Callback refusal or panic denies without mutation; context retains immediate peer, claimed routed source, provenance and invoke ID. Group silence, segmentation Abort, reply_tx and direct/routed response paths are preserved. Clause 15.9 priority1-16 is ignored for noncommandable Description. Authorized NULL relinquishment succeeds unchanged. Legal unsigned priorities outside1-16 return SERVICES/PARAMETER_OUT_OF_RANGE, while malformed encodings remain decoding failures. Absent targets/properties return UNKNOWN_OBJECT/UNKNOWN_PROPERTY and known out-of-scope writes are denied. The responder revalidates concrete typed Device authority under its commit lock and commits through that authority, including lower-level direct use and database replacement. The shared Audit_Notification_Recipient WP/WPM boundary also preserves exact NULL relinquishment as an operation; NULL is not Recipient state, a default or a disabled sentinel. Its object owner must preserve state and permit WPM continuation. Deterministic and B/IP loopback evidence only. General database writes, WPM, inbound completed-response replay cache, dynamic Audit_Notification_Recipient and its mandatory change notifications, Python callback APIs, full endpoint mutation parity, BIBB/BTL and Audit conformance remain excluded. No full-protocol status promotion."
   },
   {
    "id": "BACNET-4-ARCHITECTURE",
