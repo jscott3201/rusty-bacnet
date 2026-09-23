@@ -1,6 +1,5 @@
 //! BACnetObject trait — the interface all BACnet objects implement.
 
-use std::any::Any;
 use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Duration;
@@ -30,16 +29,6 @@ pub type MonotonicClock = dyn Fn() -> Duration + Send + Sync;
 
 mod defaults;
 use defaults::{array_property_default, historical_writable_default};
-
-/// Object-owned snapshot state retained for compatibility and local use.
-///
-/// The bundled server no longer invokes these tokens from Service 16:
-/// WritePropertyMultiple retains its successful prefix as required by Clause
-/// 15.10. Existing object implementations and downstream users may still use
-/// the hooks directly to preserve state hidden by property readback, including
-/// event resets, fallback-backed values, destructive writes, and derived state.
-#[doc(hidden)]
-pub struct WritePropertyRollback(Box<dyn Any + Send + Sync>);
 
 /// Result of applying a LifeSafetyOperation to an object.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,22 +66,6 @@ pub enum ReliabilityEvaluation {
         /// Reliability after the successful mutation.
         new_reliability: u32,
     },
-}
-
-impl WritePropertyRollback {
-    /// Wrap object-private rollback state.
-    #[doc(hidden)]
-    pub fn new<T: Any + Send + Sync>(state: T) -> Self {
-        Self(Box::new(state))
-    }
-
-    /// Recover object-private rollback state.
-    #[doc(hidden)]
-    pub fn downcast<T: Any + Send + Sync>(self) -> Result<T, Error> {
-        self.0.downcast::<T>().map(|state| *state).map_err(|_| {
-            Error::Encoding("object received an incompatible write rollback token".into())
-        })
-    }
 }
 
 /// The core trait for all BACnet objects.
@@ -282,36 +255,6 @@ pub trait BACnetObject: Send + Sync {
     /// vendor or per-instance array properties override.
     fn is_array_property(&self, property: PropertyIdentifier) -> bool {
         array_property_default(self.object_identifier().object_type(), property)
-    }
-
-    /// Capture compatibility state that property readback cannot preserve.
-    ///
-    /// The default returns `None`. Service 16 no longer calls this hook because
-    /// WritePropertyMultiple retains successful prefix writes. Implementations
-    /// and downstream callers may still use a token directly for object-local
-    /// snapshot/restore flows involving destructive or fallback-backed state.
-    /// Returning `None` MUST leave the object unchanged.
-    #[doc(hidden)]
-    fn capture_write_property_rollback(
-        &mut self,
-        _property: PropertyIdentifier,
-        _value: &PropertyValue,
-    ) -> Option<WritePropertyRollback> {
-        None
-    }
-
-    /// Restore a compatibility token returned by
-    /// [`capture_write_property_rollback`](Self::capture_write_property_rollback).
-    ///
-    /// The bundled server's Service 16 path does not invoke this hook.
-    #[doc(hidden)]
-    fn restore_write_property_rollback(
-        &mut self,
-        _rollback: WritePropertyRollback,
-    ) -> Result<(), Error> {
-        Err(Error::Encoding(
-            "object does not support this write rollback token".into(),
-        ))
     }
 
     /// Whether this object type can be created at runtime via CreateObject.

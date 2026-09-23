@@ -28,10 +28,6 @@ pub struct AccessDoorObject {
     relinquish_default: u32,
 }
 
-struct AccessDoorWriteRollback {
-    priority_array: [Option<u32>; 16],
-}
-
 impl AccessDoorObject {
     /// Create a new Access Door object.
     pub fn new(instance: u32, name: impl Into<String>) -> Result<Self, Error> {
@@ -196,29 +192,6 @@ impl BACnetObject for AccessDoorObject {
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
-    }
-
-    fn capture_write_property_rollback(
-        &mut self,
-        property: PropertyIdentifier,
-        _value: &PropertyValue,
-    ) -> Option<crate::traits::WritePropertyRollback> {
-        (property == PropertyIdentifier::PRESENT_VALUE).then(|| {
-            crate::traits::WritePropertyRollback::new(AccessDoorWriteRollback {
-                priority_array: self.priority_array,
-            })
-        })
-    }
-
-    fn restore_write_property_rollback(
-        &mut self,
-        rollback: crate::traits::WritePropertyRollback,
-    ) -> Result<(), Error> {
-        self.priority_array = rollback
-            .downcast::<AccessDoorWriteRollback>()?
-            .priority_array;
-        self.recalculate_present_value();
-        Ok(())
     }
 
     fn supports_cov(&self) -> bool {

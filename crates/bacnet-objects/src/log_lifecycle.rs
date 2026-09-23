@@ -35,13 +35,6 @@ pub(crate) struct LogLifecycle<'a> {
     clock: Option<&'a Arc<dyn ClockReader>>,
 }
 
-#[derive(Clone)]
-pub(crate) struct LogLifecycleSnapshot {
-    buffer: LogRecordBuffer,
-    enabled: bool,
-    stop_when_full: bool,
-}
-
 impl<'a> LogLifecycle<'a> {
     pub(crate) fn new(
         buffer: &'a mut LogRecordBuffer,
@@ -140,27 +133,6 @@ impl<'a> LogLifecycle<'a> {
             log_datum: LogDatum::LogStatus(bits),
             status_flags: None,
         });
-    }
-}
-
-impl LogLifecycleSnapshot {
-    pub(crate) fn capture(buffer: &LogRecordBuffer, enabled: bool, stop_when_full: bool) -> Self {
-        Self {
-            buffer: buffer.clone(),
-            enabled,
-            stop_when_full,
-        }
-    }
-
-    pub(crate) fn restore(
-        self,
-        buffer: &mut LogRecordBuffer,
-        enabled: &mut bool,
-        stop_when_full: &mut bool,
-    ) {
-        *buffer = self.buffer;
-        *enabled = self.enabled;
-        *stop_when_full = self.stop_when_full;
     }
 }
 

@@ -170,7 +170,7 @@ fn enrollment_event_time_stamp_arrays_preserve_order_indexes_and_choices() {
 }
 
 #[test]
-fn event_enrollment_detection_disable_resets_history_and_rollback_restores_it() {
+fn event_enrollment_rejected_detection_write_preserves_history_then_disable_resets() {
     let expected = seeded_timestamps();
     let mut object = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
     object.event_history.time_stamps = expected.clone();
@@ -184,25 +184,17 @@ fn event_enrollment_detection_disable_resets_history_and_rollback_restores_it() 
         Some(EventState::FAULT),
         Some(EventState::NORMAL),
     ];
-    let rollback = object
-        .capture_write_property_rollback(
-            PropertyIdentifier::EVENT_DETECTION_ENABLE,
-            &PropertyValue::Boolean(false),
-        )
-        .expect("Event Enrollment detection write needs an opaque rollback");
-
-    object
-        .write_property(
+    assert_property_error(
+        object.write_property(
             PropertyIdentifier::EVENT_DETECTION_ENABLE,
             None,
-            PropertyValue::Boolean(false),
+            PropertyValue::Unsigned(0),
             None,
-        )
-        .unwrap();
-    assert_default_timestamp_array(&object, "disabled Event Enrollment");
-
-    object.restore_write_property_rollback(rollback).unwrap();
-    assert_seeded_timestamp_reads(&object, &expected, "restored Event Enrollment");
+        ),
+        ErrorCode::INVALID_DATA_TYPE,
+        "invalid detection write",
+    );
+    assert_seeded_timestamp_reads(&object, &expected, "unchanged Event Enrollment");
     assert_eq!(
         object.event_history.original_from_states,
         [
@@ -219,25 +211,39 @@ fn event_enrollment_detection_disable_resets_history_and_rollback_restores_it() 
             Some(EventState::NORMAL),
         ]
     );
+    object
+        .write_property(
+            PropertyIdentifier::EVENT_DETECTION_ENABLE,
+            None,
+            PropertyValue::Boolean(false),
+            None,
+        )
+        .unwrap();
+    assert_default_timestamp_array(&object, "disabled Event Enrollment");
+    assert_eq!(object.event_history.original_from_states, [None; 3]);
+    assert_eq!(object.event_history.original_to_states, [None; 3]);
 }
 
 #[test]
-fn alert_enrollment_disable_projection_reset_and_rollback_cover_history() {
+fn alert_enrollment_rejected_write_and_disable_projection_preserve_history_contract() {
     let expected = seeded_timestamps();
     let mut object = AlertEnrollmentObject::new(1, "AE-1", alert_source()).unwrap();
     object.event_history.time_stamps = expected.clone();
-    let rollback = object
-        .capture_write_property_rollback(
+    assert_property_error(
+        object.write_property(
             PropertyIdentifier::EVENT_DETECTION_ENABLE,
-            &PropertyValue::Boolean(false),
-        )
-        .expect("Alert Enrollment detection write needs an opaque rollback");
-
+            None,
+            PropertyValue::Unsigned(0),
+            None,
+        ),
+        ErrorCode::INVALID_DATA_TYPE,
+        "invalid detection write",
+    );
+    assert_seeded_timestamp_reads(&object, &expected, "unchanged Alert Enrollment");
     object.set_event_detection_enable(false);
     assert_default_timestamp_array(&object, "disabled Alert Enrollment");
-    object.restore_write_property_rollback(rollback).unwrap();
-    assert_seeded_timestamp_reads(&object, &expected, "restored Alert Enrollment");
-
+    assert_eq!(object.event_history.time_stamps, seeded_zero_timestamps());
+    object.event_history.time_stamps = expected.clone();
     object.event_detection_enable = false;
     assert_default_timestamp_array(&object, "directly-disabled Alert Enrollment");
     assert_eq!(object.event_history.time_stamps, expected);

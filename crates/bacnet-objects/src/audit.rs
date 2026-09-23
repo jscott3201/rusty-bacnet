@@ -19,7 +19,7 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use crate::clock::ClockReader;
 use crate::common::read_property_list_property;
 use crate::property_metadata::PropertyMetadata;
-use crate::traits::{BACnetObject, WritePropertyRollback};
+use crate::traits::BACnetObject;
 
 mod forwarding;
 mod log_metadata;
@@ -89,10 +89,6 @@ pub struct AuditLogObject {
     generation: u64,
     persistence: Arc<dyn AuditLogPersistence>,
     clock: Option<Arc<dyn ClockReader>>,
-}
-
-struct AuditLogWriteRollback {
-    snapshot: AuditLogSnapshot,
 }
 
 const LOG_DISABLED_STATUS: u8 = 0b001;
@@ -594,38 +590,6 @@ impl BACnetObject for AuditLogObject {
         &mut self,
     ) -> Option<&mut dyn AuditLogNotificationSink> {
         Some(self)
-    }
-
-    fn capture_write_property_rollback(
-        &mut self,
-        property: PropertyIdentifier,
-        value: &PropertyValue,
-    ) -> Option<WritePropertyRollback> {
-        let PropertyValue::Boolean(requested) = value else {
-            return None;
-        };
-        (property == PropertyIdentifier::LOG_ENABLE && *requested != self.log_enable).then(|| {
-            WritePropertyRollback::new(AuditLogWriteRollback {
-                snapshot: self.current_snapshot(),
-            })
-        })
-    }
-
-    fn restore_write_property_rollback(
-        &mut self,
-        rollback: WritePropertyRollback,
-    ) -> Result<(), Error> {
-        let mut snapshot = rollback.downcast::<AuditLogWriteRollback>()?.snapshot;
-        if snapshot.object_identifier != self.oid || snapshot.capacity != self.buffer_size {
-            return Err(Error::Encoding(
-                "AuditLog rollback snapshot does not belong to this object".into(),
-            ));
-        }
-        snapshot.generation = self
-            .generation
-            .checked_add(1)
-            .ok_or_else(|| Error::OutOfRange("AuditLog persistence generation exhausted".into()))?;
-        self.commit_and_apply(snapshot)
     }
 }
 

@@ -4,7 +4,7 @@ use bacnet_objects::clock::{ClockFrame, ClockReader};
 use bacnet_objects::event_enrollment::{EventEnrollmentEvalState, EventEnrollmentMonitoredSource};
 use bacnet_objects::file::{FileConfiguration, FileObject, FileStorage, FileWriteStart};
 use bacnet_objects::property_metadata::PropertyMetadata;
-use bacnet_objects::traits::{MonotonicClock, ReliabilityEvaluation, WritePropertyRollback};
+use bacnet_objects::traits::{MonotonicClock, ReliabilityEvaluation};
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
 use bacnet_types::constructed::{
     BACnetAuditLogQueryParameters, BACnetAuditNotification, BACnetLogRecord, BACnetObjectSelector,
@@ -336,22 +336,6 @@ impl BACnetObject for ExtendedReporter {
         self.value = value;
         Ok(())
     }
-    fn capture_write_property_rollback(
-        &mut self,
-        p: PropertyIdentifier,
-        value: &PropertyValue,
-    ) -> Option<WritePropertyRollback> {
-        assert_eq!(p, CUSTOM);
-        assert_eq!(value, &PropertyValue::Unsigned(42));
-        Some(WritePropertyRollback::new(self.value))
-    }
-    fn restore_write_property_rollback(
-        &mut self,
-        rollback: WritePropertyRollback,
-    ) -> Result<(), Error> {
-        self.value = rollback.downcast::<u64>()?;
-        Ok(())
-    }
     fn enrollment_eval_state_internal(&self) -> Option<EventEnrollmentEvalState> {
         Some(self.eval.clone())
     }
@@ -511,18 +495,13 @@ async fn custom_capabilities_clocks_indexes_and_private_state_are_retained() {
         assert!(object.is_array_property(CUSTOM));
         assert!(object.is_writable_property(CUSTOM));
         assert_eq!(read(object.as_ref(), CUSTOM), PropertyValue::Unsigned(7));
-        let rollback = object
-            .capture_write_property_rollback(CUSTOM, &PropertyValue::Unsigned(42))
-            .unwrap();
         object
             .write_property(CUSTOM, Some(3), PropertyValue::Unsigned(42), Some(7))
             .unwrap();
         assert_eq!(read(object.as_ref(), CUSTOM), PropertyValue::Unsigned(42));
-        object.restore_write_property_rollback(rollback).unwrap();
-        assert_eq!(read(object.as_ref(), CUSTOM), PropertyValue::Unsigned(7));
-        assert!(object
-            .restore_write_property_rollback(WritePropertyRollback::new(false))
-            .is_err());
+        object
+            .write_property(CUSTOM, Some(3), PropertyValue::Unsigned(7), Some(7))
+            .unwrap();
         assert_eq!(read(object.as_ref(), CUSTOM), PropertyValue::Unsigned(7));
         let operations = AuditOperationFlags::from_bits((1 << 1) | (1 << 63)).unwrap();
         let selectors = vec![BACnetObjectSelector::Object(target())];

@@ -533,3 +533,6 @@ fn malformed_after_prefix_uses_exact_or_sentinel_reference_and_keeps_prefix() {
         PropertyValue::CharacterString("prefix".into())
     );
 }
+
+#[path = "wpm_state_ownership.rs"]
+mod state_ownership;

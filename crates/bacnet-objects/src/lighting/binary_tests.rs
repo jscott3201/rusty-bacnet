@@ -538,18 +538,18 @@ fn fractional_and_large_elapsed_values_are_safe() {
 }
 
 #[test]
-fn rollback_restores_operation_remaining_time_and_blink_observation_exactly() {
+fn rejected_command_preserves_operation_remaining_time_and_blink_observation() {
     let mut object = armed_warn_off(5);
     assert!(!object.advance_time_internal(Duration::from_millis(1_500)));
-    let rollback = object
-        .capture_write_property_rollback(
+    assert!(object
+        .write_property(
             PropertyIdentifier::PRESENT_VALUE,
-            &PropertyValue::Enumerated(ON),
+            None,
+            PropertyValue::Unsigned(ON as u64),
+            Some(4)
         )
-        .unwrap();
-    write(&mut object, PropertyValue::Enumerated(ON), 4);
-    object.restore_write_property_rollback(rollback).unwrap();
-
+        .is_err());
+    assert_eq!(slot(&object, 4), PropertyValue::Null);
     assert_eq!(object.binary_lighting_blink_count_internal(), 1);
     assert_eq!(slot(&object, 8), PropertyValue::Enumerated(ON));
     assert_eq!(

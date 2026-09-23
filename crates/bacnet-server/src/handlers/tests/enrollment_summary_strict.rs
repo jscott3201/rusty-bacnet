@@ -31,8 +31,8 @@ fn database(candidate: SummaryFixture) -> ObjectDatabase {
 }
 
 #[test]
-fn intrinsic_detection_rollback_restores_summary_transition_coordinate() {
-    let mut object = AnalogInputObject::new(1, "AI-rollback", 62).unwrap();
+fn intrinsic_rejected_detection_write_preserves_summary_transition_coordinate() {
+    let mut object = AnalogInputObject::new(1, "AI-preserved", 62).unwrap();
     object
         .write_property(
             PropertyIdentifier::NOTIFICATION_CLASS,
@@ -40,12 +40,6 @@ fn intrinsic_detection_rollback_restores_summary_transition_coordinate() {
             PropertyValue::Unsigned(7),
             None,
         )
-        .unwrap();
-    let reset_time_stamps = object
-        .read_property(PropertyIdentifier::EVENT_TIME_STAMPS, None)
-        .unwrap();
-    let reset_message_texts = object
-        .read_property(PropertyIdentifier::EVENT_MESSAGE_TEXTS, None)
         .unwrap();
     object
         .commit_event_transition_internal(EventTransitionCommit {
@@ -85,54 +79,15 @@ fn intrinsic_detection_rollback_restores_summary_transition_coordinate() {
         Some(EventTransition::ToOffnormal)
     );
 
-    let rollback = object
-        .capture_write_property_rollback(
-            PropertyIdentifier::EVENT_DETECTION_ENABLE,
-            &PropertyValue::Boolean(false),
-        )
-        .unwrap();
-    object
+    assert!(object
         .write_property(
             PropertyIdentifier::EVENT_DETECTION_ENABLE,
             None,
-            PropertyValue::Boolean(false),
-            None,
+            PropertyValue::Unsigned(0),
+            None
         )
-        .unwrap();
+        .is_err());
 
-    assert_eq!(
-        object
-            .read_property(PropertyIdentifier::EVENT_STATE, None)
-            .unwrap(),
-        PropertyValue::Enumerated(EventState::NORMAL.to_raw())
-    );
-    assert_eq!(
-        object
-            .read_property(PropertyIdentifier::ACKED_TRANSITIONS, None)
-            .unwrap(),
-        transition_bits(0b111)
-    );
-    assert_eq!(
-        object
-            .read_property(PropertyIdentifier::EVENT_TIME_STAMPS, None)
-            .unwrap(),
-        reset_time_stamps
-    );
-    assert_eq!(
-        object
-            .read_property(PropertyIdentifier::EVENT_MESSAGE_TEXTS, None)
-            .unwrap(),
-        reset_message_texts
-    );
-    assert_eq!(
-        object
-            .enrollment_summary_capability_internal()
-            .unwrap()
-            .last_transition,
-        None
-    );
-
-    object.restore_write_property_rollback(rollback).unwrap();
     assert_eq!(
         object
             .read_property(PropertyIdentifier::EVENT_STATE, None)

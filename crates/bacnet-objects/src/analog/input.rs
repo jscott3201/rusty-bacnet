@@ -281,16 +281,6 @@ impl BACnetObject for AnalogInputObject {
         event_detection_enable,
         OutOfRangeDetector::ALGORITHM
     );
-    impl_intrinsic_write_rollback!(
-        event_detector,
-        event_detection_enable,
-        event_history,
-        reliability_inhibit,
-        reliability,
-        out_of_service,
-        reliability_before_out_of_service,
-        fault_out_of_range
-    );
 
     fn acknowledge_alarm(&mut self, transition_bit: u8) -> Result<(), bacnet_types::error::Error> {
         self.event_detector.acked_transitions |= transition_bit & 0x07;
@@ -537,7 +527,7 @@ mod detection_enable_reset_tests {
     }
 
     #[test]
-    fn ai_write_rollback_restores_detection_state() {
+    fn ai_rejected_detection_write_preserves_hidden_state() {
         let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
         ai.event_detector.event_state = bacnet_types::enums::EventState::HIGH_LIMIT;
         ai.event_detector.acked_transitions = 0b010;
@@ -550,21 +540,19 @@ mod detection_enable_reset_tests {
         ai.event_history.original_from_states[0] = Some(EventState::NORMAL);
         ai.event_history.original_to_states[0] = Some(EventState::HIGH_LIMIT);
         ai.event_history.message_texts[0] = "offnormal".into();
-        let rollback = ai
-            .capture_write_property_rollback(
+        let error = ai
+            .write_property(
                 PropertyIdentifier::EVENT_DETECTION_ENABLE,
-                &PropertyValue::Boolean(false),
+                None,
+                PropertyValue::Unsigned(0),
+                None,
             )
-            .unwrap();
-
-        ai.write_property(
-            PropertyIdentifier::EVENT_DETECTION_ENABLE,
-            None,
-            PropertyValue::Boolean(false),
-            None,
-        )
-        .unwrap();
-        ai.restore_write_property_rollback(rollback).unwrap();
+            .unwrap_err();
+        assert!(
+            matches!(error, bacnet_types::error::Error::Protocol { class, code }
+            if class == ErrorClass::PROPERTY.to_raw() as u32
+                && code == ErrorCode::INVALID_DATA_TYPE.to_raw() as u32)
+        );
 
         assert!(ai.event_detection_enable);
         assert_eq!(

@@ -556,71 +556,58 @@ fn write_and_sync_failures_preserve_memory_and_prior_snapshot() {
 }
 
 #[test]
-fn log_enable_rollback_restores_exact_state_and_propagates_commit_failure() {
+fn log_enable_commit_failure_preserves_persistent_generation_and_retries() {
     let persistence = Arc::new(MemoryPersistence::default());
     let mut log = AuditLogObject::new(1, "AL-1", 4, persistence.clone()).unwrap();
     log.add_record(record(1, BACnetAuditLogDatum::TimeChange(1.0)))
         .unwrap();
     log.bind_clock_internal(Some(Arc::new(FixedClock(Some(frame(2))))));
     let before = persistence.snapshot.lock().unwrap().clone().unwrap();
-
-    assert!(log
-        .capture_write_property_rollback(
-            PropertyIdentifier::LOG_ENABLE,
-            &PropertyValue::Boolean(true),
-        )
-        .is_none());
-    assert!(log
-        .capture_write_property_rollback(
-            PropertyIdentifier::LOG_ENABLE,
-            &PropertyValue::Unsigned(0),
-        )
-        .is_none());
-
-    let rollback = log
-        .capture_write_property_rollback(
-            PropertyIdentifier::LOG_ENABLE,
-            &PropertyValue::Boolean(false),
-        )
-        .unwrap();
     log.write_property(
         PropertyIdentifier::LOG_ENABLE,
         None,
-        PropertyValue::Boolean(false),
+        PropertyValue::Boolean(true),
         None,
     )
     .unwrap();
-    log.restore_write_property_rollback(rollback).unwrap();
-
-    let mut restored = before;
-    restored.generation = log.generation();
-    assert_matches_snapshot(&log, &restored);
-    assert_eq!(
-        persistence.snapshot.lock().unwrap().as_ref(),
-        Some(&restored)
-    );
-
-    let rollback = log
-        .capture_write_property_rollback(
+    assert_matches_snapshot(&log, &before);
+    assert!(log
+        .write_property(
             PropertyIdentifier::LOG_ENABLE,
-            &PropertyValue::Boolean(false),
+            None,
+            PropertyValue::Unsigned(0),
+            None
         )
-        .unwrap();
-    log.write_property(
-        PropertyIdentifier::LOG_ENABLE,
-        None,
-        PropertyValue::Boolean(false),
-        None,
-    )
-    .unwrap();
-    let changed = persistence.snapshot.lock().unwrap().clone().unwrap();
+        .is_err());
+    assert_matches_snapshot(&log, &before);
     persistence.fail_sync.store(true, Ordering::Release);
-    assert!(log.restore_write_property_rollback(rollback).is_err());
-    assert_matches_snapshot(&log, &changed);
+    assert!(log
+        .write_property(
+            PropertyIdentifier::LOG_ENABLE,
+            None,
+            PropertyValue::Boolean(false),
+            None
+        )
+        .is_err());
+    assert_matches_snapshot(&log, &before);
+    assert_eq!(persistence.snapshot.lock().unwrap().as_ref(), Some(&before));
+    persistence.fail_sync.store(false, Ordering::Release);
+    log.write_property(
+        PropertyIdentifier::LOG_ENABLE,
+        None,
+        PropertyValue::Boolean(false),
+        None,
+    )
+    .unwrap();
+    let committed = persistence.snapshot.lock().unwrap().clone().unwrap();
+    assert_matches_snapshot(&log, &committed);
+    assert_eq!(committed.generation, before.generation + 1);
     assert_eq!(
-        persistence.snapshot.lock().unwrap().as_ref(),
-        Some(&changed)
+        log.read_property(PropertyIdentifier::LOG_ENABLE, None)
+            .unwrap(),
+        PropertyValue::Boolean(false)
     );
+    assert_eq!(log.records().len(), 2);
 }
 
 #[test]

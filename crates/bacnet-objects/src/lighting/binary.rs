@@ -7,7 +7,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 
 use crate::common::{self, read_common_properties, read_priority_array};
-use crate::traits::{BACnetObject, MonotonicClock, WritePropertyRollback};
+use crate::traits::{BACnetObject, MonotonicClock};
 
 const OFF: u32 = 0;
 const ON: u32 = 1;
@@ -32,18 +32,6 @@ enum PresentValueCommand {
     WarnOff,
     WarnRelinquish,
     Stop,
-}
-
-#[derive(Clone)]
-struct CommandRollback {
-    present_value: u32,
-    blink_warn_enable: bool,
-    egress_time: u32,
-    priority_array: [Option<u32>; 16],
-    relinquish_default: u32,
-    active_operation: Option<ActiveOperation>,
-    blink_request_count: u64,
-    logical_now: Duration,
 }
 
 /// BACnet Binary Lighting Output object.
@@ -263,19 +251,6 @@ impl BinaryLightingOutputObject {
         }
     }
 
-    fn command_rollback(&self) -> CommandRollback {
-        CommandRollback {
-            present_value: self.present_value,
-            blink_warn_enable: self.blink_warn_enable,
-            egress_time: self.egress_time,
-            priority_array: self.priority_array,
-            relinquish_default: self.relinquish_default,
-            active_operation: self.active_operation,
-            blink_request_count: self.blink_request_count,
-            logical_now: self.logical_now,
-        }
-    }
-
     fn monotonic_now(&self) -> Duration {
         self.monotonic_clock
             .as_ref()
@@ -394,38 +369,6 @@ impl BACnetObject for BinaryLightingOutputObject {
 
     fn supports_cov(&self) -> bool {
         true
-    }
-
-    fn capture_write_property_rollback(
-        &mut self,
-        property: PropertyIdentifier,
-        _value: &PropertyValue,
-    ) -> Option<WritePropertyRollback> {
-        matches!(
-            property,
-            PropertyIdentifier::PRESENT_VALUE
-                | PropertyIdentifier::PRIORITY_ARRAY
-                | PropertyIdentifier::RELINQUISH_DEFAULT
-                | PropertyIdentifier::BLINK_WARN_ENABLE
-                | PropertyIdentifier::EGRESS_TIME
-        )
-        .then(|| WritePropertyRollback::new(self.command_rollback()))
-    }
-
-    fn restore_write_property_rollback(
-        &mut self,
-        rollback: WritePropertyRollback,
-    ) -> Result<(), Error> {
-        let rollback = rollback.downcast::<CommandRollback>()?;
-        self.present_value = rollback.present_value;
-        self.blink_warn_enable = rollback.blink_warn_enable;
-        self.egress_time = rollback.egress_time;
-        self.priority_array = rollback.priority_array;
-        self.relinquish_default = rollback.relinquish_default;
-        self.active_operation = rollback.active_operation;
-        self.blink_request_count = rollback.blink_request_count;
-        self.logical_now = rollback.logical_now;
-        Ok(())
     }
 
     fn advance_time_internal(&mut self, elapsed: Duration) -> bool {

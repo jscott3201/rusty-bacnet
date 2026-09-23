@@ -21,7 +21,7 @@ use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::staging::StagingWritePlan;
 use bacnet_objects::traits::{
     BACnetObject, LifeSafetyOperationEffect, LifeSafetyOperationOutcome, MonotonicClock,
-    ReliabilityEvaluation, WritePropertyRollback,
+    ReliabilityEvaluation,
 };
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
 use bacnet_types::constructed::{
@@ -167,22 +167,6 @@ impl BACnetObject for SourceReporter {
 
     fn is_array_property(&self, property: PropertyIdentifier) -> bool {
         self.wrapped.is_array_property(property)
-    }
-
-    fn capture_write_property_rollback(
-        &mut self,
-        property: PropertyIdentifier,
-        value: &PropertyValue,
-    ) -> Option<WritePropertyRollback> {
-        self.wrapped
-            .capture_write_property_rollback(property, value)
-    }
-
-    fn restore_write_property_rollback(
-        &mut self,
-        rollback: WritePropertyRollback,
-    ) -> Result<(), Error> {
-        self.wrapped.restore_write_property_rollback(rollback)
     }
 
     fn is_createable(&self) -> bool {

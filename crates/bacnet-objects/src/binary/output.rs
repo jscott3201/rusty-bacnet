@@ -110,15 +110,6 @@ impl BACnetObject for BinaryOutputObject {
         event_detection_enable,
         CommandFailureDetector::ALGORITHM
     );
-    impl_intrinsic_write_rollback!(
-        event_detector,
-        event_detection_enable,
-        event_history,
-        reliability_inhibit,
-        reliability,
-        out_of_service,
-        reliability_before_out_of_service
-    );
 
     fn acknowledge_alarm_correlated_internal(
         &mut self,
