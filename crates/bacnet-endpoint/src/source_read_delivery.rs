@@ -23,13 +23,16 @@ pub(super) struct Completion {
     finished: bool,
 }
 impl Completion {
-    pub(super) fn new(status: Arc<AuditReporterStatus>) -> Self {
-        let epoch = status.begin_delivery();
-        Self {
+    pub(super) fn auditing_failure(
+        status: Arc<AuditReporterStatus>,
+        expected: u64,
+    ) -> Option<Self> {
+        let epoch = status.begin_auditing_failure_delivery(expected)?;
+        Some(Self {
             status,
             epoch,
             finished: false,
-        }
+        })
     }
     pub(super) fn finish(mut self, delivered: bool) {
         self.status.complete_delivery(self.epoch, delivered);

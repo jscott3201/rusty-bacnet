@@ -60,6 +60,24 @@ impl AuditReporterStatus {
         }
     }
 
+    /// Admit summary health only for the expected enabled configuration.
+    /// Validation and failure-epoch capture share one lock, so an old summary
+    /// cannot acquire authority for a configuration that replaced its context.
+    #[doc(hidden)]
+    pub fn begin_auditing_failure_delivery(
+        &self,
+        expected_configuration: u64,
+    ) -> Option<AuditDeliveryToken> {
+        let state = self.0.lock().unwrap();
+        (state.auditing_failure_enabled
+            && state.configuration_epoch == expected_configuration
+            && state.configuration_epoch != u64::MAX)
+            .then_some(AuditDeliveryToken {
+                configuration: state.configuration_epoch,
+                failure: state.failure_epoch,
+            })
+    }
+
     /// A success cannot clear a failure that happened after this send began.
     pub fn complete_delivery(&self, epoch: AuditDeliveryToken, success: bool) {
         let mut state = self.0.lock().unwrap();
@@ -83,5 +101,79 @@ impl AuditReporterStatus {
         } else {
             Reliability::NO_FAULT_DETECTED
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audit::AuditReporterObject;
+    use bacnet_types::{
+        bitstring::AuditOperationFlags,
+        enums::{AuditLevel, AuditOperation},
+    };
+
+    fn reporter() -> AuditReporterObject {
+        let mut reporter = AuditReporterObject::new(1, "Reporter").unwrap();
+        reporter.set_audit_level(AuditLevel::AUDIT_ALL).unwrap();
+        let mut operations = AuditOperationFlags::empty();
+        operations.insert(AuditOperation::AUDITING_FAILURE);
+        reporter.set_auditable_operations(operations);
+        reporter.status_internal().set_configured(true);
+        reporter
+    }
+
+    #[test]
+    fn auditing_failure_health_admission_rejects_mismatch_disabled_and_aba() {
+        let mut reporter = reporter();
+        let status = reporter.status_internal();
+        let expected = status.auditing_failure_epoch().unwrap();
+        assert!(status
+            .begin_auditing_failure_delivery(expected + 1)
+            .is_none());
+        // The caller observed an enabled old batch, then configuration changed
+        // before completion admission. Equal final settings must not revive it.
+        let old_token = status.begin_auditing_failure_delivery(expected).unwrap();
+        reporter.set_issue_confirmed_notifications(true);
+        reporter.set_issue_confirmed_notifications(false);
+        assert!(status.begin_auditing_failure_delivery(expected).is_none());
+        status.complete_delivery(old_token, false);
+        assert_eq!(status.reliability(), Reliability::NO_FAULT_DETECTED);
+        let current = status.auditing_failure_epoch().unwrap();
+        status.complete_delivery(
+            status.begin_auditing_failure_delivery(current).unwrap(),
+            false,
+        );
+        status.complete_delivery(old_token, true);
+        assert_eq!(status.reliability(), Reliability::COMMUNICATION_FAILURE);
+        reporter.set_audit_level(AuditLevel::NONE).unwrap();
+        assert!(status.begin_auditing_failure_delivery(current).is_none());
+        assert!(AuditReporterStatus::default()
+            .begin_auditing_failure_delivery(0)
+            .is_none());
+    }
+
+    #[test]
+    fn auditing_failure_health_admission_captures_current_failure_epoch_for_recovery() {
+        let reporter = reporter();
+        let status = reporter.status_internal();
+        let expected = status.auditing_failure_epoch().unwrap();
+        let early = status.begin_auditing_failure_delivery(expected).unwrap();
+        status.complete_delivery(status.begin_delivery(), false);
+        // A summary admitted now may recover the loss that prompted it, but
+        // the already-admitted earlier summary cannot clear that newer failure.
+        let recovery = status.begin_auditing_failure_delivery(expected).unwrap();
+        status.complete_delivery(early, true);
+        assert_eq!(status.reliability(), Reliability::COMMUNICATION_FAILURE);
+        status.complete_delivery(recovery, true);
+        assert_eq!(status.reliability(), Reliability::NO_FAULT_DETECTED);
+        status.complete_delivery(recovery, false);
+        status.complete_delivery(recovery, true);
+        assert_eq!(status.reliability(), Reliability::COMMUNICATION_FAILURE);
+        status.complete_delivery(
+            status.begin_auditing_failure_delivery(expected).unwrap(),
+            true,
+        );
+        assert_eq!(status.reliability(), Reliability::NO_FAULT_DETECTED);
     }
 }

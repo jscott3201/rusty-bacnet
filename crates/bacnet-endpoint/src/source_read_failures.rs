@@ -34,12 +34,16 @@ pub(super) fn record_drop(
                 });
             if !current
                 || db.find_by_type(ObjectType::DEVICE) != [batch.context.device]
-                || !batch.context.enabled()
                 || source.operations.is_closed()
             {
                 continue;
             }
-            let completion = delivery::Completion::new(Arc::clone(&batch.context.status));
+            let Some(completion) = delivery::Completion::auditing_failure(
+                Arc::clone(&batch.context.status),
+                batch.context.epoch,
+            ) else {
+                continue;
+            };
             let invoke = reserved
                 .as_ref()
                 .map_or(0, |(operation, _)| operation.invoke_id());

@@ -42,10 +42,12 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         let comm_state = Arc::clone(self.comm_state);
         self.transactions.spawn(async move {
             while let Some((batch, _permit, reserved)) = worker.next().await {
-                if !batch.context.enabled() {
+                let Some(completion) = DeliveryCompletion::auditing_failure(
+                    Arc::clone(&batch.context.status),
+                    batch.context.epoch,
+                ) else {
                     continue;
-                }
-                let completion = DeliveryCompletion::new(Arc::clone(&batch.context.status));
+                };
                 let deadline = tokio::time::Instant::now() + DELIVERY_TIMEOUT;
                 let invoke = reserved
                     .as_ref()

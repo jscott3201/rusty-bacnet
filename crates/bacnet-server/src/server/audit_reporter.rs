@@ -724,13 +724,13 @@ struct DeliveryCompletion {
 }
 
 impl DeliveryCompletion {
-    fn new(status: Arc<AuditReporterStatus>) -> Self {
-        let epoch = status.begin_delivery();
-        Self {
+    fn auditing_failure(status: Arc<AuditReporterStatus>, expected: u64) -> Option<Self> {
+        let epoch = status.begin_auditing_failure_delivery(expected)?;
+        Some(Self {
             status,
             epoch,
             finished: false,
-        }
+        })
     }
     fn finish(mut self, delivered: bool) {
         self.status.complete_delivery(self.epoch, delivered);
