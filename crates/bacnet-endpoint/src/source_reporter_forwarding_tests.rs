@@ -30,7 +30,7 @@ async fn built_in_configuration_identity_metadata_and_writes_survive_wrapping() 
     let operations = AuditOperationFlags::from_bits(1 << 1).unwrap();
     let original = db.get_mut(&selected()).unwrap();
     original
-        .configure_audit_reporter_with_filters_internal(
+        .configure_audit_reporter_internal(
             AuditLevel::AUDIT_ALL,
             operations,
             true,
@@ -124,7 +124,7 @@ async fn built_in_configuration_identity_metadata_and_writes_survive_wrapping() 
             .map(|&p| (p, read(object.as_ref(), p)))
             .collect::<Vec<_>>();
         assert!(object
-            .configure_audit_reporter_with_filters_internal(
+            .configure_audit_reporter_internal(
                 AuditLevel::DEFAULT,
                 AuditOperationFlags::empty(),
                 false,
@@ -136,7 +136,7 @@ async fn built_in_configuration_identity_metadata_and_writes_survive_wrapping() 
             assert_eq!(read(object.as_ref(), property), expected);
         }
         object
-            .configure_audit_reporter_with_filters_internal(
+            .configure_audit_reporter_internal(
                 AuditLevel::AUDIT_CONFIG,
                 operations,
                 false,
@@ -152,7 +152,13 @@ async fn built_in_configuration_identity_metadata_and_writes_survive_wrapping() 
             .property_list()
             .contains(&PropertyIdentifier::MONITORED_OBJECTS));
         object
-            .configure_audit_reporter_internal(AuditLevel::NONE, operations, true)
+            .configure_audit_reporter_internal(
+                AuditLevel::NONE,
+                operations,
+                true,
+                Some(vec![]),
+                BACnetPriorityFilter::empty(),
+            )
             .unwrap();
         assert_eq!(
             read(object.as_ref(), PropertyIdentifier::AUDIT_LEVEL),
@@ -183,8 +189,8 @@ impl ClockReader for Calls {
     }
 }
 
-// Deliberately implements the legacy three-argument Reporter hook only. No new
-// trait implementation is required for existing downstream Reporter types.
+// A custom Reporter implements the same complete configuration contract as the
+// built-in object; wrapping must preserve its override and all typed settings.
 struct ExtendedReporter {
     reporter: AuditReporterObject,
     calls: Arc<Calls>,
@@ -211,9 +217,12 @@ impl BACnetObject for ExtendedReporter {
         level: AuditLevel,
         operations: AuditOperationFlags,
         confirmed: bool,
+        selectors: Option<Vec<BACnetObjectSelector>>,
+        priorities: BACnetPriorityFilter,
     ) -> Result<(), Error> {
-        self.reporter
-            .configure_audit_reporter_internal(level, operations, confirmed)?;
+        self.reporter.configure_audit_reporter_internal(
+            level, operations, confirmed, selectors, priorities,
+        )?;
         self.calls.configurations.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
@@ -392,7 +401,7 @@ impl AuditLogNotificationSink for ExtendedReporter {
 }
 
 #[tokio::test]
-async fn legacy_custom_capabilities_clocks_indexes_and_private_state_are_retained() {
+async fn custom_capabilities_clocks_indexes_and_private_state_are_retained() {
     let (session, _peer, _) = session(SessionRole::ClientOnly);
     let calls = Arc::new(Calls::default());
     let monitored = (target(), PropertyIdentifier::DESCRIPTION, None);
@@ -489,12 +498,58 @@ async fn legacy_custom_capabilities_clocks_indexes_and_private_state_are_retaine
             .restore_write_property_rollback(WritePropertyRollback::new(false))
             .is_err());
         assert_eq!(read(object.as_ref(), CUSTOM), PropertyValue::Unsigned(7));
-        let operations = AuditOperationFlags::from_bits(1 << 1).unwrap();
+        let operations = AuditOperationFlags::from_bits((1 << 1) | (1 << 63)).unwrap();
+        let selectors = vec![BACnetObjectSelector::Object(target())];
+        let priorities = BACnetPriorityFilter::from_bits(1 << 7);
         object
-            .configure_audit_reporter_internal(AuditLevel::AUDIT_ALL, operations, true)
+            .configure_audit_reporter_internal(
+                AuditLevel::AUDIT_ALL,
+                operations,
+                true,
+                Some(selectors.clone()),
+                priorities,
+            )
             .unwrap();
+        assert_eq!(calls.configurations.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            read(object.as_ref(), PropertyIdentifier::AUDIT_LEVEL),
+            PropertyValue::Enumerated(AuditLevel::AUDIT_ALL.to_raw())
+        );
+        assert_eq!(
+            read(
+                object.as_ref(),
+                PropertyIdentifier::ISSUE_CONFIRMED_NOTIFICATIONS
+            ),
+            PropertyValue::Boolean(true)
+        );
+        let reporter = object.audit_reporter_internal().unwrap();
+        assert!(reporter.monitors_object_internal(target()));
+        assert!(reporter.reports_write_internal(PropertyIdentifier::PRESENT_VALUE, Some(8), false));
+        assert!(!reporter.reports_write_internal(
+            PropertyIdentifier::PRESENT_VALUE,
+            Some(16),
+            false
+        ));
+        let before = object
+            .property_list()
+            .iter()
+            .map(|&p| (p, read(object.as_ref(), p)))
+            .collect::<Vec<_>>();
+        assert!(object
+            .configure_audit_reporter_internal(
+                AuditLevel::DEFAULT,
+                AuditOperationFlags::empty(),
+                false,
+                None,
+                BACnetPriorityFilter::all(),
+            )
+            .is_err());
+        assert_eq!(calls.configurations.load(Ordering::SeqCst), 1);
+        for (property, expected) in before {
+            assert_eq!(read(object.as_ref(), property), expected);
+        }
         object
-            .configure_audit_reporter_with_filters_internal(
+            .configure_audit_reporter_internal(
                 AuditLevel::NONE,
                 operations,
                 false,
@@ -503,19 +558,12 @@ async fn legacy_custom_capabilities_clocks_indexes_and_private_state_are_retaine
             )
             .unwrap();
         assert_eq!(calls.configurations.load(Ordering::SeqCst), 2);
-        assert!(object
-            .configure_audit_reporter_with_filters_internal(
-                AuditLevel::AUDIT_ALL,
-                operations,
-                true,
-                Some(vec![]),
-                BACnetPriorityFilter::all()
-            )
-            .is_err());
-        assert_eq!(calls.configurations.load(Ordering::SeqCst), 2);
+        assert!(!object
+            .property_list()
+            .contains(&PropertyIdentifier::MONITORED_OBJECTS));
         assert_eq!(
-            read(object.as_ref(), PropertyIdentifier::AUDIT_LEVEL),
-            PropertyValue::Enumerated(AuditLevel::NONE.to_raw())
+            read(object.as_ref(), PropertyIdentifier::AUDIT_SOURCE_REPORTER),
+            PropertyValue::Boolean(true)
         );
         assert!(object.supports_cov());
         assert!(object.supports_cov_property(CUSTOM));

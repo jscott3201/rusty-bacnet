@@ -1,6 +1,6 @@
 # Rusty BACnet agent guidance
 
-This repository uses focused skills and subagents for research and review. Prefer the installed skills under `.agents/skills/` and custom agents under `.codex/agents/`.
+This repository uses focused skills and subagents for research and review. Prefer the installed skills under `.agents/skills/` and configured agents when available; use the running harness's advertised agent and model controls when repository-local agent definitions are absent.
 
 Use local Codebase Memory as the first structural code-intelligence layer. The canonical project is `Users-justin-Development-rusty-bacnet`, rooted at `/Users/justin/Development/rusty-bacnet`; verify it once with `list_projects` and `index_status` when entering a fresh repository source context, then use focused graph tools and check coverage for cited scopes. Codebase Memory is not a durable work ledger. Long-running compliance continuity lives in the ignored `_spec/rusty-bacnet-compliance-execution-plan/{Handoff.md,CURRENT_STATUS.md,NEXT_HANDOFF.md}` documents, with `codex-overnight-status.md` retained as an additional local historical log. Refresh live Git/GitHub state before acting on those snapshots. No external memory service, agent identity, namespace, or team assertion is a prerequisite.
 
@@ -18,14 +18,23 @@ Default behavior:
 - Use `_spec/rusty-bacnet-compliance-execution-plan/` for the current roadmap: read the current block of `NEXT_HANDOFF.md`, then relevant `CURRENT_STATUS.md`, `WORK_QUEUE.md`, `DECISIONS.md`, and packet/gate files. Historical blocks preserve evidence, not current instructions. The older `_spec/rusty_bacnet_compliance_specs_v1/` path is absent in this checkout. Locate the licensed Standard through `STANDARD_NAVIGATION.md` before protocol work; never infer a missing source.
 
 
-## Codex CLI and Astra
+## Pre-1.0 design and cleanup
 
-- Model and effort settings belong in `.codex/config.toml` and named-agent TOMLs. Use the advertised model catalog and role settings; do not substitute a model or raise every task to maximum effort. This repository selects Astra for root work and demanding review, with lighter roles for bounded mapping and source lookup.
+- Before 1.0.0, treat APIs as unfrozen. Prefer a coherent greenfield design and remove obsolete paths instead of adding compatibility shims, deprecated aliases, duplicate configuration hooks or speculative extension layers solely to preserve pre-1.0 callers.
+- Include related cleanup in each PR when it strengthens the same bounded outcome. Update all in-repository Rust/Python callers, tests, examples and documentation affected by an API change together, and describe the break in the PR. Protocol correctness, required platform support, persisted-data integrity and security boundaries still apply.
+- Avoid unrelated rewrites. File deduplicated GitHub issues for follow-up defects, API cleanup and necessary research that cannot fit coherently in the current PR; include evidence, dependencies and testable acceptance criteria. Keep the relevant `_spec` roadmap packet linked to those issues.
+- Freeze public APIs for the 1.0.0 release and preserve compatibility thereafter under the release policy. Historical pre-1.0 compatibility decisions in roadmap snapshots do not override this policy.
+- Session-specific merge permission remains subject to review and required checks; it does not authorize release publication or become permanent standing permission.
+
+## Codex agents and models
+
+- Reserve code implementation and repairs for GPT-6 Astra agents, including root implementation only when the root is Astra. Use GPT-6 Sol subagents as needed for bounded read-only exploration, specification research and review. Select the advertised runtime model explicitly when needed; a named role pinned to another model is not an Astra implementation route. Do not silently substitute a different model.
+- Keep durable model and effort settings in the active harness configuration or named-agent definitions when present; use supported runtime controls for this session without inventing `.codex` files or changing another active session. Choose effort for the task rather than raising every task to maximum effort.
 - Batch independent tool reads; keep dependent operations and Git/GitHub mutations sequential. Use the collaboration tools and context controls actually exposed by the running CLI. Supply a compact task packet instead of full history when supported.
 - Each packet names the objective, exact revision, paths/symbols, ownership, constraints, acceptance evidence, and expected result. Children do not delegate or rediscover the Codebase Memory project. The root resolves conflicting evidence and retains delivery authority.
 - Keep a small active team, usually two or three independent readers. The configured limit is a ceiling, not a target. Reuse compatible agents; release finished agents with the available lifecycle tool. Coordinate builds and tests to avoid duplicate Cargo work, shared fixtures, and port conflicts. Run performance measurements without competing workloads.
 - Run `cargo clean` between PRs. The root owns this boundary step: finish validation/review work, ensure no Cargo or rustc job is using the shared target directory, then clean that target before the next PR's build work. Preserve Cargo registry/download caches and never clean during another agent's build or tests.
-- Ordinary product delivery uses one `implementer`. This repository permits up to two product writers only after an explicit `$parallel-portfolio` invocation and that skill's admission gate: disjoint ownership and contracts, isolated worktrees from one base, and root-owned integration. General requests for speed or parallel research do not admit a portfolio. If the skill is unavailable, continue serially.
+- Ordinary product delivery uses one Astra implementation owner; use an appropriate configurable agent when the named `implementer` role is pinned to a different model. This repository permits up to two product writers only after an explicit `$parallel-portfolio` invocation and that skill's admission gate: disjoint ownership and contracts, isolated worktrees from one base, and root-owned integration. General requests for speed or parallel research do not admit a portfolio. If the skill is unavailable, continue serially.
 - Use the existing `pr-gate-loop` for delivery review; specialist reviews supply bounded evidence, not an extra approval cycle. Keep its repair limits and stopped-gate history intact. Standing merge authority applies only after the current delivery gate passes.
 - Validate configuration changes against the installed CLI and start a fresh CLI session to load changed settings and agent definitions. Do not restart another session or assume this running thread has reloaded them.
 

@@ -107,51 +107,29 @@ pub trait BACnetObject: Send + Sync {
         None
     }
 
-    /// Configure trusted local Reporter filters without a network write or downcast.
+    /// Atomically replace all trusted local Reporter settings without a network write.
     ///
-    /// The default opts out. Implementations must reject invalid settings before
-    /// mutation. This does not change monitored objects or command priorities;
-    /// callers own lifecycle admission and recipient selection.
+    /// The default opts out. Supporting implementations must reject invalid
+    /// settings before any mutation. `None` selectors remove Monitored_Objects
+    /// (catch-all); `Some(vec![])` retains the property and selects no ordinary
+    /// targets. Callers own lifecycle admission and recipient selection.
+    ///
+    /// Pre-1.0 API change: this full configuration contract replaces both the
+    /// three-argument hook and `configure_audit_reporter_with_filters_internal`.
+    /// Overrides and callers must supply all five settings on every call.
     #[doc(hidden)]
     fn configure_audit_reporter_internal(
         &mut self,
         _level: bacnet_types::enums::AuditLevel,
         _operations: bacnet_types::bitstring::AuditOperationFlags,
         _confirmed: bool,
+        _selectors: Option<Vec<bacnet_types::constructed::BACnetObjectSelector>>,
+        _priorities: bacnet_types::bitstring::BACnetPriorityFilter,
     ) -> Result<(), Error> {
         Err(Error::Protocol {
             class: ErrorClass::OBJECT.to_raw() as u32,
             code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
         })
-    }
-
-    /// Configure trusted local Reporter settings including selection and priorities.
-    ///
-    /// Implementations must reject invalid settings before any mutation. Supporting
-    /// implementations treat `None` selectors as property removal (catch-all), and
-    /// an empty array as selecting no ordinary targets. Callers own lifecycle
-    /// admission and recipient selection.
-    ///
-    /// For legacy implementations, the default rejects non-default filters before
-    /// calling any override. With `None` selectors and all priorities, it delegates
-    /// to the original three-argument hook, preserving that override's behavior.
-    #[doc(hidden)]
-    fn configure_audit_reporter_with_filters_internal(
-        &mut self,
-        level: bacnet_types::enums::AuditLevel,
-        operations: bacnet_types::bitstring::AuditOperationFlags,
-        confirmed: bool,
-        selectors: Option<Vec<bacnet_types::constructed::BACnetObjectSelector>>,
-        priorities: bacnet_types::bitstring::BACnetPriorityFilter,
-    ) -> Result<(), Error> {
-        if selectors.is_some() || priorities != bacnet_types::bitstring::BACnetPriorityFilter::all()
-        {
-            return Err(Error::Protocol {
-                class: ErrorClass::OBJECT.to_raw() as u32,
-                code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
-            });
-        }
-        self.configure_audit_reporter_internal(level, operations, confirmed)
     }
 
     /// The object's identifier (type + instance).

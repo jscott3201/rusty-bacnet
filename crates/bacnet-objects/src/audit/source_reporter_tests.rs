@@ -5,7 +5,7 @@ fn ordinary_reporter_has_no_source_role_even_after_local_configuration() {
     let mut reporter = AuditReporterObject::new(1, "Reporter").unwrap();
     for level in [AuditLevel::NONE, AuditLevel::AUDIT_ALL] {
         reporter
-            .configure_audit_reporter_with_filters_internal(
+            .configure_audit_reporter_internal(
                 level,
                 AuditOperationFlags::from_bits(0xff).unwrap(),
                 true,
