@@ -294,7 +294,7 @@ async fn expired_subscription_releases_quota_on_handle_subscribe_cov() {
         lifetime: Some(300),
     };
     let mut buf = bytes::BytesMut::new();
-    req.encode(&mut buf);
+    req.encode(&mut buf).unwrap();
     let mut table = server.cov_table.write().await;
     let db = server.db.read().await;
     let res = crate::handlers::handle_subscribe_cov(&mut table, &db, &peer, &buf);

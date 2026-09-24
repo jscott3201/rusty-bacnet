@@ -209,7 +209,7 @@ async fn subscribe_cov_routed_ack_and_initial_notification_return_to_remote_subs
         lifetime: Some(60),
     };
     let mut service_buf = bytes::BytesMut::new();
-    subscribe.encode(&mut service_buf);
+    subscribe.encode(&mut service_buf).unwrap();
 
     let request = Apdu::ConfirmedRequest(ConfirmedRequest {
         segmented: false,

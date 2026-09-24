@@ -48,6 +48,7 @@ mod binary_lighting_operations;
 mod binary_lighting_relinquish_default;
 mod cov_multiple_parameters;
 mod cov_property_parameters;
+mod cov_request_parameters;
 mod detection_enable_summary;
 mod device_description_writes;
 mod device_event;

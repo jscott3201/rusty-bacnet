@@ -118,3 +118,6 @@ async fn multiple_initial_and_resub_ack_precede_payload_and_cancel_is_quiet() {
 
 #[path = "property_parameters.rs"]
 mod property_parameters;
+
+#[path = "ordinary_parameters.rs"]
+mod ordinary_parameters;

@@ -130,7 +130,7 @@ async fn denied_subscription_cancellations_preserve_existing_entries() {
             MutationTarget::SubscribeCov(mut request) => {
                 request.issue_confirmed_notifications = None;
                 request.lifetime = None;
-                request.encode(&mut cancellation);
+                request.encode(&mut cancellation).unwrap();
             }
             MutationTarget::SubscribeCovProperty(mut request) => {
                 request.issue_confirmed_notifications = None;

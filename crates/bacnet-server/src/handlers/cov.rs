@@ -59,6 +59,14 @@ pub(crate) fn handle_subscribe_cov_with_initial_endpoint(
 ) -> Result<Vec<CovSubscription>, Error> {
     let request = SubscribeCOVRequest::decode(service_data)?;
 
+    // Service consistency is distinct from structural parsing. Validate before
+    // lookup, expiry purge or subscription replacement/initial notification.
+    if request.lifetime.is_some() && request.issue_confirmed_notifications.is_none() {
+        return Err(Error::Reject {
+            reason: RejectReason::INCONSISTENT_PARAMETERS.to_raw(),
+        });
+    }
+
     if request.is_cancellation() {
         table.unsubscribe_at(
             source_mac,

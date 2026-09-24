@@ -1232,8 +1232,14 @@ The server rejects a missing member of the confirmed/lifetime pair as
 INCONSISTENT_PARAMETERS (the selected syntax interpretation), and paired zero
 lifetime as SERVICES/VALUE_OUT_OF_RANGE, before lookup or subscription mutation.
 Structural decoding preserves these values so the formal responses remain distinct.
-Ordinary `subscribe_cov` retains `None`/zero indefinite lifetime behavior. Python
-currently exposes ordinary COV and PropertyMultiple, not this single-property API.
+Ordinary `subscribe_cov` retains `None`/zero indefinite lifetime behavior. Its
+`SubscribeCOVRequest::encode` also returns `Result`: a present lifetime requires
+an explicit confirmed-notification mode, while mode alone is valid. Both absent
+means cancellation. Invalid lifetime-only requests leave the output buffer
+unchanged; the server returns INCONSISTENT_PARAMETERS before object lookup,
+expiry cleanup or subscription changes. Public Rust/Python ordinary subscribe
+methods already supply the mode and retain their optional lifetime signatures.
+Python exposes ordinary COV and PropertyMultiple, not the single-property API.
 These boundaries are tracked in the [COV subscription ledger](conformance/support-summary.md).
 
 ```rust

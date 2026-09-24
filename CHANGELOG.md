@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Ordinary SubscribeCOV typed request encoding now returns `Result` and rejects
+  a lifetime without confirmed-notification mode before appending bytes (#805).
+  The server rejects that malformed shape before lookup, expiry cleanup or state
+  changes. Public Rust/Python optional lifetimes retain None/zero indefinite
+  subscriptions and explicit cancellation.
+
 - Require positive `NonZeroU32` lifetimes in Rust single-property COV subscribe
   methods; explicit cancellation remains separate. The request encoder is now
   fallible and transactional. Invalid incoming field pairs reject before state
