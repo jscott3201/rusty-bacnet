@@ -1631,7 +1631,8 @@
      "crates/bacnet-server/src/server/audit_reporter_live_tests.rs::target_reporter_overlap_follows_actual_subject_membership_and_protects_every_owner",
      "crates/bacnet-server/src/server/notification_worker_owner_tests.rs::target_reporter_loss_queues_are_isolated_with_one_global_budget_and_per_owner_aba",
      "crates/bacnet-server/src/server/audit_reporter_live_tests.rs::target_reporter_recipient_pair_has_one_elected_owner_and_fences_every_context",
-     "crates/bacnet-server/src/server/audit_reporter_live_tests.rs::target_reporter_plural_drop_keeps_all_memberships_until_task_frames_end"
+     "crates/bacnet-server/src/server/audit_reporter_live_tests.rs::target_reporter_plural_drop_keeps_all_memberships_until_task_frames_end",
+     "crates/bacnet-server/src/server/audit_reporter_sync_tests.rs::target_reporter_off_runtime_silent_change_commits_without_worker"
     ],
     "limits": "No ordinary batching/send delay, wider network configuration, new source operation family, durable outbox/retry, full Reporter/Audit/BIBB or parent345 closure."
    }

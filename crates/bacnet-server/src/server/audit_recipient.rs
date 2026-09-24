@@ -273,7 +273,7 @@ impl<T: TransportPort + 'static> TargetAudit<T> {
                     epoch: token,
                     finished: false,
                 };
-                Ok(Some(async move {
+                Ok(async move {
                     let run = |(route, _permit, reservation, bytes): (
                         Arc<super::event_recipient_route::ConfirmedRecipientRoute>,
                         tokio::sync::OwnedSemaphorePermit,
@@ -298,7 +298,7 @@ impl<T: TransportPort + 'static> TargetAudit<T> {
                         }
                     };
                     tokio::join!(run(first, completion_a), run(second, completion_b));
-                }))
+                })
             })
         })?;
         // Queue->status is an existing lock order. Wake only after status unlock.

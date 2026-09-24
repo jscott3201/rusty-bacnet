@@ -26,6 +26,8 @@ class MultipleTargetReporters(unittest.IsolatedAsyncioTestCase):
         selectors.clear()
         for invalid in ([], [configuration(1), configuration(1)], [configuration(1)] * 65,
                         [configuration(1), configuration(99)],
+                        [configuration(1), configuration(True)],
+                        [configuration(1), configuration("2")],
                         [configuration(1), {**configuration(2), "audit_level": "default"}],
                         [configuration(1), {**configuration(2), "audit_priority_filter": 65536}],
                         [configuration(1), {**configuration(2), "unexpected": True}]):

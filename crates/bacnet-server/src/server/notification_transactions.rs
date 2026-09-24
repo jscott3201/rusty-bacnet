@@ -175,10 +175,23 @@ impl NotificationTransactions {
         let _workers = self.workers.lock().unwrap();
         owner.seal();
     }
+    // Silent changes still serialize with sealing/close, but have no runtime or
+    // worker requirement. The closure rechecks the concrete owner's active state.
+    pub(super) fn commit_audit_without_worker(
+        &self,
+        commit: impl FnOnce() -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        let workers = self.workers.lock().unwrap();
+        if workers.closed {
+            return Err(Error::Encoding("Audit delivery owner is closed".into()));
+        }
+        commit()
+    }
+
     #[doc(hidden)]
     pub fn commit_audit<F: Future<Output = ()> + Send + 'static>(
         &self,
-        prepare_commit: impl FnOnce() -> Result<Option<F>, Error>,
+        prepare_commit: impl FnOnce() -> Result<F, Error>,
     ) -> Result<(), Error> {
         let handle = tokio::runtime::Handle::try_current()
             .map_err(|_| Error::Encoding("Audit changes require a Tokio runtime".into()))?;
@@ -186,9 +199,7 @@ impl NotificationTransactions {
         if workers.closed {
             return Err(Error::Encoding("Audit delivery owner is closed".into()));
         }
-        let Some(task) = prepare_commit()? else {
-            return Ok(());
-        };
+        let task = prepare_commit()?;
         let owner = workers
             .audit_owner
             .as_ref()

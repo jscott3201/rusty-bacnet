@@ -2353,9 +2353,10 @@ class BACnetServer:
         """Replace the complete target Reporter set before start (one through 64).
 
         Each configuration identifies a registered concrete Reporter (0..4194302).
-        Duplicate identities, invalid settings or missing objects raise ValueError;
-        wrong container/value types raise TypeError. The entire input is copied and
-        validated before any pending settings change. Startup freezes this API.
+        Invalid instance values (including bool and non-int), duplicate identities,
+        invalid settings or missing objects raise ValueError. Wrong container types
+        and wrong types for other setting fields raise TypeError. The entire input
+        is copied and validated before pending changes. Startup freezes this API.
         Omitted optional fields reset to catch-all selectors and all priorities.
         Enabled nominal overlaps expose CONFIGURATION_ERROR on every affected
         Reporter's RELIABILITY; the lowest instance emits, before operation filters.

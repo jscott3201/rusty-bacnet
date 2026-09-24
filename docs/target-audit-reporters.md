@@ -35,7 +35,10 @@ and concrete Description writes use one object-owned change boundary. These APIs
 are fallible. Actual changes prepare all records, permits, confirmed leases,
 encoding and worker ownership before any configuration field commits. The aggregate
 emits one record per changed property in numeric property-identifier order; equal
-configuration emits none. Absent and present-empty Monitored_Objects are distinct.
+configuration emits none. Silent active changes also work from synchronous threads
+without a Tokio runtime, while still serializing with seal/close; they create no
+worker. Notification-producing changes require the runtime before any commit.
+Absent and present-empty Monitored_Objects are distinct.
 These cardinality and ordering rules are local API policy. Pre-start changes emit
 nothing. Local records identify the local Device and omit invoke ID.
 
