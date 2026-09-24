@@ -28,7 +28,7 @@ fn subscription(
         monitored_object_identifier: point_oid(),
         issue_confirmed_notifications: false,
         expires_at: None,
-        last_notified_value: None,
+        last_notified_sample: None,
         monitored_property: property,
         monitored_property_array_index: None,
         cov_increment: None,
@@ -186,6 +186,17 @@ async fn exact_single_cov_filters_whole_and_property_payloads() {
         PropertyIdentifier::STATUS_FLAGS,
     ]));
 
+    // A selected-value repeat is now suppressed; change the expected-operation state.
+    fixture
+        .db
+        .write()
+        .await
+        .get_mut(&point_oid())
+        .unwrap()
+        .set_life_safety_operation_expected_internal(
+            bacnet_types::enums::LifeSafetyOperation::SILENCE,
+        )
+        .unwrap();
     fixture
         .fire(&[PropertyIdentifier::OPERATION_EXPECTED])
         .await;

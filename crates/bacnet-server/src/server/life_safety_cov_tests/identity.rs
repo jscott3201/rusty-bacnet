@@ -43,7 +43,27 @@ fn multiple(cancel: bool) -> Bytes {
     bytes.freeze()
 }
 
+async fn change_status(fixture: &DispatchFixture) {
+    let mut db = fixture.db.write().await;
+    let object = db.get_mut(&point_oid()).unwrap();
+    let PropertyValue::Boolean(previous) = object
+        .read_property(PropertyIdentifier::OUT_OF_SERVICE, None)
+        .unwrap()
+    else {
+        panic!("out of service")
+    };
+    object
+        .write_property(
+            PropertyIdentifier::OUT_OF_SERVICE,
+            None,
+            PropertyValue::Boolean(!previous),
+            None,
+        )
+        .unwrap();
+}
+
 async fn fire(fixture: &DispatchFixture) -> Vec<u8> {
+    change_status(fixture).await;
     BACnetServer::<RecordingTransport>::fire_life_safety_cov_notifications(
         &fixture.db,
         &fixture.network,
@@ -53,7 +73,7 @@ async fn fire(fixture: &DispatchFixture) -> Vec<u8> {
         &fixture.comm_state,
         &fixture.config,
         &point_oid(),
-        &[PropertyIdentifier::SILENCED],
+        &[PropertyIdentifier::STATUS_FLAGS],
     )
     .await;
     let mut services: Vec<_> = fixture
@@ -196,6 +216,7 @@ async fn cov_identity_multiple_forms_coexist_refresh_and_cancel_exact_context() 
         fixture.take_apdus().as_slice(),
         [Apdu::SimpleAck(_)]
     ));
+    change_status(&fixture).await;
     BACnetServer::<RecordingTransport>::fire_life_safety_cov_notifications(
         &fixture.db,
         &fixture.network,
@@ -205,7 +226,7 @@ async fn cov_identity_multiple_forms_coexist_refresh_and_cancel_exact_context() 
         &fixture.comm_state,
         &fixture.config,
         &point_oid(),
-        &[PropertyIdentifier::SILENCED],
+        &[PropertyIdentifier::STATUS_FLAGS],
     )
     .await;
     let apdus = take_after_confirmed(&fixture, 1).await;

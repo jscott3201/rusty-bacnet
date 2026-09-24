@@ -195,6 +195,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 Some(oid),
                 &multiple_subs,
                 snapshot,
+                false,
                 &mut budget,
             )
             .await;
@@ -211,6 +212,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 oid,
                 &single_subs,
                 snapshot,
+                false,
                 &mut budget,
             )
             .await;
@@ -235,6 +237,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     oid,
                     &single_subs,
                     snapshot,
+                    false,
                     &mut first_budget,
                 )
                 .await;
@@ -253,6 +256,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     Some(oid),
                     &multiple_subs,
                     snapshot,
+                    false,
                     &mut budget,
                 )
                 .await;
@@ -270,6 +274,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     Some(oid),
                     &multiple_subs,
                     snapshot,
+                    false,
                     &mut first_budget,
                 )
                 .await;
@@ -287,6 +292,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     oid,
                     &single_subs,
                     snapshot,
+                    false,
                     &mut budget,
                 )
                 .await;
@@ -335,6 +341,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             &subscription.monitored_object_identifier,
             std::slice::from_ref(subscription),
             None,
+            true,
             &mut budget,
         )
         .await;
@@ -353,6 +360,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         oid: &ObjectIdentifier,
         subs: &[CovSubscriptionSnapshot],
         snapshot: Option<&dyn bacnet_objects::traits::BACnetObject>,
+        force: bool,
         budget: &mut EventBudget,
     ) {
         if budget.is_exhausted() {
@@ -366,7 +374,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 .find(|o| o.object_type() == ObjectType::DEVICE)
                 .unwrap_or_else(|| ObjectIdentifier::new(ObjectType::DEVICE, 0).unwrap())
         };
-        let (values, current_pv, cov_increment) = {
+        let ordinary = if subs.iter().any(|sub| sub.monitored_property.is_none()) {
             let db = if snapshot.is_none() {
                 Some(db.read().await)
             } else {
@@ -379,11 +387,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
             let cov_increment = object.cov_increment();
 
-            let mut current_pv: Option<f32> = None;
+            let mut current_pv = None;
             let mut values = Vec::new();
             if let Ok(pv) = object.read_property(PropertyIdentifier::PRESENT_VALUE, None) {
                 if let PropertyValue::Real(v) = &pv {
-                    current_pv = Some(*v);
+                    current_pv = Some(
+                        crate::cov::CovSample::new(&PropertyValue::Real(*v)).expect("bounded Real"),
+                    );
                 }
                 let mut buf = BytesMut::new();
                 if encode_property_value(&mut buf, &pv).is_ok() {
@@ -407,44 +417,63 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
             }
 
-            (values, current_pv, cov_increment)
+            Some((values, current_pv, cov_increment))
+        } else {
+            None
         };
 
-        if values.is_empty() {
-            return;
-        }
-
         for sub in subs {
-            if !CovSubscriptionTable::should_notify(
-                sub,
-                current_pv,
-                sub.cov_increment.or(cov_increment),
-            ) {
-                continue;
-            }
-
-            let notification_values = if let Some(prop) = sub.monitored_property {
-                if let Some(object) = snapshot {
-                    life_safety::single_property_values(
-                        object,
-                        prop,
-                        sub.monitored_property_array_index,
-                    )
-                    .unwrap_or_else(|| values.clone())
+            let (notification_values, current_sample) = if let Some(property) =
+                sub.monitored_property
+            {
+                let db = if snapshot.is_none() {
+                    Some(db.read().await)
                 } else {
-                    let db = db.read().await;
-                    db.get(oid)
-                        .and_then(|object| {
-                            life_safety::single_property_values(
-                                object,
-                                prop,
-                                sub.monitored_property_array_index,
-                            )
-                        })
-                        .unwrap_or_else(|| values.clone())
+                    None
+                };
+                let Some(object) = snapshot.or_else(|| db.as_deref()?.get(oid)) else {
+                    continue;
+                };
+                let Ok(value) = object.read_property(property, sub.monitored_property_array_index)
+                else {
+                    continue;
+                };
+                let Ok(prepared) = crate::cov::prepare::prepare_value(
+                    object,
+                    property,
+                    sub.monitored_property_array_index,
+                    sub.cov_increment,
+                    &value,
+                ) else {
+                    continue;
+                };
+                if !force && !prepared.reports(sub.last_notified_sample.as_ref()) {
+                    continue;
                 }
+                let Some(values) = life_safety::single_property_values(
+                    object,
+                    property,
+                    sub.monitored_property_array_index,
+                    prepared.encoded,
+                ) else {
+                    continue;
+                };
+                (values, Some(prepared.sample))
             } else {
-                values.clone()
+                let Some((values, sample, increment)) = &ordinary else {
+                    continue;
+                };
+                if values.is_empty()
+                    || (!force
+                        && !CovSubscriptionTable::should_notify(
+                            sub,
+                            sample.as_ref(),
+                            sub.cov_increment.or(*increment),
+                        ))
+                {
+                    continue;
+                }
+                (values.clone(), sample.clone())
             };
 
             // Resolve after every awaited read/callback and before fresh admission.
@@ -544,9 +573,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     .notification_bytes_sent
                     .fetch_add(buf.len() as u64, Ordering::Relaxed);
 
-                if let Some(pv) = current_pv {
+                if let Some(sample) = current_sample {
                     let mut table = cov_table.write().await;
-                    table.set_last_notified_value(sub, pv);
+                    table.set_last_notified_sample(sub, sample);
                 }
 
                 let network = Arc::clone(network);
@@ -621,9 +650,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
                 if let Err(e) = Self::send_cov_apdu(network, &buf, sub, false).await {
                     warn!(error = %e, "Failed to send COV notification");
-                } else if let Some(pv) = current_pv {
+                } else if let Some(sample) = current_sample {
                     let mut table = cov_table.write().await;
-                    table.set_last_notified_value(sub, pv);
+                    table.set_last_notified_sample(sub, sample);
                 }
             }
         }
