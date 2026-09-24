@@ -274,7 +274,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             list_of_write_access_specs: specs,
         };
         let mut buf = BytesMut::new();
-        request.encode(&mut buf);
+        request.encode(&mut buf)?;
 
         let _ = self
             .confirmed_request(
@@ -346,30 +346,27 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         device_instance: u32,
         specs: Vec<bacnet_services::wpm::WriteAccessSpecification>,
     ) -> Result<(), Error> {
+        use bacnet_services::wpm::WritePropertyMultipleRequest;
+        let request = WritePropertyMultipleRequest {
+            list_of_write_access_specs: specs,
+        };
+        let mut buf = BytesMut::new();
+        request.encode(&mut buf)?;
         let (mac, routing) = self.resolve_device(device_instance).await?;
-
         if let Some((dnet, dadr)) = routing {
-            use bacnet_services::wpm::WritePropertyMultipleRequest;
-
-            let request = WritePropertyMultipleRequest {
-                list_of_write_access_specs: specs,
-            };
-            let mut buf = BytesMut::new();
-            request.encode(&mut buf);
-
-            let _ = self
-                .confirmed_request_routed(
-                    &mac,
-                    dnet,
-                    &dadr,
-                    ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE,
-                    &buf,
-                )
-                .await?;
-            Ok(())
+            self.confirmed_request_routed(
+                &mac,
+                dnet,
+                &dadr,
+                ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE,
+                &buf,
+            )
+            .await?;
         } else {
-            self.write_property_multiple(&mac, specs).await
+            self.confirmed_request(&mac, ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE, &buf)
+                .await?;
         }
+        Ok(())
     }
 
     /// Write one property on multiple discovered devices concurrently.

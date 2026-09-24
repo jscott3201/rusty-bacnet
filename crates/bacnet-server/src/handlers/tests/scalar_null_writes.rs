@@ -54,7 +54,8 @@ fn wpm(
                 .collect(),
         }],
     }
-    .encode(&mut bytes);
+    .encode(&mut bytes)
+    .unwrap();
     handle_write_property_multiple(db, &bytes)
 }
 fn objects() -> Vec<Box<dyn BACnetObject>> {

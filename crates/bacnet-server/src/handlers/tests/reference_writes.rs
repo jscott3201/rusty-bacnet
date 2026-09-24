@@ -463,7 +463,7 @@ fn wpm_reference_write_commits_in_order_and_keeps_prefix_on_failure() {
             }],
         };
         let mut buf = BytesMut::new();
-        request.encode(&mut buf);
+        request.encode(&mut buf).unwrap();
         handle_write_property_multiple(db, &buf)
     };
 

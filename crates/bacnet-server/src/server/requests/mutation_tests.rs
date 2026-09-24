@@ -34,7 +34,8 @@ pub(super) fn wpm(specs: Vec<WriteAccessSpecification>) -> Bytes {
     WritePropertyMultipleRequest {
         list_of_write_access_specs: specs,
     }
-    .encode(&mut bytes);
+    .encode(&mut bytes)
+    .unwrap();
     bytes.freeze()
 }
 

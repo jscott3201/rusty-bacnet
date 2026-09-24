@@ -22,6 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Pre-1.0 WPM request encoding now returns `Result` and validates all writes
+  transactionally. Empty outer/nested write lists, special property selectors and
+  invalid priorities fail before client admission/discovery. Both Python WPM
+  methods validate synchronously; inbound malformed-wire/prefix semantics and
+  legal empty-list property values remain unchanged (#793).
+
 - RPM response indexes now appear only for effectively declared arrays, including
   inline array errors. Unknown declarations conservatively omit the index;
   target Audit retains the attempted request index independently (#789).

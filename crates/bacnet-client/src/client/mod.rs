@@ -933,6 +933,8 @@ mod segmented_timeout_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod wpm_validation_tests;
+#[cfg(test)]
 mod write_priority_tests;
 
 impl<T: TransportPort + 'static> BACnetClient<T> {

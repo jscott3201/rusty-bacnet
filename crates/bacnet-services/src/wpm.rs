@@ -12,6 +12,8 @@ pub mod cursor;
 pub mod error;
 #[cfg(test)]
 mod priority_tests;
+#[cfg(test)]
+mod validation_tests;
 
 pub use cursor::{
     WritePropertyAttempt, WritePropertyMultipleCursor, WritePropertyMultipleCursorError,
@@ -39,7 +41,44 @@ pub struct WritePropertyMultipleRequest {
 }
 
 impl WritePropertyMultipleRequest {
-    pub fn encode(&self, buf: &mut BytesMut) {
+    /// Validate the complete outbound request without reading remote metadata.
+    ///
+    /// Each request and object specification must contain writes. Special RPM
+    /// selectors are not write targets; supplied priorities must be in 1..=16.
+    /// Encoded property values remain opaque, including legal empty list values.
+    pub fn validate(&self) -> Result<(), Error> {
+        use bacnet_types::enums::PropertyIdentifier as P;
+        if self.list_of_write_access_specs.is_empty() {
+            return Err(Error::Encoding(
+                "WPM requires at least one object specification".into(),
+            ));
+        }
+        for spec in &self.list_of_write_access_specs {
+            if spec.list_of_properties.is_empty() {
+                return Err(Error::Encoding(
+                    "WPM requires at least one property per object".into(),
+                ));
+            }
+            for property in &spec.list_of_properties {
+                if matches!(
+                    property.property_identifier,
+                    P::ALL | P::REQUIRED | P::OPTIONAL
+                ) {
+                    return Err(Error::Encoding(
+                        "WPM does not accept ALL, REQUIRED or OPTIONAL selectors".into(),
+                    ));
+                }
+                crate::write_property::validate_priority(property.priority)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Encode transactionally after validating every object/property write.
+    /// Invalid typed input leaves an existing buffer unchanged. Inbound decoding
+    /// remains separate and may preserve external empty-list/no-op requests.
+    pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
+        self.validate()?;
         for spec in &self.list_of_write_access_specs {
             primitives::encode_ctx_object_id(buf, 0, &spec.object_identifier);
             tags::encode_opening_tag(buf, 1);
@@ -48,6 +87,7 @@ impl WritePropertyMultipleRequest {
             }
             tags::encode_closing_tag(buf, 1);
         }
+        Ok(())
     }
 
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
@@ -113,7 +153,7 @@ mod tests {
             }],
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         let decoded = WritePropertyMultipleRequest::decode(&buf).unwrap();
         assert_eq!(req, decoded);
     }
@@ -143,7 +183,7 @@ mod tests {
             ],
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         let decoded = WritePropertyMultipleRequest::decode(&buf).unwrap();
         assert_eq!(req, decoded);
     }
@@ -170,7 +210,7 @@ mod tests {
             }],
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
 
         assert_eq!(WritePropertyMultipleRequest::decode(&buf).unwrap(), req);
     }
@@ -192,7 +232,7 @@ mod tests {
             }],
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
 
         assert!(WritePropertyMultipleRequest::decode(&buf).is_err());
     }
@@ -215,7 +255,7 @@ mod tests {
             }],
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         assert!(WritePropertyMultipleRequest::decode(&buf[..1]).is_err());
     }
 
@@ -233,7 +273,7 @@ mod tests {
             }],
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         assert!(WritePropertyMultipleRequest::decode(&buf[..3]).is_err());
     }
 
@@ -251,7 +291,7 @@ mod tests {
             }],
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         let half = buf.len() / 2;
         assert!(WritePropertyMultipleRequest::decode(&buf[..half]).is_err());
     }

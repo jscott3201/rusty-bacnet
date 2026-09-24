@@ -58,7 +58,7 @@ pub struct WritePropertyRequest {
     pub priority: Option<u8>,
 }
 
-/// Validate an outbound WriteProperty priority without inspecting commandability.
+/// Validate an outbound property-write priority without inspecting commandability.
 ///
 /// Omission is allowed; every supplied priority must be in 1..=16, including
 /// NULL writes. Returns a local encoding error for invalid typed input.

@@ -1728,6 +1728,40 @@
    "notes": "Split child of BACNET-12-OBJECT-MODEL (#182; behavior change - trailing bytes previously dropped between the single-element decoder and the arm now decide the write, and malformed value payloads map to PROPERTY / INVALID_DATA_ENCODING instead of the SERVICES/OTHER a propagated raw decoding error produced). A value TLV-truncated so far that framing breaks is refused by the shared incremental service grammar before that write is attempted. Unlocks covered here: MSI Alarm_Values whole-list writes (the pin in handlers/list.rs flipped from pinned failure to per-element-validated success) and the datetime-paired value properties completing #270 (DateTime Value PV / Priority_Array entries, Relinquish_Default on DateTime Value + DateTime Pattern Value; see BACNET-12-RELINQUISH-DEFAULT-WRITABILITY). #401 adds the narrow zero-element exception for Fault_Signals; other empty propertyValue payloads remain refused. WPM decodes and commits each complete attempt in order and stops at the first failure. Known residues (follow-ups, not regressions): AddListElement/RemoveListElement still break their listOfElements loop on an undecodable element instead of erroring (#182's wider scope); Enumerated contents wider than four octets still truncate to u32 (#277, explicitly untouched); and properties declared SEQUENCE OF beyond the four reference arms (e.g. LIST_OF_OBJECT_PROPERTY_REFERENCES) keep their pre-existing arm-level behavior."
   },
   {
+   "id": "BACNET-15-WPM-OUTBOUND-VALIDATION",
+   "standard_anchor": "Clause 15.10 and 15.10.3.2 / Table 15-17 (printed754-756/PDF756-758)",
+   "priority": "P1",
+   "requirement_summary": "Typed outbound WPM validates the complete nonempty request and each nonempty property-write list, excludes ALL/REQUIRED/OPTIONAL targets, and accepts supplied priorities only in 1..16. Encoding is transactional; standalone direct and device-directed clients reject before request admission or discovery, and both Python entrypoints validate synchronously before future creation.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-services/src/wpm.rs::validate",
+    "crates/bacnet-services/src/wpm.rs::encode",
+    "crates/bacnet-services/src/write_property.rs::validate_priority",
+    "crates/bacnet-client/src/client/property.rs::write_property_multiple_to_device",
+    "crates/rusty-bacnet/src/types/rpm_wpm.rs::py_to_wpm_specs"
+   ],
+   "positive_tests": [
+    "crates/bacnet-services/src/wpm/validation_tests.rs::wpm_outbound_preserves_valid_priority_index_zero_proprietary_and_empty_value_bytes",
+    "crates/bacnet-client/src/client/wpm_validation_tests.rs::wpm_validation_valid_direct_local_routed_preserve_exact_wire_and_complete",
+    "crates/rusty-bacnet/tests/test_wpm_validation.py::test_valid_priorities_and_noncommandable_null_keep_state",
+    "crates/rusty-bacnet/tests/test_wpm_validation.py::test_proprietary_index_zero_null_and_empty_list_payload_exact_wire"
+   ],
+   "negative_tests": [
+    "crates/bacnet-services/src/wpm/validation_tests.rs::wpm_outbound_late_invalid_priority_preserves_buffer",
+    "crates/bacnet-services/src/wpm/validation_tests.rs::wpm_outbound_rejects_empty_lists_selectors_and_later_invalid_objects",
+    "crates/bacnet-client/src/client/wpm_validation_tests.rs::wpm_validation_invalid_direct_local_routed_and_unknown_never_resolve_admit_or_send",
+    "crates/rusty-bacnet/tests/test_wpm_validation.py::test_invalid_whole_request_synchronously_before_start_or_address",
+    "crates/rusty-bacnet/tests/test_wpm_validation.py::test_invalid_later_write_dispatches_no_prefix_or_discovery"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md ReadPropertyMultiple / WritePropertyMultiple",
+    "docs/python-api.md write_property_multiple and write_property_multiple_to_device",
+    "crates/rusty-bacnet/rusty_bacnet.pyi WPM methods"
+   ],
+   "notes": "Refs #793. This is an outbound typed service contract, not remote property metadata or commandability validation. Omitted priority, 1..16, index zero, proprietary identifiers, NULL and legal empty-list value payloads remain valid. The outer nonempty constraint follows the service procedure; no absent ASN.1 SIZE restriction is inferred. BACnetPropertyValue encoding shared with other services is unchanged. Inbound empty request/list no-ops, malformed-wire cursor classifications and ordered-prefix/formal-error behavior remain separate and retain raw fixture coverage. Python propagates property-value encoding errors; no practical small-input encoding failure is claimed. Priorities outside native u8 extraction raise OverflowError, while invalid u8 priorities and structure raise ValueError synchronously."
+  },
+  {
    "id": "BACNET-15-WPM-ORDERED-PREFIX-ERROR",
    "standard_anchor": "Clause 15.10 and 15.10.1.3 (WritePropertyMultiple service procedure and Result(-)); Clause 18.9 (Reject reasons); Clause 21 (Error and BACnetObjectPropertyReference productions)",
    "priority": "P1",
@@ -1771,7 +1805,7 @@
    ],
    "benchmarks": [],
    "public_claims": [],
-   "notes": "Refs #741: syntactically valid Unsigned priorities outside 1..16 retain a typed PriorityOutOfRange cursor failure and return formal SERVICES / PARAMETER_OUT_OF_RANGE both before writes and after a committed prefix. Commandable AnalogOutput wire tests cover 0, 17 and 257, exact failed coordinates, untouched suffixes and policy reachability; malformed priority encodings retain initial Reject and post-prefix INVALID_TAG. The public cursor error kind replaces its former reject-only field; whole-request decode still returns Error::Decoding. Bounded service-procedure correction (Refs #242), not full BACnet, object, PICS, or BIBB conformance. The post-success undecodable-coordinate policy uses DEVICE instance 4194303, PropertyIdentifier ALL, and no array index; only the instance is normative. Empty requests and empty property lists retain the existing SimpleACK/no-op compatibility. Existing ErrorPdu, TsmResponse, client, and Python shapes are unchanged: low-level ErrorPdu.error_data retains the complete formal body while high-level clients continue exposing class/code. Legacy generic WPM Error PDUs remain decodable. The unused public object write rollback API was removed before 1.0 (Refs #743). Observable File, NetworkPort, multistate and AccessDoor tests prove committed prefix state survives a later failure, including command priority and fallback ownership."
+   "notes": "Refs #741: syntactically valid Unsigned priorities outside 1..16 retain a typed PriorityOutOfRange cursor failure and return formal SERVICES / PARAMETER_OUT_OF_RANGE both before writes and after a committed prefix. Commandable AnalogOutput wire tests cover 0, 17 and 257, exact failed coordinates, untouched suffixes and policy reachability; malformed priority encodings retain initial Reject and post-prefix INVALID_TAG. The public cursor error kind replaces its former reject-only field; whole-request decode still returns Error::Decoding. Bounded service-procedure correction (Refs #242), not full BACnet, object, PICS, or BIBB conformance. The post-success undecodable-coordinate policy uses DEVICE instance 4194303, PropertyIdentifier ALL, and no array index; only the instance is normative. Inbound empty requests and empty property lists retain the existing SimpleACK/no-op behavior; outbound typed requests reject them before encoding (#793). Existing ErrorPdu, TsmResponse, client, and Python shapes are unchanged: low-level ErrorPdu.error_data retains the complete formal body while high-level clients continue exposing class/code. Legacy generic WPM Error PDUs remain decodable. The unused public object write rollback API was removed before 1.0 (Refs #743). Observable File, NetworkPort, multistate and AccessDoor tests prove committed prefix state survives a later failure, including command priority and fallback ownership."
   },
   {
    "id": "BACNET-20-ENCODING",

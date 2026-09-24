@@ -320,7 +320,8 @@ fn wpm(properties: Vec<BACnetPropertyValue>) -> Bytes {
             list_of_properties: properties,
         }],
     }
-    .encode(&mut bytes);
+    .encode(&mut bytes)
+    .unwrap();
     bytes.freeze()
 }
 

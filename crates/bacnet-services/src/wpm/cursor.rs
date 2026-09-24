@@ -406,12 +406,18 @@ mod tests {
         }
     }
 
+    // Inbound fixtures intentionally include requests rejected by the outbound
+    // typed contract. Construct their wire grammar directly.
     fn encode(specs: Vec<WriteAccessSpecification>) -> BytesMut {
         let mut data = BytesMut::new();
-        WritePropertyMultipleRequest {
-            list_of_write_access_specs: specs,
+        for spec in specs {
+            primitives::encode_ctx_object_id(&mut data, 0, &spec.object_identifier);
+            tags::encode_opening_tag(&mut data, 1);
+            for property in spec.list_of_properties {
+                property.encode(&mut data);
+            }
+            tags::encode_closing_tag(&mut data, 1);
         }
-        .encode(&mut data);
         data
     }
 

@@ -20,7 +20,7 @@ fn wpm_handler_unknown_object_fails() {
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
     assert!(handle_write_property_multiple(&mut db, &buf).is_err());
 }
@@ -59,7 +59,7 @@ fn wpm_handler_commits_successful_prefix() {
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
     // Should fail because OBJECT_TYPE is read-only
     assert!(handle_write_property_multiple(&mut db, &buf).is_err());
@@ -126,7 +126,7 @@ fn wpm_prefix_commit_keeps_out_of_service_transition() {
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
     assert!(handle_write_property_multiple(&mut db, &buf).is_err());
     let obj = db.get_mut(&oid).unwrap();
@@ -362,7 +362,7 @@ fn wpm_prefix_commit_keeps_commandable_priority_slot() {
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
     assert!(handle_write_property_multiple(&mut db, &buf).is_err());
 
@@ -423,7 +423,7 @@ fn wpm_prefix_commit_keeps_relinquished_priority_slot() {
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
     assert!(handle_write_property_multiple(&mut db, &buf).is_err());
 
@@ -498,7 +498,7 @@ fn wpm_prefix_commit_keeps_noncommandable_present_value_analoginput() {
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
     assert!(handle_write_property_multiple(&mut db, &buf).is_err());
 
@@ -555,7 +555,7 @@ fn wpm_prefix_commit_keeps_commandable_priority_slot_multistate_output() {
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
     assert!(handle_write_property_multiple(&mut db, &buf).is_err());
 
@@ -599,7 +599,7 @@ fn wpm_prefix_commit_keeps_commandable_priority_16_slot() {
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
     assert!(handle_write_property_multiple(&mut db, &buf).is_err());
 

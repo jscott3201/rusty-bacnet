@@ -288,7 +288,8 @@ async fn recipient_wpm_commits_change_once_and_preserves_prefix_on_unavailable_s
                 .collect(),
         }],
     }
-    .encode(&mut bytes);
+    .encode(&mut bytes)
+    .unwrap();
     assert!(matches!(
         dispatch(
             &fixture.server,
@@ -537,7 +538,8 @@ async fn recipient_wpm_authorizer_denies_after_committed_prefix_without_suffix_a
                 .collect(),
         }],
     }
-    .encode(&mut bytes);
+    .encode(&mut bytes)
+    .unwrap();
     assert!(matches!(
         dispatch(
             &fixture.server,
