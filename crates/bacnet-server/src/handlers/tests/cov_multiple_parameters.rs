@@ -127,20 +127,22 @@ fn clockless_timestamped_cov_multiple_rejects_atomically_but_can_cancel() {
     ));
     assert!(table.is_empty(), "rejection must precede table mutation");
 
-    table.subscribe(CovSubscription {
-        subscriber_mac: MacAddr::from_slice(&mac),
-        subscriber_network: None,
-        subscriber_process_identifier: 1,
-        monitored_object_identifier: oid,
-        issue_confirmed_notifications: false,
-        expires_at: None,
-        last_notified_value: None,
-        monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
-        monitored_property_array_index: None,
-        cov_increment: Some(0.5),
-        notification_kind: CovNotificationKind::Multiple,
-        timestamped: true,
-    });
+    table
+        .subscribe(CovSubscription {
+            subscriber_mac: MacAddr::from_slice(&mac),
+            subscriber_network: None,
+            subscriber_process_identifier: 1,
+            monitored_object_identifier: oid,
+            issue_confirmed_notifications: false,
+            expires_at: None,
+            last_notified_value: None,
+            monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
+            monitored_property_array_index: None,
+            cov_increment: Some(0.5),
+            notification_kind: CovNotificationKind::Multiple,
+            timestamped: true,
+        })
+        .unwrap();
 
     let cancel = SubscribeCOVPropertyMultipleRequest {
         subscriber_process_identifier: 1,

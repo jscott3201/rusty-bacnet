@@ -142,20 +142,25 @@ async fn fire_cov(server: &BACnetServer<HeldTransport>, kind: CovNotificationKin
         .await
         .add(Box::new(AnalogOutputObject::new(1, "AO-1", 62).unwrap()))
         .unwrap();
-    server.cov_table.write().await.subscribe(CovSubscription {
-        subscriber_mac: MacAddr::from_slice(&[1]),
-        subscriber_network: None,
-        subscriber_process_identifier: 7,
-        monitored_object_identifier: oid,
-        issue_confirmed_notifications: true,
-        expires_at: None,
-        last_notified_value: None,
-        monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
-        monitored_property_array_index: None,
-        cov_increment: None,
-        notification_kind: kind,
-        timestamped: false,
-    });
+    server
+        .cov_table
+        .write()
+        .await
+        .subscribe(CovSubscription {
+            subscriber_mac: MacAddr::from_slice(&[1]),
+            subscriber_network: None,
+            subscriber_process_identifier: 7,
+            monitored_object_identifier: oid,
+            issue_confirmed_notifications: true,
+            expires_at: None,
+            last_notified_value: None,
+            monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
+            monitored_property_array_index: None,
+            cov_increment: None,
+            notification_kind: kind,
+            timestamped: false,
+        })
+        .unwrap();
     BACnetServer::<HeldTransport>::fire_cov_notifications(
         &server.db,
         &server.network,

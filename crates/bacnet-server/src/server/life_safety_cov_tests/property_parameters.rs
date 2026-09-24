@@ -43,13 +43,13 @@ async fn subscribe_cov_property_invalid_resubscription_keeps_state_and_emits_onl
             .cov_table
             .read()
             .await
-            .get_subscription(
-                &fixture.source_mac,
-                None,
-                12,
-                point_oid(),
-                Some(PropertyIdentifier::SILENCED),
-            )
+            .get_subscription(&crate::cov::CovSubscriptionKey::Property {
+                endpoint: crate::cov::SubscriberEndpoint::new(&fixture.source_mac, None),
+                process_id: 12,
+                object: point_oid(),
+                property: PropertyIdentifier::SILENCED,
+                index: None,
+            })
             .unwrap()
             .clone();
         fixture
@@ -76,13 +76,13 @@ async fn subscribe_cov_property_invalid_resubscription_keeps_state_and_emits_onl
         let table = fixture.cov_table.read().await;
         assert_eq!(table.len(), 1);
         let after = table
-            .get_subscription(
-                &fixture.source_mac,
-                None,
-                12,
-                point_oid(),
-                Some(PropertyIdentifier::SILENCED),
-            )
+            .get_subscription(&crate::cov::CovSubscriptionKey::Property {
+                endpoint: crate::cov::SubscriberEndpoint::new(&fixture.source_mac, None),
+                process_id: 12,
+                object: point_oid(),
+                property: PropertyIdentifier::SILENCED,
+                index: None,
+            })
             .unwrap();
         assert_eq!(after.expires_at, before.expires_at);
         assert_eq!(

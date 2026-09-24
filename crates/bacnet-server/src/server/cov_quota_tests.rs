@@ -453,34 +453,38 @@ async fn disconnect_and_expiry_cleanup_releases_quota() {
 
     {
         let mut table = server.cov_table.write().await;
-        table.subscribe(CovSubscription {
-            subscriber_mac: MacAddr::from_slice(&router_mac),
-            subscriber_network: Some(routed_a.clone()),
-            subscriber_process_identifier: 1,
-            monitored_object_identifier: ai(1),
-            issue_confirmed_notifications: false,
-            expires_at: None,
-            last_notified_value: None,
-            monitored_property: None,
-            monitored_property_array_index: None,
-            cov_increment: None,
-            notification_kind: CovNotificationKind::Single,
-            timestamped: false,
-        });
-        table.subscribe(CovSubscription {
-            subscriber_mac: MacAddr::from_slice(&router_mac),
-            subscriber_network: Some(routed_b.clone()),
-            subscriber_process_identifier: 1,
-            monitored_object_identifier: ai(1),
-            issue_confirmed_notifications: false,
-            expires_at: None,
-            last_notified_value: None,
-            monitored_property: None,
-            monitored_property_array_index: None,
-            cov_increment: None,
-            notification_kind: CovNotificationKind::Single,
-            timestamped: false,
-        });
+        table
+            .subscribe(CovSubscription {
+                subscriber_mac: MacAddr::from_slice(&router_mac),
+                subscriber_network: Some(routed_a.clone()),
+                subscriber_process_identifier: 1,
+                monitored_object_identifier: ai(1),
+                issue_confirmed_notifications: false,
+                expires_at: None,
+                last_notified_value: None,
+                monitored_property: None,
+                monitored_property_array_index: None,
+                cov_increment: None,
+                notification_kind: CovNotificationKind::Single,
+                timestamped: false,
+            })
+            .unwrap();
+        table
+            .subscribe(CovSubscription {
+                subscriber_mac: MacAddr::from_slice(&router_mac),
+                subscriber_network: Some(routed_b.clone()),
+                subscriber_process_identifier: 1,
+                monitored_object_identifier: ai(1),
+                issue_confirmed_notifications: false,
+                expires_at: None,
+                last_notified_value: None,
+                monitored_property: None,
+                monitored_property_array_index: None,
+                cov_increment: None,
+                notification_kind: CovNotificationKind::Single,
+                timestamped: false,
+            })
+            .unwrap();
     }
 
     // Removing routed_a removes only routed_a, preserving routed_b
@@ -492,13 +496,14 @@ async fn disconnect_and_expiry_cleanup_releases_quota() {
     // Verify routed_b remains active
     {
         let table = server.cov_table.read().await;
-        assert!(table.contains(
-            &MacAddr::from_slice(&router_mac),
-            Some(&routed_b),
-            1,
-            ai(1),
-            None
-        ));
+        assert!(table.contains(&crate::cov::CovSubscriptionKey::Object {
+            endpoint: crate::cov::SubscriberEndpoint::new(
+                &MacAddr::from_slice(&router_mac),
+                Some(&routed_b)
+            ),
+            process_id: 1,
+            object: ai(1)
+        }));
     }
 
     // Test expiry cleanup via purge_expired
@@ -518,7 +523,7 @@ async fn disconnect_and_expiry_cleanup_releases_quota() {
             notification_kind: CovNotificationKind::Single,
             timestamped: false,
         };
-        table.subscribe(sub);
+        table.subscribe(sub).unwrap();
         let purged = table.purge_expired();
         assert_eq!(purged, 1);
         assert_eq!(server.cov_counters().subscriptions_purged, 1);
@@ -551,20 +556,22 @@ async fn fanout_and_work_budgets_enforced() {
     {
         let mut table = server.cov_table.write().await;
         for i in 1..=6 {
-            table.subscribe(CovSubscription {
-                subscriber_mac: MacAddr::from_slice(&[10, 0, 0, i, 0xBA, 0xC0]),
-                subscriber_network: None,
-                subscriber_process_identifier: 1,
-                monitored_object_identifier: ai(1),
-                issue_confirmed_notifications: false,
-                expires_at: None,
-                last_notified_value: None,
-                monitored_property: None,
-                monitored_property_array_index: None,
-                cov_increment: None,
-                notification_kind: CovNotificationKind::Single,
-                timestamped: false,
-            });
+            table
+                .subscribe(CovSubscription {
+                    subscriber_mac: MacAddr::from_slice(&[10, 0, 0, i, 0xBA, 0xC0]),
+                    subscriber_network: None,
+                    subscriber_process_identifier: 1,
+                    monitored_object_identifier: ai(1),
+                    issue_confirmed_notifications: false,
+                    expires_at: None,
+                    last_notified_value: None,
+                    monitored_property: None,
+                    monitored_property_array_index: None,
+                    cov_increment: None,
+                    notification_kind: CovNotificationKind::Single,
+                    timestamped: false,
+                })
+                .unwrap();
         }
     }
 
@@ -616,20 +623,22 @@ async fn in_flight_confirmed_per_peer_throttled() {
     {
         let mut table = server.cov_table.write().await;
         for i in 1..=4 {
-            table.subscribe(CovSubscription {
-                subscriber_mac: peer.clone(),
-                subscriber_network: None,
-                subscriber_process_identifier: i,
-                monitored_object_identifier: ai(1),
-                issue_confirmed_notifications: true,
-                expires_at: None,
-                last_notified_value: None,
-                monitored_property: None,
-                monitored_property_array_index: None,
-                cov_increment: None,
-                notification_kind: CovNotificationKind::Single,
-                timestamped: false,
-            });
+            table
+                .subscribe(CovSubscription {
+                    subscriber_mac: peer.clone(),
+                    subscriber_network: None,
+                    subscriber_process_identifier: i,
+                    monitored_object_identifier: ai(1),
+                    issue_confirmed_notifications: true,
+                    expires_at: None,
+                    last_notified_value: None,
+                    monitored_property: None,
+                    monitored_property_array_index: None,
+                    cov_increment: None,
+                    notification_kind: CovNotificationKind::Single,
+                    timestamped: false,
+                })
+                .unwrap();
         }
     }
 
@@ -678,20 +687,22 @@ async fn subscribe_cov_property_multiple_atomic_rejection() {
     {
         let mut table = server.cov_table.write().await;
         for i in 1..=2 {
-            table.subscribe(CovSubscription {
-                subscriber_mac: MacAddr::from_slice(&peer),
-                subscriber_network: None,
-                subscriber_process_identifier: 1,
-                monitored_object_identifier: ai(i),
-                issue_confirmed_notifications: false,
-                expires_at: None,
-                last_notified_value: None,
-                monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
-                monitored_property_array_index: None,
-                cov_increment: None,
-                notification_kind: CovNotificationKind::Multiple,
-                timestamped: false,
-            });
+            table
+                .subscribe(CovSubscription {
+                    subscriber_mac: MacAddr::from_slice(&peer),
+                    subscriber_network: None,
+                    subscriber_process_identifier: 1,
+                    monitored_object_identifier: ai(i),
+                    issue_confirmed_notifications: false,
+                    expires_at: None,
+                    last_notified_value: None,
+                    monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
+                    monitored_property_array_index: None,
+                    cov_increment: None,
+                    notification_kind: CovNotificationKind::Multiple,
+                    timestamped: false,
+                })
+                .unwrap();
         }
     }
 

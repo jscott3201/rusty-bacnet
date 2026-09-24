@@ -291,20 +291,22 @@ async fn cov_property_multiple_subscription_uses_multiple_notification_on_change
     let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::new()));
     {
         let mut table = cov_table.write().await;
-        table.subscribe(CovSubscription {
-            subscriber_mac: MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC1]),
-            subscriber_network: None,
-            subscriber_process_identifier: 7,
-            monitored_object_identifier: ao_oid,
-            issue_confirmed_notifications: false,
-            expires_at: None,
-            last_notified_value: None,
-            monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
-            monitored_property_array_index: None,
-            cov_increment: None,
-            notification_kind: CovNotificationKind::Multiple,
-            timestamped: false,
-        });
+        table
+            .subscribe(CovSubscription {
+                subscriber_mac: MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC1]),
+                subscriber_network: None,
+                subscriber_process_identifier: 7,
+                monitored_object_identifier: ao_oid,
+                issue_confirmed_notifications: false,
+                expires_at: None,
+                last_notified_value: None,
+                monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
+                monitored_property_array_index: None,
+                cov_increment: None,
+                notification_kind: CovNotificationKind::Multiple,
+                timestamped: false,
+            })
+            .unwrap();
     }
 
     BACnetServer::<RecordingTransport>::fire_cov_notifications(
@@ -398,22 +400,8 @@ async fn capture_timestamped_cov_multiple(
     let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::new()));
     {
         let mut table = cov_table.write().await;
-        table.subscribe(CovSubscription {
-            subscriber_mac: MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC1]),
-            subscriber_network: None,
-            subscriber_process_identifier: 7,
-            monitored_object_identifier: ao_oid,
-            issue_confirmed_notifications: false,
-            expires_at: Some(Instant::now() + Duration::from_secs(300)),
-            last_notified_value: None,
-            monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
-            monitored_property_array_index: None,
-            cov_increment: None,
-            notification_kind: CovNotificationKind::Multiple,
-            timestamped: true,
-        });
-        if include_untimestamped {
-            table.subscribe(CovSubscription {
+        table
+            .subscribe(CovSubscription {
                 subscriber_mac: MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC1]),
                 subscriber_network: None,
                 subscriber_process_identifier: 7,
@@ -421,12 +409,30 @@ async fn capture_timestamped_cov_multiple(
                 issue_confirmed_notifications: false,
                 expires_at: Some(Instant::now() + Duration::from_secs(300)),
                 last_notified_value: None,
-                monitored_property: Some(PropertyIdentifier::STATUS_FLAGS),
+                monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
                 monitored_property_array_index: None,
                 cov_increment: None,
                 notification_kind: CovNotificationKind::Multiple,
-                timestamped: false,
-            });
+                timestamped: true,
+            })
+            .unwrap();
+        if include_untimestamped {
+            table
+                .subscribe(CovSubscription {
+                    subscriber_mac: MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC1]),
+                    subscriber_network: None,
+                    subscriber_process_identifier: 7,
+                    monitored_object_identifier: ao_oid,
+                    issue_confirmed_notifications: false,
+                    expires_at: Some(Instant::now() + Duration::from_secs(300)),
+                    last_notified_value: None,
+                    monitored_property: Some(PropertyIdentifier::STATUS_FLAGS),
+                    monitored_property_array_index: None,
+                    cov_increment: None,
+                    notification_kind: CovNotificationKind::Multiple,
+                    timestamped: false,
+                })
+                .unwrap();
         }
     }
 
@@ -520,20 +526,22 @@ async fn confirmed_cov_single_and_multiple_retries_retain_their_leases() {
             (single_mac.clone(), 7, CovNotificationKind::Single),
             (multiple_mac.clone(), 8, CovNotificationKind::Multiple),
         ] {
-            table.subscribe(CovSubscription {
-                subscriber_mac,
-                subscriber_network: None,
-                subscriber_process_identifier: process_id,
-                monitored_object_identifier: ao_oid,
-                issue_confirmed_notifications: true,
-                expires_at: None,
-                last_notified_value: None,
-                monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
-                monitored_property_array_index: None,
-                cov_increment: None,
-                notification_kind,
-                timestamped: false,
-            });
+            table
+                .subscribe(CovSubscription {
+                    subscriber_mac,
+                    subscriber_network: None,
+                    subscriber_process_identifier: process_id,
+                    monitored_object_identifier: ao_oid,
+                    issue_confirmed_notifications: true,
+                    expires_at: None,
+                    last_notified_value: None,
+                    monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
+                    monitored_property_array_index: None,
+                    cov_increment: None,
+                    notification_kind,
+                    timestamped: false,
+                })
+                .unwrap();
         }
     }
     let config = ServerConfig {

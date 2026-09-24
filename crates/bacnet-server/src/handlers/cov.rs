@@ -46,7 +46,7 @@ pub(crate) fn handle_subscribe_cov_with_initial(
     db: &ObjectDatabase,
     source_mac: &[u8],
     service_data: &[u8],
-) -> Result<Vec<CovSubscription>, Error> {
+) -> Result<Vec<CovSubscriptionSnapshot>, Error> {
     handle_subscribe_cov_with_initial_endpoint(table, db, source_mac, None, service_data)
 }
 
@@ -56,7 +56,7 @@ pub(crate) fn handle_subscribe_cov_with_initial_endpoint(
     source_mac: &[u8],
     source_network: Option<&NpduAddress>,
     service_data: &[u8],
-) -> Result<Vec<CovSubscription>, Error> {
+) -> Result<Vec<CovSubscriptionSnapshot>, Error> {
     let request = SubscribeCOVRequest::decode(service_data)?;
 
     // Service consistency is distinct from structural parsing. Validate before
@@ -68,12 +68,11 @@ pub(crate) fn handle_subscribe_cov_with_initial_endpoint(
     }
 
     if request.is_cancellation() {
-        table.unsubscribe_at(
-            source_mac,
-            source_network,
-            request.subscriber_process_identifier,
-            request.monitored_object_identifier,
-        );
+        table.unsubscribe(&CovSubscriptionKey::Object {
+            endpoint: SubscriberEndpoint::new(source_mac, source_network),
+            process_id: request.subscriber_process_identifier,
+            object: request.monitored_object_identifier,
+        });
         return Ok(Vec::new());
     }
 
@@ -101,21 +100,6 @@ pub(crate) fn handle_subscribe_cov_with_initial_endpoint(
         }
     });
 
-    table.purge_expired();
-
-    let existing = table
-        .get_subscription(
-            &MacAddr::from_slice(source_mac),
-            source_network,
-            request.subscriber_process_identifier,
-            request.monitored_object_identifier,
-            None,
-        )
-        .cloned();
-    let peer_key = CovPeerKey::from_endpoint(&MacAddr::from_slice(source_mac), source_network);
-    let is_indefinite = expires_at.is_none();
-    table.check_admission(&peer_key, is_indefinite, existing.as_ref())?;
-
     let subscription = CovSubscription {
         subscriber_mac: MacAddr::from_slice(source_mac),
         subscriber_network: source_network.cloned(),
@@ -130,9 +114,7 @@ pub(crate) fn handle_subscribe_cov_with_initial_endpoint(
         notification_kind: CovNotificationKind::Single,
         timestamped: false,
     };
-    table.subscribe(subscription.clone());
-
-    Ok(vec![subscription])
+    Ok(vec![table.subscribe(subscription)?])
 }
 
 /// Handle a SubscribeCOVProperty request.
@@ -152,7 +134,7 @@ pub(crate) fn handle_subscribe_cov_property_with_initial(
     db: &ObjectDatabase,
     source_mac: &[u8],
     service_data: &[u8],
-) -> Result<Vec<CovSubscription>, Error> {
+) -> Result<Vec<CovSubscriptionSnapshot>, Error> {
     handle_subscribe_cov_property_with_initial_endpoint(table, db, source_mac, None, service_data)
 }
 
@@ -162,7 +144,7 @@ pub(crate) fn handle_subscribe_cov_property_with_initial_endpoint(
     source_mac: &[u8],
     source_network: Option<&NpduAddress>,
     service_data: &[u8],
-) -> Result<Vec<CovSubscription>, Error> {
+) -> Result<Vec<CovSubscriptionSnapshot>, Error> {
     use bacnet_services::cov::SubscribeCOVPropertyRequest;
 
     let request = SubscribeCOVPropertyRequest::decode(service_data)?;
@@ -186,13 +168,13 @@ pub(crate) fn handle_subscribe_cov_property_with_initial_endpoint(
     };
 
     if request.is_cancellation() {
-        table.unsubscribe_property_at(
-            source_mac,
-            source_network,
-            request.subscriber_process_identifier,
-            request.monitored_object_identifier,
-            request.monitored_property_identifier,
-        );
+        table.unsubscribe(&CovSubscriptionKey::Property {
+            endpoint: SubscriberEndpoint::new(source_mac, source_network),
+            process_id: request.subscriber_process_identifier,
+            object: request.monitored_object_identifier,
+            property: request.monitored_property_identifier,
+            index: request.monitored_property_array_index,
+        });
         return Ok(Vec::new());
     }
 
@@ -218,21 +200,6 @@ pub(crate) fn handle_subscribe_cov_property_with_initial_endpoint(
 
     let expires_at = lifetime.map(|secs| Instant::now() + Duration::from_secs(u64::from(secs)));
 
-    table.purge_expired();
-
-    let existing = table
-        .get_subscription(
-            &MacAddr::from_slice(source_mac),
-            source_network,
-            request.subscriber_process_identifier,
-            request.monitored_object_identifier,
-            Some(request.monitored_property_identifier),
-        )
-        .cloned();
-    let peer_key = CovPeerKey::from_endpoint(&MacAddr::from_slice(source_mac), source_network);
-    let is_indefinite = expires_at.is_none();
-    table.check_admission(&peer_key, is_indefinite, existing.as_ref())?;
-
     let subscription = CovSubscription {
         subscriber_mac: MacAddr::from_slice(source_mac),
         subscriber_network: source_network.cloned(),
@@ -247,9 +214,7 @@ pub(crate) fn handle_subscribe_cov_property_with_initial_endpoint(
         notification_kind: CovNotificationKind::Single,
         timestamped: false,
     };
-    table.subscribe(subscription.clone());
-
-    Ok(vec![subscription])
+    Ok(vec![table.subscribe(subscription)?])
 }
 /// Handle a SubscribeCOVPropertyMultiple request.
 ///
@@ -270,7 +235,7 @@ pub(crate) fn handle_subscribe_cov_property_multiple_with_initial(
     db: &ObjectDatabase,
     source_mac: &[u8],
     service_data: &[u8],
-) -> Result<Vec<CovSubscription>, Error> {
+) -> Result<Vec<CovSubscriptionSnapshot>, Error> {
     handle_subscribe_cov_property_multiple_with_initial_endpoint(
         table,
         db,
@@ -286,7 +251,7 @@ pub(crate) fn handle_subscribe_cov_property_multiple_with_initial_endpoint(
     source_mac: &[u8],
     source_network: Option<&NpduAddress>,
     service_data: &[u8],
-) -> Result<Vec<CovSubscription>, Error> {
+) -> Result<Vec<CovSubscriptionSnapshot>, Error> {
     use bacnet_services::cov_multiple::SubscribeCOVPropertyMultipleRequest;
 
     let request = SubscribeCOVPropertyMultipleRequest::decode(service_data)?;
@@ -305,8 +270,13 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
     source_mac: &[u8],
     source_network: Option<&NpduAddress>,
     request: bacnet_services::cov_multiple::SubscribeCOVPropertyMultipleRequest,
-) -> Result<Vec<CovSubscription>, Error> {
+) -> Result<Vec<CovSubscriptionSnapshot>, Error> {
     let confirmed = request.issue_confirmed_notifications;
+    let context = MultipleContextKey {
+        endpoint: SubscriberEndpoint::new(source_mac, source_network),
+        process_id: request.subscriber_process_identifier,
+        confirmed,
+    };
     let cancellation = match (request.lifetime, request.max_notification_delay) {
         (None, None) => true,
         (Some(_), Some(_)) => false,
@@ -319,23 +289,16 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
 
     if cancellation {
         if request.list_of_cov_subscription_specifications.is_empty() {
-            table.unsubscribe_cov_multiple_context(
-                source_mac,
-                source_network,
-                request.subscriber_process_identifier,
-                confirmed,
-            );
+            table.unsubscribe_cov_multiple_context(&context);
         } else {
             for spec in &request.list_of_cov_subscription_specifications {
                 for cov_ref in &spec.list_of_cov_references {
-                    table.unsubscribe_cov_multiple_property_at(
-                        source_mac,
-                        source_network,
-                        request.subscriber_process_identifier,
-                        confirmed,
-                        spec.monitored_object_identifier,
-                        cov_ref.monitored_property.property_identifier,
-                    );
+                    table.unsubscribe(&CovSubscriptionKey::Multiple {
+                        context: context.clone(),
+                        object: spec.monitored_object_identifier,
+                        property: cov_ref.monitored_property.property_identifier,
+                        index: cov_ref.monitored_property.property_array_index,
+                    });
                 }
             }
         }
@@ -371,11 +334,9 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
             code: ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32,
         });
     }
-    let expires_at = Some(Instant::now() + Duration::from_secs(lifetime as u64));
+    let expires_at = Instant::now() + Duration::from_secs(u64::from(lifetime));
     let subscriber_mac = MacAddr::from_slice(source_mac);
-    table.purge_expired();
     let mut subscriptions = Vec::new();
-    let mut new_keys = HashSet::new();
 
     for spec in &request.list_of_cov_subscription_specifications {
         let object = db
@@ -398,29 +359,13 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
 
             validate_cov_property(object, property_identifier, property_array_index)?;
 
-            if !table.contains(
-                &subscriber_mac,
-                source_network,
-                request.subscriber_process_identifier,
-                spec.monitored_object_identifier,
-                Some(property_identifier),
-            ) {
-                new_keys.insert((
-                    subscriber_mac.clone(),
-                    source_network.cloned(),
-                    request.subscriber_process_identifier,
-                    spec.monitored_object_identifier,
-                    Some(property_identifier),
-                ));
-            }
-
             let subscription = CovSubscription {
                 subscriber_mac: subscriber_mac.clone(),
                 subscriber_network: source_network.cloned(),
                 subscriber_process_identifier: request.subscriber_process_identifier,
                 monitored_object_identifier: spec.monitored_object_identifier,
                 issue_confirmed_notifications: confirmed,
-                expires_at,
+                expires_at: Some(expires_at),
                 last_notified_value: None,
                 monitored_property: Some(property_identifier),
                 monitored_property_array_index: property_array_index,
@@ -432,33 +377,5 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
         }
     }
 
-    // The subscription table's effective identity does not include array
-    // index or per-reference options. Keep only the last occurrence of each
-    // effective key, matching the table's existing last-write-wins behavior,
-    // so a duplicate-heavy request cannot amplify the initial notification.
-    subscriptions.reverse();
-    let mut unique_subscription_keys = HashSet::new();
-    subscriptions.retain(|subscription| {
-        unique_subscription_keys.insert((
-            subscription.monitored_object_identifier,
-            subscription.monitored_property,
-        ))
-    });
-    subscriptions.reverse();
-
-    let peer_key = CovPeerKey::from_endpoint(&subscriber_mac, source_network);
-    table.check_admission_multiple(&peer_key, new_keys.len(), 0)?;
-
-    table.refresh_cov_multiple_context_lifetime(
-        source_mac,
-        source_network,
-        request.subscriber_process_identifier,
-        confirmed,
-        expires_at,
-    );
-    for subscription in &subscriptions {
-        table.subscribe(subscription.clone());
-    }
-
-    Ok(subscriptions)
+    table.subscribe_multiple(&context, expires_at, subscriptions)
 }

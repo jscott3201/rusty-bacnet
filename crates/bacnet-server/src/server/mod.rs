@@ -57,7 +57,9 @@ use crate::audit_notification::{
     MAX_AUDIT_NOTIFICATIONS, MAX_AUDIT_NOTIFICATION_BYTES,
 };
 pub use crate::cov::{CovCounters, CovPolicy};
-use crate::cov::{CovNotificationKind, CovSubscription, CovSubscriptionTable};
+use crate::cov::{
+    CovNotificationKind, CovSubscription, CovSubscriptionSnapshot, CovSubscriptionTable,
+};
 use crate::handlers;
 use crate::life_safety::{LifeSafetyOperationAuthorizationContext, LifeSafetyOperationAuthorizer};
 use confirmed_request_tracker::{ConfirmedRequestAdmission, ConfirmedRequestTracker};
@@ -842,7 +844,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         self.mutation_decisions.snapshot()
     }
 
-    /// Purge all active COV subscriptions for a peer, deterministically releasing its quota.
+    /// Remove COV subscriptions for the exact immediate MAC and optional routed source.
+    /// Two routers carrying the same remote source remain distinct endpoints. This
+    /// releases only the removed endpoint's contribution to the shared quota group.
     pub async fn remove_peer_subscriptions(
         &self,
         mac: &[u8],
@@ -852,3 +856,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         table.remove_peer_subscriptions(mac, network)
     }
 }
+
+#[cfg(test)]
+mod cov_identity_completion_tests;

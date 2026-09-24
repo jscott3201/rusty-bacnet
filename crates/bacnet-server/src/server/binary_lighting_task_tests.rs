@@ -194,20 +194,25 @@ async fn actual_delayed_elapsed_completes_without_missed_tick_bursting() {
 #[tokio::test(start_paused = true)]
 async fn expiry_fires_one_generic_cov_after_database_lock_release() {
     let (mut server, oid, sent) = start_server(2).await;
-    server.cov_table.write().await.subscribe(CovSubscription {
-        subscriber_mac: MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC1]),
-        subscriber_network: None,
-        subscriber_process_identifier: 7,
-        monitored_object_identifier: oid,
-        issue_confirmed_notifications: false,
-        expires_at: None,
-        last_notified_value: None,
-        monitored_property: None,
-        monitored_property_array_index: None,
-        cov_increment: None,
-        notification_kind: CovNotificationKind::Single,
-        timestamped: false,
-    });
+    server
+        .cov_table
+        .write()
+        .await
+        .subscribe(CovSubscription {
+            subscriber_mac: MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC1]),
+            subscriber_network: None,
+            subscriber_process_identifier: 7,
+            monitored_object_identifier: oid,
+            issue_confirmed_notifications: false,
+            expires_at: None,
+            last_notified_value: None,
+            monitored_property: None,
+            monitored_property_array_index: None,
+            cov_increment: None,
+            notification_kind: CovNotificationKind::Single,
+            timestamped: false,
+        })
+        .unwrap();
 
     write_command(&server, oid, 3, 8).await;
     assert_eq!(sent.lock().unwrap().len(), 1, "accepted-write coarse COV");
@@ -245,20 +250,22 @@ async fn terminal_cov_snapshot_survives_a_later_command_before_delivery() {
                     CovNotificationKind::Multiple,
                 ),
             ] {
-                table.subscribe(CovSubscription {
-                    subscriber_mac: MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, process as u8]),
-                    subscriber_network: None,
-                    subscriber_process_identifier: process,
-                    monitored_object_identifier: oid,
-                    issue_confirmed_notifications: false,
-                    expires_at: None,
-                    last_notified_value: None,
-                    monitored_property: property,
-                    monitored_property_array_index: None,
-                    cov_increment: None,
-                    notification_kind: kind,
-                    timestamped: false,
-                });
+                table
+                    .subscribe(CovSubscription {
+                        subscriber_mac: MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, process as u8]),
+                        subscriber_network: None,
+                        subscriber_process_identifier: process,
+                        monitored_object_identifier: oid,
+                        issue_confirmed_notifications: false,
+                        expires_at: None,
+                        last_notified_value: None,
+                        monitored_property: property,
+                        monitored_property_array_index: None,
+                        cov_increment: None,
+                        notification_kind: kind,
+                        timestamped: false,
+                    })
+                    .unwrap();
             }
         }
 

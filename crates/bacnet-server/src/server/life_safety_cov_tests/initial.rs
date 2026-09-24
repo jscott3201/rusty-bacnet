@@ -121,3 +121,81 @@ mod property_parameters;
 
 #[path = "ordinary_parameters.rs"]
 mod ordinary_parameters;
+
+#[tokio::test]
+async fn initial_single_and_multiple_life_safety_payloads_include_one_status_flags() {
+    let single = subscription(
+        Some(PropertyIdentifier::OPERATION_EXPECTED),
+        CovNotificationKind::Single,
+        1,
+    );
+    let mut multiple = subscription(
+        Some(PropertyIdentifier::SILENCED),
+        CovNotificationKind::Multiple,
+        2,
+    );
+    multiple.subscriber_mac = single.subscriber_mac.clone();
+    let fixture = ExactFixture::new([single.clone(), multiple.clone()]).await;
+    let (single, multiple) = {
+        let table = fixture.cov_table.read().await;
+        (
+            table
+                .get_subscription(&single.key().unwrap())
+                .unwrap()
+                .clone(),
+            table
+                .get_subscription(&multiple.key().unwrap())
+                .unwrap()
+                .clone(),
+        )
+    };
+
+    BACnetServer::<RecordingTransport>::fire_initial_cov_notification(
+        &fixture.db,
+        &fixture.network,
+        &fixture.cov_table,
+        &fixture.cov_in_flight,
+        &fixture.transactions,
+        &fixture.comm_state,
+        &ServerConfig::default(),
+        &single,
+    )
+    .await;
+    BACnetServer::<RecordingTransport>::fire_initial_cov_notification_multiple(
+        &fixture.db,
+        &fixture.network,
+        &fixture.cov_table,
+        &fixture.cov_in_flight,
+        &fixture.transactions,
+        &fixture.comm_state,
+        &ServerConfig::default(),
+        &[multiple],
+    )
+    .await;
+
+    let apdus = fixture.take_apdus();
+    assert_eq!(apdus.len(), 2);
+    assert_eq!(
+        single_properties(&apdus[0]),
+        vec![
+            PropertyIdentifier::OPERATION_EXPECTED,
+            PropertyIdentifier::STATUS_FLAGS,
+        ]
+    );
+    let Apdu::UnconfirmedRequest(request) = &apdus[1] else {
+        panic!("expected unconfirmed multiple notification");
+    };
+    let notification = COVNotificationMultipleRequest::decode(&request.service_request).unwrap();
+    let properties: Vec<_> = notification.list_of_cov_notifications[0]
+        .list_of_values
+        .iter()
+        .map(|value| value.property_identifier)
+        .collect();
+    assert_eq!(
+        properties,
+        vec![
+            PropertyIdentifier::SILENCED,
+            PropertyIdentifier::STATUS_FLAGS,
+        ]
+    );
+}

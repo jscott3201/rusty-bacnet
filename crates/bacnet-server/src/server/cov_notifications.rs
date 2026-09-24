@@ -105,10 +105,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         }
     }
 
-    fn cov_peer(sub: &CovSubscription) -> TsmPeer {
-        (sub.subscriber_mac.clone(), sub.subscriber_network.clone())
-    }
-
     fn canonical_cov_peer(
         sub: &CovSubscription,
     ) -> bacnet_endpoint_core::coordinator::CanonicalPeer {
@@ -309,7 +305,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         notification_transactions: &Arc<NotificationTransactions>,
         comm_state: &Arc<AtomicU8>,
         config: &ServerConfig,
-        subscription: &CovSubscription,
+        subscription: &CovSubscriptionSnapshot,
     ) {
         if comm_state.load(Ordering::Acquire) >= 1 {
             return;
@@ -317,6 +313,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
         let (counters, in_flight_tracker) = {
             let table = cov_table.read().await;
+            if !table.is_current(subscription) {
+                return;
+            }
             (
                 Arc::clone(table.counters()),
                 Arc::clone(table.in_flight_tracker()),
@@ -352,7 +351,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         notification_transactions: &Arc<NotificationTransactions>,
         config: &ServerConfig,
         oid: &ObjectIdentifier,
-        subs: &[CovSubscription],
+        subs: &[CovSubscriptionSnapshot],
         snapshot: Option<&dyn bacnet_objects::traits::BACnetObject>,
         budget: &mut EventBudget,
     ) {
@@ -541,14 +540,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
                 if let Some(pv) = current_pv {
                     let mut table = cov_table.write().await;
-                    table.set_last_notified_value(
-                        &sub.subscriber_mac,
-                        sub.subscriber_network.as_ref(),
-                        sub.subscriber_process_identifier,
-                        sub.monitored_object_identifier,
-                        sub.monitored_property,
-                        pv,
-                    );
+                    table.set_last_notified_value(sub, pv);
                 }
 
                 let network = Arc::clone(network);
@@ -625,14 +617,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     warn!(error = %e, "Failed to send COV notification");
                 } else if let Some(pv) = current_pv {
                     let mut table = cov_table.write().await;
-                    table.set_last_notified_value(
-                        &sub.subscriber_mac,
-                        sub.subscriber_network.as_ref(),
-                        sub.subscriber_process_identifier,
-                        sub.monitored_object_identifier,
-                        sub.monitored_property,
-                        pv,
-                    );
+                    table.set_last_notified_value(sub, pv);
                 }
             }
         }

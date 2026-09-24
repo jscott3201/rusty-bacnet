@@ -98,6 +98,7 @@ fn subscribe_cov_update_existing_entry_allowed_at_capacity() {
     let mut table = CovSubscriptionTable::with_policy(
         CovPolicy {
             reserved_peers: vec![MacAddr::from_slice(&mac)],
+            reserved_capacity: 0,
             ..Default::default()
         },
         std::sync::Arc::new(AtomicCovCounters::default()),
@@ -105,24 +106,33 @@ fn subscribe_cov_update_existing_entry_allowed_at_capacity() {
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
 
     for instance in 0..1023 {
-        table.subscribe(CovSubscription {
-            subscriber_mac: MacAddr::from_slice(&[10, 0, 0, (instance % 255) as u8, 0xBA, 0xC0]),
-            subscriber_network: None,
-            subscriber_process_identifier: instance,
-            monitored_object_identifier: ObjectIdentifier::new(
-                ObjectType::ANALOG_INPUT,
-                1000 + instance,
-            )
-            .unwrap(),
-            issue_confirmed_notifications: false,
-            expires_at: None,
-            last_notified_value: None,
-            monitored_property: None,
-            monitored_property_array_index: None,
-            cov_increment: None,
-            notification_kind: CovNotificationKind::Single,
-            timestamped: false,
-        });
+        table
+            .subscribe(CovSubscription {
+                subscriber_mac: MacAddr::from_slice(&[
+                    10,
+                    0,
+                    0,
+                    (instance % 255) as u8,
+                    0xBA,
+                    0xC0,
+                ]),
+                subscriber_network: None,
+                subscriber_process_identifier: instance,
+                monitored_object_identifier: ObjectIdentifier::new(
+                    ObjectType::ANALOG_INPUT,
+                    1000 + instance,
+                )
+                .unwrap(),
+                issue_confirmed_notifications: false,
+                expires_at: None,
+                last_notified_value: None,
+                monitored_property: None,
+                monitored_property_array_index: None,
+                cov_increment: None,
+                notification_kind: CovNotificationKind::Single,
+                timestamped: false,
+            })
+            .unwrap();
     }
 
     let original = SubscribeCOVRequest {
@@ -406,26 +416,39 @@ fn subscribe_cov_property_multiple_capacity_failure_is_atomic() {
     };
 
     let db = make_db_with_ai();
-    let mut table = CovSubscriptionTable::new();
+    let mut table = CovSubscriptionTable::with_policy(
+        crate::cov::CovPolicy {
+            max_subscriptions_per_peer: 1024,
+            max_indefinite_per_peer: 1024,
+            reserved_capacity: 0,
+            ..Default::default()
+        },
+        std::sync::Arc::new(crate::cov::AtomicCovCounters::default()),
+    );
     let mac = vec![192, 168, 1, 1, 0xBA, 0xC0];
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
 
     for instance in 1000..2023 {
-        table.subscribe(CovSubscription {
-            subscriber_mac: MacAddr::from_slice(&mac),
-            subscriber_network: None,
-            subscriber_process_identifier: 99,
-            monitored_object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, instance)
+        table
+            .subscribe(CovSubscription {
+                subscriber_mac: MacAddr::from_slice(&mac),
+                subscriber_network: None,
+                subscriber_process_identifier: 99,
+                monitored_object_identifier: ObjectIdentifier::new(
+                    ObjectType::ANALOG_INPUT,
+                    instance,
+                )
                 .unwrap(),
-            issue_confirmed_notifications: false,
-            expires_at: None,
-            last_notified_value: None,
-            monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
-            monitored_property_array_index: None,
-            cov_increment: None,
-            notification_kind: CovNotificationKind::Single,
-            timestamped: false,
-        });
+                issue_confirmed_notifications: false,
+                expires_at: None,
+                last_notified_value: None,
+                monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
+                monitored_property_array_index: None,
+                cov_increment: None,
+                notification_kind: CovNotificationKind::Single,
+                timestamped: false,
+            })
+            .unwrap();
     }
     assert_eq!(table.len(), 1023);
 

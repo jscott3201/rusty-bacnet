@@ -13,13 +13,18 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         notification_transactions: &Arc<NotificationTransactions>,
         comm_state: &Arc<AtomicU8>,
         config: &ServerConfig,
-        subscriptions: &[CovSubscription],
+        subscriptions: &[CovSubscriptionSnapshot],
     ) {
-        let (counters, in_flight_tracker) = {
+        let (counters, in_flight_tracker, subscriptions) = {
             let table = cov_table.read().await;
             (
                 Arc::clone(table.counters()),
                 Arc::clone(table.in_flight_tracker()),
+                subscriptions
+                    .iter()
+                    .filter(|sub| table.is_current(sub))
+                    .cloned()
+                    .collect::<Vec<_>>(),
             )
         };
         let mut budget = EventBudget::new(&config.cov_policy);
@@ -34,7 +39,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             comm_state,
             config,
             None,
-            subscriptions,
+            &subscriptions,
             None,
             &mut budget,
         )
@@ -53,7 +58,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         comm_state: &Arc<AtomicU8>,
         config: &ServerConfig,
         changed_oid: Option<&ObjectIdentifier>,
-        subscriptions: &[CovSubscription],
+        subscriptions: &[CovSubscriptionSnapshot],
         snapshot: Option<&dyn bacnet_objects::traits::BACnetObject>,
         budget: &mut EventBudget,
     ) {
@@ -65,7 +70,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             return;
         }
 
-        let mut grouped: HashMap<(TsmPeer, u32, bool), Vec<CovSubscription>> = HashMap::new();
+        let mut grouped: HashMap<crate::cov::MultipleContextKey, Vec<CovSubscriptionSnapshot>> =
+            HashMap::new();
 
         if let Some(oid) = changed_oid {
             let (current_pv, cov_increment) = {
@@ -91,11 +97,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     sub.cov_increment.or(cov_increment),
                 ) {
                     grouped
-                        .entry((
-                            Self::cov_peer(sub),
-                            sub.subscriber_process_identifier,
-                            sub.issue_confirmed_notifications,
-                        ))
+                        .entry(
+                            sub.key()
+                                .multiple_context()
+                                .expect("Multiple snapshot")
+                                .clone(),
+                        )
                         .or_default()
                         .push(sub.clone());
                 }
@@ -103,11 +110,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         } else {
             for sub in subscriptions {
                 grouped
-                    .entry((
-                        Self::cov_peer(sub),
-                        sub.subscriber_process_identifier,
-                        sub.issue_confirmed_notifications,
-                    ))
+                    .entry(
+                        sub.key()
+                            .multiple_context()
+                            .expect("Multiple snapshot")
+                            .clone(),
+                    )
                     .or_default()
                     .push(sub.clone());
             }
@@ -141,7 +149,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         counters: &Arc<AtomicCovCounters>,
         notification_transactions: &Arc<NotificationTransactions>,
         config: &ServerConfig,
-        subscriptions: &[CovSubscription],
+        subscriptions: &[CovSubscriptionSnapshot],
         snapshot: Option<&dyn bacnet_objects::traits::BACnetObject>,
         budget: &mut EventBudget,
     ) {
@@ -215,14 +223,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 if let Ok(PropertyValue::Real(pv)) =
                     object.read_property(PropertyIdentifier::PRESENT_VALUE, None)
                 {
-                    last_notified.push((
-                        sub.subscriber_mac.clone(),
-                        sub.subscriber_network.clone(),
-                        sub.subscriber_process_identifier,
-                        sub.monitored_object_identifier,
-                        sub.monitored_property,
-                        pv,
-                    ));
+                    last_notified.push((sub.clone(), pv));
                 }
 
                 let value = COVNotificationValue {
@@ -329,15 +330,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
             {
                 let mut table = cov_table.write().await;
-                for (mac, network, process_id, object_id, property_id, pv) in &last_notified {
-                    table.set_last_notified_value(
-                        mac,
-                        network.as_ref(),
-                        *process_id,
-                        *object_id,
-                        *property_id,
-                        *pv,
-                    );
+                for (snapshot, pv) in &last_notified {
+                    table.set_last_notified_value(snapshot, *pv);
                 }
             }
 
@@ -416,15 +410,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 warn!(error = %e, "Failed to send COVNotificationMultiple");
             } else {
                 let mut table = cov_table.write().await;
-                for (mac, network, process_id, object_id, property_id, pv) in &last_notified {
-                    table.set_last_notified_value(
-                        mac,
-                        network.as_ref(),
-                        *process_id,
-                        *object_id,
-                        *property_id,
-                        *pv,
-                    );
+                for (snapshot, pv) in &last_notified {
+                    table.set_last_notified_value(snapshot, *pv);
                 }
             }
         }

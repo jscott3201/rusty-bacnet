@@ -116,27 +116,32 @@ fn assert_protocol_error(error: Error, class: ErrorClass, code: ErrorCode) {
 }
 
 async fn subscribe(server: &BACnetServer<RecordingTransport>, oid: ObjectIdentifier) {
-    server.cov_table.write().await.subscribe(CovSubscription {
-        subscriber_mac: MacAddr::from_slice(&[
-            127,
-            0,
-            0,
-            1,
-            0xBA,
-            oid.object_type().to_raw() as u8,
-        ]),
-        subscriber_network: None,
-        subscriber_process_identifier: oid.object_type().to_raw(),
-        monitored_object_identifier: oid,
-        issue_confirmed_notifications: false,
-        expires_at: None,
-        last_notified_value: None,
-        monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
-        monitored_property_array_index: None,
-        cov_increment: None,
-        notification_kind: CovNotificationKind::Single,
-        timestamped: false,
-    });
+    server
+        .cov_table
+        .write()
+        .await
+        .subscribe(CovSubscription {
+            subscriber_mac: MacAddr::from_slice(&[
+                127,
+                0,
+                0,
+                1,
+                0xBA,
+                oid.object_type().to_raw() as u8,
+            ]),
+            subscriber_network: None,
+            subscriber_process_identifier: oid.object_type().to_raw(),
+            monitored_object_identifier: oid,
+            issue_confirmed_notifications: false,
+            expires_at: None,
+            last_notified_value: None,
+            monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
+            monitored_property_array_index: None,
+            cov_increment: None,
+            notification_kind: CovNotificationKind::Single,
+            timestamped: false,
+        })
+        .unwrap();
 }
 
 async fn object_state(

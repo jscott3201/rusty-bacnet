@@ -31,11 +31,11 @@ fn subscribe_cov_lifetime_only_preserves_whole_table_and_quota_before_lookup_or_
     )
     .unwrap()
     .remove(0);
-    let mut expired = finite.clone();
+    let mut expired = (*finite).clone();
     expired.subscriber_mac = MacAddr::from_slice(&[2]);
     expired.subscriber_process_identifier = 99;
     expired.expires_at = Some(Instant::now() - Duration::from_secs(1));
-    table.subscribe(expired.clone());
+    table.subscribe(expired.clone()).unwrap();
     let counters = table.counters().snapshot();
     for target in [object(1), object(999)] {
         for lifetime in [0, 300] {
@@ -52,13 +52,11 @@ fn subscribe_cov_lifetime_only_preserves_whole_table_and_quota_before_lookup_or_
             assert_eq!(table.counters().snapshot(), counters);
             for before in [&finite, &expired] {
                 let after = table
-                    .get_subscription(
-                        &before.subscriber_mac,
-                        None,
-                        before.subscriber_process_identifier,
-                        before.monitored_object_identifier,
-                        None,
-                    )
+                    .get_subscription(&crate::cov::CovSubscriptionKey::Object {
+                        endpoint: crate::cov::SubscriberEndpoint::new(&before.subscriber_mac, None),
+                        process_id: before.subscriber_process_identifier,
+                        object: before.monitored_object_identifier,
+                    })
                     .unwrap();
                 assert_eq!(after.expires_at, before.expires_at);
                 assert_eq!(

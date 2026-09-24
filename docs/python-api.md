@@ -386,6 +386,16 @@ await client.write_property_multiple("192.168.1.100:47808", [
 
 ### COV Subscriptions
 
+The bundled server distinguishes ordinary, Single-property and Multiple-reference
+subscriptions by exact transport/routed endpoint and requested coordinates.
+Ordinary renewal may change confirmed mode; confirmed and unconfirmed Multiple
+contexts coexist independently. Different accepted array indexes stay distinct,
+and exact duplicate Multiple references use the final options once. Stale initial
+or change-notification completion cannot overwrite renewed/recreated entries.
+These server guarantees do not add a Python Single-property API, empty finite
+Multiple contexts, delayed Multiple notifications or broader threshold support.
+See the [COV subscription ledger](conformance/support-summary.md).
+
 #### `subscribe_cov(address, subscriber_process_identifier, monitored_object_identifier, confirmed, lifetime=None)`
 
 `confirmed` explicitly selects notification mode. A `None` or zero lifetime

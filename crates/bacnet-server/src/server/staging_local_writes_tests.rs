@@ -130,20 +130,25 @@ async fn staging_writes_bo_bv_blo_at_priority_skips_wildcard_and_notifies_target
         PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw())
     );
 
-    server.cov_table.write().await.subscribe(CovSubscription {
-        subscriber_mac: MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC1]),
-        subscriber_network: None,
-        subscriber_process_identifier: 1,
-        monitored_object_identifier: targets[1],
-        issue_confirmed_notifications: false,
-        expires_at: None,
-        last_notified_value: None,
-        monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
-        monitored_property_array_index: None,
-        cov_increment: None,
-        notification_kind: CovNotificationKind::Single,
-        timestamped: false,
-    });
+    server
+        .cov_table
+        .write()
+        .await
+        .subscribe(CovSubscription {
+            subscriber_mac: MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC1]),
+            subscriber_network: None,
+            subscriber_process_identifier: 1,
+            monitored_object_identifier: targets[1],
+            issue_confirmed_notifications: false,
+            expires_at: None,
+            last_notified_value: None,
+            monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
+            monitored_property_array_index: None,
+            cov_increment: None,
+            notification_kind: CovNotificationKind::Single,
+            timestamped: false,
+        })
+        .unwrap();
     sent.lock().unwrap().clear();
     server
         .write_local(

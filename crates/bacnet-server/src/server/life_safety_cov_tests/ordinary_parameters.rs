@@ -31,7 +31,11 @@ async fn invalid_renewal(lifetime: u32) {
         .cov_table
         .read()
         .await
-        .get_subscription(&fixture.source_mac, None, 14, point_oid(), None)
+        .get_subscription(&crate::cov::CovSubscriptionKey::Object {
+            endpoint: crate::cov::SubscriberEndpoint::new(&fixture.source_mac, None),
+            process_id: 14,
+            object: point_oid(),
+        })
         .unwrap()
         .clone();
     fixture
@@ -52,7 +56,11 @@ async fn invalid_renewal(lifetime: u32) {
     let table = fixture.cov_table.read().await;
     assert_eq!(table.len(), 1);
     let after = table
-        .get_subscription(&fixture.source_mac, None, 14, point_oid(), None)
+        .get_subscription(&crate::cov::CovSubscriptionKey::Object {
+            endpoint: crate::cov::SubscriberEndpoint::new(&fixture.source_mac, None),
+            process_id: 14,
+            object: point_oid(),
+        })
         .unwrap();
     assert_eq!(after.expires_at, before.expires_at);
     assert_eq!(
