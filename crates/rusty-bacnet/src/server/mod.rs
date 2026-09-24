@@ -165,4 +165,5 @@ mod server_methods {
     mod lifecycle;
     mod registration;
     mod request_admission;
+    mod value_registration;
 }

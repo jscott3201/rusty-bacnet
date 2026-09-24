@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- AV/BV independently optional Audit policy properties, Rust and Python creation-time
+  authoring, and effective target READ/WRITE/CREATE/DELETE filtering. Supported
+  server local writes now share the target observer; physical Input sampling and
+  raw database authoring remain separate. No multi-Reporter or full Audit claim.
+
 - Add Rust/Python endpoint ReadPropertyMultiple through the shared read owner:
   1–64 explicit concrete references, ordered ACK correlation and per-occurrence
   value-free source READ records with one operation/recipient snapshot (#780).

@@ -294,13 +294,6 @@ impl BACnetServer {
         self.push_pending(Box::new(ai))
     }
 
-    /// Add a Binary Value object to the server (before starting).
-    #[pyo3(signature = (instance, name))]
-    fn add_binary_value(&self, instance: u32, name: &str) -> PyResult<()> {
-        let bv = BinaryValueObject::new(instance, name).map_err(to_py_err)?;
-        self.push_pending(Box::new(bv))
-    }
-
     /// Add an Analog Output object to the server (before starting).
     #[pyo3(signature = (instance, name, units=62))]
     fn add_analog_output(&self, instance: u32, name: &str, units: u32) -> PyResult<()> {
@@ -426,13 +419,6 @@ impl BACnetServer {
     // -----------------------------------------------------------------------
     // Pattern A: new(instance, name) — simple two-param constructors
     // -----------------------------------------------------------------------
-
-    /// Add an Analog Value object to the server (before starting).
-    #[pyo3(signature = (instance, name, units=62))]
-    fn add_analog_value(&self, instance: u32, name: &str, units: u32) -> PyResult<()> {
-        let obj = AnalogValueObject::new(instance, name, units).map_err(to_py_err)?;
-        self.push_pending(Box::new(obj))
-    }
 
     /// Add a Command object to the server (before starting).
     #[pyo3(signature = (instance, name))]

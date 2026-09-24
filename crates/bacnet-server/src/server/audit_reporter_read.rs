@@ -54,26 +54,18 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         // operational, other properties configuration, proprietary levels ALL.
         // The mandatory Reporter WRITE bypass does not apply to READ. Target
         // selection still uses the existing Reporter/Monitored_Objects rules.
-        let level = match reporter.read_property(PropertyIdentifier::AUDIT_LEVEL, None) {
-            Ok(PropertyValue::Enumerated(level)) => AuditLevel::from_raw(level),
-            _ => return None,
-        };
-        let operations =
-            match reporter.read_property(PropertyIdentifier::AUDITABLE_OPERATIONS, None) {
-                Ok(PropertyValue::BitString { unused_bits, data }) => {
-                    AuditOperationFlags::from_bacnet(unused_bits, &data).ok()?
-                }
-                _ => return None,
-            };
-        if level == AuditLevel::NONE
-            || (level == AuditLevel::AUDIT_CONFIG
-                && property.is_some_and(|(id, _)| id == PropertyIdentifier::PRESENT_VALUE))
-            || !operations.contains(AuditOperation::READ)
+        let policy = db
+            .get(&target)
+            .map(|object| object.audit_object_policy_internal())
+            .unwrap_or_default()
+            .effective_internal(reporter);
+        if !policy.reports(AuditOperation::READ, property.map(|(id, _)| id), None)
             || !reporter.monitors_object_internal(target)
         {
             return None;
         }
         Some(ReadAuditIntent(PendingWrite {
+            selection: None,
             failure: self.failure_ticket(
                 &status,
                 reporter.confirmed_internal(),
@@ -92,7 +84,7 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
                 operation: AuditOperation::READ,
                 source_comment: None,
                 target_comment: None,
-                invoke_id: Some(self.invoke_id),
+                invoke_id: self.invoke_id,
                 source_user_id: None,
                 source_user_role: None,
                 target_device: BACnetRecipient::Device(device),

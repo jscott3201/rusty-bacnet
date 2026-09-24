@@ -2065,6 +2065,41 @@ or full Audit Reporting/BIBB/BTL conformance. Other source operations, multiple 
 selector semantics, batching/send delay, standalone source ownership and other
 transports remain outside this subset.
 
+
+### Object-owned AV/BV Audit policy
+
+Analog Value and Binary Value support independently optional, writable
+`Audit_Level`, `Auditable_Operations`, and `Audit_Priority_Filter` properties.
+Provision `bacnet_objects::audit::ObjectAuditPolicy` through `set_audit_policy`
+before registration. `None` omits a property; DEFAULT level and
+`AuditPriorityPolicy::Inherit` (a present NULL priority filter) inherit the selected
+Reporter's settings. Metadata and Property_List expose only provisioned rows.
+Both supported objects have commandable Present_Value; their optional priority
+filter applies only to commandable-property writes, not Description or lifecycle
+operations. Provisioning does not install or enable a Reporter.
+
+Target READ/WRITE/CREATE/DELETE use the effective instance policy. The selected
+Reporter's NONE level remains the master suppression boundary. With an enabled
+Reporter, an actual object Audit_Level change is recorded across NONE and despite
+a cleared WRITE bit. Actual Auditable_Operations changes bypass WRITE only while
+the effective object level is enabled. Equal-value and failed writes use ordinary
+filters. Each WPM element captures its pre-state; later elements see committed
+policy. Successful BV CREATE uses the created policy, DELETE captures it before
+removal, and failed CREATE uses Reporter fallback. Network AV creation remains
+unsupported. Source reporting ignores remote object policy.
+
+`BACnetServer::write_local` uses the same target observer, with local Device
+provenance and no invoke ID. Device recipient changes still emit only their
+old/new pair. Physical Input sampling through `set_present_value_local` is silent;
+raw object/database authoring bypasses notification ownership.
+
+The AV/BV object clauses (§12.4 printed185/PDF187; §12.10 printed211/PDF213)
+inherit the Reporter's priority filter when the object row is absent or NULL.
+Generic §19.6.3 (printed820/PDF822) conflicts for the absent case. This bounded
+implementation follows the object-specific clauses; the 2024-04-29 errata does
+not resolve that wording and adds the commandability condition. Other object
+families, multi-Reporter association and broader Audit completion remain open.
+
 ### Target Device Audit recipient
 
 The standalone target profile uses `DeviceObject::provision_audit_recipient` for

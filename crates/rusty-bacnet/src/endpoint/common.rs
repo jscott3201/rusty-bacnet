@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use bacnet_endpoint::identity::{build_database_with_extra, DeviceIdentity};
 use bacnet_objects::analog::{AnalogInputObject, AnalogValueObject};
+use bacnet_objects::audit::ObjectAuditPolicy;
 use bacnet_objects::binary::{BinaryInputObject, BinaryValueObject};
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::traits::BACnetObject;
@@ -172,6 +173,7 @@ pub(crate) enum PendingObject {
         present_value: f32,
     },
     AnalogValue {
+        audit_policy: ObjectAuditPolicy,
         instance: u32,
         name: String,
         units: u32,
@@ -181,6 +183,7 @@ pub(crate) enum PendingObject {
         name: String,
     },
     BinaryValue {
+        audit_policy: ObjectAuditPolicy,
         instance: u32,
         name: String,
     },
@@ -197,12 +200,17 @@ impl PendingObject {
                 present_value,
             } => make_analog_input(*instance, name, *units, *present_value),
             Self::AnalogValue {
+                audit_policy,
                 instance,
                 name,
                 units,
-            } => make_analog_value(*instance, name, *units),
+            } => make_analog_value(*instance, name, *units, *audit_policy),
             Self::BinaryInput { instance, name } => make_binary_input(*instance, name),
-            Self::BinaryValue { instance, name } => make_binary_value(*instance, name),
+            Self::BinaryValue {
+                instance,
+                name,
+                audit_policy,
+            } => make_binary_value(*instance, name, *audit_policy),
         }
     }
 }
@@ -281,8 +289,10 @@ pub(crate) fn make_analog_value(
     instance: u32,
     name: &str,
     units: u32,
+    audit_policy: ObjectAuditPolicy,
 ) -> PyResult<Box<dyn BACnetObject>> {
-    let object = AnalogValueObject::new(instance, name, units).map_err(to_py_err)?;
+    let mut object = AnalogValueObject::new(instance, name, units).map_err(to_py_err)?;
+    object.set_audit_policy(audit_policy);
     Ok(Box::new(object))
 }
 
@@ -293,7 +303,12 @@ pub(crate) fn make_binary_input(instance: u32, name: &str) -> PyResult<Box<dyn B
 }
 
 /// Create a pending Binary Value object.
-pub(crate) fn make_binary_value(instance: u32, name: &str) -> PyResult<Box<dyn BACnetObject>> {
-    let object = BinaryValueObject::new(instance, name).map_err(to_py_err)?;
+pub(crate) fn make_binary_value(
+    instance: u32,
+    name: &str,
+    audit_policy: ObjectAuditPolicy,
+) -> PyResult<Box<dyn BACnetObject>> {
+    let mut object = BinaryValueObject::new(instance, name).map_err(to_py_err)?;
+    object.set_audit_policy(audit_policy);
     Ok(Box::new(object))
 }

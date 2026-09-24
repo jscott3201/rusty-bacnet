@@ -1547,13 +1547,45 @@ Broader source/bounds evidence remains the existing Rust
 Reporter suites, not independent interoperability qualification.
 
 Recipient changes through the active Device property also support local and
-network writes with atomic old/new notification admission. Ordinary direct local
-writes remain outside the target producer. No per-object overrides, other dynamic
-configuration, multi-Reporter arbitration, Python callbacks, payload-origin
+network writes with atomic old/new notification admission. Rust's supported
+`write_local` operation also shares the target observer; raw database authoring
+and physical Input sampling remain outside it. AV/BV policy rows are described
+below. No other dynamic configuration, multi-Reporter arbitration, Python callbacks, payload-origin
 verification, source-side reporting, ordinary sample/event production,
 WriteGroup expansion or batching,
 Maximum_Send_Delay/Send_Now, durability, full Reporter/Audit/BIBB/BTL/certification,
 independent interop or #345 closure is claimed.
+
+#### Object-owned AV/BV Audit policy
+
+`BACnetServer`, `BipEndpoint`, `ScEndpoint`, and `MstpEndpoint` accept three
+creation-time keyword arguments on `add_analog_value` and `add_binary_value`:
+
+- `audit_level`: `None` (absent), `"default"`, `"none"`, `"audit_config"`, or `"audit_all"`.
+- `auditable_operations`: `None` (absent) or a u64 operation mask. Reserved bits 16–31 are rejected.
+- `audit_priority_filter`: `None` (absent), `"inherit"` (present BACnet NULL), or a 16-bit mask. Bit 0 selects priority 1.
+
+Validation occurs before registration, with no I/O. Invalid names/ranges raise
+ValueError; noninteger masks, including bool, raise TypeError. Endpoint pending
+registrations retain the typed policy across their existing startup retry paths.
+These options provision readable optional rows; they do not enable an endpoint
+target Reporter or broaden its executing service set. The standalone target
+Reporter uses the object overrides for READ/WRITE/CREATE/DELETE; its NONE setting
+remains the master suppression boundary. Network writes can change provisioned
+rows, but cannot add an absent row. Source reporting ignores remote object policy.
+
+```python
+server.add_analog_value(7, "Setpoint", audit_level="default",
+                        auditable_operations=0b11, audit_priority_filter="inherit")
+server.add_binary_value(8, "Enable", audit_level="audit_config")
+```
+
+Actual Audit_Level changes bypass the object's own NONE/WRITE suppression under
+an enabled Reporter; actual Auditable_Operations changes bypass WRITE while the
+effective level is enabled. Equal-value and failed writes retain ordinary filters.
+AV/BV absent/NULL priority filters inherit the Reporter under the object-specific
+clauses, despite conflicting generic wording. See the [Rust policy contract](rust-api.md#object-owned-avbv-audit-policy)
+for the interpretation, WPM/local-write behavior, and bounded lifecycle support.
 
 #### Building Control
 

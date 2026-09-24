@@ -39,6 +39,10 @@ pub enum PropertyPresenceCondition {
     IntrinsicReporting,
     /// Audit Reporting is active, making its recipient required and writable.
     AuditReporting,
+    /// An optional object-owned Audit setting is provisioned.
+    ObjectAuditReporting,
+    /// An optional Audit priority filter on a commandable reporting object.
+    CommandableAuditReporting,
     /// The paired Active_Text and Inactive_Text option is implemented.
     PairedText,
 }

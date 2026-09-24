@@ -1,4 +1,5 @@
 use super::*;
+use crate::handlers::{WriteCommitObserver, WriteTarget};
 use bacnet_objects::staging::StagingWritePlan;
 
 #[cfg(test)]
@@ -15,8 +16,8 @@ mod staging_local_writes_tests;
 /// for the two, so this decides which check applies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LocalWrite {
-    /// A client on the network, writing any property.
-    Network {
+    /// A trusted local program performing a network-equivalent property write.
+    Property {
         property: PropertyIdentifier,
         array_index: Option<u32>,
         priority: Option<u8>,
@@ -66,7 +67,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     }
 
     /// Write a property on a local object and fire the same post-write COV
-    /// and event notifications that a network [`WriteProperty`] does.
+    /// and event notifications that a network [`WriteProperty`] does. When target
+    /// Audit reporting is configured, the same observer records eligible local
+    /// writes with local Device provenance and no invoke ID; Device recipient
+    /// changes retain their sole old/new pair owner.
     ///
     /// This is the server-owned local-mutation entry point: it performs the
     /// write under the database lock — routing `OBJECT_NAME` through the name
@@ -86,7 +90,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     ) -> Result<(), Error> {
         self.write_local_as(
             oid,
-            LocalWrite::Network {
+            LocalWrite::Property {
                 property,
                 array_index,
                 priority,
@@ -126,11 +130,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         write: LocalWrite,
         value: PropertyValue,
     ) -> Result<(), Error> {
-        // Only a network write can carry OBJECT_NAME, so only it needs the name
+        // Only a property write can carry OBJECT_NAME, so only it needs the name
         // index kept in step.
         let renaming = matches!(
             write,
-            LocalWrite::Network { property, .. } if property == PropertyIdentifier::OBJECT_NAME
+            LocalWrite::Property { property, .. } if property == PropertyIdentifier::OBJECT_NAME
         );
         let life_safety = crate::life_safety_cov::is_life_safety_object(*oid);
         let (exact_changes, staging_plans) = {
@@ -147,16 +151,66 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     db.check_name_available(oid, new_name)?;
                 }
             }
-            let object = db.get_mut(oid).expect("existence checked above");
-            match write {
-                LocalWrite::Network {
+            let mut audit = match write {
+                LocalWrite::Property {
                     property,
                     array_index,
                     priority,
-                } => object.write_property(property, array_index, value, priority)?,
-                LocalWrite::ApplicationInputPresentValue => {
-                    object.set_present_value_internal(value)?
+                } => {
+                    // Device's recipient sink exclusively owns the old/new pair.
+                    let recipient_sink = property
+                        == PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT
+                        && db
+                            .get_mut(oid)
+                            .and_then(|object| object.device_authority_internal())
+                            .is_some();
+                    if recipient_sink {
+                        None
+                    } else {
+                        let mut audit = audit_reporter::WriteAudit::local(
+                            &self.config,
+                            &self.network,
+                            &self.notification_transactions,
+                            &self.comm_state,
+                            &db,
+                        );
+                        let encoded = audit_reporter::small_value(&value).unwrap_or_default();
+                        if let Some(audit) = &mut audit {
+                            audit.before(
+                                &db,
+                                WriteTarget {
+                                    oid: *oid,
+                                    property,
+                                    array_index,
+                                    priority,
+                                    value: &encoded,
+                                },
+                            );
+                        }
+                        audit
+                    }
                 }
+                LocalWrite::ApplicationInputPresentValue => None,
+            };
+            let object = db.get_mut(oid).expect("existence checked above");
+            let result = match write {
+                LocalWrite::Property {
+                    property,
+                    array_index,
+                    priority,
+                } => object.write_property(property, array_index, value, priority),
+                LocalWrite::ApplicationInputPresentValue => {
+                    object.set_present_value_internal(value)
+                }
+            };
+            if let Err(error) = result {
+                if let Some(audit) = &mut audit {
+                    audit.failed(&mut db, &error);
+                }
+                return Err(error);
+            }
+            if let Some(audit) = &mut audit {
+                audit.committed(&mut db);
             }
             if renaming {
                 db.update_name_index(oid);

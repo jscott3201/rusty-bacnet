@@ -324,6 +324,7 @@ impl Request<'_> {
                     bacnet_types::enums::AuditOperation::CREATE,
                     target,
                     kind,
+                    result.is_ok(),
                 );
                 audit.lifecycle_completed(&mut db, &result);
             }
@@ -362,6 +363,7 @@ impl Request<'_> {
                     bacnet_types::enums::AuditOperation::DELETE,
                     Some(oid),
                     oid.object_type(),
+                    true,
                 );
             }
             let result = handlers::handle_delete_object(&mut db, &self.req.service_request);
