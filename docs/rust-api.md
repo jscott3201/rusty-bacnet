@@ -1275,9 +1275,47 @@ Already admitted confirmed notifications retain their APDU and retry/ACK lifecyc
 only the exact immediate endpoint plus routed source. `CovPeerKey` continues to
 group quota/rate accounting and does not authorize cross-router cleanup.
 
-This identity contract does not add empty finite Multiple contexts, delayed
-Multiple notifications, live Device subscription-property projection or broader
-property-specific COV threshold support.
+Property subscriptions now prepare one selected-coordinate `CovSample` for comparison,
+wire payload and fenced baseline completion; a failed selected read or encoding
+never substitutes Present_Value. The pre-1.0 table API replaces the float baseline
+with `last_notified_sample: Option<CovSample>` and
+`set_last_notified_sample(snapshot, sample)`. `CovSample::new(&value)` is fallible;
+its private immutable storage is normalized and shared by snapshot clones. It
+bounds retention before copying/recursive encoding to 32 nested List levels
+(root List is level 1), 1,024 nodes including empty Lists, and 65,536 scalar/raw
+payload bytes. These local caps remain active under `CovPolicy::unlimited()`;
+they do not constrain allocations inside a custom object's read callback.
+Admission-time overflow returns RESOURCES/NO_SPACE_TO_ADD_LIST_ELEMENT before
+replacement/context refresh. A later unavailable or oversized value is skipped
+without advancing its baseline. Independent notification traffic budgets remain.
+
+The selected local property profile compares Real, Double, Signed and Unsigned
+values in their own types. Only numeric Present_Value inherits the object's
+COV_Increment when omitted; other numeric coordinates without an increment report
+actual value changes. Integer deltas remain exact, including large Unsigned64
+values. Actual array index zero reports count changes and ignores increments.
+Positive numeric slots use their own delta; Null and numeric-type transitions
+report without coercion. Structured non-array values and reviewed whole
+Property_List, Priority_Array, State_Text, Event_Time_Stamps and
+Event_Message_Texts coordinates use typed structural equality and ignore
+increments. Support follows the reviewed object/property matrix, not the current
+numeric appearance of List children. Unclassified whole arrays are refused with
+PROPERTY/NOT_COV_PROPERTY whether an increment is present or absent. Indexed
+non-arrays that pass existing read validation return PROPERTY_IS_NOT_AN_ARRAY.
+
+For matching finite numeric values, nonpositive increments (including negative
+infinity) remain eligible on observation; NaN and positive infinity increments
+do not trigger numeric deltas. Initial reporting and type transitions still
+report. Same-type nonfinite samples compare IEEE bits; identical NaN payloads and
+infinities are stable. Structural equality also preserves float bits, while finite
+numeric signed zeros compare equal. These are explicit local exceptional-value
+policies, not Standard-prescribed arithmetic. Existing ordinary whole-object
+triggers, Life Safety status-change triggers and confirmed-admission versus
+unconfirmed-success baseline timing are preserved.
+
+This profile does not add empty finite Multiple contexts, delayed Multiple
+notifications, live Device subscription-property projection, general numeric
+whole-array reduction or broader Status_Flags observation.
 
 
 ```rust

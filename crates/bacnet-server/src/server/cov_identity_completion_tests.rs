@@ -51,7 +51,10 @@ fn proposal(
         monitored_object_identifier: object(),
         issue_confirmed_notifications: confirmed,
         expires_at: None,
-        last_notified_value: Some(1.0),
+        last_notified_sample: Some(
+            crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(1.0))
+                .unwrap(),
+        ),
         monitored_property: Some(property),
         monitored_property_array_index: None,
         cov_increment: Some(0.1),
@@ -215,7 +218,10 @@ async fn stale_completion(
         }
         if !matches!(change, Change::Remove) {
             let mut renewed = original;
-            renewed.last_notified_value = Some(99.0);
+            renewed.last_notified_sample = Some(
+                crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(99.0))
+                    .unwrap(),
+            );
             table.subscribe(renewed).unwrap();
         }
     }
@@ -229,15 +235,18 @@ async fn stale_completion(
         if matches!(change, Change::Remove) {
             assert!(table.get_subscription(snapshots[0].key()).is_none());
         } else {
-            assert_eq!(table.get_subscription(snapshots[0].key()).unwrap().last_notified_value,Some(99.0),"stale completion initial={initial} kind={kind:?} confirmed={confirmed} change={change:?}");
+            assert_eq!(table.get_subscription(snapshots[0].key()).unwrap().last_notified_sample,Some(crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(99.0)).unwrap()),"stale completion initial={initial} kind={kind:?} confirmed={confirmed} change={change:?}");
         }
         if kind == CovNotificationKind::Multiple {
             assert_eq!(
                 table
                     .get_subscription(snapshots[1].key())
                     .unwrap()
-                    .last_notified_value,
-                Some(10.0),
+                    .last_notified_sample,
+                Some(
+                    crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(0.0))
+                        .unwrap()
+                ),
                 "each reference retains its own generation"
             );
         }
@@ -276,3 +285,7 @@ async fn cov_identity_held_fanout_completion_fences_each_reference_and_mode() {
 }
 
 mod lifetime;
+
+mod property_samples;
+
+mod sample_contract;

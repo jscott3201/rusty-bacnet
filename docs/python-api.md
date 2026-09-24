@@ -398,8 +398,18 @@ stale ownership at the final eligibility check cannot admit a new notification.
 This does not retract bytes if cancellation races afterward. A Multiple context-only renewal
 uses its current deadline, and each retained value must have its own live owner.
 An already admitted confirmed notification continues its retry/ACK lifecycle.
+Bundled server property subscriptions compare their selected value, using the same
+validated sample for payload and baseline; failed reads never substitute
+Present_Value. Numeric Present_Value alone inherits the object's increment;
+other numeric properties without one report changes. Count coordinates and
+supported structured/whole-array values ignore increments. Unclassified whole
+arrays are refused regardless of increment presence. Retained samples have local
+32-level / 1,024-node / 65,536-payload-byte caps, independent of traffic budgets;
+admission overflow preserves existing subscriptions, and later overflow skips the
+sample. See the [Rust selected-property profile](rust-api.md#cov-subscriptions)
+for exact type, exceptional-number and shape policies.
 These server guarantees do not add a Python Single-property API, empty finite
-Multiple contexts, delayed Multiple notifications or broader threshold support.
+Multiple contexts, delayed Multiple notifications or general numeric-array reduction.
 See the [COV subscription ledger](conformance/support-summary.md).
 
 #### `subscribe_cov(address, subscriber_process_identifier, monitored_object_identifier, confirmed, lifetime=None)`

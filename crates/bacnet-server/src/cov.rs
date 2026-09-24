@@ -14,7 +14,10 @@ use bacnet_types::MacAddr;
 mod identity;
 pub use identity::*;
 mod admission;
+mod sample;
+pub use sample::CovSample;
 mod lifetime;
+pub(crate) mod prepare;
 pub use lifetime::CovTimeRemaining;
 
 mod policy;
@@ -42,9 +45,8 @@ pub struct CovSubscription {
     pub issue_confirmed_notifications: bool,
     /// When this subscription expires (None = infinite lifetime).
     pub expires_at: Option<Instant>,
-    /// Last present_value for which a COV notification was sent.
-    /// Used with COV_Increment to decide whether to fire again.
-    pub last_notified_value: Option<f32>,
+    /// Last validated selected sample (Present_Value for an ordinary object subscription).
+    pub last_notified_sample: Option<CovSample>,
     /// Monitored property for Single-property and Multiple-reference subscriptions.
     pub monitored_property: Option<PropertyIdentifier>,
     /// Accepted property index; absent, zero and element indexes are independent.
@@ -279,10 +281,10 @@ impl CovSubscriptionTable {
     }
 
     /// Complete only the captured generation, never a renewal or recreated entry.
-    pub fn set_last_notified_value(
+    pub fn set_last_notified_sample(
         &mut self,
         snapshot: &CovSubscriptionSnapshot,
-        value: f32,
+        value: CovSample,
     ) -> bool {
         if !self.is_current(snapshot) {
             return false;
@@ -291,30 +293,31 @@ impl CovSubscriptionTable {
             .get_mut(snapshot.key())
             .unwrap()
             .subscription
-            .last_notified_value = Some(value);
+            .last_notified_sample = Some(value);
         true
     }
 
-    /// Check if a COV notification should fire for a subscription given
-    /// the current present_value and the object's COV_Increment.
-    ///
-    /// Returns `true` if:
-    /// - No COV_Increment (binary/multi-state objects — always notify)
-    /// - No previous notified value (first notification)
-    /// - `|current - last_notified| >= cov_increment`
+    /// Ordinary whole-object trigger policy: preserve its Real PV increment gate.
+    /// Property subscriptions compare their prepared selected sample instead.
     pub fn should_notify(
         sub: &CovSubscription,
-        current_value: Option<f32>,
+        current_value: Option<&CovSample>,
         cov_increment: Option<f32>,
     ) -> bool {
         match (cov_increment, current_value) {
             (Some(increment), Some(current)) => {
-                match sub.last_notified_value {
-                    None => true, // First notification — always fire
-                    Some(last) => (current - last).abs() >= increment,
+                match (
+                    current.value(),
+                    sub.last_notified_sample.as_ref().map(CovSample::value),
+                ) {
+                    (
+                        bacnet_types::primitives::PropertyValue::Real(current),
+                        Some(bacnet_types::primitives::PropertyValue::Real(last)),
+                    ) => (current - last).abs() >= increment,
+                    _ => true,
                 }
             }
-            _ => true, // No increment or no numeric value — always notify
+            _ => true,
         }
     }
 

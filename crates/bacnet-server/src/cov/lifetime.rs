@@ -111,7 +111,7 @@ mod tests {
             .unwrap(),
             issue_confirmed_notifications: false,
             expires_at: Some(now + Duration::from_secs(1)),
-            last_notified_value: None,
+            last_notified_sample: None,
             monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
             monitored_property_array_index: None,
             cov_increment: None,

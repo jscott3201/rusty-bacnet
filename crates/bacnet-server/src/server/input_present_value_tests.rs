@@ -134,7 +134,7 @@ async fn subscribe(server: &BACnetServer<RecordingTransport>, oid: ObjectIdentif
             monitored_object_identifier: oid,
             issue_confirmed_notifications: false,
             expires_at: None,
-            last_notified_value: None,
+            last_notified_sample: None,
             monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
             monitored_property_array_index: None,
             cov_increment: None,

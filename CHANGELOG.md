@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Property COV now compares and sends one typed selected-value sample (#810),
+  without Present_Value fallback on a failed read. Numeric, count, nullable-slot
+  and reviewed structured/whole-array profiles have explicit comparison rules;
+  unclassified whole arrays are refused independently of increment presence.
+  Validated immutable samples cap retained depth/nodes/payload bytes and share
+  normalized storage across accepted snapshots. This pre-1.0 API change replaces
+  the float baseline with `CovSample` and `set_last_notified_sample`; all callers
+  migrate directly. Existing lifetime/generation fences and ordinary-object and
+  Life Safety status triggers remain in force.
+
 - Owned finite COV notifications no longer round a live subsecond remainder to
   indefinite zero (#819). One supplied-time projection rounds positive finite
   durations upward and saturates the wire range, keeping expiry distinct.

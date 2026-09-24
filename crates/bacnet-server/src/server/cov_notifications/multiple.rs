@@ -41,6 +41,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             None,
             &subscriptions,
             None,
+            true,
             &mut budget,
         )
         .await;
@@ -60,6 +61,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         changed_oid: Option<&ObjectIdentifier>,
         subscriptions: &[CovSubscriptionSnapshot],
         snapshot: Option<&dyn bacnet_objects::traits::BACnetObject>,
+        force: bool,
         budget: &mut EventBudget,
     ) {
         if comm_state.load(Ordering::Acquire) >= 1 || subscriptions.is_empty() {
@@ -73,52 +75,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let mut grouped: HashMap<crate::cov::MultipleContextKey, Vec<CovSubscriptionSnapshot>> =
             HashMap::new();
 
-        if let Some(oid) = changed_oid {
-            let (current_pv, cov_increment) = {
-                let db = db.read().await;
-                let object = match snapshot.or_else(|| db.get(oid)) {
-                    Some(object) => object,
-                    None => return,
-                };
-
-                let current_pv = match object.read_property(PropertyIdentifier::PRESENT_VALUE, None)
-                {
-                    Ok(PropertyValue::Real(value)) => Some(value),
-                    _ => None,
-                };
-
-                (current_pv, object.cov_increment())
-            };
-
-            for sub in subscriptions {
-                if CovSubscriptionTable::should_notify(
-                    sub,
-                    current_pv,
-                    sub.cov_increment.or(cov_increment),
-                ) {
-                    grouped
-                        .entry(
-                            sub.key()
-                                .multiple_context()
-                                .expect("Multiple snapshot")
-                                .clone(),
-                        )
-                        .or_default()
-                        .push(sub.clone());
-                }
-            }
-        } else {
-            for sub in subscriptions {
-                grouped
-                    .entry(
-                        sub.key()
-                            .multiple_context()
-                            .expect("Multiple snapshot")
-                            .clone(),
-                    )
-                    .or_default()
-                    .push(sub.clone());
-            }
+        for sub in subscriptions {
+            grouped
+                .entry(
+                    sub.key()
+                        .multiple_context()
+                        .expect("Multiple snapshot")
+                        .clone(),
+                )
+                .or_default()
+                .push(sub.clone());
         }
 
         for subs in grouped.values() {
@@ -133,6 +99,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 config,
                 subs,
                 snapshot,
+                force || changed_oid.is_none(),
                 budget,
             )
             .await;
@@ -151,6 +118,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         config: &ServerConfig,
         subscriptions: &[CovSubscriptionSnapshot],
         snapshot: Option<&dyn bacnet_objects::traits::BACnetObject>,
+        force: bool,
         budget: &mut EventBudget,
     ) {
         if subscriptions.is_empty() {
@@ -193,23 +161,27 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 else {
                     continue;
                 };
-                let mut value_buf = BytesMut::new();
-                if encode_property_value(&mut value_buf, &property_value).is_err() {
+                let Ok(prepared) = crate::cov::prepare::prepare_value(
+                    object,
+                    property_identifier,
+                    sub.monitored_property_array_index,
+                    sub.cov_increment,
+                    &property_value,
+                ) else {
+                    continue;
+                };
+                if !force && !prepared.reports(sub.last_notified_sample.as_ref()) {
                     continue;
                 }
-                let baseline = match object.read_property(PropertyIdentifier::PRESENT_VALUE, None) {
-                    Ok(PropertyValue::Real(pv)) => Some(pv),
-                    _ => None,
-                };
                 candidates.push((
                     sub,
                     COVNotificationValue {
                         property_identifier,
                         property_array_index: sub.monitored_property_array_index,
-                        value: value_buf.to_vec(),
+                        value: prepared.encoded,
                         time_of_change: None,
                     },
-                    baseline,
+                    prepared.sample,
                 ));
             }
 
@@ -255,9 +227,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     .timestamped
                     .then(|| timestamp.map(|(_, time)| time))
                     .flatten();
-                if let Some(pv) = baseline {
-                    last_notified.push((sub.clone(), pv));
-                }
+                last_notified.push((sub.clone(), baseline));
                 retained_subscriptions.push(sub.clone());
                 if let Some(item) = items.iter_mut().find(|item| {
                     item.monitored_object_identifier == sub.monitored_object_identifier
@@ -364,7 +334,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             {
                 let mut table = cov_table.write().await;
                 for (snapshot, pv) in &last_notified {
-                    table.set_last_notified_value(snapshot, *pv);
+                    table.set_last_notified_sample(snapshot, pv.clone());
                 }
             }
 
@@ -444,7 +414,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             } else {
                 let mut table = cov_table.write().await;
                 for (snapshot, pv) in &last_notified {
-                    table.set_last_notified_value(snapshot, *pv);
+                    table.set_last_notified_sample(snapshot, pv.clone());
                 }
             }
         }

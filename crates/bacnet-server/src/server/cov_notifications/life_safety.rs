@@ -66,6 +66,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 Some(oid),
                 &multiple_subs,
                 None,
+                status_changed,
                 &mut budget,
             )
             .await;
@@ -82,6 +83,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 oid,
                 &single_subs,
                 None,
+                status_changed,
                 &mut budget,
             )
             .await;
@@ -106,6 +108,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     oid,
                     &single_subs,
                     None,
+                    status_changed,
                     &mut first_budget,
                 )
                 .await;
@@ -124,6 +127,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     Some(oid),
                     &multiple_subs,
                     None,
+                    status_changed,
                     &mut budget,
                 )
                 .await;
@@ -141,6 +145,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     Some(oid),
                     &multiple_subs,
                     None,
+                    status_changed,
                     &mut first_budget,
                 )
                 .await;
@@ -158,6 +163,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     oid,
                     &single_subs,
                     None,
+                    status_changed,
                     &mut budget,
                 )
                 .await;
@@ -211,14 +217,12 @@ pub(super) fn single_property_values(
     object: &dyn bacnet_objects::traits::BACnetObject,
     property: PropertyIdentifier,
     array_index: Option<u32>,
+    encoded: Vec<u8>,
 ) -> Option<Vec<BACnetPropertyValue>> {
-    let property_value = object.read_property(property, array_index).ok()?;
-    let mut value_buf = BytesMut::new();
-    encode_property_value(&mut value_buf, &property_value).ok()?;
     let mut values = vec![BACnetPropertyValue {
         property_identifier: property,
         property_array_index: array_index,
-        value: value_buf.to_vec(),
+        value: encoded,
         priority: None,
     }];
     if crate::life_safety_cov::is_life_safety_object(object.object_identifier())

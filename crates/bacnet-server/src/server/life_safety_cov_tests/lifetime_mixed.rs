@@ -209,7 +209,7 @@ async fn mixed_case(initial: bool, confirmed: bool, retain_value: bool) {
         assert!(table
             .get_subscription(&b_key)
             .unwrap()
-            .last_notified_value
+            .last_notified_sample
             .is_none());
     }
     fixture.transactions.close();

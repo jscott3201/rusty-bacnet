@@ -393,7 +393,9 @@ pub trait BACnetObject: Send + Sync {
     ///
     /// Returns `Some(increment)` for objects that use COV_Increment filtering
     /// (e.g., AnalogInput, AnalogOutput, AnalogValue). A notification fires only
-    /// when `|current_value - last_notified_value| >= increment`.
+    /// when the numeric Present_Value delta reaches the increment. Property COV
+    /// inherits this increment only for numeric Present_Value; other selected
+    /// properties use their own supplied increment or typed change reporting.
     ///
     /// Returns `None` for objects that notify on any state change (binary, multi-state).
     fn cov_increment(&self) -> Option<f32> {

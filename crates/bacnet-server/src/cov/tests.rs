@@ -18,7 +18,7 @@ fn make_sub(mac: &[u8], process_id: u32, oid: ObjectIdentifier) -> CovSubscripti
         monitored_object_identifier: oid,
         issue_confirmed_notifications: false,
         expires_at: None,
-        last_notified_value: None,
+        last_notified_sample: None,
         monitored_property: None,
         monitored_property_array_index: None,
         cov_increment: None,
@@ -67,16 +67,26 @@ fn multiple_subscribers_same_object() {
 fn should_notify_no_increment_always_fires() {
     let sub = make_sub(&[1, 2, 3], 1, ai1());
     // Binary/multi-state objects have no COV_Increment
-    assert!(CovSubscriptionTable::should_notify(&sub, Some(1.0), None));
+    assert!(CovSubscriptionTable::should_notify(
+        &sub,
+        Some(
+            &crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(1.0))
+                .unwrap()
+        ),
+        None
+    ));
 }
 
 #[test]
 fn should_notify_first_notification_always_fires() {
     let sub = make_sub(&[1, 2, 3], 1, ai1());
-    // First notification (last_notified_value = None)
+    // First notification (last_notified_sample = None)
     assert!(CovSubscriptionTable::should_notify(
         &sub,
-        Some(72.5),
+        Some(
+            &crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(72.5))
+                .unwrap()
+        ),
         Some(1.0)
     ));
 }
@@ -84,11 +94,16 @@ fn should_notify_first_notification_always_fires() {
 #[test]
 fn should_notify_change_exceeds_increment() {
     let mut sub = make_sub(&[1, 2, 3], 1, ai1());
-    sub.last_notified_value = Some(70.0);
+    sub.last_notified_sample = Some(
+        crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(70.0)).unwrap(),
+    );
     // Change of 2.5 >= increment of 1.0
     assert!(CovSubscriptionTable::should_notify(
         &sub,
-        Some(72.5),
+        Some(
+            &crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(72.5))
+                .unwrap()
+        ),
         Some(1.0)
     ));
 }
@@ -96,11 +111,16 @@ fn should_notify_change_exceeds_increment() {
 #[test]
 fn should_notify_change_below_increment() {
     let mut sub = make_sub(&[1, 2, 3], 1, ai1());
-    sub.last_notified_value = Some(72.0);
+    sub.last_notified_sample = Some(
+        crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(72.0)).unwrap(),
+    );
     // Change of 0.3 < increment of 1.0
     assert!(!CovSubscriptionTable::should_notify(
         &sub,
-        Some(72.3),
+        Some(
+            &crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(72.3))
+                .unwrap()
+        ),
         Some(1.0)
     ));
 }
@@ -108,11 +128,16 @@ fn should_notify_change_below_increment() {
 #[test]
 fn should_notify_exact_increment() {
     let mut sub = make_sub(&[1, 2, 3], 1, ai1());
-    sub.last_notified_value = Some(70.0);
+    sub.last_notified_sample = Some(
+        crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(70.0)).unwrap(),
+    );
     // Change of exactly 1.0 == increment of 1.0 → fires
     assert!(CovSubscriptionTable::should_notify(
         &sub,
-        Some(71.0),
+        Some(
+            &crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(71.0))
+                .unwrap()
+        ),
         Some(1.0)
     ));
 }
@@ -120,23 +145,37 @@ fn should_notify_exact_increment() {
 #[test]
 fn should_notify_zero_increment_always_fires() {
     let mut sub = make_sub(&[1, 2, 3], 1, ai1());
-    sub.last_notified_value = Some(72.0);
+    sub.last_notified_sample = Some(
+        crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(72.0)).unwrap(),
+    );
     // COV_Increment = 0.0 means any change fires
     assert!(CovSubscriptionTable::should_notify(
         &sub,
-        Some(72.001),
+        Some(
+            &crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(72.001))
+                .unwrap()
+        ),
         Some(0.0)
     ));
 }
 
 #[test]
-fn set_last_notified_value_updates() {
+fn set_last_notified_sample_updates() {
     let mut table = CovSubscriptionTable::new();
     let snapshot = table.subscribe(make_sub(&[1, 2, 3], 1, ai1())).unwrap();
-    table.set_last_notified_value(&snapshot, 72.5);
+    table.set_last_notified_sample(
+        &snapshot,
+        crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(72.5)).unwrap(),
+    );
 
     let subs = table.subscriptions_for(&ai1());
-    assert_eq!(subs[0].last_notified_value, Some(72.5));
+    assert_eq!(
+        subs[0].last_notified_sample,
+        Some(
+            crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(72.5))
+                .unwrap()
+        )
+    );
 }
 
 #[test]

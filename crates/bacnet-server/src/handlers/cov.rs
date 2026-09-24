@@ -15,16 +15,17 @@ fn validate_cov_property(
     let zone_tracking_deferred = object.object_identifier().object_type()
         == ObjectType::LIFE_SAFETY_ZONE
         && property == PropertyIdentifier::TRACKING_VALUE;
-    if object.read_property(property, array_index).is_err() {
-        return Err(cov_property_error(if zone_tracking_deferred {
+    let value = object.read_property(property, array_index).map_err(|_| {
+        cov_property_error(if zone_tracking_deferred {
             ErrorCode::NOT_COV_PROPERTY
         } else {
             ErrorCode::UNKNOWN_PROPERTY
-        }));
-    }
+        })
+    })?;
     if !object.supports_cov_property(property) {
         return Err(cov_property_error(ErrorCode::NOT_COV_PROPERTY));
     }
+    crate::cov::prepare::validate_sample(object, property, array_index, &value)?;
     Ok(())
 }
 
@@ -107,7 +108,7 @@ pub(crate) fn handle_subscribe_cov_with_initial_endpoint(
         monitored_object_identifier: request.monitored_object_identifier,
         issue_confirmed_notifications: request.issue_confirmed_notifications.unwrap_or(false),
         expires_at,
-        last_notified_value: None,
+        last_notified_sample: None,
         monitored_property: None,
         monitored_property_array_index: None,
         cov_increment: None,
@@ -207,7 +208,7 @@ pub(crate) fn handle_subscribe_cov_property_with_initial_endpoint(
         monitored_object_identifier: request.monitored_object_identifier,
         issue_confirmed_notifications: request.issue_confirmed_notifications.unwrap_or(false),
         expires_at,
-        last_notified_value: None,
+        last_notified_sample: None,
         monitored_property: Some(request.monitored_property_identifier),
         monitored_property_array_index: request.monitored_property_array_index,
         cov_increment: request.cov_increment,
@@ -366,7 +367,7 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
                 monitored_object_identifier: spec.monitored_object_identifier,
                 issue_confirmed_notifications: confirmed,
                 expires_at: Some(expires_at),
-                last_notified_value: None,
+                last_notified_sample: None,
                 monitored_property: Some(property_identifier),
                 monitored_property_array_index: property_array_index,
                 cov_increment: cov_ref.cov_increment,
