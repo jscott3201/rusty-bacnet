@@ -120,6 +120,7 @@ impl ObjectDatabase {
         self.enrollment_eval_sources.remove(&oid);
         self.trend_poll.retire(&oid);
         self.objects.insert(oid, object);
+        self.audit_membership_changed(oid, true);
         if is_new {
             self.type_index
                 .entry(oid.object_type())
@@ -303,6 +304,7 @@ impl ObjectDatabase {
             if let Some(type_set) = self.type_index.get_mut(&oid.object_type()) {
                 type_set.retain(|o| o != oid);
             }
+            self.audit_membership_changed(*oid, false);
             Ok(Some(obj))
         } else {
             Ok(None)

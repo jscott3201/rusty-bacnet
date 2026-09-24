@@ -1031,6 +1031,15 @@ class BACnetTimeStamp:
     def __eq__(self, other: object) -> bool: ...
 
 
+class AuditReporterConfiguration(TypedDict):
+    """Owned pre-start target Reporter settings; no Python callbacks."""
+    instance: int
+    audit_level: Literal["none", "audit_config", "audit_all"]
+    auditable_operations: int
+    issue_confirmed_notifications: bool
+    monitored_objects: NotRequired[list[ObjectIdentifier | ObjectType | None] | None]
+    audit_priority_filter: NotRequired[int | None]
+
 class AuditRecipientDevice(TypedDict):
     """Audit recipient selected by Device object identifier."""
 
@@ -2340,37 +2349,21 @@ class BACnetServer:
         after start for atomic old/new delivery. No NULL recipient sentinel.
         """
         ...
-    def configure_audit_reporter(
-        self, instance: int, *,
-        audit_level: Literal["none", "audit_config", "audit_all"],
-        auditable_operations: int, issue_confirmed_notifications: bool,
-        monitored_objects: list[ObjectIdentifier | ObjectType | None] | None = None,
-        audit_priority_filter: int | None = None,
-    ) -> None:
-        """Configure one static target Reporter; add_audit_reporter alone stays inert.
+    def configure_audit_reporters(self, reporters: list[AuditReporterConfiguration]) -> None:
+        """Replace the complete target Reporter set before start (one through 64).
 
-        The first valid call fixes the Reporter identity. Later pre-start calls
-        replace its settings; another Reporter raises ValueError.
-        Reporter instances are non-bool integers in 0..=4194303.
-        Operations is a non-bool u64 mask: bits 0..15 and 32..63 only. Wrong mask,
-        level or confirmation types raise TypeError; invalid values/identities
-        raise ValueError. Failures preserve prior settings and registrations.
-        Configuration freezes at startup ownership transfer, including in-flight
-        start and after stop (RuntimeError). Provision the Device recipient separately; configure its route
-        with add_device_binding, in either order; an unresolved recipient permits
-        startup but exposes CONFIGURATION_ERROR on an enabled Reporter's RELIABILITY.
-        Monitored objects: None/omission removes the property (catch-all); an exact
-        list selects exact ObjectIdentifiers or all instances of each ObjectType
-        (including extensible values). None entries are ignored, empty/all-None
-        selects no ordinary targets, and duplicates never duplicate records.
-        Wrong container/element types raise TypeError. Priority filter is a non-bool
-        u16 mask (0..65535): bit 0 selects priority 1, bit 15 priority 16 (also the
-        default for omitted write priority). None/omission selects all priorities;
-        zero is valid. Wrong types raise TypeError; out-of-range values ValueError.
-        Priority filtering applies only to commandable-property writes; enabled
-        Reporter-target writes retain their filter bypass. Replacement resets
-        omitted options to their defaults. No runtime changes, source reporting,
-        Python callbacks, retries or durable outbox.
+        Each configuration identifies a registered concrete Reporter (0..4194302).
+        Invalid instance values (including bool and non-int), duplicate identities,
+        invalid settings or missing objects raise ValueError. Wrong container types
+        and wrong types for other setting fields raise TypeError. The entire input
+        is copied and validated before pending changes. Startup freezes this API.
+        Omitted optional fields reset to catch-all selectors and all priorities.
+        Enabled nominal overlaps expose CONFIGURATION_ERROR on every affected
+        Reporter's RELIABILITY; the lowest instance emits, before operation filters.
+        Empty/all-None selectors select no nominal targets. Mandatory Reporter
+        writes and Device recipient changes have separate bounded capture rules.
+        All Reporters use the one provisioned Device recipient and share the same
+        64-operation admission budget. Source reporting remains exactly one.
         """
         ...
 

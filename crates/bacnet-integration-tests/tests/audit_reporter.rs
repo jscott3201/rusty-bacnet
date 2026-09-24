@@ -15,7 +15,7 @@ use bacnet_objects::{
     device::{DeviceConfig, DeviceObject},
     file::FileObject,
 };
-use bacnet_server::server::{AuditReporterConfig, BACnetServer, DeviceBinding};
+use bacnet_server::server::{AuditReportersConfig, BACnetServer, DeviceBinding};
 use bacnet_services::audit::AuditLogQueryRequest;
 use bacnet_services::file::FileWriteAccessMethod;
 use bacnet_types::{
@@ -152,22 +152,26 @@ async fn exercise(confirmed: bool, selected: bool, lists: bool, files: bool) {
     reporter.set_audit_level(AuditLevel::AUDIT_ALL).unwrap();
     let mut operations = AuditOperationFlags::empty();
     operations.insert(AuditOperation::WRITE);
-    reporter.set_auditable_operations(operations);
-    reporter.set_issue_confirmed_notifications(confirmed);
+    reporter.set_auditable_operations(operations).unwrap();
+    reporter
+        .set_issue_confirmed_notifications(confirmed)
+        .unwrap();
     if selected {
-        reporter.set_monitored_objects(Some(vec![
-            BACnetObjectSelector::None,
-            BACnetObjectSelector::Object(oid(ObjectType::BINARY_VALUE, 1)),
-            BACnetObjectSelector::Object(oid(ObjectType::BINARY_VALUE, 1)),
-        ]));
+        reporter
+            .set_monitored_objects(Some(vec![
+                BACnetObjectSelector::None,
+                BACnetObjectSelector::Object(oid(ObjectType::BINARY_VALUE, 1)),
+                BACnetObjectSelector::Object(oid(ObjectType::BINARY_VALUE, 1)),
+            ]))
+            .unwrap();
     }
     target_db.add(Box::new(reporter)).unwrap();
     let mut target = BACnetServer::builder()
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
         .database(target_db)
-        .audit_reporter(AuditReporterConfig {
-            reporter: oid(ObjectType::AUDIT_REPORTER, 1),
+        .audit_reporters(AuditReportersConfig {
+            reporters: vec![oid(ObjectType::AUDIT_REPORTER, 1)],
         })
         .device_binding(
             DeviceBinding::local(oid(ObjectType::DEVICE, 20), logger.local_mac()).unwrap(),

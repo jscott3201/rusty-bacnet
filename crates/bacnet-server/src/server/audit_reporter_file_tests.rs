@@ -625,10 +625,14 @@ async fn audit_reporter_atomic_write_file_selection_levels_priority_and_reporter
             for write in [false, true] {
                 let mut reporter = reporter();
                 reporter.set_audit_level(level).unwrap();
-                reporter.set_monitored_objects(selectors.clone());
-                reporter.set_audit_priority_filter(BACnetPriorityFilter::empty());
+                reporter.set_monitored_objects(selectors.clone()).unwrap();
+                reporter
+                    .set_audit_priority_filter(BACnetPriorityFilter::empty())
+                    .unwrap();
                 if !write {
-                    reporter.set_auditable_operations(AuditOperationFlags::empty());
+                    reporter
+                        .set_auditable_operations(AuditOperationFlags::empty())
+                        .unwrap();
                 }
                 let mut fixture = server(reporter).await;
                 fixture

@@ -1,65 +1,41 @@
-//! Locally managed Reporter configuration and mutation-owned generations.
+//! Fallible local setters share the complete object-owned change boundary.
 use super::*;
-
 impl AuditReporterObject {
-    /// Set the locally managed audit level.
+    /// Set Audit_Level; live admission failure leaves all state unchanged.
     pub fn set_audit_level(&mut self, level: AuditLevel) -> Result<(), Error> {
-        if level == AuditLevel::DEFAULT {
-            return Err(Error::OutOfRange(
-                "Audit Reporter audit level must not be DEFAULT".into(),
-            ));
-        }
-        if self.audit_level != level {
-            self.status.configuration_changed();
-        }
-        self.audit_level = level;
-        self.update_auditing_failure_filter();
-        Ok(())
+        let mut next = self.configuration_internal();
+        next.audit_level = level;
+        self.change_configuration(next, None)
     }
-
-    /// Set the locally managed operation filter.
-    pub fn set_auditable_operations(&mut self, operations: AuditOperationFlags) {
-        if self.auditable_operations != operations {
-            self.status.configuration_changed();
-        }
-        self.auditable_operations = operations;
-        self.update_auditing_failure_filter();
+    /// Set Auditable_Operations atomically with any required notification.
+    pub fn set_auditable_operations(
+        &mut self,
+        operations: AuditOperationFlags,
+    ) -> Result<(), Error> {
+        let mut next = self.configuration_internal();
+        next.auditable_operations = operations;
+        self.change_configuration(next, None)
     }
-
-    fn update_auditing_failure_filter(&self) {
-        self.status.set_auditing_failure_enabled(
-            self.audit_level != AuditLevel::NONE
-                && self
-                    .auditable_operations
-                    .contains(bacnet_types::enums::AuditOperation::AUDITING_FAILURE),
-        );
+    /// Set the command-priority filter atomically.
+    pub fn set_audit_priority_filter(&mut self, filter: BACnetPriorityFilter) -> Result<(), Error> {
+        let mut next = self.configuration_internal();
+        next.audit_priority_filter = filter;
+        self.change_configuration(next, None)
     }
-
-    /// Set the locally managed command-priority filter.
-    pub fn set_audit_priority_filter(&mut self, filter: BACnetPriorityFilter) {
-        if self.audit_priority_filter != filter {
-            self.status.configuration_changed();
-        }
-        self.audit_priority_filter = filter;
+    /// Set confirmed delivery mode atomically.
+    pub fn set_issue_confirmed_notifications(&mut self, confirmed: bool) -> Result<(), Error> {
+        let mut next = self.configuration_internal();
+        next.confirmed = confirmed;
+        self.change_configuration(next, None)
     }
-
-    /// Select confirmed or unconfirmed target audit notifications.
-    pub fn set_issue_confirmed_notifications(&mut self, confirmed: bool) {
-        self.status.set_confirmed(confirmed);
-    }
-
-    /// Configure the optional Monitored_Objects array locally (never over BACnet).
-    ///
-    /// `None` removes the property and preserves catch-all target reporting.
-    /// `Some(vec![])` or all NULL entries selects no ordinary targets. Object
-    /// identifiers match exactly; object types match every instance of that type.
-    /// Duplicates do not cause duplicate reports. Enabled external Reporter writes
-    /// bypass this selection. This does not enable multi-Reporter arbitration.
-    pub fn set_monitored_objects(&mut self, selectors: Option<Vec<BACnetObjectSelector>>) {
-        if self.monitored_objects != selectors {
-            self.status.configuration_changed();
-        }
-        self.monitored_objects = selectors;
+    /// Set optional selectors: absent means catch-all; present empty means no nominal targets.
+    pub fn set_monitored_objects(
+        &mut self,
+        selectors: Option<Vec<BACnetObjectSelector>>,
+    ) -> Result<(), Error> {
+        let mut next = self.configuration_internal();
+        next.monitored_objects = selectors;
+        self.change_configuration(next, None)
     }
 }
 
@@ -87,8 +63,8 @@ mod tests {
             original,
             "invalid full configuration is atomic"
         );
-        reporter.set_issue_confirmed_notifications(true);
-        reporter.set_issue_confirmed_notifications(false);
+        reporter.set_issue_confirmed_notifications(true).unwrap();
+        reporter.set_issue_confirmed_notifications(false).unwrap();
         let current = status.begin_delivery();
         assert_ne!(original, current);
         status.complete_delivery(original, false);

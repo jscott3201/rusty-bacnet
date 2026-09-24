@@ -956,14 +956,13 @@ is not claimed.
 
 Trusted local configuration through `dyn BACnetObject` uses one atomic
 `configure_audit_reporter_internal(level, operations, confirmed, selectors, priorities)`
-contract. Custom Reporter objects override that full method; objects that do not
-opt in reject configuration. This pre-1.0 API replaces the three-argument method
-and the separate `configure_audit_reporter_with_filters_internal` name. Every call
-replaces all five settings, and an invalid call must leave the object unchanged.
-`None` selectors remove `Monitored_Objects` and select all ordinary targets;
-`Some(vec![])` retains an empty property and selects none. Lifecycle admission
-and recipient selection remain the caller's responsibility. The private endpoint
-source adapter forwards this contract without changing source-role ownership.
+contract. It replaces all five settings once; invalid or resource-denied changes
+leave every field unchanged. Built-in live setters and Description writes share
+that boundary and return Result. `None` selectors remove Monitored_Objects and
+select all nominal targets; `Some(vec![])` retains an empty property and selects
+none. Runtime ownership prepares mandatory change notifications before committing.
+The private endpoint source adapter forwards the contract without changing its
+exactly-one source-role ownership. See [target Reporter ownership and live changes](target-audit-reporters.md).
 
 #### Building Control (7)
 
@@ -2135,12 +2134,12 @@ inherit the Reporter's priority filter when the object row is absent or NULL.
 Generic §19.6.3 (printed820/PDF822) conflicts for the absent case. This bounded
 implementation follows the object-specific clauses; the 2024-04-29 errata does
 not resolve that wording and adds the commandability condition. Other object
-families, multi-Reporter association and broader Audit completion remain open.
+families and broader Audit completion remain open.
 
 ### Target Device Audit recipient
 
 The standalone target profile uses `DeviceObject::provision_audit_recipient` for
-initial state and `AuditReporterConfig { reporter }` for selection. Active local
+initial state and `AuditReportersConfig { reporters }` for selection. Active local
 and authorized network recipient writes share atomic old/new delivery admission.
 See the [Device recipient contract](device-audit-recipient.md) for supported routes,
 metadata, failure semantics and shutdown ownership. The endpoint source profile

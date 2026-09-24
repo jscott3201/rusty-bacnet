@@ -125,9 +125,9 @@ fn custom_reporter_configuration_replaces_every_setting_through_trait_object() {
     );
     let reporter = object.audit_reporter_internal().unwrap();
     assert!(reporter.monitors_object_internal(target));
-    assert!(reporter.reports_write_internal(PropertyIdentifier::PRESENT_VALUE, Some(8), false));
-    assert!(reporter.reports_write_internal(PropertyIdentifier::PRESENT_VALUE, Some(16), false));
-    assert!(!reporter.reports_write_internal(PropertyIdentifier::PRESENT_VALUE, Some(1), false));
+    assert!(reporter.reports_write_internal(PropertyIdentifier::PRESENT_VALUE, Some(8)));
+    assert!(reporter.reports_write_internal(PropertyIdentifier::PRESENT_VALUE, Some(16)));
+    assert!(!reporter.reports_write_internal(PropertyIdentifier::PRESENT_VALUE, Some(1)));
 
     // Empty selection retains the property and selects no ordinary targets.
     object

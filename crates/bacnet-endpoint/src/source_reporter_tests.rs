@@ -87,10 +87,12 @@ fn database() -> ObjectDatabase {
             AuditReporterObject::new(instance, format!("Reporter-{instance}")).unwrap();
         // Silence must not depend on the default disabled audit level.
         reporter.set_audit_level(AuditLevel::AUDIT_ALL).unwrap();
-        reporter.set_auditable_operations(
-            bacnet_types::bitstring::AuditOperationFlags::from_bits(0xff).unwrap(),
-        );
-        reporter.set_issue_confirmed_notifications(true);
+        reporter
+            .set_auditable_operations(
+                bacnet_types::bitstring::AuditOperationFlags::from_bits(0xff).unwrap(),
+            )
+            .unwrap();
+        reporter.set_issue_confirmed_notifications(true).unwrap();
         db.add(Box::new(reporter)).unwrap();
     }
     db

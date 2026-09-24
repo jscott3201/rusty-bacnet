@@ -65,8 +65,15 @@ pub struct NotificationTransactions {
     core: Arc<NotificationCore>,
     workers: Mutex<NotificationWorkers>,
     audit_permits: Arc<tokio::sync::Semaphore>,
-    audit_failures: AuditFailureQueue<Arc<ConfirmedRecipientRoute>>,
+    pub(super) audit_association:
+        std::sync::OnceLock<Arc<bacnet_objects::audit::TargetAuditAssociation>>,
+    audit_failures: std::sync::OnceLock<Vec<ReporterFailureQueue>>,
 }
+
+type ReporterFailureQueue = (
+    Arc<AuditReporterStatus>,
+    AuditFailureQueue<Arc<ConfirmedRecipientRoute>>,
+);
 
 #[derive(Default)]
 struct NotificationWorkers {
@@ -89,8 +96,34 @@ mod audit_failure_queue;
 pub use audit_failure_queue::{AuditFailureContext, AuditFailureQueue, AuditFailureTicket};
 
 impl NotificationTransactions {
-    pub(super) fn audit_failure_queue(&self) -> &AuditFailureQueue<Arc<ConfirmedRecipientRoute>> {
-        &self.audit_failures
+    pub(super) fn install_target_audit(
+        &self,
+        association: Arc<bacnet_objects::audit::TargetAuditAssociation>,
+    ) {
+        let queues = association
+            .reporters()
+            .iter()
+            .map(|(_, status)| (Arc::clone(status), AuditFailureQueue::default()))
+            .collect();
+        assert!(self.audit_failures.set(queues).is_ok());
+        assert!(self.audit_association.set(association).is_ok());
+    }
+    pub(super) fn audit_failure_queue(
+        &self,
+        status: &Arc<AuditReporterStatus>,
+    ) -> Option<&AuditFailureQueue<Arc<ConfirmedRecipientRoute>>> {
+        self.audit_failures
+            .get()?
+            .iter()
+            .find(|(current, _)| Arc::ptr_eq(current, status))
+            .map(|(_, queue)| queue)
+    }
+    pub(super) fn audit_recipient_changed(&self) {
+        if let Some(queues) = self.audit_failures.get() {
+            for (_, queue) in queues {
+                queue.recipient_changed();
+            }
+        }
     }
 
     #[doc(hidden)]
@@ -118,7 +151,8 @@ impl NotificationTransactions {
             }),
             workers: Mutex::new(NotificationWorkers::default()),
             audit_permits: Arc::new(tokio::sync::Semaphore::new(64)),
-            audit_failures: AuditFailureQueue::default(),
+            audit_association: std::sync::OnceLock::new(),
+            audit_failures: std::sync::OnceLock::new(),
         })
     }
 
@@ -141,16 +175,29 @@ impl NotificationTransactions {
         let _workers = self.workers.lock().unwrap();
         owner.seal();
     }
+    // Silent changes still serialize with sealing/close, but have no runtime or
+    // worker requirement. The closure rechecks the concrete owner's active state.
+    pub(super) fn commit_audit_without_worker(
+        &self,
+        commit: impl FnOnce() -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        let workers = self.workers.lock().unwrap();
+        if workers.closed {
+            return Err(Error::Encoding("Audit delivery owner is closed".into()));
+        }
+        commit()
+    }
+
     #[doc(hidden)]
     pub fn commit_audit<F: Future<Output = ()> + Send + 'static>(
         &self,
         prepare_commit: impl FnOnce() -> Result<F, Error>,
     ) -> Result<(), Error> {
         let handle = tokio::runtime::Handle::try_current()
-            .map_err(|_| Error::Encoding("recipient changes require a Tokio runtime".into()))?;
+            .map_err(|_| Error::Encoding("Audit changes require a Tokio runtime".into()))?;
         let mut workers = self.workers.lock().unwrap();
         if workers.closed {
-            return Err(Error::Encoding("recipient delivery owner is closed".into()));
+            return Err(Error::Encoding("Audit delivery owner is closed".into()));
         }
         let task = prepare_commit()?;
         let owner = workers
@@ -276,7 +323,13 @@ impl NotificationTransactions {
 
     #[cfg(test)]
     pub(super) fn audit_resources(&self) -> (bool, u64, usize) {
-        let (owned, count) = self.audit_failures.resources();
+        let (owned, count) = self.audit_failures.get().into_iter().flatten().fold(
+            (false, 0u64),
+            |(owned, count), (_, queue)| {
+                let (current_owned, current_count) = queue.resources();
+                (owned || current_owned, count.saturating_add(current_count))
+            },
+        );
         (owned, count, self.audit_permits.available_permits())
     }
 

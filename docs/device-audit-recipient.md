@@ -2,13 +2,14 @@
 
 The standalone server's opt-in target Audit profile stores its recipient in the
 actual built-in Device. Provision `DeviceObject::provision_audit_recipient` before
-startup and select the Reporter with `AuditReporterConfig { reporter }`. Python
+startup and select target Reporters with `AuditReportersConfig { reporters }`. Python
 uses `configure_audit_recipient(AuditRecipientInput)` before `start()` and selects
-settings separately with `configure_audit_reporter`. The former Rust configuration
+settings separately with `configure_audit_reporters`. The former Rust configuration
 field and Python `recipient_device_instance` keyword are removed before 1.0.
 
 Startup requires exactly one concrete built-in Device, a typed provision, and the
-selected Audit Reporter. Provisioning alone does not expose a network property.
+selected Audit Reporters. See [target Reporter ownership](target-audit-reporters.md) for
+association, overlap health, and the single pair-owner election. Provisioning alone does not expose a network property.
 While a complete target or source runtime is active, `Audit_Notification_Recipient` is readable,
 required and writable, appears in Property_List and RPM REQUIRED, and has one
 Device-owned value. Its metadata retains the optional base table code and active
@@ -71,7 +72,7 @@ successful commit. Timestamp retention and bounded failure behavior are local
 policies, not additional claims of normative requirements.
 
 The installed owner protects removal, replacement or adaptation of its Device and
-Reporter, and insertion of an additional Device. Shutdown seals writes before
+configured Reporters, and insertion of an additional Device. Shutdown seals writes before
 closing admissions, joins owned producers and workers, then uninstalls the
 capability under the database guard. Canceled stop retains sealed protection until
 a later stop finishes. Drop requests cancellation and keeps membership protection

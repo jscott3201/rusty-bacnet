@@ -1466,12 +1466,15 @@ SC mapping, MS/TP hardware support or independent interop is claimed here.
 This is not active Reporter configuration, full Audit/BIBB, BTL/certification
 or issue #345 closure.
 
-#### Static target Audit Reporter
+#### Target Audit Reporters
 
-`BACnetServer.configure_audit_reporter(instance, *, audit_level, auditable_operations, issue_confirmed_notifications,
-monitored_objects=None, audit_priority_filter=None) -> None` connects
-one pending Reporter to the existing Rust target-side producer. It is synchronous,
-opt-in and pre-start only; `add_audit_reporter(instance, name)` is unchanged.
+`BACnetServer.configure_audit_reporters(reporters: list[AuditReporterConfiguration]) -> None`
+selects one through 64 pending Reporters through the shared Rust target owner. It
+is synchronous, opt-in and pre-start only; `add_audit_reporter(instance, name)`
+registers objects without selecting them. Every dict supplies the required fields
+shown below; the two filter fields are optional. A valid call replaces the complete
+selected set and the supplied settings. All validation precedes any object mutation.
+See [election, overlap health and live Rust mutation](target-audit-reporters.md).
 
 ```python
 # parent: running Device 9, file-backed Audit Log 7, explicit allow_all sink.
@@ -1479,20 +1482,21 @@ opt-in and pre-start only; `add_audit_reporter(instance, name)` is unchanged.
 child.add_audit_reporter(1, "Target Reporter")
 child.add_analog_value(1, "Writable target")
 child.configure_audit_recipient({"kind": "device", "object_identifier": ObjectIdentifier(ObjectType.DEVICE, 9)})
-child.configure_audit_reporter(
-    1, audit_level="audit_all",
-    auditable_operations=1 << AuditOperation.WRITE.to_raw(),
-    issue_confirmed_notifications=True,
-    monitored_objects=[ObjectIdentifier(ObjectType.ANALOG_VALUE, 1)],
-    audit_priority_filter=1 << 7,  # priority 8 only; omit for all priorities
-)
+child.configure_audit_reporters([{
+    "instance": 1, "audit_level": "audit_all",
+    "auditable_operations": 1 << AuditOperation.WRITE.to_raw(),
+    "issue_confirmed_notifications": True,
+    "monitored_objects": [ObjectIdentifier(ObjectType.ANALOG_VALUE, 1)],
+    "audit_priority_filter": 1 << 7,  # priority 8 only; omit for all priorities
+}])
 child.add_device_binding(9, await parent.local_address())
 # After child.start(), a public BACnetClient.write_property() to the child's
 # target at priority=8 can produce a notification. Query the parent's Audit Log 7
 # under a deadline to observe receipt; the write ACK alone is not that evidence.
 ```
 
-- The Reporter identifier must be a non-Boolean integer in `0..=4194303`.
+- Each Reporter identifier must be a non-Boolean integer in `0..=4194302`.
+  Empty/over-64 lists, duplicate identities and unknown fields are rejected.
   Provision the Device recipient independently with `configure_audit_recipient`,
   using a copied `AuditRecipientInput` Device or Address mapping. Device choices
   must be concrete, remote Device identifiers (instance 4194303 is reserved).
@@ -1510,8 +1514,8 @@ child.add_device_binding(9, await parent.local_address())
   Reserved bits 16–31, negatives and u64 overflow raise `ValueError`; wrong types,
   including bool, raise `TypeError`. Accepting a bit does not implement its source.
 - `issue_confirmed_notifications` requires actual `True` or `False`; integers
-  and truthy objects raise `TypeError`. All arguments after `instance` are
-  keyword-only; only `monitored_objects` and `audit_priority_filter` are optional.
+  and truthy objects raise `TypeError`. Only `monitored_objects` and
+  `audit_priority_filter` are optional dict fields.
   Validation finishes before object settings or selection change.
 - `monitored_objects=None` (or omission) removes the optional `Monitored_Objects`
   property (`UNKNOWN_PROPERTY` on read) and selects all ordinary targets. An exact
@@ -1529,11 +1533,11 @@ child.add_device_binding(9, await parent.local_address())
   with omitted priority. Filtering applies to commandable-property writes, not
   non-commandable writes or non-write operations. Existing list/file/lifecycle
   behavior is unchanged; enabled Reporter-target writes retain their bypass.
-- **The first valid call fixes the Reporter identity.** Further valid pre-start
-  calls on that same instance replace all Reporter settings; omitted
-  options reset to catch-all/all priorities rather than retaining previous filters.
-  Selecting another Reporter raises `ValueError`, even after selecting level NONE;
-  other registered Reporters remain inert. Failed calls preserve settings and registrations.
+- Every valid call replaces the complete selected set. Omitted options reset to
+  catch-all/all priorities. Failed calls preserve all settings and registrations.
+  Input dictionaries, selector lists and values are copied. Enabled nominal overlaps
+  expose CONFIGURATION_ERROR on every affected Reporter; only the lowest instance
+  emits, before operation/value filters. Mandatory fallback does not add overlap.
 - Binding and Reporter configuration may occur in either order. Device choices use
   existing configured direct B/IP IPv4 `add_device_binding()` routes. Address
   choices need no binding and use the direct unicast B/IP IPv4 subset described
@@ -1542,7 +1546,7 @@ child.add_device_binding(9, await parent.local_address())
   startup: an enabled Reporter exposes `RELIABILITY=CONFIGURATION_ERROR` (`10`)
   and the fault bit in `STATUS_FLAGS`, without emitting or queuing ordinary records.
   Use existing `read_property()` on these properties; there is no separate status API.
-- Startup revalidates the selected pending identity before draining registrations.
+- Startup revalidates every selected pending identity before draining registrations.
   Configuration freezes at ownership transfer: valid calls during startup, while
   running or after stop raise `RuntimeError`. Input validation precedes that check.
   Validation and TLS/serial preparation failures before transfer leave it retryable;
@@ -1550,14 +1554,13 @@ child.add_device_binding(9, await parent.local_address())
   static settings/bindings on a new server; they are not persisted.
 
 By default `Monitored_Objects` remains absent (catch-all) and `Audit_Priority_Filter`
-selects all priorities; `Audit_Source_Reporter` remains false. The unchanged
-Rust producer covers inbound WP/WPM elements, AddListElement/RemoveListElement,
+selects all priorities; `Audit_Source_Reporter` remains false. The Rust producer covers inbound WP/WPM elements, AddListElement/RemoveListElement,
 AtomicWriteFile and CREATE/DELETE successes and authorized execution errors at
 their existing operation boundaries. Normal operations require their operation
 bit; enabled external Reporter property writes retain the core filter bypass.
 Success omits Result; known execution errors include the response-mapped Error.
-The existing optional AUDITING_FAILURE resource-admission summary remains bounded
-and memory-only when its bit is enabled. No new ordinary producer source is introduced.
+Each selected Reporter has its own optional bounded, memory-only AUDITING_FAILURE
+resource-admission summary when its bit is enabled. No new ordinary producer source is introduced.
 
 Delivery retains 64 shared immediate Audit permits, one total three-second deadline,
 no ordinary-record queue/retry or outbound segmentation, object-owned health and
@@ -1565,7 +1568,7 @@ joined shutdown. Delivery failure does not change the original operation result.
 Unconfirmed send success proves only transport acceptance, not recipient storage.
 No durable outbox, replay or restart-delivery guarantee is provided; the receiver's
 file-backed storage is a separate contract. Installed-extension loopback tests in
-`test_audit_api.py` prove one queryable target WRITE for both confirmation modes,
+`test_audit_api.py` prove queryable target WRITEs for both confirmation modes,
 strict atomic validation, replacement, selector/priority filtering and Reporter-write
 bypass, suppression, unresolved-recipient no growth and lifecycle freezing.
 Broader source/bounds evidence remains the existing Rust
@@ -1575,8 +1578,8 @@ Recipient changes through the active Device property also support local and
 network writes with atomic old/new notification admission. Rust's supported
 `write_local` operation also shares the target observer; raw database authoring
 and physical Input sampling remain outside it. AV/BV policy rows are described
-below. No other dynamic configuration, multi-Reporter arbitration, Python callbacks, payload-origin
-verification, source-side reporting, ordinary sample/event production,
+below. No Python live configuration/callbacks, payload-origin verification, standalone
+source-side reporting, ordinary sample/event production,
 WriteGroup expansion or batching,
 Maximum_Send_Delay/Send_Now, durability, full Reporter/Audit/BIBB/BTL/certification,
 independent interop or #345 closure is claimed.

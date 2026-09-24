@@ -216,7 +216,7 @@ mod tests {
             read_range_budget: server::ReadRangeBudget::default(),
             get_event_information_budget: server::GetEventInformationBudget::default(),
             audit_notification_sink: None,
-            audit_reporter: None,
+            audit_reporters: None,
             audit_recipient: std::sync::Mutex::new(None),
             device_bindings: std::collections::BTreeMap::new(),
             forwarding_configuration_started: AtomicBool::new(false),

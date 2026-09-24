@@ -41,13 +41,13 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         property: Option<(PropertyIdentifier, Option<u32>)>,
         result: Option<(ErrorClass, ErrorCode)>,
     ) -> Option<ReadAuditIntent> {
-        let profile = self.config.audit_reporter.as_ref()?;
-        let reporter = db.get(&profile.reporter)?.audit_reporter_internal()?;
+        let selected_reporter = self.select(Some(target), target.object_type())?;
+        let reporter = &selected_reporter.configuration;
         let device = local_device(db);
         let route = device
             .and_then(|device| recipient(db, device))
             .and_then(|value| self.transactions.audit_routes.get()?.resolve(&value));
-        let status = reporter.status_internal();
+        let status = Arc::clone(&selected_reporter.status);
         status.set_configured(device.is_some() && route.is_some());
         let device = device?;
         // Reuse the existing local property classification: Present_Value is
@@ -60,22 +60,17 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
             .unwrap_or_default()
             .effective_internal(reporter);
         if !policy.reports(AuditOperation::READ, property.map(|(id, _)| id), None)
-            || !reporter.monitors_object_internal(target)
+            || !reporter.monitors(target)
         {
             return None;
         }
         Some(ReadAuditIntent(PendingWrite {
             selection: None,
-            failure: self.failure_ticket(
-                &status,
-                reporter.confirmed_internal(),
-                device,
-                route.clone(),
-            ),
+            failure: self.failure_ticket(&status, reporter.confirmed, device, route.clone()),
             route,
             completion: status.begin_delivery(),
             status,
-            confirmed: reporter.confirmed_internal(),
+            confirmed: reporter.confirmed,
             notification: BACnetAuditNotification {
                 source_timestamp: None,
                 target_timestamp: None,

@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_objects::traits::BACnetObject;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::{Barrier, Semaphore};
 
@@ -18,8 +19,8 @@ fn failure_reporter() -> bacnet_objects::audit::AuditReporterObject {
     reporter.set_audit_level(AuditLevel::AUDIT_ALL).unwrap();
     let mut flags = AuditOperationFlags::empty();
     flags.insert(AuditOperation::AUDITING_FAILURE);
-    reporter.set_auditable_operations(flags);
-    reporter.set_issue_confirmed_notifications(true);
+    reporter.set_auditable_operations(flags).unwrap();
+    reporter.set_issue_confirmed_notifications(true).unwrap();
     reporter
 }
 
@@ -29,7 +30,11 @@ fn failure_ticket(
 ) -> AuditFailureTicket<Arc<ConfirmedRecipientRoute>> {
     let status = reporter.status_internal();
     owner
-        .audit_failure_queue()
+        .audit_failures
+        .get_or_init(|| vec![(Arc::clone(&status), AuditFailureQueue::default())]);
+    owner
+        .audit_failure_queue(&reporter.status_internal())
+        .unwrap()
         .observe(AuditFailureContext {
             device: ObjectIdentifier::new(bacnet_types::enums::ObjectType::DEVICE, 10).unwrap(),
             epoch: status.auditing_failure_epoch().unwrap(),
@@ -54,12 +59,15 @@ fn record_failure(
     sequence: u16,
 ) -> Option<audit_failure_queue::AuditFailureWorker<Arc<ConfirmedRecipientRoute>>> {
     let ticket = failure_ticket(owner, reporter);
-    owner.audit_failure_queue().record_drop(
-        owner,
-        ticket,
-        BACnetTimeStamp::SequenceNumber(sequence),
-        count,
-    )
+    owner
+        .audit_failure_queue(&reporter.status_internal())
+        .unwrap()
+        .record_drop(
+            owner,
+            ticket,
+            BACnetTimeStamp::SequenceNumber(sequence),
+            count,
+        )
 }
 
 #[derive(Default)]
@@ -365,7 +373,9 @@ async fn auditing_failure_admission_order_survives_reversed_completions_and_cont
     let mut reporter = failure_reporter();
     let first = failure_ticket(&owner, &reporter);
     let second = failure_ticket(&owner, &reporter);
-    let queue = owner.audit_failure_queue();
+    let queue = owner
+        .audit_failure_queue(&reporter.status_internal())
+        .unwrap();
     let mut worker = queue
         .record_drop(&owner, second, BACnetTimeStamp::SequenceNumber(0), 1)
         .unwrap();
@@ -383,8 +393,8 @@ async fn auditing_failure_admission_order_survives_reversed_completions_and_cont
     drop((permit, reserved));
     // Empty pending state must retain the latest context's identity. Mode ABA
     // must not let a delayed contribution recreate the old pending batch.
-    reporter.set_issue_confirmed_notifications(false);
-    reporter.set_issue_confirmed_notifications(true);
+    reporter.set_issue_confirmed_notifications(false).unwrap();
+    reporter.set_issue_confirmed_notifications(true).unwrap();
     let current = failure_ticket(&owner, &reporter);
     assert!(queue
         .record_drop(&owner, first, BACnetTimeStamp::SequenceNumber(65535), 7)
@@ -406,7 +416,9 @@ async fn auditing_failure_context_change_wakes_separately_and_never_transfers_co
     let held: Vec<_> = (0..256).map(|_| reserve(&owner)).collect();
     let mut reporter = failure_reporter();
     let old = failure_ticket(&owner, &reporter);
-    let queue = owner.audit_failure_queue();
+    let queue = owner
+        .audit_failure_queue(&reporter.status_internal())
+        .unwrap();
     let mut worker = queue
         .record_drop(&owner, old.clone(), BACnetTimeStamp::SequenceNumber(4), 7)
         .unwrap();
@@ -416,7 +428,7 @@ async fn auditing_failure_context_change_wakes_separately_and_never_transfers_co
     {
         let mut next = std::pin::pin!(worker.next());
         assert!(next.as_mut().poll(&mut cx).is_pending());
-        reporter.set_issue_confirmed_notifications(false);
+        reporter.set_issue_confirmed_notifications(false).unwrap();
         let new = failure_ticket(&owner, &reporter);
         assert_eq!(
             wake.0.load(Ordering::SeqCst),
@@ -455,7 +467,9 @@ async fn auditing_failure_timestamp_choice_changes_do_not_change_admission_order
         second: 0,
         hundredths: 0,
     });
-    let queue = owner.audit_failure_queue();
+    let queue = owner
+        .audit_failure_queue(&reporter.status_internal())
+        .unwrap();
     let mut worker = queue.record_drop(&owner, second, clock_time, 1).unwrap();
     assert!(queue
         .record_drop(&owner, first, BACnetTimeStamp::SequenceNumber(99), 1)
@@ -465,4 +479,62 @@ async fn auditing_failure_timestamp_choice_changes_do_not_change_admission_order
     assert_eq!(batch.earliest, BACnetTimeStamp::SequenceNumber(99));
     drop((permit, reserved));
     assert!(worker.next().await.is_none());
+}
+
+#[tokio::test]
+async fn target_reporter_loss_queues_are_isolated_with_one_global_budget_and_per_owner_aba() {
+    use bacnet_objects::audit::{AuditReporterObject, TargetAuditAssociation};
+    let owner = NotificationTransactions::new();
+    let mut first = failure_reporter();
+    let mut second = AuditReporterObject::new(2, "Second").unwrap();
+    second
+        .set_audit_level(bacnet_types::enums::AuditLevel::AUDIT_ALL)
+        .unwrap();
+    let flags = first.configuration_internal().auditable_operations;
+    second.set_auditable_operations(flags).unwrap();
+    second.set_issue_confirmed_notifications(true).unwrap();
+    owner.install_target_audit(TargetAuditAssociation::new(vec![
+        (first.object_identifier(), first.status_internal()),
+        (second.object_identifier(), second.status_internal()),
+    ]));
+    let permits: Vec<_> = (0..64).map(|_| owner.try_admit_audit().unwrap()).collect();
+    assert!(owner.try_admit_audit().is_err());
+    let stale = failure_ticket(&owner, &first);
+    let mut a = record_failure(&owner, &first, 2, 10).unwrap();
+    let mut b = record_failure(&owner, &second, 3, 20).unwrap();
+    assert!(record_failure(&owner, &first, 5, 30).is_none());
+    assert!(record_failure(&owner, &second, 7, 40).is_none());
+    assert_eq!(owner.audit_resources(), (true, 17, 0));
+    first.set_issue_confirmed_notifications(false).unwrap();
+    first.set_issue_confirmed_notifications(true).unwrap();
+    let current = failure_ticket(&owner, &first);
+    let queue = owner.audit_failure_queue(&first.status_internal()).unwrap();
+    assert!(queue
+        .record_drop(&owner, stale, BACnetTimeStamp::SequenceNumber(0), 99)
+        .is_none());
+    assert!(queue
+        .record_drop(&owner, current, BACnetTimeStamp::SequenceNumber(50), 11)
+        .is_none());
+    assert_eq!(
+        owner.audit_resources(),
+        (true, 21, 0),
+        "first Reporter ABA cannot erase second Reporter's ten losses"
+    );
+    drop(permits);
+    let (a_batch, a_permit, a_reservation) = a.next().await.unwrap();
+    let (b_batch, b_permit, b_reservation) = b.next().await.unwrap();
+    assert_eq!(
+        (a_batch.count, a_batch.earliest),
+        (11, BACnetTimeStamp::SequenceNumber(50))
+    );
+    assert_eq!(
+        (b_batch.count, b_batch.earliest),
+        (10, BACnetTimeStamp::SequenceNumber(20))
+    );
+    assert_eq!(owner.active_count(), 2);
+    drop((a_permit, a_reservation, b_permit, b_reservation));
+    assert!(a.next().await.is_none());
+    assert!(b.next().await.is_none());
+    assert_eq!(owner.audit_resources(), (false, 0, 64));
+    assert_eq!(owner.active_count(), 0);
 }

@@ -166,14 +166,16 @@ fn object_audit_policy_specific_priority_inheritance_and_reporter_master_none() 
     reporter.set_audit_level(AuditLevel::AUDIT_ALL).unwrap();
     let mut operations = AuditOperationFlags::empty();
     operations.insert(bacnet_types::enums::AuditOperation::WRITE);
-    reporter.set_auditable_operations(operations);
-    reporter.set_audit_priority_filter(BACnetPriorityFilter::from_bits(1 << 7));
+    reporter.set_auditable_operations(operations).unwrap();
+    reporter
+        .set_audit_priority_filter(BACnetPriorityFilter::from_bits(1 << 7))
+        .unwrap();
     for filter in [None, Some(AuditPriorityPolicy::Inherit)] {
         let policy = ObjectAuditPolicy {
             priority_filter: filter,
             ..Default::default()
         }
-        .effective_internal(&reporter);
+        .effective_internal(&reporter.configuration_internal());
         assert!(policy.reports(
             bacnet_types::enums::AuditOperation::WRITE,
             Some(P::PRESENT_VALUE),
@@ -196,7 +198,7 @@ fn object_audit_policy_specific_priority_inheritance_and_reporter_master_none() 
         operations: Some(operations),
         ..Default::default()
     }
-    .effective_internal(&reporter);
+    .effective_internal(&reporter.configuration_internal());
     assert!(!policy.reports(
         bacnet_types::enums::AuditOperation::WRITE,
         Some(P::DESCRIPTION),

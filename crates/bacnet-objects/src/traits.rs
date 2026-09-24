@@ -93,12 +93,20 @@ pub trait BACnetObject: Send + Sync {
         None
     }
 
+    /// Scoped built-in Reporter mutation authority; absent for other objects.
+    #[doc(hidden)]
+    fn audit_reporter_authority_internal(
+        &mut self,
+    ) -> Option<crate::audit::AuditReporterAuthority<'_>> {
+        None
+    }
+
     /// Atomically replace all trusted local Reporter settings without a network write.
     ///
     /// The default opts out. Supporting implementations must reject invalid
     /// settings before any mutation. `None` selectors remove Monitored_Objects
     /// (catch-all); `Some(vec![])` retains the property and selects no ordinary
-    /// targets. Callers own lifecycle admission and recipient selection.
+    /// targets. An installed target owner prepares required records and lifecycle admission.
     ///
     /// Pre-1.0 API change: this full configuration contract replaces both the
     /// three-argument hook and `configure_audit_reporter_with_filters_internal`.

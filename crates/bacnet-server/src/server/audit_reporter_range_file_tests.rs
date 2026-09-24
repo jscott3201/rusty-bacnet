@@ -14,8 +14,7 @@ mod boundary;
 async fn audit_reporter_read_range_pages_identity_value_free_and_response_parity() {
     for case in ["success", "empty", "item cap", "byte cap", "array"] {
         let mut fixture = server(read_reporter()).await;
-        let mut plain = server(read_reporter()).await;
-        plain.server.config.audit_reporter = None;
+        let mut plain = plain_server(read_reporter()).await;
         let reads = add_target(&fixture, Kind::Range, None, false).await;
         let plain_reads = add_target(&plain, Kind::Range, None, false).await;
         let (property, index) = if case == "array" {
@@ -112,8 +111,7 @@ async fn audit_reporter_atomic_read_file_stream_record_empty_eof_no_reread_and_p
         for case in ["window", "empty", "eof"] {
             let empty = case == "empty";
             let mut fixture = server(read_reporter()).await;
-            let mut plain = server(read_reporter()).await;
-            plain.server.config.audit_reporter = None;
+            let mut plain = plain_server(read_reporter()).await;
             let reads = add_target(&fixture, kind, None, false).await;
             let plain_reads = add_target(&plain, kind, None, false).await;
             let start = if !empty {
@@ -203,8 +201,7 @@ async fn audit_reporter_range_file_execution_errors_exact_result_and_silent_unkn
     for kind in [Kind::Range, Kind::Stream, Kind::Record] {
         for (failure, result) in cases {
             let mut fixture = server(read_reporter()).await;
-            let mut plain = server(read_reporter()).await;
-            plain.server.config.audit_reporter = None;
+            let mut plain = plain_server(read_reporter()).await;
             let reads = add_target(&fixture, kind, Some(failure), false).await;
             add_target(&plain, kind, Some(failure), false).await;
             let data = kind.request(1, 1);
@@ -299,8 +296,7 @@ async fn audit_reporter_range_file_service_validation_errors_preserve_identity()
         ),
     ] {
         let mut fixture = server(read_reporter()).await;
-        let mut plain = server(read_reporter()).await;
-        plain.server.config.audit_reporter = None;
+        let mut plain = plain_server(read_reporter()).await;
         add_target(&fixture, kind, None, false).await;
         add_target(&plain, kind, None, false).await;
         let mut target = kind.target();
@@ -406,10 +402,14 @@ async fn audit_reporter_range_file_read_bit_level_and_monitored_objects() {
             let mut reporter = read_reporter();
             reporter.set_audit_level(level).unwrap();
             if !bit {
-                reporter.set_auditable_operations(AuditOperationFlags::empty());
+                reporter
+                    .set_auditable_operations(AuditOperationFlags::empty())
+                    .unwrap();
             }
-            reporter.set_monitored_objects(selection);
-            reporter.set_audit_priority_filter(BACnetPriorityFilter::empty());
+            reporter.set_monitored_objects(selection).unwrap();
+            reporter
+                .set_audit_priority_filter(BACnetPriorityFilter::empty())
+                .unwrap();
             let mut fixture = server(reporter).await;
             add_target(&fixture, kind, None, false).await;
             assert!(matches!(

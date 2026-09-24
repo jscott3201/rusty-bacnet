@@ -81,7 +81,7 @@ impl SourceRead {
             device,
             status,
             routes,
-            owner: AuditOwnership::new(device, selected),
+            owner: AuditOwnership::for_source(device, selected),
             sequence: database.event_sequence_internal(),
             egress: egress.clone(),
             notifications: Arc::downgrade(notifications),

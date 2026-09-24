@@ -70,7 +70,7 @@ fn complete(fixture: &Fixture, index: usize, mac: &[u8], success: bool) {
 async fn recipient_confirmed_pair_failure_wins_in_either_completion_order() {
     for failure_first in [true, false] {
         let mut reporter = reporter();
-        reporter.set_issue_confirmed_notifications(true);
+        reporter.set_issue_confirmed_notifications(true).unwrap();
         let mut fixture = fixture(reporter).await;
         assert!(matches!(
             change(&fixture, &device(21)).await,
@@ -107,7 +107,7 @@ async fn recipient_confirmed_pair_failure_wins_in_either_completion_order() {
 #[tokio::test(start_paused = true)]
 async fn recipient_old_generation_completion_cannot_poison_new_pair_health() {
     let mut reporter = reporter();
-    reporter.set_issue_confirmed_notifications(true);
+    reporter.set_issue_confirmed_notifications(true).unwrap();
     let mut fixture = fixture(reporter).await;
     assert!(matches!(
         write_value(&fixture.server, None).await,
@@ -147,7 +147,7 @@ async fn recipient_aba_retires_and_wakes_pending_summary_without_new_ordinary_wo
     let mut flags = AuditOperationFlags::empty();
     flags.insert(AuditOperation::WRITE);
     flags.insert(AuditOperation::AUDITING_FAILURE);
-    reporter.set_auditable_operations(flags);
+    reporter.set_auditable_operations(flags).unwrap();
     let mut fixture = fixture(reporter).await;
     let held = (0..63)
         .map(|_| {

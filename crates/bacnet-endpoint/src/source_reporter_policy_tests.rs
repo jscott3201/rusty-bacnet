@@ -14,8 +14,10 @@ fn object_audit_policy_snapshot_is_forwarded_from_the_original_instance() {
     let mut value = AnalogValueObject::new(7, "wrapped AV", 62).unwrap();
     value.set_audit_policy(policy);
     let mut object: Box<dyn BACnetObject> = Box::new(value);
-    let owner =
-        bacnet_objects::database::AuditOwnership::new(oid(ObjectType::DEVICE, 123), selected());
+    let owner = bacnet_objects::database::AuditOwnership::for_source(
+        oid(ObjectType::DEVICE, 123),
+        selected(),
+    );
     source_reporter::install(&mut object, &owner).unwrap();
     assert_eq!(object.audit_object_policy_internal(), policy);
     object

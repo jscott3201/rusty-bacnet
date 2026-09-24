@@ -52,6 +52,9 @@ mod resources;
 #[path = "audit_reporter_read_tests.rs"]
 mod read;
 
+#[path = "audit_reporter_live_tests.rs"]
+mod live;
+
 #[tokio::test(start_paused = true)]
 async fn audit_reporter_atomic_write_file_delivery_saturation_deadline_and_no_recursion() {
     use file::{access, file_server, request, SERVICE};
@@ -275,9 +278,13 @@ async fn audit_reporter_filters_disabled_write_bit_and_priority_without_filterin
             reporter.set_audit_level(AuditLevel::NONE).unwrap();
         }
         if !write_bit {
-            reporter.set_auditable_operations(AuditOperationFlags::empty());
+            reporter
+                .set_auditable_operations(AuditOperationFlags::empty())
+                .unwrap();
         }
-        reporter.set_audit_priority_filter(BACnetPriorityFilter::from_bits(0x8001));
+        reporter
+            .set_audit_priority_filter(BACnetPriorityFilter::from_bits(0x8001))
+            .unwrap();
         let mut fixture = server(reporter).await;
         assert!(matches!(
             write_value(&fixture.server, priority).await,
@@ -289,7 +296,9 @@ async fn audit_reporter_filters_disabled_write_bit_and_priority_without_filterin
         fixture.server.stop().await.unwrap();
     }
     let mut reporter = reporter();
-    reporter.set_audit_priority_filter(BACnetPriorityFilter::empty());
+    reporter
+        .set_audit_priority_filter(BACnetPriorityFilter::empty())
+        .unwrap();
     let mut fixture = server(reporter).await;
     assert!(matches!(
         dispatch(
@@ -425,7 +434,7 @@ fn confirmed_notification(sent: &StdMutex<Vec<Bytes>>, index: usize) -> Confirme
 #[tokio::test(start_paused = true)]
 async fn audit_reporter_missing_ack_and_failed_delivery_are_communication_failures_and_recover() {
     let mut reporter = reporter();
-    reporter.set_issue_confirmed_notifications(true);
+    reporter.set_issue_confirmed_notifications(true).unwrap();
     let mut fixture = server(reporter).await;
     write_value(&fixture.server, None).await;
     settle().await;
@@ -478,7 +487,9 @@ async fn audit_reporter_missing_ack_and_failed_delivery_are_communication_failur
 #[tokio::test]
 async fn audit_reporter_self_write_is_one_notification_and_sensor_sampling_is_excluded() {
     let mut reporter = reporter();
-    reporter.set_auditable_operations(AuditOperationFlags::empty());
+    reporter
+        .set_auditable_operations(AuditOperationFlags::empty())
+        .unwrap();
     let mut fixture = server(reporter).await;
     assert!(matches!(
         dispatch(
@@ -516,7 +527,7 @@ async fn audit_reporter_self_write_is_one_notification_and_sensor_sampling_is_ex
 #[tokio::test]
 async fn audit_reporter_overflow_and_shutdown_with_inflight_send_are_bounded() {
     let mut reporter = reporter();
-    reporter.set_issue_confirmed_notifications(true);
+    reporter.set_issue_confirmed_notifications(true).unwrap();
     let mut fixture = server(reporter).await;
     fixture.transport.block.store(true, Ordering::Release);
     let response = dispatch(
@@ -548,7 +559,9 @@ async fn audit_reporter_overflow_and_shutdown_with_inflight_send_are_bounded() {
 async fn audit_reporter_blocked_transport_has_a_total_deadline_even_without_ack_wait() {
     for confirmed in [false, true] {
         let mut reporter = reporter();
-        reporter.set_issue_confirmed_notifications(confirmed);
+        reporter
+            .set_issue_confirmed_notifications(confirmed)
+            .unwrap();
         let mut fixture = server(reporter).await;
         fixture.transport.block.store(true, Ordering::Release);
         write_value(&fixture.server, None).await;
@@ -651,7 +664,9 @@ async fn audit_reporter_known_source_array_coordinate_and_large_value_policy() {
 #[tokio::test]
 async fn audit_reporter_noncommandable_present_value_ignores_priority_filter() {
     let mut reporter = reporter();
-    reporter.set_audit_priority_filter(BACnetPriorityFilter::empty());
+    reporter
+        .set_audit_priority_filter(BACnetPriorityFilter::empty())
+        .unwrap();
     let mut fixture = server(reporter).await;
     fixture
         .server

@@ -6,8 +6,10 @@ fn enabled(confirmed: bool) -> bacnet_objects::audit::AuditReporterObject {
     let mut flags = AuditOperationFlags::empty();
     flags.insert(AuditOperation::WRITE);
     flags.insert(AuditOperation::AUDITING_FAILURE);
-    reporter.set_auditable_operations(flags);
-    reporter.set_issue_confirmed_notifications(confirmed);
+    reporter.set_auditable_operations(flags).unwrap();
+    reporter
+        .set_issue_confirmed_notifications(confirmed)
+        .unwrap();
     reporter
 }
 
@@ -214,10 +216,14 @@ async fn audit_reporter_auditing_failure_filters_ignore_selection_and_priority()
         let mut reporter = enabled(false);
         reporter.set_audit_level(level).unwrap();
         if !bit {
-            reporter.set_auditable_operations(AuditOperationFlags::empty());
+            reporter
+                .set_auditable_operations(AuditOperationFlags::empty())
+                .unwrap();
         }
-        reporter.set_monitored_objects(Some(vec![]));
-        reporter.set_audit_priority_filter(BACnetPriorityFilter::empty());
+        reporter.set_monitored_objects(Some(vec![])).unwrap();
+        reporter
+            .set_audit_priority_filter(BACnetPriorityFilter::empty())
+            .unwrap();
         let mut fixture = server(reporter).await;
         let mut permits: Vec<_> = (0..64)
             .map(|_| {
@@ -228,20 +234,21 @@ async fn audit_reporter_auditing_failure_filters_ignore_selection_and_priority()
                     .unwrap()
             })
             .collect();
-        // Reporter Description bypasses ordinary selection/WRITE/priority.
+        // A failed Reporter write keeps the selected attempt-accounting policy.
+        // Actual Description changes instead require atomic precommit admission.
         assert!(matches!(
             dispatch(
                 &fixture.server,
                 ConfirmedServiceChoice::WRITE_PROPERTY,
                 wp(
                     oid(ObjectType::AUDIT_REPORTER, 1),
-                    PropertyIdentifier::DESCRIPTION,
+                    PropertyIdentifier::PRESENT_VALUE,
                     vec![0x72, 0, b'x'],
                     Some(3)
                 )
             )
             .await,
-            Apdu::SimpleAck(_)
+            Apdu::Error(_)
         ));
         settle().await;
         assert_eq!(

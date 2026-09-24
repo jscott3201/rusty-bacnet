@@ -14,7 +14,7 @@ fn lifecycle_reporter() -> bacnet_objects::audit::AuditReporterObject {
     ] {
         operations.insert(operation);
     }
-    reporter.set_auditable_operations(operations);
+    reporter.set_auditable_operations(operations).unwrap();
     reporter
 }
 
@@ -421,9 +421,11 @@ async fn audit_reporter_lifecycle_filters_final_identity_success_and_failure() {
         (None, AuditLevel::AUDIT_ALL, false, false, 0),
     ] {
         let mut reporter = lifecycle_reporter();
-        reporter.set_monitored_objects(selectors);
+        reporter.set_monitored_objects(selectors).unwrap();
         reporter.set_audit_level(level).unwrap();
-        reporter.set_audit_priority_filter(BACnetPriorityFilter::from_bits(0));
+        reporter
+            .set_audit_priority_filter(BACnetPriorityFilter::from_bits(0))
+            .unwrap();
         let mut operations = AuditOperationFlags::empty();
         if create_bit {
             operations.insert(AuditOperation::CREATE);
@@ -431,7 +433,7 @@ async fn audit_reporter_lifecycle_filters_final_identity_success_and_failure() {
         if delete_bit {
             operations.insert(AuditOperation::DELETE);
         }
-        reporter.set_auditable_operations(operations);
+        reporter.set_auditable_operations(operations).unwrap();
         let mut fixture = server(reporter).await;
         let response = dispatch(
             &fixture.server,

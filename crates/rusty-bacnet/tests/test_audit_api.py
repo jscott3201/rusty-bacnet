@@ -314,12 +314,7 @@ class AuditContractArtifactTests(unittest.TestCase):
             ("configure_audit_log_parent", {"instance": "int"}, {
                 "parent_device_instance": "int", "parent_audit_log_instance": "int",
             }),
-            ("configure_audit_reporter", {"instance": "int"}, {
-                "audit_level": "Literal['none', 'audit_config', 'audit_all']",
-                "auditable_operations": "int", "issue_confirmed_notifications": "bool",
-                "monitored_objects": "list[ObjectIdentifier | ObjectType | None] | None",
-                "audit_priority_filter": "int | None",
-            }),
+            ("configure_audit_reporters", {"reporters": "list[AuditReporterConfiguration]"}, {}),
         ):
             with self.subTest(server_method=name):
                 parameters = list(inspect.signature(getattr(BACnetServer, name)).parameters.values())
@@ -662,8 +657,7 @@ class AuditContractArtifactTests(unittest.TestCase):
         async def exercise() -> None:
             server = BACnetServer(device_instance=8, interface="127.0.0.1", port=0)
             server.add_audit_reporter(1, "Selected")
-            server.configure_audit_reporter(1, audit_level="none", auditable_operations=0,
-                                            issue_confirmed_notifications=False)
+            server.configure_audit_reporters([{"instance": 1, 'audit_level': "none", 'auditable_operations': 0, 'issue_confirmed_notifications': False}])
             with self.assertRaisesRegex(ValueError, "configure_audit_recipient"):
                 await server.start()
             self.assertEqual(getattr(server, "_pending_registration_count")(), 1)
@@ -702,8 +696,7 @@ class AuditContractArtifactTests(unittest.TestCase):
             server.configure_audit_recipient(cast(Any, recipient))
             recipient["mac_address"] = bytes.fromhex("7f000001bac1")
             server.add_audit_reporter(1, "Selected")
-            server.configure_audit_reporter(1, audit_level="none", auditable_operations=0,
-                                            issue_confirmed_notifications=False)
+            server.configure_audit_reporters([{"instance": 1, 'audit_level': "none", 'auditable_operations': 0, 'issue_confirmed_notifications': False}])
             await server.start()
             try:
                 value = await server.read_property(ObjectIdentifier(ObjectType.DEVICE, 8),
@@ -713,38 +706,35 @@ class AuditContractArtifactTests(unittest.TestCase):
                 await server.stop()
         asyncio.run(bounded_reporter_test(exercise()))
 
-    def test_reporter_strict_validation_is_atomic_and_identity_is_fixed(self) -> None:
+    def test_reporter_strict_validation_is_atomic_and_set_is_replaceable(self) -> None:
         async def exercise() -> None:
             server = BACnetServer(device_instance=8, interface="127.0.0.1", port=0)
             server.configure_audit_recipient({"kind": "device", "object_identifier": ObjectIdentifier(ObjectType.DEVICE, 9)})
-            configure = cast(Callable[..., None], server.configure_audit_reporter)
+            configure = cast(Callable[..., None], server.configure_audit_reporters)
             settings = dict(audit_level="audit_all",
                             auditable_operations=2, issue_confirmed_notifications=False)
             with self.assertRaisesRegex(ValueError, "no pending Audit Reporter"):
-                configure(1, **settings)
+                configure([{"instance": 1, **settings}])
             server.add_analog_value(1, "Not a Reporter")
             with self.assertRaisesRegex(ValueError, "no pending Audit Reporter"):
-                configure(1, **settings)
+                configure([{"instance": 1, **settings}])
             server.add_audit_reporter(1, "Selected")
             server.add_audit_reporter(2, "Inert")
             with self.assertRaisesRegex(TypeError, r"monitored_objects\[1\]"):
-                configure(2, **settings, monitored_objects=[ObjectType.ANALOG_VALUE, True])
+                configure([{"instance": 2, **settings, 'monitored_objects': [ObjectType.ANALOG_VALUE, True]}])
             with self.assertRaisesRegex(ValueError, "audit_priority_filter"):
-                configure(2, **settings, audit_priority_filter=65536)
-            configure(1, **settings)
+                configure([{"instance": 2, **settings, 'audit_priority_filter': 65536}])
+            configure([{"instance": 1, **settings}])
             # All allowed u64 positions survive, including bit 63, without narrowing.
             valid_mask = 0xffff_ffff_0000_ffff
-            configure(1, audit_level="none",
-                      auditable_operations=0, issue_confirmed_notifications=False)
-            with self.assertRaisesRegex(ValueError, "different Audit Reporter"):
-                configure(2, **settings)  # NONE does not release the fixed selection.
-            configure(1, audit_level="audit_config",
-                      auditable_operations=valid_mask, issue_confirmed_notifications=True)
+            configure([{"instance": 1, 'audit_level': "none", 'auditable_operations': 0, 'issue_confirmed_notifications': False}])
+            configure([{"instance": 2, **settings}])  # A valid list replaces the selected set.
+            configure([{"instance": 1, 'audit_level': "audit_config", 'auditable_operations': valid_mask, 'issue_confirmed_notifications': True}])
 
             for field in ("instance",):
-                for invalid in (-1, 2**22, 2**100, True, False, 1.0, "1", None):
+                for invalid in (-1, 2**22 - 1, 2**22, 2**100, True, False, 1.0, "1", None):
                     with self.subTest(field=field, invalid=invalid), self.assertRaises(ValueError):
-                        configure(**{**settings, "instance": 1, field: invalid})
+                        configure([{**{**settings, "instance": 1, field: invalid}}])
             cases = {
                 "audit_level": [(ValueError, v) for v in ("", "NONE", "default", "audit_all ", "4")]
                     + [(TypeError, v) for v in (None, 1, True, b"audit_all")],
@@ -763,26 +753,26 @@ class AuditContractArtifactTests(unittest.TestCase):
             for field, invalids in cases.items():
                 for error, invalid in invalids:
                     with self.subTest(field=field, invalid=invalid), self.assertRaises(error):
-                        configure(1, **{**settings, field: invalid})
+                        configure([{"instance": 1, **{**settings, field: invalid}}])
             with self.assertRaisesRegex(ValueError, "remote Device"):
                 server.configure_audit_recipient({"kind": "device", "object_identifier": ObjectIdentifier(ObjectType.DEVICE, 8)})
-            with self.assertRaises(TypeError):
-                configure(1, **settings, recipient_device_instance=9)
-            with self.assertRaisesRegex(ValueError, "different Audit Reporter"):
-                configure(2, **settings)
+            with self.assertRaises(ValueError):
+                configure([{"instance": 1, **settings, 'recipient_device_instance': 9}])
+            with self.assertRaisesRegex(ValueError, "duplicate"):
+                configure([{"instance": 2, **settings}, {"instance": 2, **settings}])
             with self.assertRaisesRegex(ValueError, "no pending Audit Reporter"):
-                configure(99, **settings)
+                configure([{"instance": 99, **settings}])
             with self.assertRaises(TypeError):
                 configure(1, 9, "audit_all", 2, False)
             for field in settings:
-                with self.subTest(missing=field), self.assertRaises(TypeError):
-                    configure(1, **{k: v for k, v in settings.items() if k != field})
+                with self.subTest(missing=field), self.assertRaises(ValueError):
+                    configure([{"instance": 1, **{k: v for k, v in settings.items() if k != field}}])
             self.assertEqual(getattr(server, "_pending_registration_count")(), 3)
             await server.start()
             try:
                 for instance, level, mask, confirmed in (
                     (1, 2, PropertyValue.bit_string(0, bytes.fromhex("ffff0000ffffffff")), True),
-                    (2, 0, PropertyValue.bit_string(0, b""), False),
+                    (2, 1, PropertyValue.bit_string(6, b"\x40"), False),
                 ):
                     oid = ObjectIdentifier(ObjectType.AUDIT_REPORTER, instance)
                     self.assertEqual((await server.read_property(oid, PropertyIdentifier.AUDIT_LEVEL)).value, level)
@@ -809,18 +799,18 @@ class AuditContractArtifactTests(unittest.TestCase):
             server = BACnetServer(device_instance=8, interface="127.0.0.1", port=0)
             server.add_audit_reporter(1, "Selected")
             server.configure_audit_recipient({"kind": "device", "object_identifier": ObjectIdentifier(ObjectType.DEVICE, 9)})
-            configure = cast(Callable[..., None], server.configure_audit_reporter)
+            configure = cast(Callable[..., None], server.configure_audit_reporters)
             # Every case replaces a non-default configuration, including removal
             # by explicit None and omission. Inputs are copied, not retained.
-            configure(1, **settings, monitored_objects=[target], audit_priority_filter=0)
-            configure(1, **settings, **options)
+            configure([{"instance": 1, **settings, 'monitored_objects': [target], 'audit_priority_filter': 0}])
+            configure([{"instance": 1, **settings, **options}])
             for invalid in (
                 {"monitored_objects": [None, True], "audit_priority_filter": 0},
                 {"monitored_objects": [], "audit_priority_filter": 65536},
                 {"monitored_objects": [], "audit_priority_filter": 0, "auditable_operations": 1 << 16},
             ):
                 with self.assertRaises((TypeError, ValueError)):
-                    configure(1, **{**settings, **invalid})
+                    configure([{"instance": 1, **{**settings, **invalid}}])
             if isinstance(options.get("monitored_objects"), list):
                 options["monitored_objects"].clear()
             self.assertEqual(getattr(server, "_pending_registration_count")(), 1)
@@ -863,11 +853,11 @@ class AuditContractArtifactTests(unittest.TestCase):
         settings = dict(audit_level="audit_all",
                         auditable_operations=2, issue_confirmed_notifications=False)
         server.configure_audit_recipient({"kind": "device", "object_identifier": ObjectIdentifier(ObjectType.DEVICE, 9)})
-        configure = cast(Callable[..., None], server.configure_audit_reporter)
-        configure(1, **settings)
+        configure = cast(Callable[..., None], server.configure_audit_reporters)
+        configure([{"instance": 1, **settings}])
         server.add_audit_reporter(1, "Duplicate")
         with self.assertRaisesRegex(ValueError, "duplicate pending Audit Reporter"):
-            configure(1, **{**settings, "audit_level": "none"})
+            configure([{"instance": 1, **{**settings, "audit_level": "none"}}])
         for _ in range(2):
             with self.assertRaisesRegex(ValueError, "duplicate pending Audit Reporter"):
                 _unused = server.start()
@@ -883,8 +873,7 @@ class AuditContractArtifactTests(unittest.TestCase):
                 server.add_audit_reporter(1, "Retryable")
                 server.configure_audit_recipient({"kind": "device", "object_identifier": ObjectIdentifier(ObjectType.DEVICE, 9)})
                 for level in ("audit_all", "none"):
-                    server.configure_audit_reporter(1, audit_level=cast(Any, level), auditable_operations=2, issue_confirmed_notifications=False,
-                        monitored_objects=[None], audit_priority_filter=0)
+                    server.configure_audit_reporters([{"instance": 1, 'audit_level': cast(Any, level), 'auditable_operations': 2, 'issue_confirmed_notifications': False, 'monitored_objects': [None], 'audit_priority_filter': 0}])
                     with self.assertRaisesRegex(RuntimeError, "TLS config error"):
                         _unused = server.start()
                     self.assertEqual(getattr(server, "_pending_registration_count")(), 1)
@@ -892,11 +881,10 @@ class AuditContractArtifactTests(unittest.TestCase):
             for configure_before_start in (False, True):
                 with self.subTest(configure_before_start=configure_before_start):
                     server = BACnetServer(device_instance=8, interface="127.0.0.1", port=0)
-                    server.add_audit_reporter(2**22 - 1, "Frozen")
+                    server.add_audit_reporter(2**22 - 2, "Frozen")
                     server.configure_audit_recipient({"kind": "device", "object_identifier": ObjectIdentifier(ObjectType.DEVICE, 0)})
                     def configure() -> None:
-                        server.configure_audit_reporter(2**22 - 1, audit_level="audit_all", auditable_operations=2, issue_confirmed_notifications=True,
-                            monitored_objects=[ObjectType.ANALOG_VALUE], audit_priority_filter=1 << 7)
+                        server.configure_audit_reporters([{"instance": 2**22 - 2, 'audit_level': "audit_all", 'auditable_operations': 2, 'issue_confirmed_notifications': True, 'monitored_objects': [ObjectType.ANALOG_VALUE], 'audit_priority_filter': 1 << 7}])
                     if configure_before_start:
                         configure()
                     starting = server.start()
@@ -981,21 +969,18 @@ class AuditContractArtifactTests(unittest.TestCase):
                     child.add_device_binding(9, parent_address)
                 if level is not None:
                     child.configure_audit_recipient({"kind": "device", "object_identifier": ObjectIdentifier(ObjectType.DEVICE, 9)})
-                    child.configure_audit_reporter(0, audit_level="none", auditable_operations=0, issue_confirmed_notifications=not confirmed,
-                        monitored_objects=[], audit_priority_filter=0)
-                    child.configure_audit_reporter(0, audit_level=cast(Any, level), auditable_operations=operations,
-                        issue_confirmed_notifications=confirmed, **(filters or {}))
+                    child.configure_audit_reporters([{"instance": 0, 'audit_level': "none", 'auditable_operations': 0, 'issue_confirmed_notifications': not confirmed, 'monitored_objects': [], 'audit_priority_filter': 0}])
+                    child.configure_audit_reporters([{"instance": 0, 'audit_level': cast(Any, level), 'auditable_operations': operations, 'issue_confirmed_notifications': confirmed, **(filters or {})}])
                     with self.assertRaises(ValueError):
-                        child.configure_audit_reporter(1, audit_level="audit_all", auditable_operations=2, issue_confirmed_notifications=True)
+                        child.configure_audit_reporters([{"instance": 99, 'audit_level': "audit_all", 'auditable_operations': 2, 'issue_confirmed_notifications': True}])
                     with self.assertRaises(ValueError):
-                        child.configure_audit_reporter(0, audit_level="none", auditable_operations=1 << 16, issue_confirmed_notifications=True)
+                        child.configure_audit_reporters([{"instance": 0, 'audit_level': "none", 'auditable_operations': 1 << 16, 'issue_confirmed_notifications': True}])
                     invalid_filters: list[dict[str, Any]] = [
                         {"monitored_objects": [True]}, {"audit_priority_filter": 65536},
                     ]
                     for invalid in invalid_filters:
                         with self.assertRaises((TypeError, ValueError)):
-                            child.configure_audit_reporter(0, audit_level="none", auditable_operations=0,
-                                issue_confirmed_notifications=not confirmed, **invalid)
+                            child.configure_audit_reporters([{"instance": 0, 'audit_level': "none", 'auditable_operations': 0, 'issue_confirmed_notifications': not confirmed, **invalid}])
                 if bound and not confirmed:
                     child.add_device_binding(9, parent_address)
                 await child.start()

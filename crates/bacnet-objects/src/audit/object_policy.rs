@@ -136,7 +136,10 @@ impl ObjectAuditPolicy {
 
     /// Resolve this AV/BV instance's settings against its associated Reporter.
     #[doc(hidden)]
-    pub fn effective_internal(self, reporter: &super::AuditReporterObject) -> EffectiveAuditPolicy {
+    pub fn effective_internal(
+        self,
+        reporter: &super::AuditReporterConfiguration,
+    ) -> EffectiveAuditPolicy {
         EffectiveAuditPolicy {
             reporter_enabled: reporter.audit_level != AuditLevel::NONE,
             level: self

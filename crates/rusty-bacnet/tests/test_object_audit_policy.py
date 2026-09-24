@@ -71,8 +71,7 @@ class ObjectAuditPolicyTests(unittest.IsolatedAsyncioTestCase):
             parent.configure_audit_notification_sink(1, policy="allow_all")
             child = rb.BACnetServer(8121, interface="127.0.0.1", port=0)
             child.add_audit_reporter(1, "reporter")
-            child.configure_audit_reporter(1, audit_level="audit_all", auditable_operations=0,
-                                           issue_confirmed_notifications=True)
+            child.configure_audit_reporters([{"instance": 1, 'audit_level': "audit_all", 'auditable_operations': 0, 'issue_confirmed_notifications': True}])
             child.add_analog_value(1, "av", audit_level="none", auditable_operations=2)
             child.add_binary_value(1, "bv", audit_level="audit_all", auditable_operations=2,
                                    audit_priority_filter=128)

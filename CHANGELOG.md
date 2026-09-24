@@ -7,10 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Target Audit now supports 1–64 configured Reporters with lowest-instance nominal
+  election, overlap health, independent loss contexts and one global admission budget.
+  Live Rust Reporter configuration and Description changes share atomic capture.
+  Pre-1.0 API replacement: `AuditReportersConfig { reporters }`, `.audit_reporters(...)`,
+  and Python `configure_audit_reporters([...])`; singular selectors are removed.
+  Source reporting remains exactly one; no full Audit conformance claim (#782).
+
 - AV/BV independently optional Audit policy properties, Rust and Python creation-time
   authoring, and effective target READ/WRITE/CREATE/DELETE filtering. Supported
   server local writes now share the target observer; physical Input sampling and
-  raw database authoring remain separate. No multi-Reporter or full Audit claim.
+  raw database authoring remain separate. No full Audit claim.
 
 - Add Rust/Python endpoint ReadPropertyMultiple through the shared read owner:
   1–64 explicit concrete references, ordered ACK correlation and per-occurrence
@@ -206,7 +213,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ambiguous. Delivery failure updates Reporter health without changing the READ
   result. The Device recipient extension is described above; full Audit Reporting
   conformance remains out of scope. Source loss summaries are described above. See
-  [endpoint source READ](docs/rust-api.md#bounded-endpoint-source-readproperty-reporting).
+  [endpoint source READ](docs/rust-api.md#bounded-endpoint-source-read-reporting).
   **Pre-1.0 internal Rust API cleanup:** shared coordinator
   `LeaseOwner::ServerNotification` / `LeaseMetadata::server_notification` become
   `Notification` / `notification`, reflecting ClientOnly notification ownership.
@@ -223,10 +230,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The Python configuration API and Reporter operational behavior are unchanged.
 
 - **Standalone Python static target Audit Reporter (RB-23c, Refs #345):**
-  Add pre-start Reporter selection (now `configure_audit_reporter(instance, *,
+  Add pre-start Reporter selection (initially `configure_audit_reporter(instance, *,
   audit_level, auditable_operations, issue_confirmed_notifications)`); unchanged
   `add_audit_reporter()` alone stays inert. The first valid call fixes the Reporter
-  identity; repeated calls replace that instance's settings. Initial recipient
+  identity; repeated calls replace that instance's settings. The plural target
+  configuration described above supersedes this singular API and identity rule.
+  Initial recipient
   provision now uses the separate Device-owned API described above.
   Strict identifiers, level literals, full-u64 operation masks and actual booleans
   validate before mutation. Configuration freezes at startup ownership transfer,
@@ -237,7 +246,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   health and joined shutdown are reused unchanged. Installed-extension loopback
   tests cover actual public writes, confirmed/unconfirmed receipt/query, suppression,
   invalid-call atomicity and lifecycle behavior. See
-  [Python static Reporter](docs/python-api.md#static-target-audit-reporter).
+  [Python target Reporters](docs/python-api.md#target-audit-reporters).
   This supersedes prior active-Python-Reporter exclusions only for this static
   target-side subset. The Device recipient path above extends its destination
   configuration; ordinary source-side/local-write production, retries/durable

@@ -67,7 +67,7 @@ async fn audit_reporter_selection_absent_exact_type_mixed_and_duplicates_have_ex
         ),
     ] {
         let mut reporter = reporter();
-        reporter.set_monitored_objects(selection);
+        reporter.set_monitored_objects(selection).unwrap();
         let mut fixture = server(reporter).await;
         let mut expected = Vec::new();
         let mut invoke = 77;
@@ -172,7 +172,7 @@ async fn audit_reporter_selection_wpm_keeps_only_matching_ordered_outcomes() {
         ],
     ] {
         let mut reporter = reporter();
-        reporter.set_monitored_objects(Some(selection));
+        reporter.set_monitored_objects(Some(selection)).unwrap();
         let mut fixture = server(reporter).await;
         let response = dispatch(
             &fixture.server,
@@ -263,7 +263,9 @@ async fn audit_reporter_selection_wpm_keeps_only_matching_ordered_outcomes() {
 async fn audit_reporter_selection_unmatched_wpm_failure_is_silent_and_still_halts() {
     let input = oid(ObjectType::ANALOG_INPUT, 1);
     let mut reporter = reporter();
-    reporter.set_monitored_objects(Some(vec![Selector::Object(input)]));
+    reporter
+        .set_monitored_objects(Some(vec![Selector::Object(input)]))
+        .unwrap();
     let mut fixture = server(reporter).await;
     let response = dispatch(
         &fixture.server,
@@ -330,9 +332,13 @@ async fn audit_reporter_selection_self_write_bypasses_selection_but_not_none_lev
     ] {
         let mut reporter = reporter();
         reporter.set_audit_level(level).unwrap();
-        reporter.set_monitored_objects(Some(vec![]));
-        reporter.set_auditable_operations(AuditOperationFlags::empty());
-        reporter.set_audit_priority_filter(BACnetPriorityFilter::empty());
+        reporter.set_monitored_objects(Some(vec![])).unwrap();
+        reporter
+            .set_auditable_operations(AuditOperationFlags::empty())
+            .unwrap();
+        reporter
+            .set_audit_priority_filter(BACnetPriorityFilter::empty())
+            .unwrap();
         let mut fixture = server(reporter).await;
         let target = oid(ObjectType::AUDIT_REPORTER, 1);
         for failed in [false, true] {
@@ -377,7 +383,7 @@ async fn audit_reporter_selection_self_write_bypasses_selection_but_not_none_lev
 async fn audit_reporter_selection_empty_and_null_suppress_without_state_or_execution_changes() {
     for selection in [vec![], vec![Selector::None, Selector::None]] {
         let mut reporter = reporter();
-        reporter.set_monitored_objects(Some(selection));
+        reporter.set_monitored_objects(Some(selection)).unwrap();
         let mut fixture = server(reporter).await;
         // Suppression must not even attempt a delivery that could fault health.
         fixture.transport.fail.store(true, Ordering::Release);

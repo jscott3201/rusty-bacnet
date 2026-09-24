@@ -11,7 +11,7 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
     ) -> Option<AuditFailureTicket<Arc<ConfirmedRecipientRoute>>> {
         let route = route?;
         self.transactions
-            .audit_failure_queue()
+            .audit_failure_queue(status)?
             .observe(AuditFailureContext {
                 epoch: status.auditing_failure_epoch()?,
                 status: Arc::clone(status),
@@ -27,7 +27,10 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         let Some(ticket) = pending.failure.clone() else {
             return;
         };
-        let Some(mut worker) = self.transactions.audit_failure_queue().record_drop(
+        let Some(queue) = self.transactions.audit_failure_queue(&pending.status) else {
+            return;
+        };
+        let Some(mut worker) = queue.record_drop(
             self.transactions,
             ticket,
             pending

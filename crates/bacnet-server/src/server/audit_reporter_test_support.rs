@@ -118,7 +118,7 @@ pub(super) fn reporter() -> AuditReporterObject {
     reporter.set_audit_level(AuditLevel::AUDIT_ALL).unwrap();
     let mut operations = AuditOperationFlags::empty();
     operations.insert(AuditOperation::WRITE);
-    reporter.set_auditable_operations(operations);
+    reporter.set_auditable_operations(operations).unwrap();
     reporter
 }
 
@@ -200,6 +200,31 @@ pub(super) async fn try_server(
     recipient: Option<bacnet_types::constructed::BACnetRecipient>,
     bindings: Vec<DeviceBinding>,
 ) -> Result<Fixture, Error> {
+    try_servers(vec![reporter], devices, recipient, bindings).await
+}
+
+pub(super) async fn try_servers(
+    reporters: Vec<AuditReporterObject>,
+    devices: &[u32],
+    recipient: Option<bacnet_types::constructed::BACnetRecipient>,
+    bindings: Vec<DeviceBinding>,
+) -> Result<Fixture, Error> {
+    try_servers_profile(reporters, devices, recipient, bindings, true).await
+}
+
+pub(super) async fn plain_server(reporter: AuditReporterObject) -> Fixture {
+    try_servers_profile(vec![reporter], &[10], None, vec![], false)
+        .await
+        .unwrap()
+}
+
+async fn try_servers_profile(
+    reporters: Vec<AuditReporterObject>,
+    devices: &[u32],
+    recipient: Option<bacnet_types::constructed::BACnetRecipient>,
+    bindings: Vec<DeviceBinding>,
+    enabled: bool,
+) -> Result<Fixture, Error> {
     let mut db = ObjectDatabase::new();
     let writes = Arc::new(AtomicUsize::new(0));
     let attempts = Arc::new(AtomicUsize::new(0));
@@ -235,13 +260,19 @@ pub(super) async fn try_server(
         .unwrap();
     db.add(Box::new(BinaryValueObject::new(2, "other-value").unwrap()))
         .unwrap();
-    db.add(Box::new(reporter)).unwrap();
+    let identities = reporters
+        .iter()
+        .map(BACnetObject::object_identifier)
+        .collect();
+    for reporter in reporters {
+        db.add(Box::new(reporter)).unwrap();
+    }
     let transport = CaptureTransport::default();
     let captured = transport.clone();
     let server = BACnetServer::start_with_clock_mode_and_bindings(
         ServerConfig {
-            audit_reporter: Some(AuditReporterConfig {
-                reporter: oid(ObjectType::AUDIT_REPORTER, 1),
+            audit_reporters: enabled.then_some(AuditReportersConfig {
+                reporters: identities,
             }),
             ..Default::default()
         },

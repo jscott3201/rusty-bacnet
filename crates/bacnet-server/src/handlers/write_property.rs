@@ -195,15 +195,14 @@ pub(crate) fn handle_write_property_multiple_observed(
                 },
             );
         }
-        let write = db
-            .get_mut(&oid)
-            .expect("existence checked above")
-            .write_property(
-                property,
-                reference.property_array_index,
-                value,
-                attempt.priority,
-            );
+        let write = write_with_source(
+            db.get_mut(&oid).expect("existence checked above"),
+            property,
+            reference.property_array_index,
+            value,
+            attempt.priority,
+            source,
+        );
         if let Err(error) = write {
             if let Some(observer) = observer.as_deref_mut() {
                 observer.failed(db, &error);
@@ -441,15 +440,14 @@ pub(crate) fn handle_write_property_observed(
             },
         );
     }
-    let result = db
-        .get_mut(&oid)
-        .expect("existence checked above")
-        .write_property(
-            request.property_identifier,
-            request.property_array_index,
-            value,
-            request.priority,
-        );
+    let result = write_with_source(
+        db.get_mut(&oid).expect("existence checked above"),
+        request.property_identifier,
+        request.property_array_index,
+        value,
+        request.priority,
+        source,
+    );
     if let Err(error) = result {
         if let Some(observer) = observer {
             observer.failed(db, &error);
@@ -463,4 +461,22 @@ pub(crate) fn handle_write_property_observed(
         observer.committed(db);
     }
     Ok(oid)
+}
+
+// Concrete Reporter changes keep the authorized request provenance at their
+// canonical object-owned mutation boundary. All other object writes stay generic.
+fn write_with_source(
+    object: &mut dyn bacnet_objects::traits::BACnetObject,
+    property: PropertyIdentifier,
+    index: Option<u32>,
+    value: PropertyValue,
+    priority: Option<u8>,
+    source: Option<&bacnet_objects::device::AuditWriteSource>,
+) -> Result<(), Error> {
+    if property == PropertyIdentifier::DESCRIPTION {
+        if let Some(mut reporter) = object.audit_reporter_authority_internal() {
+            return reporter.write_description(value, index, source);
+        }
+    }
+    object.write_property(property, index, value, priority)
 }

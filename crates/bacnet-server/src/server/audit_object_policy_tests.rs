@@ -78,7 +78,8 @@ fn count(f: &Fixture) -> usize {
 async fn object_audit_policy_actual_changes_noops_failures_and_local_paths() {
     for kind in [ObjectType::ANALOG_VALUE, ObjectType::BINARY_VALUE] {
         let mut r = reporter();
-        r.set_auditable_operations(AuditOperationFlags::empty());
+        r.set_auditable_operations(AuditOperationFlags::empty())
+            .unwrap();
         let mut f = server(r).await;
         install(
             &f,
@@ -205,7 +206,7 @@ async fn object_audit_policy_reporter_none_unselected_and_input_sampling_silent(
         if none {
             r.set_audit_level(AuditLevel::NONE).unwrap();
         } else {
-            r.set_monitored_objects(Some(vec![]));
+            r.set_monitored_objects(Some(vec![])).unwrap();
         }
         let mut f = server(r).await;
         install(
@@ -251,7 +252,8 @@ async fn object_audit_policy_priorities_config_read_and_failed_write() {
         )),
     ] {
         let mut r = reporter();
-        r.set_audit_priority_filter(BACnetPriorityFilter::from_bits(1 << 7));
+        r.set_audit_priority_filter(BACnetPriorityFilter::from_bits(1 << 7))
+            .unwrap();
         let mut f = server(r).await;
         install(
             &f,
@@ -431,7 +433,8 @@ async fn object_audit_policy_wpm_each_element_captures_committed_prestate() {
 async fn object_audit_policy_bv_create_delete_and_failed_av_create_fallback() {
     use bacnet_services::object_mgmt::{CreateObjectRequest, DeleteObjectRequest, ObjectSpecifier};
     let mut r = reporter();
-    r.set_auditable_operations(flags(&[AuditOperation::CREATE, AuditOperation::DELETE]));
+    r.set_auditable_operations(flags(&[AuditOperation::CREATE, AuditOperation::DELETE]))
+        .unwrap();
     let mut f = server(r).await;
     // NONE created policy suppresses CREATE and its deletion. The next object
     // at the same OID has no policy state from the deleted instance.

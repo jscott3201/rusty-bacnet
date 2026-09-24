@@ -311,7 +311,7 @@ async fn source_read_stop_and_drop_cancel_owned_work_with_held_client_clones() {
 
 #[tokio::test]
 async fn source_read_and_target_reporting_remain_independent_over_bip() {
-    use bacnet_server::server::{AuditReporterConfig, BACnetServer, DeviceBinding};
+    use bacnet_server::server::{AuditReportersConfig, BACnetServer, DeviceBinding};
     let (mut sink, mut records) = network().await;
     let mut db = crate::DeviceIdentity::new(456, 42)
         .unwrap()
@@ -345,8 +345,8 @@ async fn source_read_and_target_reporting_remain_independent_over_bip() {
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
         .database(db)
-        .audit_reporter(AuditReporterConfig {
-            reporter: selected(),
+        .audit_reporters(AuditReportersConfig {
+            reporters: vec![selected()],
         })
         .device_binding(
             DeviceBinding::local(oid(ObjectType::DEVICE, 999), sink.local_mac()).unwrap(),

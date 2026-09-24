@@ -20,15 +20,17 @@ async fn device_recipient_bip_address_change_delivers_to_both_real_loggers() {
             .provision_audit_recipient(BACnetRecipient::Device(oid(ObjectType::DEVICE, 20)))
             .unwrap();
         let mut reporter = AuditReporterObject::new(1, "reporter").unwrap();
-        reporter.set_issue_confirmed_notifications(confirmed);
+        reporter
+            .set_issue_confirmed_notifications(confirmed)
+            .unwrap();
         // The mandatory property-specific pair applies even at Audit_Level NONE.
         db.add(Box::new(reporter)).unwrap();
         let mut target = BACnetServer::builder()
             .interface(Ipv4Addr::LOCALHOST)
             .port(0)
             .database(db)
-            .audit_reporter(AuditReporterConfig {
-                reporter: oid(ObjectType::AUDIT_REPORTER, 1),
+            .audit_reporters(AuditReportersConfig {
+                reporters: vec![oid(ObjectType::AUDIT_REPORTER, 1)],
             })
             .device_binding(
                 DeviceBinding::local(oid(ObjectType::DEVICE, 20), old_logger.local_mac()).unwrap(),
