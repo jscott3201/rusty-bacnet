@@ -58,6 +58,12 @@ class EndpointReadRangeTests(unittest.IsolatedAsyncioTestCase):
                             # Bad destination would fail parsing if validation were delayed.
                             with self.assertRaises(ValueError):
                                 reader.read_range("not-an-address", oid, pid, **options)
+                    for count in (1 << 31, -(1 << 31) - 1):
+                        with self.subTest(reader=type(reader), overflowing_count=count):
+                            # Native argument conversion precedes address parsing and I/O.
+                            with self.assertRaises(OverflowError):
+                                reader.read_range("not-an-address", oid, pid,
+                                                  range_type="position", count=count)
                     for selector in (PropertyIdentifier.ALL, PropertyIdentifier.REQUIRED, PropertyIdentifier.OPTIONAL):
                         with self.assertRaises(ValueError):
                             reader.read_range("not-an-address", oid, selector)

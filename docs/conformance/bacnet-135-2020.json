@@ -529,7 +529,7 @@
      "crates/bacnet-server/src/handlers/read_range.rs::handle_read_range",
      "crates/bacnet-objects/src/traits.rs::BACnetObject::is_array_property",
      "crates/bacnet-objects/src/traits.rs::BACnetObject::log_record_identities_internal",
-     "crates/bacnet-client/src/client/file_list.rs::validate_read_range_ack"
+     "crates/bacnet-client/src/read_range.rs::validate_ack"
    ],
    "positive_tests": [
     "crates/bacnet-server/src/handlers/tests/read_range.rs::by_position_is_one_based_signed_and_reports_exact_endpoints",

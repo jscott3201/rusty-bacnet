@@ -642,7 +642,9 @@ Read a range of items from a list or log object. This method is shared by
 `BACnetClient` and `EndpointClient`. Python supports all-items (`range_type=None`),
 position and sequence forms; ByTime remains Rust-only. Invalid selectors,
 array index zero and omitted/zero/out-of-INTEGER16 counts for a selected range
-raise `ValueError` before address parsing or I/O. Omitted reference values default
+raise `ValueError` before address parsing or I/O, provided the supplied count fits
+a signed 32-bit integer. Counts outside that native argument range raise
+`OverflowError` before address parsing or I/O. Omitted reference values default
 to zero; zero position/sequence references are valid and may return no matches.
 The typed `ReadRangeResult` dictionary preserves raw item bytes, the three-boolean
 flags tuple and optional first sequence number. Endpoint responses must be

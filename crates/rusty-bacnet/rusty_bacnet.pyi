@@ -1855,7 +1855,9 @@ class BACnetClient:
 
         ``range_type`` is ``"position"``, ``"sequence"``, or ``None`` (all-items).
         ByTime is not exposed. Invalid selectors, array index zero and missing,
-        zero or non-INTEGER16 counts raise ValueError before I/O. Position/sequence
+        zero or non-INTEGER16 counts raise ValueError before I/O when the supplied
+        count fits a signed 32-bit integer. Counts outside that native argument
+        range raise OverflowError before address parsing or I/O. Position/sequence
         reference zero is valid; omitted references default to zero.
         Returns ``{"object_id": ObjectIdentifier, "property_id": PropertyIdentifier,
         "array_index": int | None, "result_flags": tuple[bool, bool, bool], "item_count": int,
@@ -2712,7 +2714,9 @@ class EndpointClient:
 
         ``range_type`` is ``"position"``, ``"sequence"``, or ``None`` (all-items).
         ByTime is not exposed. Invalid selectors, array index zero and missing,
-        zero or non-INTEGER16 counts raise ValueError before I/O. Position/sequence
+        zero or non-INTEGER16 counts raise ValueError before I/O when the supplied
+        count fits a signed 32-bit integer. Counts outside that native argument
+        range raise OverflowError before address parsing or I/O. Position/sequence
         reference zero is valid; omitted references default to zero.
         Returns ``{"object_id": ObjectIdentifier, "property_id": PropertyIdentifier,
         "array_index": int | None, "result_flags": tuple[bool, bool, bool], "item_count": int,
