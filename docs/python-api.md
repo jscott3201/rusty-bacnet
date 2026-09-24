@@ -638,7 +638,15 @@ raw = await client.get_event_information("192.168.1.100:47808")
 
 #### `read_range(address, object_id, property_id, array_index=None, range_type=None, reference_index=None, reference_seq=None, count=None) -> dict`
 
-Read a range of items from a list or log object.
+Read a range of items from a list or log object. This method is shared by
+`BACnetClient` and `EndpointClient`. Python supports all-items (`range_type=None`),
+position and sequence forms; ByTime remains Rust-only. Invalid selectors,
+array index zero and omitted/zero/out-of-INTEGER16 counts for a selected range
+raise `ValueError` before address parsing or I/O. Omitted reference values default
+to zero; zero position/sequence references are valid and may return no matches.
+The typed `ReadRangeResult` dictionary preserves raw item bytes, the three-boolean
+flags tuple and optional first sequence number. Endpoint responses must be
+unsegmented; the standalone client's existing segmentation support is unchanged.
 
 ```python
 # Read by position
@@ -1873,7 +1881,8 @@ async with endpoint:
 `device_instance`, `vendor_id`, `max_apdu`, `transport`, `local_address`,
 `active_leases`, plus policy counters). `local_address()` is `"ip:port"`
 (BIP), VMAC hex (SC), or station string (MS/TP). Roles expose no callbacks;
-concurrent use is `asyncio.gather` over `read_property` plus
+the client initiates `read_property` and `read_range`; concurrent use is
+`asyncio.gather` over these reads plus
 `is_session_alive()` polling — never Rust-calls-Python. Interpreter
 finalization only seals forcefully; always await `close()` or context exit.
 BIPv6/Ethernet have no endpoint owner; use the standalone path there.

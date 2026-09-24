@@ -13,6 +13,27 @@
 - Addenda/errata status: ASHRAE 135-2020 Errata Summary 2024-04-29 (v1) reviewed for the supported subset. Item 7 (Clause 21.6, p. 886): successful-actions-only corrected from BOOLEAN (struck through, removed) to BACnetSuccessFilter (italic, added), tags [7]/[4]. Item 8 (Clause 21.2.3, p. 865): start-at-sequence-number corrected from Unsigned32 (struck through, removed) to Unsigned64 (italic, added), tag [2] OPTIONAL. Both items visually verified from the rendered errata p. 3 (strikeout = removed, italics = added per the p. 1 convention); not inferred from concatenated text extraction. The implementation encodes the corrected BACnetSuccessFilter/u64 contract after the RB-02 codec and RB-20 runtime/Python migrations; `BACNET-13-AUDIT-WIRE-MODELS` remains `implementation-present-needs-source-review` pending broader Audit review.
 - PR-0808 evidence row: `BACNET-12-ALERT-ENROLLMENT-TABLE-12-61` is `supported-with-clause-evidence` for the served object model only; it is not an Alert evaluator or notification-generation claim.
 
+## Endpoint ReadRange source READ
+
+Refs #771 extends `BACNET-19-SOURCE-READ-PROPERTY` without changing its in-progress
+status or global evidence pins. Clause15.8 (printed745–748/PDF747–750) and
+19.6.5/Table19-5 (printed823/PDF825) ground one value-free source READ record for
+one attempted object/property range request, independent of returned item count.
+[Real B/IP tests](../../crates/bacnet-endpoint/src/source_range_tests.rs) cover all
+Rust range forms, empty/multiple-item ACKs, both delivery modes, exact terminal
+failures, segmented refusal, cancellation/retries, recipient snapshots and Drop.
+The shared RP/RR core preserves the existing operation/lease/notification owners.
+
+[Transactional codec tests](../../crates/bacnet-services/src/read_range_validation_tests.rs)
+reject selectors, index zero, invalid counts and nonconcrete ByTime components
+before output. Zero position/sequence references remain valid. Concrete date/time
+component bounds reuse the decoder; no extra calendar/weekday rule is imposed.
+[Installed Python tests](../../crates/rusty-bacnet/tests/test_endpoint_read_range.py)
+cover the actual shared EndpointClient/standalone API and typed raw-byte ACK shape.
+Python supports all-items/position/sequence, not ByTime or source Reporter setup.
+Endpoint responses remain unsegmented; Audit reporting remains direct B/IP only.
+Source RPM/WP and wider Audit work remain open under #345.
+
 ## Python standalone mutation policy
 
 `BACNET-LOCAL-MUTATION-POLICY` records the bounded #768 binding evidence, with

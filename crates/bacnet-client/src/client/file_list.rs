@@ -1,53 +1,6 @@
 use super::*;
 
-fn validate_read_range_ack(
-    request: &bacnet_services::read_range::ReadRangeRequest,
-    ack: &bacnet_services::read_range::ReadRangeAck,
-) -> Result<(), Error> {
-    if ack.object_identifier != request.object_identifier {
-        return Err(Error::decoding(
-            0,
-            "ReadRange ACK object identifier does not match the request",
-        ));
-    }
-    if ack.property_identifier != request.property_identifier {
-        return Err(Error::decoding(
-            0,
-            "ReadRange ACK property identifier does not match the request",
-        ));
-    }
-    if ack.property_array_index != request.property_array_index {
-        return Err(Error::decoding(
-            0,
-            "ReadRange ACK array index does not match the request",
-        ));
-    }
-
-    let sequence_range = matches!(
-        request.range.as_ref(),
-        Some(
-            bacnet_services::read_range::RangeSpec::BySequenceNumber { .. }
-                | bacnet_services::read_range::RangeSpec::ByTime { .. }
-        )
-    );
-    match (sequence_range, ack.item_count, ack.first_sequence_number) {
-        (true, 1.., Some(1..)) | (true, 0, None) | (false, _, None) => {}
-        (true, 1.., _) => {
-            return Err(Error::decoding(
-                0,
-                "nonempty ReadRange By Sequence/Time ACK requires a nonzero first sequence number",
-            ));
-        }
-        _ => {
-            return Err(Error::decoding(
-                0,
-                "ReadRange ACK first sequence number is invalid for the request range",
-            ));
-        }
-    }
-
-    Ok(())
-}
+use crate::read_range::validate_ack;
 
 fn validate_atomic_read_file_ack(
     request: &bacnet_services::file::FileAccessMethod,
@@ -183,14 +136,14 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             range,
         };
         let mut buf = BytesMut::new();
-        request.encode(&mut buf);
+        request.encode(&mut buf)?;
 
         let response_data = self
             .confirmed_request(destination_mac, ConfirmedServiceChoice::READ_RANGE, &buf)
             .await?;
 
         let ack = ReadRangeAck::decode(&response_data)?;
-        validate_read_range_ack(&request, &ack)?;
+        validate_ack(&request, &ack)?;
         Ok(ack)
     }
 
@@ -361,19 +314,19 @@ mod tests {
             count: 1,
         }));
         let valid = ack(&request, 1, None);
-        assert!(validate_read_range_ack(&request, &valid).is_ok());
+        assert!(validate_ack(&request, &valid).is_ok());
 
         let mut wrong_object = valid.clone();
         wrong_object.object_identifier = ObjectIdentifier::new(ObjectType::TREND_LOG, 2).unwrap();
-        assert!(validate_read_range_ack(&request, &wrong_object).is_err());
+        assert!(validate_ack(&request, &wrong_object).is_err());
 
         let mut wrong_property = valid.clone();
         wrong_property.property_identifier = PropertyIdentifier::PRESENT_VALUE;
-        assert!(validate_read_range_ack(&request, &wrong_property).is_err());
+        assert!(validate_ack(&request, &wrong_property).is_err());
 
         let mut wrong_index = valid;
         wrong_index.property_array_index = Some(2);
-        assert!(validate_read_range_ack(&request, &wrong_index).is_err());
+        assert!(validate_ack(&request, &wrong_index).is_err());
     }
 
     #[test]
@@ -382,11 +335,11 @@ mod tests {
             reference_seq: 1,
             count: 1,
         }));
-        assert!(validate_read_range_ack(&by_sequence, &ack(&by_sequence, 1, Some(1))).is_ok());
-        assert!(validate_read_range_ack(&by_sequence, &ack(&by_sequence, 1, None)).is_err());
-        assert!(validate_read_range_ack(&by_sequence, &ack(&by_sequence, 1, Some(0))).is_err());
-        assert!(validate_read_range_ack(&by_sequence, &ack(&by_sequence, 0, None)).is_ok());
-        assert!(validate_read_range_ack(&by_sequence, &ack(&by_sequence, 0, Some(1))).is_err());
+        assert!(validate_ack(&by_sequence, &ack(&by_sequence, 1, Some(1))).is_ok());
+        assert!(validate_ack(&by_sequence, &ack(&by_sequence, 1, None)).is_err());
+        assert!(validate_ack(&by_sequence, &ack(&by_sequence, 1, Some(0))).is_err());
+        assert!(validate_ack(&by_sequence, &ack(&by_sequence, 0, None)).is_ok());
+        assert!(validate_ack(&by_sequence, &ack(&by_sequence, 0, Some(1))).is_err());
 
         let by_time = request(Some(RangeSpec::ByTime {
             reference_time: (
@@ -405,18 +358,18 @@ mod tests {
             ),
             count: 1,
         }));
-        assert!(validate_read_range_ack(&by_time, &ack(&by_time, 1, Some(1))).is_ok());
-        assert!(validate_read_range_ack(&by_time, &ack(&by_time, 1, None)).is_err());
-        assert!(validate_read_range_ack(&by_time, &ack(&by_time, 1, Some(0))).is_err());
+        assert!(validate_ack(&by_time, &ack(&by_time, 1, Some(1))).is_ok());
+        assert!(validate_ack(&by_time, &ack(&by_time, 1, None)).is_err());
+        assert!(validate_ack(&by_time, &ack(&by_time, 1, Some(0))).is_err());
 
         let by_position = request(Some(RangeSpec::ByPosition {
             reference_index: 1,
             count: 1,
         }));
-        assert!(validate_read_range_ack(&by_position, &ack(&by_position, 1, Some(1))).is_err());
+        assert!(validate_ack(&by_position, &ack(&by_position, 1, Some(1))).is_err());
 
         let no_range = request(None);
-        assert!(validate_read_range_ack(&no_range, &ack(&no_range, 1, Some(1))).is_err());
+        assert!(validate_ack(&no_range, &ack(&no_range, 1, Some(1))).is_err());
     }
 }
 

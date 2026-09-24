@@ -1846,17 +1846,20 @@ class BACnetClient:
         object_id: ObjectIdentifier,
         property_id: PropertyIdentifier,
         array_index: Optional[int] = None,
-        range_type: Optional[str] = None,
+        range_type: Optional[Literal["position", "sequence"]] = None,
         reference_index: Optional[int] = None,
         reference_seq: Optional[int] = None,
         count: Optional[int] = None,
-    ) -> dict[str, Any]:
+    ) -> ReadRangeResult:
         """Read a range of items from a list or log object.
 
-        ``range_type`` is ``"position"``, ``"sequence"``, or ``None``.
+        ``range_type`` is ``"position"``, ``"sequence"``, or ``None`` (all-items).
+        ByTime is not exposed. Invalid selectors, array index zero and missing,
+        zero or non-INTEGER16 counts raise ValueError before I/O. Position/sequence
+        reference zero is valid; omitted references default to zero.
         Returns ``{"object_id": ObjectIdentifier, "property_id": PropertyIdentifier,
-        "array_index": int | None, "result_flags": int, "item_count": int,
-        "item_data": bytes}``.
+        "array_index": int | None, "result_flags": tuple[bool, bool, bool], "item_count": int,
+        "item_data": bytes, "first_sequence_number": int | None}``.
         """
         ...
 
@@ -2668,10 +2671,19 @@ class EndpointStatus(TypedDict):
     unclaimed_terminal: int
     responder_declined: int
 
+class ReadRangeResult(TypedDict):
+    object_id: ObjectIdentifier
+    property_id: PropertyIdentifier
+    array_index: int | None
+    result_flags: tuple[bool, bool, bool]
+    item_count: int
+    item_data: bytes
+    first_sequence_number: int | None
+
 class EndpointClient:
     """Client role cloned from a running endpoint (no lifecycle).
 
-    Initiates ``read_property`` through the owner's single transport.
+    Initiates ``read_property`` and ``read_range`` through the owner's single transport.
     After the owner closes, calls fail closed with ``BacnetError``.
     """
 
@@ -2685,8 +2697,31 @@ class EndpointClient:
         """Read a property through the shared transport."""
         ...
 
+    async def read_range(
+        self,
+        address: str,
+        object_id: ObjectIdentifier,
+        property_id: PropertyIdentifier,
+        array_index: Optional[int] = None,
+        range_type: Optional[Literal["position", "sequence"]] = None,
+        reference_index: Optional[int] = None,
+        reference_seq: Optional[int] = None,
+        count: Optional[int] = None,
+    ) -> ReadRangeResult:
+        """Read a range of items from a list or log object.
+
+        ``range_type`` is ``"position"``, ``"sequence"``, or ``None`` (all-items).
+        ByTime is not exposed. Invalid selectors, array index zero and missing,
+        zero or non-INTEGER16 counts raise ValueError before I/O. Position/sequence
+        reference zero is valid; omitted references default to zero.
+        Returns ``{"object_id": ObjectIdentifier, "property_id": PropertyIdentifier,
+        "array_index": int | None, "result_flags": tuple[bool, bool, bool], "item_count": int,
+        "item_data": bytes, "first_sequence_number": int | None}``.
+        """
+        ...
+
     def service_scope(self) -> dict[str, Any]:
-        """Narrow scope: initiates ``read_property`` only."""
+        """Narrow scope: initiates ``read_property`` and ``read_range``."""
         ...
 
 class EndpointServer:

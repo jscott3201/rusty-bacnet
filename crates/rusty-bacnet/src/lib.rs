@@ -7,6 +7,7 @@ mod endpoint;
 mod errors;
 mod hub;
 mod mstp_py;
+mod read_range;
 mod sc_identity;
 mod server;
 mod tls;

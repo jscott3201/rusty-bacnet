@@ -1872,7 +1872,17 @@ in `BACNET-15-ENDPOINT-DEVICE-WRITE` (in progress). This is not general endpoint
 mutation parity or inbound replay suppression. The source recipient extension
 is described below and in the [Device recipient contract](device-audit-recipient.md).
 
-### Bounded endpoint source ReadProperty reporting
+### Bounded endpoint source READ reporting
+
+The initiating role supports `read_property` and `read_range`, plus explicit
+endpoint destinations. ReadRange returns a correlated `ReadRangeAck` with raw
+item bytes; empty and multiple-item ACKs each produce one value-free source READ
+record. Request encoding validates before output/transaction admission: ALL,
+REQUIRED, OPTIONAL, array index zero, zero/non-INTEGER16 counts, and nonconcrete
+ByTime components are rejected. Zero position/sequence references are valid and
+may match no items. Rust supports all-items, position, sequence and ByTime.
+Endpoint requests/responses are unsegmented; a received segmented response is a
+failed attempted read and is reported using the caller's terminal result.
 
 On direct B/IP IPv4, provision the typed recipient on the built-in Device and
 select `EndpointSession::with_source_audit_reporter`. Device recipient choices
@@ -1909,7 +1919,7 @@ let mut session = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROA
         SocketAddrV4::new(Ipv4Addr::LOCALHOST, 47808),
     ).build_session()?.with_source_audit_reporter(source);
 session.start().await?;
-// Use session.client().unwrap().read_property(...) for a direct IPv4 target.
+// Use session.client().unwrap().read_property(...) or read_range(...) for a direct IPv4 target.
 // Trusted runtime writes use the same Device owner; None relinquishes unchanged.
 session.write_audit_recipient(None).await?;
 session.stop().await?;
@@ -1930,7 +1940,7 @@ properties. Priority filters do not filter READ. Requests selected for source
 reporting reject routed, broadcast, or non-IPv4 destinations before traffic.
 
 A record contains the local source Device, one request-time timestamp, the actual
-ReadProperty invoke ID shared across retries, and the requested object/property/
+ReadProperty or ReadRange invoke ID shared across retries, and the requested object/property/
 array index. With no remote Device cache, its target is the exact direct BACnet
 address, including the UDP port. The selected Device recipient or Address identifies the logger
 sink; it is never substituted for the operation target. Unknown user, source
@@ -1951,14 +1961,14 @@ Once an audited request transfers to session ownership, dropping its caller
 waiter does not cancel it: the session observes the response or deadline and
 records once. Ordinary requests retain caller-owned RAII cancellation. There
 are 64 whole-operation slots, acquired before asynchronous policy reads, and a
-separate shared pool of 64 active audit notifications. ReadProperty results do
+separate shared pool of 64 active audit notifications. Read results do
 not wait for audit delivery. Notifications have one absolute three-second
 send/ACK deadline, no retries and no ordinary-record backlog. Expired or canceled
 queued notification commands are discarded before transport execution; a send
 already in progress may have reached the peer when cancellation wins.
 
 Overload, encoding, send and acknowledgment failures update the selected
-Reporter's instance-owned Reliability without replacing the ReadProperty result.
+Reporter's instance-owned Reliability without replacing the read result.
 Completion authority includes the configuration generation: an old delivery
 cannot clear a newer failure or update health after configuration changes.
 

@@ -1,4 +1,4 @@
-//! Prepared ReadProperty ownership and terminal observation shared by both paths.
+//! Prepared read ownership and terminal observation shared by both paths.
 use super::*;
 
 /// A reserved, encoded operation that has not submitted any traffic.
@@ -7,7 +7,7 @@ pub struct PreparedEndpointRead {
     pub(super) guard: EndpointRequestGuard,
     pub(super) destination: EndpointApduDestination,
     pub(super) data_attributes: Vec<DataAttribute>,
-    pub(super) request: ReadPropertyRequest,
+    pub(super) request: EndpointReadRequest,
     pub(super) encoded: Vec<u8>,
     pub(super) response: tokio::sync::oneshot::Receiver<TsmResponse>,
 }
@@ -16,7 +16,7 @@ pub struct PreparedEndpointRead {
 #[doc(hidden)]
 pub struct EndpointReadOutcome {
     /// The original caller result, without waiting for audit delivery.
-    pub result: Result<ReadPropertyACK, Error>,
+    pub result: Result<EndpointReadAck, Error>,
     /// At least one transport execution began, or a peer terminal was observed.
     /// This does not claim remote execution when the local transport failed.
     pub attempted: bool,
@@ -33,26 +33,19 @@ impl PreparedEndpointRead {
     #[doc(hidden)]
     pub async fn execute(mut self) -> EndpointReadOutcome {
         let mut attempted = false;
-        let result = self.execute_inner(&mut attempted).await;
+        let result = self
+            .execute_inner(&mut attempted)
+            .await
+            .and_then(|bytes| self.request.decode(&bytes));
         EndpointReadOutcome { result, attempted }
     }
 
-    fn terminal(&mut self, response: TsmResponse) -> Result<ReadPropertyACK, Error> {
+    fn terminal(&mut self, response: TsmResponse) -> Result<bytes::Bytes, Error> {
         self.guard.active = false;
-        let bytes = confirmed_response_result(response)?;
-        let ack = ReadPropertyACK::decode(&bytes)?;
-        if ack.object_identifier != self.request.object_identifier
-            || ack.property_identifier != self.request.property_identifier
-            || ack.property_array_index != self.request.property_array_index
-        {
-            return Err(Error::Encoding(
-                "ReadProperty ACK does not match request identity".into(),
-            ));
-        }
-        Ok(ack)
+        confirmed_response_result(response)
     }
 
-    async fn execute_inner(&mut self, attempted: &mut bool) -> Result<ReadPropertyACK, Error> {
+    async fn execute_inner(&mut self, attempted: &mut bool) -> Result<bytes::Bytes, Error> {
         let inner = Arc::clone(&self.guard.inner);
         for attempt in 0..=inner.retries {
             if !inner.open.load(Ordering::Acquire) {

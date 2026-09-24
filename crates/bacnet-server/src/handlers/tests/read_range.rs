@@ -128,7 +128,7 @@ pub(super) fn call_with_index(
         range,
     };
     let mut request_bytes = BytesMut::new();
-    request.encode(&mut request_bytes);
+    request.encode(&mut request_bytes).unwrap();
     let mut ack_bytes = BytesMut::new();
     handle_read_range(db, &request_bytes, &mut ack_bytes)?;
     ReadRangeAck::decode(&ack_bytes)
