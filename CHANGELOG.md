@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Multi-device RP/RPM/WP batch limits now use `Option<NonZeroUsize>` in Rust.
+  Python rejects zero synchronously with `ValueError`, including empty batches.
+  `None` still selects 32; result shapes and completion order are unchanged.
+
 - **ReadProperty ACK correlation (Refs #784, #345):** standalone direct/routed
   and endpoint clients share object/property/array-index validation. Device and
   Network Port wildcard requests accept only a same-type concrete peer-reported

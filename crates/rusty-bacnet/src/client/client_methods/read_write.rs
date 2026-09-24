@@ -1,3 +1,5 @@
+use std::num::NonZeroUsize;
+
 use super::super::*;
 
 #[pymethods]
@@ -228,7 +230,8 @@ impl BACnetClient {
     ///
     /// Args:
     ///     requests: List of (device_instance, object_id, property_id, array_index) tuples
-    ///     max_concurrent: Max concurrent requests (default 32)
+    ///     max_concurrent: Positive native-sized integer (None uses 32). Zero raises
+    ///         ValueError synchronously; integers outside usize raise OverflowError.
     ///
     /// Returns: List of dicts with 'device_instance', 'value' (PropertyValue or None),
     ///          'error' (str or None)
@@ -237,7 +240,7 @@ impl BACnetClient {
         &self,
         py: Python<'py>,
         requests: Vec<(u32, PyObjectIdentifier, PyPropertyIdentifier, Option<u32>)>,
-        max_concurrent: Option<usize>,
+        max_concurrent: Option<NonZeroUsize>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         let rust_requests: Vec<_> = requests
@@ -299,7 +302,8 @@ impl BACnetClient {
     ///
     /// Args:
     ///     requests: List of (device_instance, [(object_id, [(property_id, array_index)])]) tuples
-    ///     max_concurrent: Max concurrent requests (default 32)
+    ///     max_concurrent: Positive native-sized integer (None uses 32). Zero raises
+    ///         ValueError synchronously; integers outside usize raise OverflowError.
     ///
     /// Returns: List of dicts with 'device_instance', 'results' (list or None), 'error' (str or None)
     #[pyo3(signature = (requests, max_concurrent=None))]
@@ -311,7 +315,7 @@ impl BACnetClient {
             u32,
             Vec<(PyObjectIdentifier, Vec<(PyPropertyIdentifier, Option<u32>)>)>,
         )>,
-        max_concurrent: Option<usize>,
+        max_concurrent: Option<NonZeroUsize>,
     ) -> PyResult<Bound<'py, PyAny>> {
         use bacnet_services::common::PropertyReference;
 
@@ -387,7 +391,8 @@ impl BACnetClient {
     ///
     /// Args:
     ///     requests: List of (device_instance, object_id, property_id, value, priority, array_index)
-    ///     max_concurrent: Max concurrent requests (default 32)
+    ///     max_concurrent: Positive native-sized integer (None uses 32). Zero raises
+    ///         ValueError synchronously; integers outside usize raise OverflowError.
     ///
     /// Returns: List of dicts with 'device_instance', 'error' (str or None)
     #[pyo3(signature = (requests, max_concurrent=None))]
@@ -403,7 +408,7 @@ impl BACnetClient {
             Option<u8>,
             Option<u32>,
         )>,
-        max_concurrent: Option<usize>,
+        max_concurrent: Option<NonZeroUsize>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         let rust_requests: Result<Vec<_>, PyErr> = requests

@@ -2541,3 +2541,14 @@ atomic. No peer identity history is exposed.
 
 See [server request admission](request-admission.md) for exact fields, accepted
 ranges, overload behavior, and the known extreme-overload/conformance limitation.
+
+### Multi-device batch concurrency
+
+`BACnetClient.read_property_from_devices`,
+`read_property_multiple_from_devices`, and `write_property_to_devices` accept
+`max_concurrent=None` (32) or a positive integer that fits the platform native
+`usize`. Zero raises `ValueError` synchronously before starting a future or I/O,
+including an empty batch on an unstarted client. Negative or oversized integers
+raise `OverflowError`. Normal calls require a running client; empty batches then
+return an empty list. Results retain completion order and their existing shapes.
+Canceling the returned future cancels its pending requests.
