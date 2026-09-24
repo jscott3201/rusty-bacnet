@@ -147,6 +147,18 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
                 match apdu::decode_apdu(received.apdu.clone()) {
                     Ok(decoded) => {
+                        if notification_transactions_dispatch
+                            .application_sealed
+                            .load(Ordering::Acquire)
+                        {
+                            seg_receivers.clear();
+                            if matches!(
+                                decoded,
+                                Apdu::ConfirmedRequest(_) | Apdu::UnconfirmedRequest(_)
+                            ) {
+                                continue;
+                            }
+                        }
                         let source_mac = received.source_mac.clone();
                         let source_network = received.source_network.clone();
 

@@ -360,9 +360,15 @@ async fn audit_reporter_monitored_objects_network_writes_are_denied_without_muta
                     Reliability::COMMUNICATION_FAILURE
                 );
                 assert_eq!(fixture.server.notification_transactions.active_count(), 0);
-                assert!(fixture.server.notification_transactions.workers_empty());
+                assert!(fixture
+                    .server
+                    .notification_transactions
+                    .delivery_workers_idle());
                 fixture.server.stop().await.unwrap();
             }
         }
     }
 }
+
+#[path = "audit_delay_property_tests.rs"]
+mod delay;

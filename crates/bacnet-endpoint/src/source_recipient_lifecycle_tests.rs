@@ -16,6 +16,7 @@ fn released_projection(db: &mut ObjectDatabase) {
             false,
             Some(vec![]),
             BACnetPriorityFilter::empty(),
+            None,
         )
         .unwrap();
 }

@@ -1039,6 +1039,8 @@ class AuditReporterConfiguration(TypedDict):
     issue_confirmed_notifications: bool
     monitored_objects: NotRequired[list[ObjectIdentifier | ObjectType | None] | None]
     audit_priority_filter: NotRequired[int | None]
+    # Paired Maximum_Send_Delay/Send_Now: None absent; 0..3600 whole seconds.
+    maximum_send_delay: NotRequired[int | None]
 
 class AuditRecipientDevice(TypedDict):
     """Audit recipient selected by Device object identifier."""
@@ -2361,7 +2363,11 @@ class BACnetServer:
         invalid settings or missing objects raise ValueError. Wrong container types
         and wrong types for other setting fields raise TypeError. The entire input
         is copied and validated before pending changes. Startup freezes this API.
-        Omitted optional fields reset to catch-all selectors and all priorities.
+        Omitted optional fields reset to catch-all selectors, all priorities and
+        absent delay/control properties. maximum_send_delay accepts None or an
+        integer 0..3600: zero exposes immediate Maximum_Send_Delay/Send_Now;
+        positive values enable bounded ordinary target batching. Bool/non-integer
+        delay raises TypeError; an out-of-range integer raises ValueError.
         Enabled nominal overlaps expose CONFIGURATION_ERROR on every affected
         Reporter's RELIABILITY; the lowest instance emits, before operation filters.
         Empty/all-None selectors select no nominal targets. Mandatory Reporter

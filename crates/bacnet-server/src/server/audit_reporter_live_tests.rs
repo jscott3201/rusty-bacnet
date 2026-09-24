@@ -26,6 +26,7 @@ async fn target_reporter_live_enable_emits_one_local_change() {
             false,
             None,
             BACnetPriorityFilter::all(),
+            None,
         )
         .unwrap();
     settle().await;
@@ -160,6 +161,7 @@ async fn target_reporter_nominal_overlap_elects_lowest_before_write_filters_and_
             false,
             Some(vec![Selector::ObjectType(ObjectType::BINARY_VALUE)]),
             BACnetPriorityFilter::all(),
+            None,
         )
         .unwrap();
     settle().await;
@@ -296,6 +298,7 @@ async fn target_reporter_aggregate_late_admission_failure_is_atomic_and_releases
             true,
             None,
             BACnetPriorityFilter::empty(),
+            None,
         );
     assert!(
         result.is_err(),
@@ -335,6 +338,7 @@ async fn target_reporter_aggregate_late_admission_failure_is_atomic_and_releases
             false,
             None,
             BACnetPriorityFilter::empty(),
+            None,
         )
         .unwrap();
     settle().await;
@@ -578,7 +582,10 @@ async fn target_reporter_plural_cancelled_stop_rejects_changes_until_joined_unin
     drop(held);
     fixture.server.stop().await.unwrap();
     fixture.server.stop().await.unwrap();
-    assert!(fixture.server.notification_transactions.workers_empty());
+    assert!(fixture
+        .server
+        .notification_transactions
+        .delivery_workers_idle());
     let mut held = database.write().await;
     for instance in [1, 2] {
         let target = oid(ObjectType::AUDIT_REPORTER, instance);

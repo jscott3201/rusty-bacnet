@@ -37,6 +37,8 @@ pub(super) struct CaptureTransport {
     pub(super) block: Arc<AtomicBool>,
     pub(super) unblock: Arc<tokio::sync::Notify>,
     requests: Arc<AtomicU8>,
+    pub(super) incoming:
+        Arc<StdMutex<Option<mpsc::Receiver<bacnet_transport::port::ReceivedNpdu>>>>,
 }
 
 impl CaptureTransport {
@@ -67,7 +69,12 @@ impl TransportPort for CaptureTransport {
         &mut self,
     ) -> Result<mpsc::Receiver<bacnet_transport::port::ReceivedNpdu>, Error> {
         self.started.store(true, Ordering::Release);
-        Ok(mpsc::channel(1).1)
+        Ok(self
+            .incoming
+            .lock()
+            .unwrap()
+            .take()
+            .unwrap_or_else(|| mpsc::channel(1).1))
     }
     async fn stop(&mut self) -> Result<(), Error> {
         Ok(())
@@ -225,6 +232,27 @@ async fn try_servers_profile(
     bindings: Vec<DeviceBinding>,
     enabled: bool,
 ) -> Result<Fixture, Error> {
+    try_servers_config(
+        reporters,
+        devices,
+        recipient,
+        bindings,
+        enabled,
+        1476,
+        CaptureTransport::default(),
+    )
+    .await
+}
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn try_servers_config(
+    reporters: Vec<AuditReporterObject>,
+    devices: &[u32],
+    recipient: Option<bacnet_types::constructed::BACnetRecipient>,
+    bindings: Vec<DeviceBinding>,
+    enabled: bool,
+    max_apdu_length: u32,
+    transport: CaptureTransport,
+) -> Result<Fixture, Error> {
     let mut db = ObjectDatabase::new();
     let writes = Arc::new(AtomicUsize::new(0));
     let attempts = Arc::new(AtomicUsize::new(0));
@@ -267,10 +295,10 @@ async fn try_servers_profile(
     for reporter in reporters {
         db.add(Box::new(reporter)).unwrap();
     }
-    let transport = CaptureTransport::default();
     let captured = transport.clone();
     let server = BACnetServer::start_with_clock_mode_and_bindings(
         ServerConfig {
+            max_apdu_length,
             audit_reporters: enabled.then_some(AuditReportersConfig {
                 reporters: identities,
             }),

@@ -7,7 +7,7 @@ it by instance. The cap is a local resource policy. Python configures the same
 owner before startup through `configure_audit_reporters(list[AuditReporterConfiguration])`.
 Each entry supplies `instance`, `audit_level`, `auditable_operations`, and
 `issue_confirmed_notifications`, with optional `monitored_objects` and
-`audit_priority_filter`. A valid call replaces the complete selected set and
+`audit_priority_filter` and `maximum_send_delay`. A valid call replaces the complete selected set and
 settings; invalid input leaves all pending objects unchanged. Settings are copied,
 not retained from caller dictionaries. The singular configuration APIs are removed
 before 1.0. Source reporting remains a separate exactly-one-Reporter profile.
@@ -24,13 +24,16 @@ inherits the elected Reporter's settings.
 Each Reporter owns its configuration, delivery generation, Reliability/Status_Flags
 and bounded resource-loss coalescer. Overlap, unavailable route, and communication
 failure remain distinct state. All Reporters share one global 64-operation budget;
-there is no ordinary-record queue, retry, or multiplication of capacity. Alternating
-Reporters cannot erase each other's pending losses. Configuration/recipient changes
-fence stale completions and old loss contexts, including A-to-B-to-A transitions.
-Source mode retains its existing single coalescer.
+optional delayed storage has separate bounded capacity and does not multiply this
+send budget. Alternating Reporters cannot erase each other's pending losses.
+Configuration/recipient changes fence stale health completions while retaining
+bounded captured target loss contexts, including A-to-B-to-A transitions.
+Source mode retains its existing single current-context coalescer. See
+[delayed target Audit reporting](delayed-target-audit.md) for queue, control,
+historical-loss and shutdown contracts.
 
 Trusted live Rust setters, the aggregate
-`configure_audit_reporter_internal(level, operations, confirmed, selectors, priorities)`,
+`configure_audit_reporter_internal(level, operations, confirmed, selectors, priorities, maximum_send_delay)`,
 and concrete Description writes use one object-owned change boundary. These APIs
 are fallible. Actual changes prepare all records, permits, confirmed leases,
 encoding and worker ownership before any configuration field commits. The aggregate
@@ -58,7 +61,8 @@ required by the Standard. Description NULL relinquishment succeeds unchanged;
 it never stores NULL or creates a local change record. An eligible network NULL
 attempt still has one record. Any Description array index is rejected before
 value handling with PROPERTY/PROPERTY_IS_NOT_AN_ARRAY; other non-string values
-remain INVALID_DATA_TYPE. Network configuration beyond Description stays unsupported.
+remain INVALID_DATA_TYPE. The optional Maximum_Send_Delay/Send_Now pair is also network writable when present;
+other network configuration remains unsupported.
 
 All target Reporters share the typed [Device recipient](device-audit-recipient.md).
 An actual recipient change still prepares exactly one old/new pair. Its owner is
@@ -68,8 +72,9 @@ the dedicated pair even when all levels are NONE. The change fences every target
 Reporter's old recipient context. Both routes must be usable before commit.
 
 The active owner protects every configured Reporter and its Device through sealed,
-canceled and dropped lifetimes until DB-capable task frames quiesce. Normal stop
-joins workers and uninstalls under the database guard. This extends the existing
+canceled and dropped lifetimes until DB-capable task frames quiesce. Normal target
+stop seals producers, allows a bounded three-second drain with ACK-only progress,
+then joins workers and uninstalls under the database guard. This extends the existing
 ownership boundary without changing general database authoring or source roles.
 Python configuration freezes at startup transfer; its existing read_property API
 reads each Reporter's Reliability and Status_Flags. Live configuration described
@@ -77,6 +82,6 @@ above is a Rust API, not a new Python callback or runtime authoring API.
 
 Evidence is in `server::audit_reporter_tests::live`, the existing target producer
 and recipient suites, per-Reporter `notification_worker_owner_tests`, and installed
-Python Audit integration tests. These are bounded target-profile claims; ordinary
-batching/send delay, wider network configuration, other source families and full
-Audit/Reporter/BIBB conformance remain outside this outcome.
+Python Audit integration tests. These are bounded target-profile claims; wider
+network configuration, other source families and full Audit/Reporter/BIBB
+conformance remain outside this outcome.

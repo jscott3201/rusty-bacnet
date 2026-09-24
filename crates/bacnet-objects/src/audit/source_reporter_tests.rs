@@ -11,6 +11,7 @@ fn ordinary_reporter_has_no_source_role_even_after_local_configuration() {
                 true,
                 Some(vec![]),
                 BACnetPriorityFilter::empty(),
+                None,
             )
             .unwrap();
         assert_eq!(

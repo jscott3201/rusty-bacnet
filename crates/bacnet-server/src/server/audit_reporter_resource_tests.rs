@@ -98,11 +98,15 @@ fn ack(fixture: &Fixture, index: usize) {
 }
 
 async fn stop(fixture: &mut Fixture) {
-    tokio::time::timeout(Duration::from_secs(1), fixture.server.stop())
+    // Target stop now permits one retained three-second Audit drain.
+    tokio::time::timeout(Duration::from_secs(4), fixture.server.stop())
         .await
         .unwrap()
         .unwrap();
-    assert!(fixture.server.notification_transactions.workers_empty());
+    assert!(fixture
+        .server
+        .notification_transactions
+        .delivery_workers_idle());
     assert_eq!(fixture.server.notification_transactions.active_count(), 0);
     assert_eq!(
         fixture.server.notification_transactions.audit_resources(),
@@ -355,13 +359,17 @@ async fn audit_reporter_auditing_failure_stop_cancels_waiters_and_inflight() {
         assert_eq!(records(&fixture).len(), usize::from(capacity == 2));
         assert!(fixture.server.notification_transactions.audit_resources().0);
         // Join the waiting/sending summary before releasing test-held resources.
-        tokio::time::timeout(Duration::from_secs(1), fixture.server.stop())
+        // Target stop now permits one retained three-second Audit drain.
+        tokio::time::timeout(Duration::from_secs(4), fixture.server.stop())
             .await
             .unwrap()
             .unwrap();
         drop(permits);
         drop(held);
-        assert!(fixture.server.notification_transactions.workers_empty());
+        assert!(fixture
+            .server
+            .notification_transactions
+            .delivery_workers_idle());
         assert_eq!(fixture.server.notification_transactions.active_count(), 0);
         assert_eq!(
             fixture.server.notification_transactions.audit_resources(),

@@ -294,6 +294,7 @@ async fn source_rpm_unique_successful_device_projection_and_per_reference_filter
                     false,
                     None,
                     BACnetPriorityFilter::empty(),
+                    None,
                 )
                 .unwrap();
         }

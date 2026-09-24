@@ -1568,8 +1568,12 @@ Each selected Reporter has its own optional bounded, memory-only AUDITING_FAILUR
 resource-admission summary when its bit is enabled. No new ordinary producer source is introduced.
 
 Delivery retains 64 shared immediate Audit permits, one total three-second deadline,
-no ordinary-record queue/retry or outbound segmentation, object-owned health and
-joined shutdown. Delivery failure does not change the original operation result.
+no retries or outbound segmentation, object-owned health and joined shutdown.
+Optional `maximum_send_delay` (0–3600 seconds, `None` absent) provisions the paired
+Maximum_Send_Delay/Send_Now properties on each selected target Reporter. Positive
+delay uses bounded ordinary batching; zero exposes immediate delivery controls.
+See [delayed target Audit reporting](delayed-target-audit.md) for limits, live wire
+commands, historical-loss filtering and the three-second target stop drain. Delivery failure does not change the original operation result.
 Unconfirmed send success proves only transport acceptance, not recipient storage.
 No durable outbox, replay or restart-delivery guarantee is provided; the receiver's
 file-backed storage is a separate contract. Installed-extension loopback tests in
@@ -1585,8 +1589,7 @@ network writes with atomic old/new notification admission. Rust's supported
 and physical Input sampling remain outside it. AV/BV policy rows are described
 below. No Python live configuration/callbacks, payload-origin verification, standalone
 source-side reporting, ordinary sample/event production,
-WriteGroup expansion or batching,
-Maximum_Send_Delay/Send_Now, durability, full Reporter/Audit/BIBB/BTL/certification,
+WriteGroup expansion, source batching, durability, full Reporter/Audit/BIBB/BTL/certification,
 independent interop or #345 closure is claimed.
 
 #### Object-owned AV/BV Audit policy

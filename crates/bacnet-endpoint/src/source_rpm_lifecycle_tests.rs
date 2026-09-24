@@ -254,6 +254,7 @@ async fn source_rpm_partial_notification_admission_counts_only_dropped_occurrenc
             false,
             None,
             BACnetPriorityFilter::empty(),
+            None,
         )
         .unwrap();
     let mut session = session(db, SessionRole::ClientOnly, &sink);

@@ -2115,8 +2115,8 @@ mode and destination. Changes discard incompatible pending counts, including
 A-to-B-to-A changes without another READ. Active Device/Reporter removal and
 replacement are denied. A new context
 can supersede the single pending slot; stale completions cannot transfer their
-counts into it. This bounded discard policy also applies to target resource-loss
-summaries. Admitted notifications retain the three-second total deadline and
+counts into it. Target reporting instead retains bounded captured historical
+contexts, as described in [delayed target Audit reporting](delayed-target-audit.md). Admitted notifications retain the three-second total deadline and
 no retries.
 
 `stop()` seals admission, cancels operations and notifications, and joins owned
@@ -2160,8 +2160,8 @@ field, consuming a clockless sequence or retaining a worker/lease. WPM keeps its
 successful prefix and stops at the denied element. This stronger admission rule
 is a local policy, not a Standard-mandated write rejection. A successful admission
 owns one bounded delivery attempt; later send/ACK failure cannot undo the write.
-Ordinary, equal and NULL writes keep their existing best-effort behavior. No
-delayed queue or Send_Now support is implied.
+Ordinary, equal and NULL writes keep their existing best-effort behavior. These
+mandatory records bypass the separately configured [delayed target queue](delayed-target-audit.md).
 
 `BACnetServer::write_local` uses the same target observer, with local Device
 provenance and no invoke ID. Device recipient changes still emit only their

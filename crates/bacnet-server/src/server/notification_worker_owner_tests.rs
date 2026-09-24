@@ -505,8 +505,17 @@ async fn target_reporter_loss_queues_are_isolated_with_one_global_budget_and_per
     assert!(record_failure(&owner, &first, 5, 30).is_none());
     assert!(record_failure(&owner, &second, 7, 40).is_none());
     assert_eq!(owner.audit_resources(), (true, 17, 0));
-    first.set_issue_confirmed_notifications(false).unwrap();
-    first.set_issue_confirmed_notifications(true).unwrap();
+    let queue = owner.audit_failure_queue(&first.status_internal()).unwrap();
+    for confirmed in [false, true] {
+        let reservation = queue
+            .prepare_context(
+                first.status_internal().next_configuration_epoch().unwrap(),
+                true,
+            )
+            .unwrap();
+        first.set_issue_confirmed_notifications(confirmed).unwrap();
+        reservation.publish();
+    }
     let current = failure_ticket(&owner, &first);
     let queue = owner.audit_failure_queue(&first.status_internal()).unwrap();
     assert!(queue
@@ -517,15 +526,15 @@ async fn target_reporter_loss_queues_are_isolated_with_one_global_budget_and_per
         .is_none());
     assert_eq!(
         owner.audit_resources(),
-        (true, 21, 0),
-        "first Reporter ABA cannot erase second Reporter's ten losses"
+        (true, 127, 0),
+        "first Reporter ABA retains historical losses without changing the second Reporter"
     );
     drop(permits);
     let (a_batch, a_permit, a_reservation) = a.next().await.unwrap();
     let (b_batch, b_permit, b_reservation) = b.next().await.unwrap();
     assert_eq!(
         (a_batch.count, a_batch.earliest),
-        (11, BACnetTimeStamp::SequenceNumber(50))
+        (106, BACnetTimeStamp::SequenceNumber(0))
     );
     assert_eq!(
         (b_batch.count, b_batch.earliest),
@@ -533,6 +542,12 @@ async fn target_reporter_loss_queues_are_isolated_with_one_global_budget_and_per
     );
     assert_eq!(owner.active_count(), 2);
     drop((a_permit, a_reservation, b_permit, b_reservation));
+    let (current, permit, reserved) = a.next().await.unwrap();
+    assert_eq!(
+        (current.count, current.earliest.clone()),
+        (11, BACnetTimeStamp::SequenceNumber(50))
+    );
+    drop((current, permit, reserved));
     assert!(a.next().await.is_none());
     assert!(b.next().await.is_none());
     assert_eq!(owner.audit_resources(), (false, 0, 64));

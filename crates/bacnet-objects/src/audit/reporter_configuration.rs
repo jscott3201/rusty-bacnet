@@ -55,7 +55,8 @@ mod tests {
                 AuditOperationFlags::empty(),
                 true,
                 Some(vec![]),
-                BACnetPriorityFilter::empty()
+                BACnetPriorityFilter::empty(),
+                None
             )
             .is_err());
         assert_eq!(

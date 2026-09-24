@@ -22,6 +22,7 @@ async fn target_reporter_off_runtime_silent_change_commits_without_worker() {
             false,
             None,
             BACnetPriorityFilter::all(),
+            None,
         )?;
         reporter.write_property(
             PropertyIdentifier::DESCRIPTION,
@@ -49,6 +50,7 @@ async fn target_reporter_off_runtime_silent_change_commits_without_worker() {
                 false,
                 None,
                 BACnetPriorityFilter::all(),
+                None,
             )
             .is_err());
         assert_eq!(
@@ -62,7 +64,10 @@ async fn target_reporter_off_runtime_silent_change_commits_without_worker() {
     assert!(outcome.is_ok(), "silent active change failed: {outcome:?}");
     settle().await;
     assert!(fixture.transport.sent.lock().unwrap().is_empty());
-    assert!(fixture.server.notification_transactions.workers_empty());
+    assert!(fixture
+        .server
+        .notification_transactions
+        .delivery_workers_idle());
     assert_eq!(
         fixture.server.notification_transactions.audit_resources(),
         (false, 0, 64)

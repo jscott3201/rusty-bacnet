@@ -29,6 +29,12 @@ async fn recipient_cancelled_stop_stays_sealed_until_retry_uninstalls() {
         )
         .is_err());
     assert_eq!(
+        fixture.server.notification_transactions.audit_resources().2,
+        62
+    );
+    tokio::time::advance(Duration::from_secs(3)).await;
+    settle().await;
+    assert_eq!(
         fixture.server.notification_transactions.audit_resources(),
         (false, 0, 64)
     );
@@ -142,7 +148,7 @@ async fn recipient_old_generation_completion_cannot_poison_new_pair_health() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn recipient_aba_retires_and_wakes_pending_summary_without_new_ordinary_work() {
+async fn recipient_aba_retains_and_delivers_pending_summary_without_new_ordinary_work() {
     let mut reporter = reporter();
     let mut flags = AuditOperationFlags::empty();
     flags.insert(AuditOperation::WRITE);
@@ -185,18 +191,23 @@ async fn recipient_aba_retires_and_wakes_pending_summary_without_new_ordinary_wo
     }
     assert_eq!(
         fixture.server.notification_transactions.audit_resources().1,
-        0,
-        "retired count is gone while the old worker still owns its lease"
+        1,
+        "the historical count remains owned across recipient ABA"
     );
     drop(db);
     fixture.transport.block.store(false, Ordering::Release);
     fixture.transport.unblock.notify_waiters();
     settle().await;
     let records = notifications(&fixture.transport.sent);
-    assert_eq!(records.len(), 5);
-    assert!(records
-        .iter()
-        .all(|request| request.notifications[0].operation == AuditOperation::WRITE));
+    assert_eq!(records.len(), 6);
+    assert_eq!(
+        records
+            .iter()
+            .filter(|request| request.notifications[0].operation == AuditOperation::WRITE)
+            .count(),
+        5
+    );
+    assert_eq!(records.iter().filter(|request| request.notifications[0].operation == AuditOperation::AUDITING_FAILURE).count(), 1);
     assert_eq!(
         fixture.server.notification_transactions.audit_resources(),
         (false, 0, 64)

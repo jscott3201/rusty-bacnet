@@ -293,6 +293,7 @@ async fn direct_bip_ipv4_client_only_and_both_start_stop_silently() {
                     confirmed,
                     None,
                     bacnet_types::bitstring::BACnetPriorityFilter::all(),
+                    None,
                 )
                 .unwrap();
             let reporter = db

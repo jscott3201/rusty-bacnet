@@ -12,6 +12,7 @@ use bacnet_types::constructed::{AuditPropertyReference, BACnetAuditNotification,
 use bacnet_types::{enums::AuditOperation, primitives::BACnetTimeStamp};
 
 pub(super) struct TargetAudit<T: TransportPort> {
+    pub(super) batches: Arc<super::audit_batch_queue::AuditBatchQueue>,
     pub(super) owner: Arc<AuditOwnership>,
     pub(super) device: ObjectIdentifier,
     pub(super) association: Arc<TargetAuditAssociation>,
@@ -25,7 +26,7 @@ pub(super) struct TargetAudit<T: TransportPort> {
     pub(super) max_apdu: u32,
 }
 
-fn denied() -> Error {
+pub(super) fn denied() -> Error {
     Error::Protocol {
         class: ErrorClass::SERVICES.to_raw() as u32,
         code: ErrorCode::SERVICE_REQUEST_DENIED.to_raw() as u32,
@@ -80,6 +81,19 @@ pub(super) fn validate(
         return Err(denied());
     }
     for selected in &profile.reporters {
+        let status = db
+            .get(selected)
+            .unwrap()
+            .audit_reporter_internal()
+            .unwrap()
+            .status_internal();
+        super::audit_context_preparation::validate_summary(
+            &status,
+            &status.configuration(),
+            device,
+            route.as_ref(),
+            config.max_apdu_length,
+        )?;
         db.get(selected)
             .unwrap()
             .audit_reporter_internal()
@@ -128,6 +142,7 @@ impl<T: TransportPort + 'static> TargetAudit<T> {
             .unwrap()
             .clone();
         let runtime = Arc::new(Self {
+            batches: super::audit_batch_queue::AuditBatchQueue::new(&association),
             owner: AuditOwnership::for_target(device, Arc::clone(&association)),
             device,
             association: Arc::clone(&association),
@@ -157,6 +172,16 @@ impl<T: TransportPort + 'static> TargetAudit<T> {
         db.protect_audit_internal(&runtime.owner)?;
         assert!(transactions.audit_routes.set(routes).is_ok());
         transactions.set_audit_owner(&runtime.owner);
+        assert!(transactions
+            .audit_batch
+            .set(Arc::downgrade(&runtime.batches))
+            .is_ok());
+        super::audit_batch_runtime::start(
+            Arc::clone(&runtime.batches),
+            Arc::clone(network),
+            transactions,
+            Arc::clone(comm_state),
+        );
         Ok(Some(runtime))
     }
 
@@ -223,7 +248,24 @@ impl<T: TransportPort + 'static> TargetAudit<T> {
                 current_value: Some(old_value.to_vec()),
                 result: None,
             };
-            status.commit_recipient_change(|confirmed, token| {
+            let mut contexts = Vec::with_capacity(self.association.reporters().len());
+            for (_, reporter) in self.association.reporters() {
+                super::audit_context_preparation::validate_summary(
+                    reporter,
+                    &reporter.configuration(),
+                    self.device,
+                    Some(&new_route),
+                    self.max_apdu,
+                )?;
+                let next = reporter.next_configuration_epoch()?;
+                let context = self
+                    .transactions
+                    .audit_failure_queue(reporter)
+                    .expect("target context owner")
+                    .prepare_context(next, reporter.auditing_failure_epoch().is_some())?;
+                contexts.push((Arc::clone(reporter), next, context));
+            }
+            let task = status.commit_recipient_change(|confirmed, token| {
                 let mut attempts = Vec::with_capacity(2);
                 for route in [old_route, new_route] {
                     let permit = self.transactions.try_admit_audit().map_err(|_| denied())?;
@@ -253,7 +295,12 @@ impl<T: TransportPort + 'static> TargetAudit<T> {
                 *current = new;
                 for (_, other) in self.association.reporters() {
                     if !Arc::ptr_eq(other, &status) {
-                        other.recipient_changed_internal();
+                        let next = contexts
+                            .iter()
+                            .find(|(reporter, _, _)| Arc::ptr_eq(reporter, other))
+                            .unwrap()
+                            .1;
+                        other.commit_recipient_epoch(next);
                     }
                 }
                 let network = Arc::clone(&self.network);
@@ -299,7 +346,11 @@ impl<T: TransportPort + 'static> TargetAudit<T> {
                     };
                     tokio::join!(run(first, completion_a), run(second, completion_b));
                 })
-            })
+            })?;
+            for (_, _, context) in contexts {
+                context.publish();
+            }
+            Ok(task)
         })?;
         // Queue->status is an existing lock order. Wake only after status unlock.
         self.transactions.audit_recipient_changed();

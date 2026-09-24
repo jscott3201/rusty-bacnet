@@ -374,7 +374,10 @@ async fn audit_reporter_selection_self_write_bypasses_selection_but_not_none_lev
                 vec![expected_description(target, 78, 1, true)]
             );
         }
-        assert!(fixture.server.notification_transactions.workers_empty());
+        assert!(fixture
+            .server
+            .notification_transactions
+            .delivery_workers_idle());
         fixture.server.stop().await.unwrap();
     }
 }
@@ -418,7 +421,10 @@ async fn audit_reporter_selection_empty_and_null_suppress_without_state_or_execu
             Reliability::NO_FAULT_DETECTED
         );
         assert_eq!(fixture.server.notification_transactions.active_count(), 0);
-        assert!(fixture.server.notification_transactions.workers_empty());
+        assert!(fixture
+            .server
+            .notification_transactions
+            .delivery_workers_idle());
         assert_eq!(
             fixture
                 .server

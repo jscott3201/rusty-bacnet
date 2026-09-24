@@ -14,6 +14,7 @@ impl BACnetObject for AuditReporterObject {
         confirmed: bool,
         selectors: Option<Vec<BACnetObjectSelector>>,
         priorities: BACnetPriorityFilter,
+        maximum_send_delay: Option<crate::audit::AuditSendDelay>,
     ) -> Result<(), Error> {
         let mut next = self.configuration_internal();
         next.audit_level = level;
@@ -21,6 +22,7 @@ impl BACnetObject for AuditReporterObject {
         next.confirmed = confirmed;
         next.monitored_objects = selectors;
         next.audit_priority_filter = priorities;
+        next.maximum_send_delay = maximum_send_delay;
         self.change_configuration(next, None)
     }
 
@@ -42,6 +44,7 @@ impl BACnetObject for AuditReporterObject {
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         reporter_metadata::effective_properties(
             self.configuration_internal().monitored_objects.is_some(),
+            self.configuration_internal().maximum_send_delay.is_some(),
         )
     }
 
@@ -116,6 +119,22 @@ impl BACnetObject for AuditReporterObject {
                         .ok_or_else(crate::common::invalid_array_index_error),
                 }
             }
+            p if matches!(
+                p,
+                PropertyIdentifier::MAXIMUM_SEND_DELAY | PropertyIdentifier::SEND_NOW
+            ) && configuration.maximum_send_delay.is_some() =>
+            {
+                if array_index.is_some() {
+                    return Err(crate::common::property_is_not_an_array_error());
+                }
+                if p == PropertyIdentifier::SEND_NOW {
+                    Ok(PropertyValue::Boolean(self.status.send_now()))
+                } else {
+                    Ok(PropertyValue::Unsigned(u64::from(
+                        configuration.maximum_send_delay.unwrap().seconds(),
+                    )))
+                }
+            }
             p if p == PropertyIdentifier::PROPERTY_LIST => {
                 read_property_list_property(&self.property_list(), array_index)
             }
@@ -133,8 +152,13 @@ impl BACnetObject for AuditReporterObject {
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
-        if property == PropertyIdentifier::DESCRIPTION {
-            return AuditReporterAuthority(self).write_description(value, array_index, None);
+        if matches!(
+            property,
+            PropertyIdentifier::DESCRIPTION
+                | PropertyIdentifier::MAXIMUM_SEND_DELAY
+                | PropertyIdentifier::SEND_NOW
+        ) {
+            return AuditReporterAuthority(self).write_property(property, value, array_index, None);
         }
         Err(Error::Protocol {
             class: ErrorClass::PROPERTY.to_raw() as u32,

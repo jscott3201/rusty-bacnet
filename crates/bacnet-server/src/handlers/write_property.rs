@@ -490,9 +490,14 @@ fn write_with_source(
     priority: Option<u8>,
     source: Option<&bacnet_objects::device::AuditWriteSource>,
 ) -> Result<(), Error> {
-    if property == PropertyIdentifier::DESCRIPTION {
+    if matches!(
+        property,
+        PropertyIdentifier::DESCRIPTION
+            | PropertyIdentifier::MAXIMUM_SEND_DELAY
+            | PropertyIdentifier::SEND_NOW
+    ) {
         if let Some(mut reporter) = object.audit_reporter_authority_internal() {
-            return reporter.write_description(value, index, source);
+            return reporter.write_property(property, value, index, source);
         }
     }
     object.write_property(property, index, value, priority)

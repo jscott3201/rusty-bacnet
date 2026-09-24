@@ -406,7 +406,10 @@ async fn audit_reporter_missing_recipient_is_configuration_failure_without_growt
         );
         assert!(fixture.transport.sent.lock().unwrap().is_empty());
         assert_eq!(fixture.server.notification_transactions.active_count(), 0);
-        assert!(fixture.server.notification_transactions.workers_empty());
+        assert!(fixture
+            .server
+            .notification_transactions
+            .delivery_workers_idle());
         assert_eq!(fixture.writes.load(Ordering::Acquire), 100);
         fixture.server.stop().await.unwrap();
     }
@@ -547,12 +550,15 @@ async fn audit_reporter_overflow_and_shutdown_with_inflight_send_are_bounded() {
         health(&fixture.server).await,
         Reliability::COMMUNICATION_FAILURE
     );
-    tokio::time::timeout(Duration::from_secs(1), fixture.server.stop())
+    tokio::time::timeout(Duration::from_secs(4), fixture.server.stop())
         .await
         .unwrap()
         .unwrap();
     assert_eq!(fixture.server.notification_transactions.active_count(), 0);
-    assert!(fixture.server.notification_transactions.workers_empty());
+    assert!(fixture
+        .server
+        .notification_transactions
+        .delivery_workers_idle());
 }
 
 #[tokio::test(start_paused = true)]
@@ -574,7 +580,10 @@ async fn audit_reporter_blocked_transport_has_a_total_deadline_even_without_ack_
             Reliability::COMMUNICATION_FAILURE
         );
         assert_eq!(fixture.server.notification_transactions.active_count(), 0);
-        assert!(fixture.server.notification_transactions.workers_empty());
+        assert!(fixture
+            .server
+            .notification_transactions
+            .delivery_workers_idle());
         fixture.server.stop().await.unwrap();
     }
 }
@@ -713,3 +722,15 @@ async fn audit_reporter_noncommandable_present_value_ignores_priority_filter() {
 
 #[path = "audit_object_policy_tests.rs"]
 mod object_policy;
+
+#[path = "audit_batching_tests.rs"]
+mod batching;
+
+#[path = "audit_batch_resources_tests.rs"]
+mod batch_resources;
+
+#[path = "audit_batch_shutdown_tests.rs"]
+mod batch_shutdown;
+
+#[path = "audit_batch_history_tests.rs"]
+mod batch_history;

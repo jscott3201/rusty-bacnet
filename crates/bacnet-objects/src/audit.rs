@@ -35,6 +35,8 @@ mod notification;
 mod persistence;
 mod receipt;
 mod reporter_change;
+mod reporter_delay;
+pub use reporter_delay::AuditSendDelay;
 mod reporter_metadata;
 mod reporter_object;
 mod reporter_status;
@@ -718,3 +720,7 @@ mod persistence_receipt_tests;
 
 #[path = "audit/reporter_configuration.rs"]
 mod reporter_configuration;
+
+#[cfg(test)]
+#[path = "audit/reporter_delay_tests.rs"]
+mod reporter_delay_tests;

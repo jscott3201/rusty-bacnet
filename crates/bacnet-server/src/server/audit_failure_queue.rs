@@ -45,13 +45,22 @@ pub struct AuditFailureBatch<R> {
 
 impl<R> AuditFailureBatch<R> {
     pub fn notification(&self) -> bacnet_types::constructed::BACnetAuditNotification {
+        self.context.notification(self.count, self.earliest.clone())
+    }
+}
+impl<R> AuditFailureContext<R> {
+    pub(in crate::server) fn notification(
+        &self,
+        count: u64,
+        timestamp: BACnetTimeStamp,
+    ) -> bacnet_types::constructed::BACnetAuditNotification {
         use bacnet_types::constructed::{BACnetAuditNotification, BACnetRecipient};
         let mut value = bytes::BytesMut::new();
-        bacnet_encoding::primitives::encode_app_unsigned(&mut value, self.count);
+        bacnet_encoding::primitives::encode_app_unsigned(&mut value, count);
         BACnetAuditNotification {
             source_timestamp: None,
-            target_timestamp: Some(self.earliest.clone()),
-            source_device: BACnetRecipient::Device(self.context.device),
+            target_timestamp: Some(timestamp),
+            source_device: BACnetRecipient::Device(self.device),
             source_object: None,
             operation: bacnet_types::enums::AuditOperation::AUDITING_FAILURE,
             source_comment: None,
@@ -59,7 +68,7 @@ impl<R> AuditFailureBatch<R> {
             invoke_id: None,
             source_user_id: None,
             source_user_role: None,
-            target_device: BACnetRecipient::Device(self.context.device),
+            target_device: BACnetRecipient::Device(self.device),
             target_object: None,
             target_property: None,
             target_priority: None,
@@ -70,11 +79,48 @@ impl<R> AuditFailureBatch<R> {
     }
 }
 
+struct Entry<R> {
+    epoch: u64,
+    eligible: bool,
+    context: Option<Arc<AuditFailureContext<R>>>,
+    pending: Option<AuditFailureBatch<R>>,
+    _slot: Option<tokio::sync::OwnedSemaphorePermit>,
+}
+
 struct State<R> {
     owned: bool,
-    current: Option<Arc<AuditFailureContext<R>>>,
+    current: Option<u64>,
     order: u64,
-    pending: Option<AuditFailureBatch<R>>,
+    entries: Vec<Entry<R>>,
+    reserved: usize,
+    historical: Option<Arc<tokio::sync::Semaphore>>,
+    lost: u64,
+}
+impl<R> State<R> {
+    fn prune(&mut self) {
+        let current = self.current;
+        self.entries.retain(|entry| {
+            Some(entry.epoch) == current
+                || entry.pending.is_some()
+                || entry
+                    .context
+                    .as_ref()
+                    .is_some_and(|context| Arc::strong_count(context) > 1)
+        });
+    }
+    fn eligible(&self, context: &Arc<AuditFailureContext<R>>) -> bool
+    where
+        R: PartialEq,
+    {
+        self.entries.iter().any(|entry| {
+            entry
+                .context
+                .as_ref()
+                .is_some_and(|c| Arc::ptr_eq(c, context))
+                && entry.eligible
+                && (self.historical.is_some() || context.enabled())
+        })
+    }
 }
 
 #[doc(hidden)]
@@ -82,7 +128,14 @@ pub struct AuditFailureQueue<R> {
     state: Arc<Mutex<State<R>>>,
     changed: Arc<tokio::sync::Notify>,
 }
-
+impl<R> Clone for AuditFailureQueue<R> {
+    fn clone(&self) -> Self {
+        Self {
+            state: Arc::clone(&self.state),
+            changed: Arc::clone(&self.changed),
+        }
+    }
+}
 impl<R> Default for AuditFailureQueue<R> {
     fn default() -> Self {
         Self {
@@ -90,59 +143,152 @@ impl<R> Default for AuditFailureQueue<R> {
                 owned: false,
                 current: None,
                 order: 0,
-                pending: None,
+                entries: vec![],
+                reserved: 0,
+                historical: None,
+                lost: 0,
             })),
             changed: Arc::new(tokio::sync::Notify::new()),
         }
     }
 }
 
+/// A rollback-owned slot. Publishing after canonical commit cannot allocate or fail.
+pub(in crate::server) struct ContextReservation<R> {
+    queue: AuditFailureQueue<R>,
+    entry: Option<Entry<R>>,
+}
+impl<R> ContextReservation<R> {
+    pub(in crate::server) fn publish(mut self) {
+        let mut state = self.queue.state.lock().unwrap();
+        let entry = self.entry.take().unwrap();
+        state.reserved -= 1;
+        state.current = Some(entry.epoch);
+        state.entries.push(entry);
+        state.prune();
+        drop(state);
+        self.queue.changed.notify_waiters();
+    }
+}
+impl<R> Drop for ContextReservation<R> {
+    fn drop(&mut self) {
+        if self.entry.is_some() {
+            self.queue.state.lock().unwrap().reserved -= 1;
+        }
+    }
+}
+
 impl<R> AuditFailureQueue<R> {
+    pub(super) fn target(budget: Arc<tokio::sync::Semaphore>, epoch: u64, eligible: bool) -> Self {
+        let queue = Self::default();
+        queue.state.lock().unwrap().historical = Some(budget);
+        queue
+            .prepare_context(epoch, eligible)
+            .expect("validated at most 64 baseline contexts")
+            .publish();
+        queue
+    }
+    pub(in crate::server) fn prepare_context(
+        &self,
+        epoch: u64,
+        eligible: bool,
+    ) -> Result<ContextReservation<R>, Error> {
+        let mut state = self.state.lock().unwrap();
+        state.prune();
+        let denied = || Error::Protocol {
+            class: bacnet_types::enums::ErrorClass::SERVICES.to_raw() as u32,
+            code: bacnet_types::enums::ErrorCode::SERVICE_REQUEST_DENIED.to_raw() as u32,
+        };
+        if state.entries.len() + state.reserved >= 8
+            || state.entries.iter().any(|entry| entry.epoch == epoch)
+        {
+            return Err(denied());
+        }
+        let slot = Arc::clone(state.historical.as_ref().expect("target context owner"))
+            .try_acquire_owned()
+            .map_err(|_| denied())?;
+        // Capacity is allocated during fallible preparation, never after canonical assignment.
+        let reserve = state.reserved + 1;
+        state.entries.try_reserve(reserve).map_err(|_| denied())?;
+        state.reserved += 1;
+        Ok(ContextReservation {
+            queue: self.clone(),
+            entry: Some(Entry {
+                epoch,
+                eligible,
+                context: None,
+                pending: None,
+                _slot: Some(slot),
+            }),
+        })
+    }
+    pub(super) fn has_pending(&self) -> bool {
+        let state = self.state.lock().unwrap();
+        state.owned || state.entries.iter().any(|e| e.pending.is_some())
+    }
+    #[cfg(test)]
+    pub(in crate::server) fn context_resources(&self) -> (usize, usize, u64) {
+        let state = self.state.lock().unwrap();
+        (state.entries.len(), state.reserved, state.lost)
+    }
     #[cfg(test)]
     pub(super) fn resources(&self) -> (bool, u64) {
         let state = self.state.lock().unwrap();
         (
             state.owned,
-            state.pending.as_ref().map_or(0, |batch| batch.count),
+            state
+                .entries
+                .iter()
+                .filter_map(|e| e.pending.as_ref())
+                .fold(0u64, |n, b| n.saturating_add(b.count)),
         )
     }
 }
-
 impl<R: PartialEq> AuditFailureQueue<R> {
-    /// Retire pending old-generation summaries even if no new ordinary record arrives.
-    #[doc(hidden)]
+    /// Current-only source profiles retire old contexts; target contexts remain pinned.
     pub fn recipient_changed(&self) {
         let mut state = self.state.lock().unwrap();
-        state.pending = None;
-        state.current = None;
+        if state.historical.is_none() {
+            state.entries.clear();
+            state.current = None;
+        }
         drop(state);
         self.changed.notify_waiters();
     }
-
-    /// Capture admission order, not completion or wire-timestamp order.
-    /// A new context supersedes the single pending batch, without transferring it.
+    /// Capture original admission order before queueing or any subsequent drop callback.
     pub fn observe(&self, context: AuditFailureContext<R>) -> Option<AuditFailureTicket<R>> {
-        if !context.enabled() {
-            return None;
-        }
         let mut state = self.state.lock().unwrap();
-        state.order = state.order.checked_add(1)?;
-        let changed = !state.current.as_ref().is_some_and(|old| old.same(&context));
-        if changed {
-            state.pending = None;
-            state.current = Some(Arc::new(context));
+        if state.historical.is_none() {
+            if !context.enabled() {
+                return None;
+            }
+            let changed = !state
+                .entries
+                .first()
+                .and_then(|e| e.context.as_ref())
+                .is_some_and(|old| old.same(&context));
+            if changed {
+                state.entries.clear();
+                state.current = Some(context.epoch);
+                state.entries.push(Entry {
+                    epoch: context.epoch,
+                    eligible: true,
+                    context: None,
+                    pending: None,
+                    _slot: None,
+                });
+                self.changed.notify_waiters();
+            }
         }
-        let ticket = AuditFailureTicket {
-            context: Arc::clone(state.current.as_ref().unwrap()),
-            order: state.order,
-        };
-        drop(state);
-        if changed {
-            self.changed.notify_waiters();
-        }
-        Some(ticket)
+        let order = state.order.checked_add(1)?;
+        let entry = state
+            .entries
+            .iter_mut()
+            .find(|entry| entry.epoch == context.epoch)?;
+        let context = Arc::clone(entry.context.get_or_insert_with(|| Arc::new(context)));
+        state.order = order;
+        Some(AuditFailureTicket { context, order })
     }
-
     pub fn record_drop(
         &self,
         owner: &NotificationTransactions,
@@ -150,31 +296,25 @@ impl<R: PartialEq> AuditFailureQueue<R> {
         timestamp: BACnetTimeStamp,
         count: u64,
     ) -> Option<AuditFailureWorker<R>> {
-        if !ticket.context.enabled() || owner.audit_permits.is_closed() {
-            return None;
-        }
         let mut state = self.state.lock().unwrap();
-        if !state
-            .current
-            .as_ref()
-            .is_some_and(|current| Arc::ptr_eq(current, &ticket.context))
-        {
+        state.lost = state.lost.saturating_add(count);
+        if owner.audit_permits.is_closed() || !state.eligible(&ticket.context) {
             return None;
         }
-        if let Some(batch) = &mut state.pending {
-            batch.count = batch.count.saturating_add(count);
-            if ticket.order < batch.earliest_order {
-                batch.earliest_order = ticket.order;
-                batch.earliest = timestamp;
-            }
-        } else {
-            state.pending = Some(AuditFailureBatch {
+        let entry = state.entries.iter_mut().find(|e| {
+            e.context
+                .as_ref()
+                .is_some_and(|c| Arc::ptr_eq(c, &ticket.context))
+        })?;
+        merge(
+            &mut entry.pending,
+            AuditFailureBatch {
                 context: ticket.context,
                 count,
                 earliest: timestamp,
                 earliest_order: ticket.order,
-            });
-        }
+            },
+        );
         if state.owned {
             return None;
         }
@@ -188,6 +328,17 @@ impl<R: PartialEq> AuditFailureQueue<R> {
         })
     }
 }
+fn merge<R>(pending: &mut Option<AuditFailureBatch<R>>, batch: AuditFailureBatch<R>) {
+    if let Some(pending) = pending {
+        pending.count = pending.count.saturating_add(batch.count);
+        if batch.earliest_order < pending.earliest_order {
+            pending.earliest_order = batch.earliest_order;
+            pending.earliest = batch.earliest;
+        }
+    } else {
+        *pending = Some(batch);
+    }
+}
 
 #[doc(hidden)]
 pub struct AuditFailureWorker<R> {
@@ -197,18 +348,18 @@ pub struct AuditFailureWorker<R> {
     changed: Arc<tokio::sync::Notify>,
     active: bool,
 }
-
 impl<R: PartialEq> AuditFailureWorker<R> {
     fn finish_if_empty(&mut self) -> bool {
         let mut state = self.failures.lock().unwrap();
-        if state
-            .pending
-            .as_ref()
-            .is_some_and(|batch| !batch.context.enabled())
-        {
-            state.pending = None;
+        if state.historical.is_none() {
+            for entry in &mut state.entries {
+                if entry.pending.as_ref().is_some_and(|b| !b.context.enabled()) {
+                    entry.pending = None;
+                }
+            }
         }
-        if state.pending.is_none() {
+        state.prune();
+        if state.entries.iter().all(|e| e.pending.is_none()) {
             state.owned = false;
             self.active = false;
             true
@@ -216,32 +367,20 @@ impl<R: PartialEq> AuditFailureWorker<R> {
             false
         }
     }
-
-    /// Restore a summary that could not enter a local bounded egress queue.
-    /// Merge only into the same current generation; never count the summary itself.
+    /// Restore only the captured eligible context; never recursively count a summary.
     pub fn restore(&mut self, batch: AuditFailureBatch<R>) {
-        if !batch.context.enabled() {
-            return;
-        }
         let mut state = self.failures.lock().unwrap();
-        if !state
-            .current
-            .as_ref()
-            .is_some_and(|current| Arc::ptr_eq(current, &batch.context))
-        {
+        if !state.eligible(&batch.context) {
             return;
         }
-        if let Some(pending) = &mut state.pending {
-            pending.count = pending.count.saturating_add(batch.count);
-            if batch.earliest_order < pending.earliest_order {
-                pending.earliest_order = batch.earliest_order;
-                pending.earliest = batch.earliest;
-            }
-        } else {
-            state.pending = Some(batch);
+        if let Some(entry) = state.entries.iter_mut().find(|e| {
+            e.context
+                .as_ref()
+                .is_some_and(|c| Arc::ptr_eq(c, &batch.context))
+        }) {
+            merge(&mut entry.pending, batch);
         }
     }
-
     pub async fn next(
         &mut self,
     ) -> Option<(
@@ -256,7 +395,6 @@ impl<R: PartialEq> AuditFailureWorker<R> {
         let coordinator = Arc::clone(&self.core.coordinator);
         let changed_owner = Arc::clone(&self.changed);
         loop {
-            // Register both wake reasons before inspecting state/resources.
             let released = coordinator.released();
             let changed = changed_owner.notified();
             tokio::pin!(released, changed);
@@ -264,13 +402,15 @@ impl<R: PartialEq> AuditFailureWorker<R> {
             changed.as_mut().enable();
             let ready = {
                 let mut state = self.failures.lock().unwrap();
-                let Some(batch) = state.pending.as_ref() else {
+                let historical = state.historical.is_some();
+                let Some(entry) = state.entries.iter_mut().find(|e| e.pending.is_some()) else {
                     state.owned = false;
                     self.active = false;
                     return None;
                 };
-                if !batch.context.enabled() {
-                    state.pending = None;
+                let batch = entry.pending.as_ref().unwrap();
+                if !historical && !batch.context.enabled() {
+                    entry.pending = None;
                     None
                 } else {
                     let reserved = if batch.context.confirmed {
@@ -284,10 +424,10 @@ impl<R: PartialEq> AuditFailureWorker<R> {
                         Ok(None)
                     };
                     match reserved {
-                        Ok(reserved) => Some((state.pending.take().unwrap(), reserved)),
+                        Ok(reserved) => Some((entry.pending.take().unwrap(), reserved)),
                         Err(NotificationReserveError::Coordinator(ReserveError::Exhausted)) => None,
                         Err(_) => {
-                            state.pending = None;
+                            entry.pending = None;
                             None
                         }
                     }
@@ -303,13 +443,18 @@ impl<R: PartialEq> AuditFailureWorker<R> {
         }
     }
 }
-
 impl<R> Drop for AuditFailureWorker<R> {
     fn drop(&mut self) {
         if self.active {
             let mut state = self.failures.lock().unwrap();
-            state.pending = None;
+            for entry in &mut state.entries {
+                entry.pending = None;
+            }
             state.owned = false;
         }
     }
 }
+
+#[cfg(test)]
+#[path = "audit_historical_loss_tests.rs"]
+mod historical_tests;
