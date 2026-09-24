@@ -677,3 +677,9 @@ mod identity;
 
 #[path = "life_safety_cov_tests/identity_arrays.rs"]
 mod identity_arrays;
+
+#[cfg(test)]
+mod lifetime;
+
+#[cfg(test)]
+mod lifetime_mixed;

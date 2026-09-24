@@ -14,6 +14,8 @@ use bacnet_types::MacAddr;
 mod identity;
 pub use identity::*;
 mod admission;
+mod lifetime;
+pub use lifetime::CovTimeRemaining;
 
 mod policy;
 pub use policy::*;
@@ -271,13 +273,9 @@ impl CovSubscriptionTable {
 
     /// Whether a snapshot still owns a live entry in this table.
     pub fn is_current(&self, snapshot: &CovSubscriptionSnapshot) -> bool {
-        Arc::ptr_eq(&self.owner, &snapshot.owner)
-            && self.subs.get(snapshot.key()).is_some_and(|entry| {
-                entry.generation == snapshot.generation
-                    && entry
-                        .expires_at
-                        .is_none_or(|expiry| expiry > Instant::now())
-            })
+        self.remaining_lifetime(snapshot, Instant::now())
+            .and_then(CovTimeRemaining::wire_seconds)
+            .is_some()
     }
 
     /// Complete only the captured generation, never a renewal or recreated entry.

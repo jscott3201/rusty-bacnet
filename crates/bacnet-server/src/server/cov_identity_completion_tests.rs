@@ -242,7 +242,15 @@ async fn stale_completion(
             );
         }
     }
-    fixture.finish(confirmed).await;
+    let admitted = confirmed && kind == CovNotificationKind::Multiple;
+    if confirmed && !admitted {
+        assert!(
+            fixture.sent.lock().unwrap().is_empty(),
+            "late stale Single ownership must suppress admission"
+        );
+        assert_eq!(fixture.transactions.active_count(), 0);
+    }
+    fixture.finish(admitted).await;
 }
 
 #[tokio::test]
@@ -266,3 +274,5 @@ async fn cov_identity_held_fanout_completion_fences_each_reference_and_mode() {
         }
     }
 }
+
+mod lifetime;
