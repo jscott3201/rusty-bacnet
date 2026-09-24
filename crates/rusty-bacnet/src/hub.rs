@@ -111,7 +111,7 @@ struct HubConfig {
     admission_policy: AdmissionPolicy,
     probe_policy: ScHubProbePolicy,
     broadcast_rate: ScHubBroadcastRatePolicy,
-    unicast_send_budget: Duration,
+    relay_send_budget: Duration,
 }
 
 impl HubConfig {
@@ -126,7 +126,7 @@ impl HubConfig {
                 .with_graceful_timeouts(self.graceful_timeouts)
                 .with_probe_policy(self.probe_policy)
                 .with_broadcast_rate_policy(self.broadcast_rate)
-                .with_unicast_send_budget(self.unicast_send_budget)
+                .with_relay_send_budget(self.relay_send_budget)
                 .map_err(to_py_err)?;
         // One native policy consumes the locked classification; no registry
         // copies, Python callbacks or certificate-principal inference.
@@ -161,7 +161,7 @@ impl PyScHub {
     /// before bind, in this order: `ca_cert` presence, VMAC length (the
     /// existing `RuntimeError`), reserved VMACs, `device_uuid`, admission
     /// limits, admission policy, graceful and handshake timeouts, probe policy,
-    /// unicast send budget, then broadcast rates.
+    /// transit relay send budget, then broadcast rates.
     ///
     /// Args:
     ///     listen: Bind address, e.g. ``"127.0.0.1:0"`` for a random port.
@@ -218,11 +218,13 @@ impl PyScHub {
     ///     broadcast_global_per_second: Aggregate refill rate (default 512).
     ///         Rate fields must be in 1..=u64::MAX/1_000_000_000. Exhaustion
     ///         silently drops and increments the existing redacted counters.
-    ///     unicast_send_budget_ms: NPDU/opaque unicast acquisition-plus-send
+    ///     relay_send_budget_ms: Transit relay acquisition-plus-send
     ///         budget (default 5000), positive representable whole milliseconds.
+    ///         Covers NPDU/opaque unicast, each concurrent broadcast recipient
+    ///         and forwarded BVLC-Result; probe/control/cleanup/shutdown stay separate.
     ///         Timeout does not retire, retry, or send a fabricated Result.
     #[new]
-    #[pyo3(signature = (listen, cert, key, vmac, ca_cert=None, *, device_uuid=None, max_clients=256, max_handshakes=256, admission_policy="allow_all", graceful_disconnect_ack_ms=5000, graceful_ws_close_ms=5000, graceful_overall_ms=15000, handshake_tls_ms=10000, handshake_websocket_upgrade_ms=10000, handshake_connect_request_ms=10000, probe_scan_interval_ms=30000, probe_idle_age_ms=60000, probe_ack_age_ms=5000, probe_send_budget_ms=5000, broadcast_sender_burst=1024, broadcast_sender_per_second=128, broadcast_global_burst=4096, broadcast_global_per_second=512, unicast_send_budget_ms=5000))]
+    #[pyo3(signature = (listen, cert, key, vmac, ca_cert=None, *, device_uuid=None, max_clients=256, max_handshakes=256, admission_policy="allow_all", graceful_disconnect_ack_ms=5000, graceful_ws_close_ms=5000, graceful_overall_ms=15000, handshake_tls_ms=10000, handshake_websocket_upgrade_ms=10000, handshake_connect_request_ms=10000, probe_scan_interval_ms=30000, probe_idle_age_ms=60000, probe_ack_age_ms=5000, probe_send_budget_ms=5000, broadcast_sender_burst=1024, broadcast_sender_per_second=128, broadcast_global_burst=4096, broadcast_global_per_second=512, relay_send_budget_ms=5000))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         listen: &str,
@@ -248,7 +250,7 @@ impl PyScHub {
         broadcast_sender_per_second: u64,
         broadcast_global_burst: u64,
         broadcast_global_per_second: u64,
-        unicast_send_budget_ms: u64,
+        relay_send_budget_ms: u64,
     ) -> PyResult<Self> {
         let ca_cert = ca_cert.filter(|path| !path.is_empty()).ok_or_else(|| {
             PyValueError::new_err("ca_cert must be a nonempty CA certificate path for mutual TLS")
@@ -301,8 +303,8 @@ impl PyScHub {
             Duration::from_millis(probe_send_budget_ms),
         )
         .map_err(|error| PyValueError::new_err(error.to_string()))?;
-        let unicast_send_budget = Duration::from_millis(unicast_send_budget_ms);
-        bacnet_transport::sc_hub::ScHubTlsConfig::validate_unicast_send_budget(unicast_send_budget)
+        let relay_send_budget = Duration::from_millis(relay_send_budget_ms);
+        bacnet_transport::sc_hub::ScHubTlsConfig::validate_relay_send_budget(relay_send_budget)
             .map_err(|error| PyValueError::new_err(error.to_string()))?;
         let broadcast_rate = ScHubBroadcastRatePolicy::new(
             broadcast_sender_burst,
@@ -326,7 +328,7 @@ impl PyScHub {
                 admission_policy,
                 probe_policy,
                 broadcast_rate,
-                unicast_send_budget,
+                relay_send_budget,
             },
             address: Arc::new(Mutex::new(None)),
         })

@@ -13,6 +13,31 @@
 - Addenda/errata status: ASHRAE 135-2020 Errata Summary 2024-04-29 (v1) reviewed for the supported subset. Item 7 (Clause 21.6, p. 886): successful-actions-only corrected from BOOLEAN (struck through, removed) to BACnetSuccessFilter (italic, added), tags [7]/[4]. Item 8 (Clause 21.2.3, p. 865): start-at-sequence-number corrected from Unsigned32 (struck through, removed) to Unsigned64 (italic, added), tag [2] OPTIONAL. Both items visually verified from the rendered errata p. 3 (strikeout = removed, italics = added per the p. 1 convention); not inferred from concatenated text extraction. The implementation encodes the corrected BACnetSuccessFilter/u64 contract after the RB-02 codec and RB-20 runtime/Python migrations; `BACNET-13-AUDIT-WIRE-MODELS` remains `implementation-present-needs-source-review` pending broader Audit review.
 - PR-0808 evidence row: `BACNET-12-ALERT-ENROLLMENT-TABLE-12-61` is `supported-with-clause-evidence` for the served object model only; it is not an Alert evaluator or notification-generation claim.
 
+## Hub transit relay budget
+
+Scoped `BACNET-AB-SC-CONNECTION-STATE` evidence, Refs #774 under #476.
+One validated `relay_send_budget` / Python `relay_send_budget_ms` setting replaces
+the pre-1.0 unicast-only API without aliases. The default remains five seconds;
+positive whole-millisecond and monotonic representation checks precede file I/O
+or bind. It bounds acquisition plus send for NPDU/opaque unicast, each concurrent
+broadcast recipient, and forwarded BVLC-Result. Probe, control, cleanup and
+graceful-shutdown policy remain distinct. Timeouts do not retire, retry or
+fabricate a Result; buffered bytes cannot be retracted. Captured-registration
+retirement still protects replacements. Outcome counters remain unicast-only,
+with their existing broadcast/Result exclusions.
+
+[Real TLS/paused-clock tests](../../crates/bacnet-transport/src/sc_hub/relay_budget_tests.rs)
+prove healthy fanout while two recipients are blocked, one concurrent configured
+budget, source progress, no replay, retained peers and later delivery; addressed
+Result and replacement-under-held-sink cases use the same runtime paths.
+The same module establishes sixteen peers and closes them concurrently, verifies
+registration/resource reclamation, recovers capacity and joins Hub shutdown.
+Existing sequential stress coverage remains. [Installed Python tests](../../crates/rusty-bacnet/tests/test_sc_hub_probe_policy.py)
+exercise the renamed setting with all transit wire families; Rust owns the
+deterministic held-sink deadline proof. Signature/stub and invalid-before-I/O
+tests migrate together. Global pins/statuses remain unchanged; parent #476
+acceptance is reconciled separately, with no broader Annex AB claim here.
+
 ## Hub outcome status
 
 Scoped `BACNET-AB-SC-CONNECTION-STATE` evidence, Refs #770 under #476.
@@ -33,8 +58,8 @@ Evidence: [TLS outcome cases](../../crates/bacnet-transport/src/sc_hub/outcome_t
 and [installed Python outcomes](../../crates/rusty-bacnet/tests/test_sc_hub_conflict_admission.py).
 Existing stress/cleanup coverage and Rust post-stop snapshots remain. Python
 status still raises before start/after stop; no new lifecycle or shutdown count
-is implied. Global review pins and row status remain unchanged. #476 remains
-open for the separately tracked relay-budget coverage in #774; no broader
+is implied. Global review pins and row status remain unchanged. #476 acceptance is reconciled separately; unified relay-budget evidence is
+recorded above. No broader
 conformance or certificate-principal authorization claim is added.
 
 ## Hub operator timing and broadcast policy
@@ -51,9 +76,10 @@ Idle and ACK ages must be strictly exceeded at a scan; pending age starts at
 reservation. Sequential sends can delay later scans; missed ticks are skipped,
 not replayed. Matching ACK/activity and pending clearing share the registry lock;
 wrong-ID/invalid ACKs cannot refresh activity. The public configuration also sets
-one separate NPDU/opaque unicast acquisition-plus-send budget (default5s), without
-retry, fabricated Result, or timeout-only retirement. Broadcast/Result send
-budgets and the initiating node's heartbeat policy remain separate.
+one separate transit relay acquisition-plus-send budget (default5s), without
+retry, fabricated Result, or timeout-only retirement. It includes NPDU/opaque
+unicast, each concurrent broadcast recipient, and forwarded Result. Initiating-node
+heartbeat and Hub probe/control/cleanup/graceful policies remain separate.
 
 [Paused-clock real TLS tests](../../crates/bacnet-transport/src/sc_hub/probe_tests.rs)
 cover exact strict age boundaries, held-sink budgets, missed-scan behavior, and

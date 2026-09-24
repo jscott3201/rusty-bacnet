@@ -49,7 +49,7 @@ class HubIdentityTests(unittest.TestCase):
                   "graceful_disconnect_ack_ms", "graceful_ws_close_ms", "graceful_overall_ms",
                   "handshake_tls_ms", "handshake_websocket_upgrade_ms",
                   "handshake_connect_request_ms",
-                  'probe_scan_interval_ms', 'probe_idle_age_ms', 'probe_ack_age_ms', 'probe_send_budget_ms', 'broadcast_sender_burst', 'broadcast_sender_per_second', 'broadcast_global_burst', 'broadcast_global_per_second', 'unicast_send_budget_ms']
+                  'probe_scan_interval_ms', 'probe_idle_age_ms', 'probe_ack_age_ms', 'probe_send_budget_ms', 'broadcast_sender_burst', 'broadcast_sender_per_second', 'broadcast_global_burst', 'broadcast_global_per_second', 'relay_send_budget_ms']
         self.assertEqual([arg.arg for arg in init.args.kwonlyargs], kwonly)
         defaults = {arg.arg: default for arg, default in
                     zip(init.args.kwonlyargs, init.args.kw_defaults)}
@@ -62,7 +62,7 @@ class HubIdentityTests(unittest.TestCase):
              "graceful_disconnect_ack_ms": 5000, "graceful_ws_close_ms": 5000,
              "graceful_overall_ms": 15000, "handshake_tls_ms": 10000,
              "handshake_websocket_upgrade_ms": 10000, "handshake_connect_request_ms": 10000,
-             'probe_scan_interval_ms': 30000, 'probe_idle_age_ms': 60000, 'probe_ack_age_ms': 5000, 'probe_send_budget_ms': 5000, 'broadcast_sender_burst': 1024, 'broadcast_sender_per_second': 128, 'broadcast_global_burst': 4096, 'broadcast_global_per_second': 512, 'unicast_send_budget_ms': 5000})
+             'probe_scan_interval_ms': 30000, 'probe_idle_age_ms': 60000, 'probe_ack_age_ms': 5000, 'probe_send_budget_ms': 5000, 'broadcast_sender_burst': 1024, 'broadcast_sender_per_second': 128, 'broadcast_global_burst': 4096, 'broadcast_global_per_second': 512, 'relay_send_budget_ms': 5000})
         uuid_type = init.args.kwonlyargs[0].annotation
         assert uuid_type is not None
         annotation = ast.unparse(uuid_type)

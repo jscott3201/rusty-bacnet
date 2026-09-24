@@ -264,8 +264,8 @@ impl ScHub {
         // policy: every public startup API funnels through here.
         let admission_limits = tls_config.admission_limits();
         admission_limits.validate()?;
-        let unicast_send_budget = tls_config.unicast_send_budget();
-        ScHubTlsConfig::validate_unicast_send_budget(unicast_send_budget)?;
+        let relay_send_budget = tls_config.relay_send_budget();
+        ScHubTlsConfig::validate_relay_send_budget(relay_send_budget)?;
         let probe_policy = tls_config.probe_policy();
         probe_policy.validate()?;
         let graceful_timeouts = tls_config.graceful_timeouts();
@@ -295,7 +295,7 @@ impl ScHub {
         let tasks = tasks.with_broadcast_budget(broadcast);
         let tasks = tasks.with_graceful_timeouts(graceful_timeouts);
         let mut tasks = tasks.with_probe_policy(probe_policy);
-        tasks.timing.unicast_send_budget = unicast_send_budget;
+        tasks.timing.relay_send_budget = relay_send_budget;
         let task = tokio::spawn(connection::accept_loop_with_counter(
             listener,
             tls_acceptor,
@@ -614,3 +614,6 @@ mod probe_tests;
 
 #[cfg(test)]
 mod outcome_tests;
+
+#[cfg(test)]
+mod relay_budget_tests;

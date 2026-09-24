@@ -70,6 +70,10 @@ def hub_kwargs(**overrides: Any) -> Any:
 class HubConstructorTests(unittest.TestCase):
     """Sync constructor validation: everything fails before bind, without I/O."""
 
+    def test_removed_unicast_budget_keyword_is_rejected_before_io(self):
+        with self.assertRaises(TypeError):
+            ScHub(**hub_kwargs(unicast_send_budget_ms=25))
+
     def test_outcome_stub_matches_exact_runtime_shape_oracle(self):
         tree = ast.parse((Path(__file__).resolve().parents[1] / "rusty_bacnet.pyi").read_text())
         classes = {node.name: node for node in tree.body if isinstance(node, ast.ClassDef)}
@@ -88,14 +92,14 @@ class HubConstructorTests(unittest.TestCase):
             ScHub(**hub_kwargs(
                 listen=f"127.0.0.1:{occupied.getsockname()[1]}",
                 probe_scan_interval_ms=25, probe_idle_age_ms=75,
-                probe_ack_age_ms=40, probe_send_budget_ms=30, unicast_send_budget_ms=25,
+                probe_ack_age_ms=40, probe_send_budget_ms=30, relay_send_budget_ms=25,
                 broadcast_sender_burst=2, broadcast_sender_per_second=1,
                 broadcast_global_burst=3, broadcast_global_per_second=1,
             ))
 
     def test_invalid_probe_unicast_and_rate_settings_fail_before_io(self):
         timing = ("probe_scan_interval_ms", "probe_idle_age_ms", "probe_ack_age_ms",
-                  "probe_send_budget_ms", "unicast_send_budget_ms")
+                  "probe_send_budget_ms", "relay_send_budget_ms")
         rates = ("broadcast_sender_burst", "broadcast_sender_per_second",
                  "broadcast_global_burst", "broadcast_global_per_second")
         for field in timing + rates:

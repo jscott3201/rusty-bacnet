@@ -16,7 +16,7 @@ use tokio::time::Instant;
 /// All durations must be positive whole milliseconds, be at most `i64::MAX` milliseconds (reserving elapsed-tick headroom),
 /// and be representable as a future monotonic instant on this platform. These
 /// are local representation bounds, not BACnet's initiating-node 3–300s range.
-/// NPDU/opaque unicast has a separate configured send budget.
+/// Transit relays have a separate configured acquisition-plus-send budget.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScHubProbePolicy {
     scan_interval: Duration,
@@ -89,7 +89,7 @@ impl Default for ScHubProbePolicy {
 pub(super) struct HubTiming {
     pub(super) origin: Instant,
     pub policy: ScHubProbePolicy,
-    pub unicast_send_budget: Duration,
+    pub relay_send_budget: Duration,
 }
 
 impl HubTiming {
@@ -97,7 +97,7 @@ impl HubTiming {
         Self {
             origin: Instant::now(),
             policy,
-            unicast_send_budget: Duration::from_secs(5),
+            relay_send_budget: Duration::from_secs(5),
         }
     }
     pub fn now_ms(self) -> u64 {

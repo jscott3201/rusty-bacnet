@@ -1946,7 +1946,7 @@ hub = ScHub(
     handshake_connect_request_ms=10000,  # 5s minimum per Annex AB.6.2.3
     probe_scan_interval_ms=30000, probe_idle_age_ms=60000,
     probe_ack_age_ms=5000, probe_send_budget_ms=5000,
-    unicast_send_budget_ms=5000,          # NPDU/opaque acquisition + send
+    relay_send_budget_ms=5000,            # each transit relay acquisition + send
     broadcast_sender_burst=1024, broadcast_sender_per_second=128,
     broadcast_global_burst=4096, broadcast_global_per_second=512,
 )
@@ -1978,11 +1978,15 @@ reservation before sending. Delayed scans are skipped, and serial sends can
 postpone detection, so `probe_ack_age_ms` is not a hard closure deadline. A valid
 matching ACK clears pending and refreshes activity; wrong/invalid ACKs do not.
 `probe_send_budget_ms` includes sink acquisition and send.
-`unicast_send_budget_ms` independently bounds NPDU/opaque unicast attempts;
-timeout does not retire, retry, or fabricate a Result and cannot retract buffered
-bytes. Broadcast fanout and forwarded Results retain separate existing bounds.
+`relay_send_budget_ms` independently bounds each transit acquisition-plus-send
+attempt: NPDU/opaque unicast, each concurrent broadcast recipient, and forwarded
+BVLC-Result. Timeout does not retire, retry, or fabricate a Result and cannot
+retract buffered bytes. Healthy broadcast recipients progress independently.
+Probe, control, cleanup and graceful-shutdown policies remain separate. The
+pre-1.0 unicast-only keyword is removed without an alias; use `relay_send_budget_ms`.
+Outcome counters retain their documented unicast-only scope.
 
-Probe and unicast values are positive integers in milliseconds, at most
+Probe and relay values are positive integers in milliseconds, at most
 `2**63 - 1` with platform monotonic representability also checked. Zero/excessive
 values raise `ValueError`; negative/out-of-u64 integers raise `OverflowError`;
 nonintegers raise `TypeError`. These are local representation bounds, not
