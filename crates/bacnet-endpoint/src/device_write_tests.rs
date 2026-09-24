@@ -240,7 +240,8 @@ async fn endpoint_device_write_actual_ingress_rejects_source_reporter_and_stops(
             property_value: value.to_vec(),
             priority: None,
         }
-        .encode(&mut service);
+        .encode(&mut service)
+        .unwrap();
         let mut apdu = BytesMut::new();
         encode_apdu(
             &mut apdu,

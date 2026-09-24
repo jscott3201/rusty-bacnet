@@ -33,7 +33,7 @@ fn write_raw(
         priority: None,
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
     handle_write_property(db, &buf).map(|_| ())
 }
 

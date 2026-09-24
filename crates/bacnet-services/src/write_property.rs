@@ -58,8 +58,25 @@ pub struct WritePropertyRequest {
     pub priority: Option<u8>,
 }
 
+/// Validate an outbound WriteProperty priority without inspecting commandability.
+///
+/// Omission is allowed; every supplied priority must be in 1..=16, including
+/// NULL writes. Returns a local encoding error for invalid typed input.
+pub fn validate_priority(priority: Option<u8>) -> Result<(), Error> {
+    if let Some(priority) = priority {
+        if !(1..=16).contains(&priority) {
+            return Err(Error::Encoding(format!(
+                "WriteProperty priority must be 1-16, got {priority}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 impl WritePropertyRequest {
-    pub fn encode(&self, buf: &mut BytesMut) {
+    /// Encode transactionally: invalid priority leaves `buf` unchanged.
+    pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
+        validate_priority(self.priority)?;
         primitives::encode_ctx_object_id(buf, 0, &self.object_identifier);
         primitives::encode_ctx_unsigned(buf, 1, self.property_identifier.to_raw() as u64);
         if let Some(idx) = self.property_array_index {
@@ -71,6 +88,7 @@ impl WritePropertyRequest {
         if let Some(prio) = self.priority {
             primitives::encode_ctx_unsigned(buf, 4, prio as u64);
         }
+        Ok(())
     }
 
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
@@ -205,6 +223,52 @@ mod tests {
     }
 
     #[test]
+    fn outbound_priority_validation_is_transactional() {
+        for priority in [0, 17, 255] {
+            let request = WritePropertyRequest {
+                object_identifier: object_id(),
+                property_identifier: PropertyIdentifier::PRESENT_VALUE,
+                property_array_index: Some(0),
+                property_value: vec![0],
+                priority: Some(priority),
+            };
+            let mut output = BytesMut::from(&b"prefix"[..]);
+            assert!(matches!(
+                request.encode(&mut output),
+                Err(Error::Encoding(_))
+            ));
+            assert_eq!(
+                &output[..],
+                b"prefix",
+                "invalid priority {priority} changed output"
+            );
+        }
+    }
+
+    #[test]
+    fn outbound_priority_none_and_all_valid_values_preserve_bytes() {
+        for priority in std::iter::once(None).chain((1..=16).map(Some)) {
+            let request = WritePropertyRequest {
+                object_identifier: object_id(),
+                property_identifier: PropertyIdentifier::PRESENT_VALUE,
+                property_array_index: Some(0),
+                property_value: vec![0],
+                priority,
+            };
+            let mut output = BytesMut::from(&b"prefix"[..]);
+            request.encode(&mut output).unwrap();
+            let mut expected = b"prefix".to_vec();
+            expected
+                .extend_from_slice(&[0x0c, 0x00, 0x40, 0x00, 1, 0x19, 85, 0x29, 0, 0x3e, 0, 0x3f]);
+            if let Some(priority) = priority {
+                expected.extend_from_slice(&[0x49, priority]);
+            }
+            assert_eq!(output.as_ref(), expected);
+            assert_eq!(WritePropertyRequest::decode(&output[6..]).unwrap(), request);
+        }
+    }
+
+    #[test]
     fn request_round_trip() {
         let req = WritePropertyRequest {
             object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 1).unwrap(),
@@ -214,7 +278,7 @@ mod tests {
             priority: None,
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         let decoded = WritePropertyRequest::decode(&buf).unwrap();
         assert_eq!(req, decoded);
     }
@@ -229,7 +293,7 @@ mod tests {
             priority: Some(8),
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         let decoded = WritePropertyRequest::decode(&buf).unwrap();
         assert_eq!(req, decoded);
     }
@@ -289,7 +353,7 @@ mod tests {
             priority: Some(16),               // max valid
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         let decoded = WritePropertyRequest::decode(&buf).unwrap();
         assert_eq!(decoded.priority, Some(16));
 
@@ -304,7 +368,8 @@ mod tests {
                 priority: None,
                 ..req.clone()
             }
-            .encode(&mut buf);
+            .encode(&mut buf)
+            .unwrap();
             tags::encode_tag(
                 &mut buf,
                 4,
@@ -323,7 +388,8 @@ mod tests {
             priority: None,
             ..req
         }
-        .encode(&mut buf);
+        .encode(&mut buf)
+        .unwrap();
         tags::encode_tag(&mut buf, 4, TagClass::Context, 2);
         buf.extend_from_slice(&[0x00, 0x01]);
         assert_eq!(
@@ -405,7 +471,7 @@ mod tests {
             priority: None,
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         assert!(WritePropertyRequest::decode(&buf[..1]).is_err());
     }
 
@@ -419,7 +485,7 @@ mod tests {
             priority: None,
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         assert!(WritePropertyRequest::decode(&buf[..2]).is_err());
     }
 
@@ -433,7 +499,7 @@ mod tests {
             priority: None,
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         assert!(WritePropertyRequest::decode(&buf[..3]).is_err());
     }
 
@@ -447,7 +513,7 @@ mod tests {
             priority: Some(8),
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         let half = buf.len() / 2;
         assert!(WritePropertyRequest::decode(&buf[..half]).is_err());
     }

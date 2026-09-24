@@ -30,7 +30,8 @@ fn wp(
         property_value: value(&input),
         priority,
     }
-    .encode(&mut bytes);
+    .encode(&mut bytes)
+    .unwrap();
     handle_write_property(db, &bytes)
 }
 fn wpm(

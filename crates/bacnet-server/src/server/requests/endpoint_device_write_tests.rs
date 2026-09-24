@@ -25,7 +25,7 @@ fn write() -> WritePropertyRequest {
 
 fn request(write: &WritePropertyRequest) -> ConfirmedRequestPdu {
     let mut bytes = BytesMut::new();
-    write.encode(&mut bytes);
+    write.encode(&mut bytes).unwrap();
     ConfirmedRequestPdu {
         segmented: false,
         more_follows: false,
@@ -439,10 +439,13 @@ async fn endpoint_device_write_rejects_scope_index_type_priority_and_malformed_b
         ErrorCode::INVALID_DATA_ENCODING,
     ));
     for priority in [0, 17] {
-        let mut write = write();
-        write.priority = Some(priority);
+        let mut inbound = request(&write());
+        // Independent malformed peer input retains the server's semantic error test.
+        let mut bytes = BytesMut::from(inbound.service_request.as_ref());
+        bacnet_encoding::primitives::encode_ctx_unsigned(&mut bytes, 4, priority);
+        inbound.service_request = bytes.freeze();
         cases.push((
-            request(&write),
+            inbound,
             ErrorClass::SERVICES,
             ErrorCode::PARAMETER_OUT_OF_RANGE,
         ));

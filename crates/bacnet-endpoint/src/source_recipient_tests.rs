@@ -61,7 +61,8 @@ async fn wire(
         property_value: bytes,
         priority: None,
     }
-    .encode(&mut service);
+    .encode(&mut service)
+    .unwrap();
     // Discover the ephemeral local address through the session's actual egress.
     session
         .egress

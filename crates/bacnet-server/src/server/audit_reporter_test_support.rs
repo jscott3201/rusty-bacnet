@@ -344,7 +344,8 @@ pub(super) fn wp(
         property_value: value,
         priority,
     }
-    .encode(&mut data);
+    .encode(&mut data)
+    .unwrap();
     data.freeze()
 }
 

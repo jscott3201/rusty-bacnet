@@ -351,9 +351,14 @@ async fn recipient_invalid_and_unauthorized_requests_preserve_value_epoch_and_se
             property_identifier: PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT,
             property_array_index: index,
             property_value: bytes,
-            priority,
+            priority: None,
         }
-        .encode(&mut data);
+        .encode(&mut data)
+        .unwrap();
+        // Preserve external malformed-priority requests independently of typed output.
+        if let Some(priority) = priority {
+            bacnet_encoding::primitives::encode_ctx_unsigned(&mut data, 4, priority);
+        }
         assert!(matches!(
             dispatch(
                 &fixture.server,

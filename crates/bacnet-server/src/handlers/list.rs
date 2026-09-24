@@ -474,7 +474,7 @@ mod tests {
             priority: None,
         };
         let mut encoded = BytesMut::new();
-        request.encode(&mut encoded);
+        request.encode(&mut encoded).unwrap();
 
         // #182: WriteProperty loop-decodes the whole payload, so the
         // whole-list write lands with per-element validation in the arm.
@@ -497,7 +497,7 @@ mod tests {
             priority: None,
         };
         let mut encoded = BytesMut::new();
-        request.encode(&mut encoded);
+        request.encode(&mut encoded).unwrap();
         match handle_write_property(&mut db, &encoded).unwrap_err() {
             Error::Protocol { class, code } => {
                 assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);

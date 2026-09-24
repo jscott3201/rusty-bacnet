@@ -236,17 +236,20 @@ pub(super) fn cases() -> Vec<(ConfirmedServiceChoice, Bytes, MutationTarget)> {
         }};
     }
     let object = oid(ObjectType::BINARY_VALUE, 1);
-    case!(
-        WRITE_PROPERTY,
-        WriteProperty,
-        WritePropertyRequest {
-            object_identifier: object,
-            property_identifier: PropertyIdentifier::PRESENT_VALUE,
-            property_array_index: None,
-            property_value: value(PropertyValue::Enumerated(1)),
-            priority: Some(8),
-        }
-    );
+    let request = WritePropertyRequest {
+        object_identifier: object,
+        property_identifier: PropertyIdentifier::PRESENT_VALUE,
+        property_array_index: None,
+        property_value: value(PropertyValue::Enumerated(1)),
+        priority: Some(8),
+    };
+    let mut bytes = BytesMut::new();
+    request.encode(&mut bytes).unwrap();
+    cases.push((
+        ConfirmedServiceChoice::WRITE_PROPERTY,
+        bytes.freeze(),
+        MutationTarget::WriteProperty(request),
+    ));
     cases.push((
         ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE,
         wpm(vec![WriteAccessSpecification {

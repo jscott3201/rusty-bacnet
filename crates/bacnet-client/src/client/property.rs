@@ -249,7 +249,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             priority,
         };
         let mut buf = BytesMut::new();
-        request.encode(&mut buf);
+        request.encode(&mut buf)?;
 
         let _ = self
             .confirmed_request(
@@ -301,6 +301,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         property_value: Vec<u8>,
         priority: Option<u8>,
     ) -> Result<(), Error> {
+        bacnet_services::write_property::validate_priority(priority)?;
         let (mac, routing) = self.resolve_device(device_instance).await?;
 
         if let Some((dnet, dadr)) = routing {
@@ -314,7 +315,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 priority,
             };
             let mut buf = BytesMut::new();
-            request.encode(&mut buf);
+            request.encode(&mut buf)?;
 
             let _ = self
                 .confirmed_request_routed(

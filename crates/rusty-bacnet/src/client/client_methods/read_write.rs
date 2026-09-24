@@ -55,7 +55,7 @@ impl BACnetClient {
     ///     object_id: Target object identifier
     ///     property_id: Property to write
     ///     value: PropertyValue to write (e.g. `PropertyValue.real(72.5)`)
-    ///     priority: Optional priority (1-16, for commandable properties)
+    ///     priority: Optional priority (1-16); invalid u8 priorities raise ValueError synchronously.
     ///     array_index: Optional array index
     #[pyo3(signature = (address, object_id, property_id, value, priority=None, array_index=None))]
     #[allow(clippy::too_many_arguments)]
@@ -69,13 +69,7 @@ impl BACnetClient {
         priority: Option<u8>,
         array_index: Option<u32>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        if let Some(p) = priority {
-            if !(1..=16).contains(&p) {
-                return Err(PyValueError::new_err(format!(
-                    "priority must be 1-16, got {p}"
-                )));
-            }
-        }
+        validate_write_priority(priority)?;
 
         let inner = self.inner.clone();
         let oid = object_id.to_rust();
@@ -389,6 +383,8 @@ impl BACnetClient {
 
     /// Write a property on multiple devices concurrently.
     ///
+    /// Every priority is validated synchronously before any batch dispatch.
+    ///
     /// Args:
     ///     requests: List of (device_instance, object_id, property_id, value, priority, array_index)
     ///     max_concurrent: Positive native-sized integer (None uses 32). Zero raises
@@ -415,6 +411,7 @@ impl BACnetClient {
             .into_iter()
             .map(
                 |(device_instance, oid, pid, value, priority, array_index)| {
+                    validate_write_priority(priority)?;
                     let mut value_buf = BytesMut::new();
                     encode_property_value(&mut value_buf, &value.inner).map_err(to_py_err)?;
                     Ok(bacnet_client::client::DeviceWriteRequest {

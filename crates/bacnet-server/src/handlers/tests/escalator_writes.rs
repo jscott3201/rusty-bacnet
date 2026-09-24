@@ -36,7 +36,7 @@ fn write_property(
         priority: None,
     };
     let mut request_bytes = BytesMut::new();
-    request.encode(&mut request_bytes);
+    request.encode(&mut request_bytes).unwrap();
     handle_write_property(db, &request_bytes).map(|_| ())
 }
 

@@ -505,7 +505,7 @@ fn encode_write_property(property: PropertyIdentifier, value: PropertyValue) -> 
         priority: None,
     };
     let mut encoded = BytesMut::new();
-    request.encode(&mut encoded);
+    request.encode(&mut encoded).unwrap();
     encoded.freeze()
 }
 

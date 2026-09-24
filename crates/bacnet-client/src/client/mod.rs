@@ -932,6 +932,8 @@ mod segmented_response_capacity_tests;
 mod segmented_timeout_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod write_priority_tests;
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Create a generic builder that accepts a pre-built transport.

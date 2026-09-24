@@ -22,6 +22,36 @@
  ],
  "rows": [
   {
+   "id": "BACNET-15-WP-OUTBOUND-PRIORITY",
+   "standard_anchor": "Clause 15.9.1.1 Priority, printed page 752 / PDF page 754; inbound error and noncommandable rules printed page 753 / PDF page 755",
+   "priority": "P1",
+   "requirement_summary": "Typed outbound WriteProperty permits omitted priority or 1..16 and rejects other values before output, request admission, or traffic.",
+   "status": "in-progress",
+   "code_anchors": [
+    "crates/bacnet-services/src/write_property.rs::validate_priority",
+    "crates/bacnet-services/src/write_property.rs::WritePropertyRequest",
+    "crates/bacnet-client/src/client/property.rs",
+    "crates/rusty-bacnet/src/client/mod.rs::validate_write_priority"
+   ],
+   "positive_tests": [
+    "crates/bacnet-services/src/write_property.rs::outbound_priority_none_and_all_valid_values_preserve_bytes",
+    "crates/bacnet-client/src/client/write_priority_tests.rs::write_priority_valid_direct_local_routed_preserve_exact_wire_and_complete",
+    "crates/rusty-bacnet/tests/test_write_priority.py::WritePriorityTests::test_all_valid_priorities_noncommandable_and_null_unchanged"
+   ],
+   "negative_tests": [
+    "crates/bacnet-services/src/write_property.rs::outbound_priority_validation_is_transactional",
+    "crates/bacnet-client/src/client/write_priority_tests.rs::write_priority_invalid_direct_local_routed_and_batch_never_admit_or_send",
+    "crates/rusty-bacnet/tests/test_write_priority.py::WritePriorityTests::test_invalid_priority_all_entrypoints_synchronously_before_start",
+    "crates/rusty-bacnet/tests/test_write_priority.py::WritePriorityTests::test_mixed_invalid_batch_has_no_valid_prefix_traffic"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md",
+    "docs/python-api.md"
+   ],
+   "notes": "Refs #791. Narrow outbound validation evidence, not complete WriteProperty qualification. Encoder validation is transactional, including a prepopulated output buffer; inbound decoder formal errors remain distinct. Python direct, auto-routed and multi-device WP use the shared priority rule; a mixed invalid batch is rejected before dispatch. Valid NULL and noncommandable behavior remains unchanged. WPM preflight (#793), structured batch results (#788) and endpoint source WP are outside this row. Global evidence pins and other row statuses remain unchanged."
+  },
+  {
    "id": "BACNET-LOCAL-MUTATION-POLICY",
    "standard_anchor": "Local operator authorization policy; Clauses 14, 15 and 13 COV service execution boundaries; not a normative authentication claim",
    "priority": "P1",

@@ -196,7 +196,7 @@ fn acked_transitions_write_property_denies_every_family_without_mutation() {
                 priority: Some(8),
             };
             let mut bytes = BytesMut::new();
-            request.encode(&mut bytes);
+            request.encode(&mut bytes).unwrap();
             assert_protocol(
                 handle_write_property(&mut db, &bytes).unwrap_err(),
                 ErrorClass::PROPERTY,

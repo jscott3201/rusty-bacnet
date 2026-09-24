@@ -456,6 +456,7 @@ impl BACnetClient {
     }
 
     /// Write a property on a device by instance number (auto-routing).
+    /// Priority must be omitted or 1-16; invalid u8 priorities raise ValueError synchronously.
     #[pyo3(signature = (device_instance, object_id, property_id, value, priority=None, array_index=None))]
     #[allow(clippy::too_many_arguments)]
     fn write_property_to_device<'py>(
@@ -468,11 +469,12 @@ impl BACnetClient {
         priority: Option<u8>,
         array_index: Option<u32>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        validate_write_priority(priority)?;
         let inner = self.inner.clone();
         let oid = object_id.to_rust();
         let pid = property_id.to_rust();
         let mut buf = BytesMut::new();
-        let _ = encode_property_value(&mut buf, &value.inner);
+        encode_property_value(&mut buf, &value.inner).map_err(to_py_err)?;
         let encoded = buf.to_vec();
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {

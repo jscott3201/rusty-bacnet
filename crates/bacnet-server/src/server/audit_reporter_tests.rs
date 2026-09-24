@@ -586,7 +586,8 @@ async fn audit_reporter_known_source_array_coordinate_and_large_value_policy() {
         property_value: vec![0x91, 1],
         priority: None,
     }
-    .encode(&mut request);
+    .encode(&mut request)
+    .unwrap();
     assert!(matches!(
         dispatch(
             &fixture.server,

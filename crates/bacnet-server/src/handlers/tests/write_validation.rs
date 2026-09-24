@@ -38,7 +38,7 @@ fn write_wire(
         priority: None,
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
     handle_write_property(db, &buf).map(|_| ())
 }
 
@@ -274,7 +274,7 @@ fn enumerated_overflow_is_invalid_data_encoding_without_mutation() {
         priority: None,
     };
     let mut request_bytes = BytesMut::new();
-    request.encode(&mut request_bytes);
+    request.encode(&mut request_bytes).unwrap();
 
     match handle_write_property(&mut db, &request_bytes).unwrap_err() {
         Error::Protocol { class, code } => {
@@ -431,7 +431,7 @@ fn relinquish_default_write_recaptures_present_value_over_write_property() {
         priority: None,
     };
     let mut buf = BytesMut::new();
-    slot.encode(&mut buf);
+    slot.encode(&mut buf).unwrap();
     handle_write_property(&mut db, &buf).unwrap();
     assert_eq!(
         read_wire(&db, ao_oid, PropertyIdentifier::PRESENT_VALUE),
@@ -475,7 +475,7 @@ fn relinquish_default_write_recaptures_present_value_over_write_property() {
         priority: None,
     };
     let mut buf = BytesMut::new();
-    slot.encode(&mut buf);
+    slot.encode(&mut buf).unwrap();
     handle_write_property(&mut db, &buf).unwrap();
     assert_eq!(
         read_wire(&db, ao_oid, PropertyIdentifier::PRESENT_VALUE),
@@ -581,7 +581,7 @@ fn write_property_rejects_overwide_color_temperature_without_mutation() {
         priority: None,
     };
     let mut request_bytes = BytesMut::new();
-    request.encode(&mut request_bytes);
+    request.encode(&mut request_bytes).unwrap();
 
     match handle_write_property(&mut db, &request_bytes)
         .expect_err("over-wide Color Temperature Present_Value must be rejected")

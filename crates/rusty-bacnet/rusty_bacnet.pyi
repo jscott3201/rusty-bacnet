@@ -1459,7 +1459,11 @@ class BACnetClient:
         priority: Optional[int] = None,
         array_index: Optional[int] = None,
     ) -> None:
-        """Write a single property on a remote device."""
+        """Write a single property on a remote device.
+
+        Priority is None or 1..16. Invalid u8 priorities raise ValueError
+        synchronously; integers outside u8 raise OverflowError.
+        """
         ...
 
     async def read_property_multiple(
@@ -1541,6 +1545,10 @@ class BACnetClient:
         max_concurrent: Optional[int] = None,
     ) -> list[dict[str, Any]]:
         """Write a property to multiple devices concurrently.
+
+        Every priority must be None or 1..16; invalid u8 priorities raise
+        ValueError synchronously before any batch dispatch. Integers outside
+        u8 raise OverflowError.
 
         ``requests`` is ``[(device_instance, object_id, property_id, value, priority, array_index), ...]``.
         ``max_concurrent`` must be positive and fit the native usize; None uses 32.
@@ -1668,7 +1676,11 @@ class BACnetClient:
         priority: Optional[int] = None,
         array_index: Optional[int] = None,
     ) -> None:
-        """Write a property on a device by instance number (auto-routing)."""
+        """Write a property on a device by instance number (auto-routing).
+
+        Priority is None or 1..16. Invalid u8 priorities raise ValueError
+        synchronously before lookup; integers outside u8 raise OverflowError.
+        """
         ...
 
     async def write_property_multiple_to_device(
