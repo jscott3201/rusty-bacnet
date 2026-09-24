@@ -119,7 +119,7 @@ pub(super) async fn serve(
     if expired {
         super::outcomes::increment(&clients.outcomes.connect_timeouts);
     }
-    if lease.vmac.is_some() {
+    if lease.vmac.is_some() || lease.peer_close_observed() {
         #[cfg(test)]
         deadline.close_started.store(true, Ordering::Release);
         lease.cleanup(&clients, &write).await;

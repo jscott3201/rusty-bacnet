@@ -403,6 +403,14 @@ fanout remains concurrent; a healthy recipient need not wait for a blocked one.
 Probe, control, cleanup and graceful-shutdown policies remain separate; shutdown
 may force cleanup before a blocked relay's send deadline.
 
+Peer-initiated WebSocket Close is answered through the connection lease, including
+upgraded peers that have not sent Connect and peers closing while the Hub awaits
+Disconnect-Ack. Cleanup flushes the queued reciprocal frame within the local
+five-second sink acquisition/I/O bound after retiring the matching registration.
+Close without Disconnect-Ack still yields a forced graceful-shutdown outcome;
+forceful abort may forgo the reply. The [scoped conformance evidence](conformance/standard-135-2020-ledger.md#hub-reciprocal-websocket-close)
+covers WebSocket replies, not TLS `close_notify` behavior.
+
 `ScHubTlsConfig::with_relay_send_budget(Duration)` validates this separate
 transit budget; `validate_relay_send_budget` supports preflight before
 loading TLS files. This replaces the pre-1.0 unicast-only setting without an

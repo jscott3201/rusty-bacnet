@@ -48,6 +48,21 @@ policy, not certificate-principal authorization; DCC, ReinitializeDevice,
 LifeSafety, Audit and endpoint Device writes remain separate. See
 [the policy contract](../mutation-policy.md); #524 remains open.
 
+## Hub reciprocal WebSocket Close
+
+Scoped `BACNET-AB-SC-WEBSOCKET-TLS` evidence, Refs #776: an observed peer Close
+uses the existing connection lease to flush Tungstenite's queued reciprocal
+frame. [Real mutual-TLS tests](../../crates/bacnet-transport/src/sc_hub/peer_close_tests.rs)
+assert the allowed code/reason before EOF for registered, upgraded pre-Connect,
+and graceful Disconnect-Ack-wait peers. Close without a Disconnect-Ack keeps the
+shutdown outcome forced. Retirement and identity-checked registry removal precede
+the existing local five-second sink acquisition/flush bound; tests cover held
+sinks, capacity recovery, replacement safety and canceled forceful-stop joining.
+Forceful abort can forgo the reply. This covers AB.7.5.5 (PDF1412/printed1410)
+and RFC6455 sections5.5.1/7.1.2 only for these paths; it makes no TLS
+`close_notify`, complete close-status mapping or broader Annex AB claim.
+The row status and global evidence pins remain unchanged.
+
 ## Hub transit relay budget
 
 Scoped `BACNET-AB-SC-CONNECTION-STATE` evidence, Refs #774 under #476.

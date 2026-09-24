@@ -251,18 +251,17 @@ pub(super) async fn next_or_graceful(
 
 /// Run the graceful exchange for one connection task, then return.
 ///
-/// - `lease_vmac` `None` (half-handshake): silent Close only, never
+/// - Unregistered lease (half-handshake): silent Close only, never
 ///   Disconnect-Request.
-/// - `Some(vmac)` (established): entry revalidates under a brief map lock
+/// - Registered lease: entry revalidates under a brief map lock
 ///   (ptr-eq + not closed); a pre-Request supersede exits quietly so a
 ///   replacement task can drive its own exchange. After the Request is sent,
 ///   any missing Ack (timeout, peer Request/Close first, NAK, send failure,
 ///   close-echo timeout, supersede) marks the run forced.
 ///
 /// Always ends the connection; the caller breaks to the existing lease
-/// cleanup (ptr-eq-guarded removal + bounded Close, harmlessly repeated).
+/// cleanup (ptr-eq-guarded removal + bounded Close or queued-reply flush).
 /// Never holds the Clients lock across waits.
-#[allow(clippy::too_many_arguments)]
 pub(super) async fn exchange(
     peer_addr: SocketAddr,
     read: &mut futures_util::stream::SplitStream<
@@ -270,13 +269,13 @@ pub(super) async fn exchange(
     >,
     write: &Arc<Mutex<WsSink>>,
     clients: &Clients,
-    lease_vmac: Option<Vmac>,
-    closed: &Arc<AtomicBool>,
-    notify: &Arc<Notify>,
+    lease: &mut super::retirement::Lease,
     ctx: &GracefulCtx,
 ) {
-    let Some(vmac) = lease_vmac else {
-        silent_close(peer_addr, read, write, ctx).await;
+    let Some(vmac) = lease.vmac else {
+        if silent_close(peer_addr, read, write, ctx).await {
+            lease.note_peer_close();
+        }
         return;
     };
     // Snapshot-then-release: brief lock, clone identity, release before I/O.
@@ -296,7 +295,7 @@ pub(super) async fn exchange(
         debug!("Hub graceful: {peer_addr} already retired, skipping DisconnectRequest");
         return;
     };
-    if closed.load(Ordering::Acquire) {
+    if lease.closed.load(Ordering::Acquire) {
         debug!("Hub graceful: {peer_addr} closed before DisconnectRequest");
         return;
     }
@@ -304,20 +303,36 @@ pub(super) async fn exchange(
         ctx.note_failed();
         return;
     }
-    match await_ack(peer_addr, read, write, clients, vmac, closed, notify, ctx).await {
+    match await_ack(
+        peer_addr,
+        read,
+        write,
+        clients,
+        vmac,
+        &lease.closed,
+        &lease.notify,
+        ctx,
+    )
+    .await
+    {
         AckOutcome::Acked => {
-            if !close_handshake(peer_addr, read, write, ctx).await {
+            if close_handshake(peer_addr, read, write, ctx).await {
+                lease.note_peer_close();
+            } else {
                 ctx.note_failed();
             }
         }
-        AckOutcome::QuietSuperseded => {}
+        AckOutcome::PeerClosed => {
+            lease.note_peer_close();
+            ctx.note_failed();
+        }
         AckOutcome::Failed => ctx.note_failed(),
     }
 }
 
 enum AckOutcome {
     Acked,
-    QuietSuperseded,
+    PeerClosed,
     Failed,
 }
 
@@ -404,7 +419,7 @@ async fn await_ack(
                         Some(Err(_)) => return AckOutcome::Failed,
                         Some(Ok(Message::Close(_))) => {
                             debug!("Hub graceful: {peer_addr} closed before Ack");
-                            return AckOutcome::Failed;
+                            return AckOutcome::PeerClosed;
                         }
                         Some(Ok(Message::Binary(data))) => {
                             let decoded = match decode_sc_message(&data) {
@@ -530,7 +545,7 @@ async fn silent_close(
     >,
     write: &Arc<Mutex<WsSink>>,
     ctx: &GracefulCtx,
-) {
+) -> bool {
     let send = tokio::time::timeout(ctx.timeouts.ws_close(), async {
         let mut sink = write.lock().await;
         sink.send(Message::Close(None)).await
@@ -538,18 +553,20 @@ async fn silent_close(
     .await;
     if !matches!(send, Ok(Ok(()))) {
         debug!("Hub graceful: silent Close to half-handshake {peer_addr} failed");
-        return;
+        return false;
     }
-    let _ = tokio::time::timeout(ctx.timeouts.ws_close(), async {
+    let echo = tokio::time::timeout(ctx.timeouts.ws_close(), async {
         loop {
             match read.next().await {
-                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                Some(Ok(Message::Close(_))) => return true,
+                Some(Err(_)) | None => return false,
                 Some(Ok(_)) => continue,
             }
         }
     })
     .await;
     debug!("Hub graceful: half-handshake {peer_addr} closed silently");
+    matches!(echo, Ok(true))
 }
 
 #[cfg(test)]

@@ -4,6 +4,7 @@ use super::*;
 
 pub(super) struct Lease {
     pub vmac: Option<Vmac>,
+    peer_close_observed: bool,
     pub closed: Arc<AtomicBool>,
     pub notify: Arc<Notify>,
 }
@@ -12,9 +13,20 @@ impl Lease {
     pub fn new() -> Self {
         Self {
             vmac: None,
+            peer_close_observed: false,
             closed: Arc::new(AtomicBool::new(false)),
             notify: Arc::new(Notify::new()),
         }
+    }
+
+    /// Tungstenite queues the reciprocal frame while reading peer Close.
+    /// Preserve that fact even when the dispatch future is then retired.
+    pub fn note_peer_close(&mut self) {
+        self.peer_close_observed = true;
+    }
+
+    pub fn peer_close_observed(&self) -> bool {
+        self.peer_close_observed
     }
 
     pub async fn cleanup(&self, clients: &Clients, sink: &Arc<Mutex<WsSink>>) {
@@ -29,12 +41,16 @@ impl Lease {
                 map.remove(&vmac);
             }
         }
-        // Local replacement cleanup budget, including sink acquisition and
+        // Local retirement cleanup budget, including sink acquisition and
         // Close/flush. This is outside retirement selection: already-closed
         // state must not cancel its own cleanup. Cancellation is not rollback.
         let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async {
             let mut sink = sink.lock().await;
-            sink.send(Message::Close(None)).await?;
+            if !self.peer_close_observed {
+                sink.send(Message::Close(None)).await?;
+            }
+            // A peer Close already queued its exact reciprocal frame. Another
+            // send is invalid after closing and would prevent this flush.
             sink.flush().await
         })
         .await;

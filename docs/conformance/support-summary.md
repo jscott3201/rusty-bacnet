@@ -96,7 +96,7 @@
 | `BACNET-AB-SC-DATA-ATTRIBUTES` | Annex AB.3.4 | P0 | implementation-present-needs-conformance-tests | 0 |
 | `BACNET-AB-SC-CONNECTION-STATE` | Annex AB.6.2 | P0 | implementation-present-needs-state-machine-audit | 16 |
 | `BACNET-AB-SC-HUB-CONNECTOR` | Annex AB.5 | P0 | supported-with-clause-evidence | 2 |
-| `BACNET-AB-SC-WEBSOCKET-TLS` | Annex AB.7 | P0 | implementation-present-needs-security-tests | 2 |
+| `BACNET-AB-SC-WEBSOCKET-TLS` | Annex AB.7 | P0 | implementation-present-needs-security-tests | 4 |
 | `BACNET-AB-SC-HEARTBEAT` | Annex AB.6.3 | P0 | implementation-present-needs-timeout-tests | 2 |
 | `BACNET-13-EVENT-DISABLE-WPM-PREFIX` | Clause 12.52 Table 12-61 (Alert Enrollment Event_State, Acked_Transitions, Event_Detection_Enable); Clause 13.2.2.1 disabled-state initial conditions; Clause 13.3 pTimeDelayNormal fallback; Clause 15.10 ordered WritePropertyMultiple procedure | P1 | in-progress | 0 |
 | `BACNET-13-EVENT-ENROLLMENT-EVALUATOR` | Clause 12.12 with Table 12-14 (Event Enrollment Object Type; configured Event_Type excludes CHANGE_OF_RELIABILITY; Time_Delay_Normal Unsigned, conformance O, extract 16444-16446, property text 16887-16889); Clause 12.12 Table 12-15 (Time_Delay -> pTimeDelay mapping for every evaluated algorithm); Clause 13.2.2.1 (changed nonzero Reliability while FAULT is a To-Fault re-entry); Clause 13.2.2.1.4 (transition actions incl. the same-state rule); Clause 13.2.3 (Acked_Transitions on a received transition); Clause 13.2.5.2 Table 13-3 and Clause 13.2.5.3 (CHANGE_OF_RELIABILITY whenever From or To is FAULT); Clause 13.3 common introduction and 13.3.1/13.3.2/13.3.3/13.3.5/13.3.6 direction rules with the pTimeDelayNormal fallback; Figure 13-10 | P1 | supported-with-clause-evidence | 0 |
