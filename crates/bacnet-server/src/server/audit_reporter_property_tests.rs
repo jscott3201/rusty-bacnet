@@ -53,7 +53,8 @@ async fn rpm_wire(
             }],
         }],
     }
-    .encode(&mut bytes);
+    .encode(&mut bytes)
+    .unwrap();
     let response = dispatch(
         server,
         ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,

@@ -36,7 +36,7 @@ fn rpm_file_indexed_property_list_and_scalar_gates_preserve_bytes() {
             }],
         };
         let mut bytes = BytesMut::new();
-        request.encode(&mut bytes);
+        request.encode(&mut bytes).unwrap();
         let mut legacy = BytesMut::new();
         handle_read_property_multiple(&db, &bytes, &mut legacy).unwrap();
         let ack = ReadPropertyMultipleACK::decode(&legacy).unwrap();

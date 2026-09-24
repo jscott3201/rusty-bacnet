@@ -486,7 +486,8 @@ async fn recipient_active_metadata_rpm_and_property_list_follow_runtime_presence
                     }],
                 }],
             }
-            .encode(&mut data);
+            .encode(&mut data)
+            .unwrap();
             let mut response = BytesMut::new();
             crate::handlers::handle_read_property_multiple(&db, &data, &mut response).unwrap();
             let ack = ReadPropertyMultipleACK::decode(&response).unwrap();

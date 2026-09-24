@@ -102,7 +102,8 @@ fn request(specs: Vec<ReadAccessSpecification>) -> BytesMut {
     ReadPropertyMultipleRequest {
         list_of_read_access_specs: specs,
     }
-    .encode(&mut bytes);
+    .encode(&mut bytes)
+    .unwrap();
     bytes
 }
 fn budget(work: usize, bytes: usize) -> ReadPropertyMultipleBudget {

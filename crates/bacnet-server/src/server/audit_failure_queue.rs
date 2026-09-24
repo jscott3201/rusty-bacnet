@@ -217,6 +217,31 @@ impl<R: PartialEq> AuditFailureWorker<R> {
         }
     }
 
+    /// Restore a summary that could not enter a local bounded egress queue.
+    /// Merge only into the same current generation; never count the summary itself.
+    pub fn restore(&mut self, batch: AuditFailureBatch<R>) {
+        if !batch.context.enabled() {
+            return;
+        }
+        let mut state = self.failures.lock().unwrap();
+        if !state
+            .current
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, &batch.context))
+        {
+            return;
+        }
+        if let Some(pending) = &mut state.pending {
+            pending.count = pending.count.saturating_add(batch.count);
+            if batch.earliest_order < pending.earliest_order {
+                pending.earliest_order = batch.earliest_order;
+                pending.earliest = batch.earliest;
+            }
+        } else {
+            state.pending = Some(batch);
+        }
+    }
+
     pub async fn next(
         &mut self,
     ) -> Option<(

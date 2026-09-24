@@ -187,7 +187,8 @@ fn rpm_timer_indexed_reads_and_bytes_are_unchanged() {
                     .collect(),
             }],
         }
-        .encode(&mut request);
+        .encode(&mut request)
+        .unwrap();
         let mut legacy = BytesMut::new();
         handle_read_property_multiple(&db, &request, &mut legacy).unwrap();
         let ack = ReadPropertyMultipleACK::decode(&legacy).unwrap();

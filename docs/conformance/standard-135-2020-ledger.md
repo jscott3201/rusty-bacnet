@@ -13,6 +13,28 @@
 - Addenda/errata status: ASHRAE 135-2020 Errata Summary 2024-04-29 (v1) reviewed for the supported subset. Item 7 (Clause 21.6, p. 886): successful-actions-only corrected from BOOLEAN (struck through, removed) to BACnetSuccessFilter (italic, added), tags [7]/[4]. Item 8 (Clause 21.2.3, p. 865): start-at-sequence-number corrected from Unsigned32 (struck through, removed) to Unsigned64 (italic, added), tag [2] OPTIONAL. Both items visually verified from the rendered errata p. 3 (strikeout = removed, italics = added per the p. 1 convention); not inferred from concatenated text extraction. The implementation encodes the corrected BACnetSuccessFilter/u64 contract after the RB-02 codec and RB-20 runtime/Python migrations; `BACNET-13-AUDIT-WIRE-MODELS` remains `implementation-present-needs-source-review` pending broader Audit review.
 - PR-0808 evidence row: `BACNET-12-ALERT-ENROLLMENT-TABLE-12-61` is `supported-with-clause-evidence` for the served object model only; it is not an Alert evaluator or notification-generation claim.
 
+## Endpoint RPM source READ
+
+Refs #780 extends the in-progress `BACNET-19-SOURCE-READ-PROPERTY` row with
+Rust/Python endpoint RPM. Its profile is 1–64 explicit references on concrete
+objects, with nonempty lists and unsegmented request/ACK bounds. Index zero is
+valid; inline errors may omit the requested index, while successful values must
+echo it. Complete ordered correlation precedes per-occurrence value-free records.
+One operation shares its lease, worker, timestamp and recipient snapshot; whole
+failures fan out as a documented local representation of attempted references.
+Only a unique successful Device identity establishes operation-local Target Device.
+
+[Wire/lifecycle coverage](../../crates/bacnet-endpoint/src/source_rpm_tests.rs),
+[bounded congestion coverage](../../crates/bacnet-endpoint/src/source_rpm_congestion_tests.rs)
+and [installed Python coverage](../../crates/rusty-bacnet/tests/test_endpoint_rpm.py)
+support this subset. Typed synchronous QueueFull is known local resource loss;
+a full-queue summary retains its count in the existing bounded coalescer until
+capacity returns. Closed/shutdown and ambiguous attempted delivery remain separate.
+Clause15.7 (printed742–744/PDF744–746), Table19-5 (printed823/PDF825), and High Volume
+(printed825/PDF827) ground these distinctions. The server scalar-error index
+producer fix remains #789; broader Audit #345 stays open. Global pins and row
+statuses remain unchanged.
+
 ## ReadProperty ACK identity and source attribution
 
 Refs #784 extends the in-progress `BACNET-19-SOURCE-READ-PROPERTY` evidence.

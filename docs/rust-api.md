@@ -1888,7 +1888,44 @@ same-type concrete peer-reported identifiers; other mismatches return decoding
 errors. This client contract does not implement the bundled server's Network
 Port ingress-port alias mapping (#785).
 
-The initiating role supports `read_property` and `read_range`, plus explicit
+Endpoint ReadPropertyMultiple accepts 1–64 explicit property occurrences across
+nonempty object specifications, with concrete object identifiers. ALL, REQUIRED,
+OPTIONAL and wildcard object instances are excluded from this endpoint profile;
+standalone RPM retains its broader profile. Array index zero is valid. Shared
+RPM request encoding is fallible and validates both lists before appending bytes.
+
+RPM ACK correlation checks all object/property counts, order and identifiers
+before returning success or projecting any record. A successful value must echo
+the requested index. An inline error may omit a requested index or repeat it,
+but cannot substitute another index; an unindexed request requires no index.
+The Audit attempt retains the requested index. Indistinguishable duplicate
+omitted-index errors cannot reveal a peer's ordering violation. Request and raw
+ACK bytes must fit the configured unsegmented max APDU. The server's separate
+known-scalar error-index response issue remains tracked in #789.
+
+One RPM operation retains one requester lease, source-operation slot, timestamp,
+invoke ID, owned worker and recipient/configuration snapshot across retries and
+caller cancellation. Each eligible occurrence produces a separate value-free
+READ record, including duplicates. AUDIT_CONFIG excludes Present_Value per
+occurrence; returned values remain caller-only. Inline errors retain their
+class/code. Whole Error/Abort/Reject, timeout, malformed, mismatched or segmented
+outcomes are locally represented by the final operation failure on every eligible
+attempted reference; they do not imply remote per-property execution. Notification
+admission is independent and bounded through the existing delivery and resource
+failure-summary owners; no batch reserves 64 notification permits across request I/O.
+Known synchronous egress QueueFull also counts as local resource loss; Closed or
+shutdown and already-attempted transport/ACK failures do not. A full-queue summary
+returns its count to the same bounded generation-fenced coalescer and waits for
+capacity. It never counts itself or retries an ordinary record; stop owns that wait.
+
+After a complete validated RPM ACK, one distinct concrete Device object with at
+least one successful property establishes Target_Device for all records in that
+operation. Error-only Device results establish none; conflicting successful
+Device IDs retain Address attribution without rejecting the otherwise valid ACK.
+This is operation-local knowledge, with no discovery cache. Direct B/IP source
+limits and the absence of Python source Reporter configuration remain unchanged.
+
+The initiating role supports `read_property`, `read_range` and `read_property_multiple`, plus explicit
 endpoint destinations. ReadRange returns a correlated `ReadRangeAck` with raw
 item bytes; empty and multiple-item ACKs each produce one value-free source READ
 record. Request encoding validates before output/transaction admission: ALL,
@@ -1954,7 +1991,7 @@ properties. Priority filters do not filter READ. Requests selected for source
 reporting reject routed, broadcast, or non-IPv4 destinations before traffic.
 
 A record contains the local source Device, one request-time timestamp, the actual
-ReadProperty or ReadRange invoke ID shared across retries, and the requested
+ReadProperty, ReadRange or ReadPropertyMultiple invoke ID shared across retries, and the requested
 property/array index. Successful ReadProperty records use the validated ACK's
 object identifier, including concrete Device/Network Port replies to wildcard
 requests. On failure or without a valid ACK, the record retains the requested

@@ -276,7 +276,7 @@ fn list_properties_reject_indexed_read_property_multiple_inline() {
             }],
         };
         let mut buf = BytesMut::new();
-        request.encode(&mut buf);
+        request.encode(&mut buf).unwrap();
         let mut ack_buf = BytesMut::new();
         handle_read_property_multiple(&db, &buf, &mut ack_buf).unwrap();
         let ack = ReadPropertyMultipleACK::decode(&ack_buf.to_vec()).unwrap();

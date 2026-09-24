@@ -116,7 +116,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             list_of_read_access_specs: specs,
         };
         let mut buf = BytesMut::new();
-        request.encode(&mut buf);
+        request.encode(&mut buf)?;
 
         let response_data = self
             .confirmed_request(
@@ -144,7 +144,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 list_of_read_access_specs: specs,
             };
             let mut buf = BytesMut::new();
-            request.encode(&mut buf);
+            request.encode(&mut buf)?;
 
             let response_data = self
                 .confirmed_request_routed(

@@ -62,7 +62,7 @@ fn rpm_property_ids(
         }],
     };
     let mut request_bytes = BytesMut::new();
-    request.encode(&mut request_bytes);
+    request.encode(&mut request_bytes).unwrap();
 
     let mut response_bytes = BytesMut::new();
     handle_read_property_multiple(db, &request_bytes, &mut response_bytes).unwrap();
@@ -108,7 +108,7 @@ pub(super) fn assert_rpm_selector_bytes(
             }],
         };
         let mut bytes = BytesMut::new();
-        request.encode(&mut bytes);
+        request.encode(&mut bytes).unwrap();
         bytes
     };
     let request_bytes = encode_request(&[selector]);

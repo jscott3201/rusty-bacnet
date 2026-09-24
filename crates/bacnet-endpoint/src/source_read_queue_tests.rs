@@ -3,10 +3,10 @@ use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::ReceivedNpdu;
 use tokio::sync::{Notify, Semaphore};
 
-struct Gated {
-    inner: LoopbackTransport,
-    entered: Arc<Notify>,
-    gate: Arc<Semaphore>,
+pub(super) struct Gated {
+    pub(super) inner: LoopbackTransport,
+    pub(super) entered: Arc<Notify>,
+    pub(super) gate: Arc<Semaphore>,
 }
 impl TransportPort for Gated {
     fn bip_broadcast_endpoint(&self) -> Option<SocketAddrV4> {

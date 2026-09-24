@@ -254,7 +254,7 @@ impl EndpointRequester {
         )
     }
 
-    /// Validate/encode before reserving a lease for either supported read service.
+    /// Validate/encode before reserving a lease for the supported read services.
     #[doc(hidden)]
     pub fn prepare_read(
         &self,

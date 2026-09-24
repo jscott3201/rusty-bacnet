@@ -394,7 +394,8 @@ async fn read_only_controls_unaffected_under_deny_all() {
             }],
         }],
     }
-    .encode(&mut rpm);
+    .encode(&mut rpm)
+    .unwrap();
     let response = fixture
         .dispatch(
             ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,

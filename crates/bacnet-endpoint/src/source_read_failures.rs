@@ -16,7 +16,7 @@ pub(super) fn record_drop(
     };
     let source = Arc::downgrade(source);
     owner.spawn(async move {
-        while let Some((batch, _permit, reserved)) = worker.next().await {
+        while let Some((batch, permit, reserved)) = worker.next().await {
             let Some(source) = source.upgrade() else {
                 return;
             };
@@ -69,6 +69,25 @@ pub(super) fn record_drop(
                 deadline,
             );
             drop(db);
+            if matches!(
+                sent,
+                Err(
+                    bacnet_endpoint_core::endpoint_ingress::EndpointEgressAdmissionError::QueueFull
+                )
+            ) {
+                let egress = source.egress.clone();
+                worker.restore(batch);
+                #[cfg(test)]
+                source.summary_queue_full.notify_one();
+                drop(source);
+                drop(permit);
+                drop(reserved);
+                drop(completion);
+                if egress.wait_for_capacity().await.is_err() {
+                    return;
+                }
+                continue;
+            }
             drop(source);
             completion.finish(delivery::finish_send(sent, reserved, deadline).await);
         }
