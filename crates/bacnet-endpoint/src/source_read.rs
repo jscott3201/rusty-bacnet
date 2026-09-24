@@ -301,6 +301,19 @@ impl SourceRead {
             let _permit = permit;
             let outcome = operation.execute().await;
             if outcome.attempted {
+                // Only validated peer success resolves a request alias. Errors,
+                // timeout and malformed ACKs retain the attempted request target.
+                if let Ok(ack) = &outcome.result {
+                    let object = ack.object_identifier();
+                    notification.target_object = Some(object);
+                    // Table 19-4: this successful Device-object read establishes
+                    // its Device identity for this operation, without a cache.
+                    if object.object_type() == ObjectType::DEVICE
+                        && object.instance_number() != ObjectIdentifier::WILDCARD_INSTANCE
+                    {
+                        notification.target_device = BACnetRecipient::Device(object);
+                    }
+                }
                 notification.result = delivery::result(&outcome.result);
                 if let Some(owner) = weak_owner.upgrade() {
                     delivery::admit(

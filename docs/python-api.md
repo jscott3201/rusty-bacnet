@@ -297,6 +297,13 @@ All `address` parameters accept:
 
 #### `read_property(address, object_id, property_id, array_index=None) -> PropertyValue`
 
+Standalone and endpoint clients validate the ACK's object, property and array
+index. Device or Network Port instance `4194303` requests accept a concrete
+same-type identifier reported by the peer; unresolved wildcard and mismatched
+ACKs raise `BacnetError`. The return value remains the decoded property value.
+The bundled server resolves the Device alias; its Network Port receiving-port
+resolution is tracked separately in #785.
+
 ```python
 value = await client.read_property(
     "192.168.1.100:47808",
