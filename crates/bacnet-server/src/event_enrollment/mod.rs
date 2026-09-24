@@ -53,12 +53,9 @@ pub use algorithms::{
     encode_change_of_value_params, encode_floating_limit_params, encode_out_of_range_params,
 };
 pub use api::{
-    evaluate_event_enrollments, evaluate_event_enrollments_detailed_report,
-    evaluate_event_enrollments_report, EventEnrollmentTransition,
+    evaluate_event_enrollments, evaluate_event_enrollments_report, EventEnrollmentTransition,
 };
 pub use commit::{
-    EventEnrollmentDetailedEvaluationDiagnostic, EventEnrollmentDetailedEvaluationOutcome,
-    EventEnrollmentDetailedEvaluationReport, EventEnrollmentDetailedEvaluationStage,
     EventEnrollmentEvaluationDiagnostic, EventEnrollmentEvaluationOutcome,
     EventEnrollmentEvaluationReport, EventEnrollmentEvaluationStage,
     EventEnrollmentReliabilityCause, EventEnrollmentReliabilityResult,

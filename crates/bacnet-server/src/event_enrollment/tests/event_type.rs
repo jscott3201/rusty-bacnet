@@ -41,7 +41,7 @@ fn fault_entry_reentry_and_recovery_select_change_of_reliability() {
         )
         .unwrap();
 
-    let entry = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    let entry = evaluate_event_enrollments_report(&mut db, 1);
     assert_eq!(entry.reliability_results.len(), 1);
     assert_eq!(
         entry.reliability_results[0].new_reliability,
@@ -62,7 +62,7 @@ fn fault_entry_reentry_and_recovery_select_change_of_reliability() {
             None,
         )
         .unwrap();
-    let reentry = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    let reentry = evaluate_event_enrollments_report(&mut db, 1);
     assert_eq!(reentry.reliability_results.len(), 1);
     assert_eq!(
         reentry.reliability_results[0].new_reliability,
@@ -83,7 +83,7 @@ fn fault_entry_reentry_and_recovery_select_change_of_reliability() {
             None,
         )
         .unwrap();
-    let recovery = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    let recovery = evaluate_event_enrollments_report(&mut db, 1);
     assert_eq!(recovery.reliability_results.len(), 1);
     assert_eq!(
         recovery.reliability_results[0].new_reliability,
@@ -113,7 +113,7 @@ fn malformed_reference_and_normal_transition_select_their_model_event_types() {
     });
     db.add(Box::new(enrollment)).unwrap();
 
-    let malformed = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    let malformed = evaluate_event_enrollments_report(&mut db, 1);
     assert_eq!(malformed.reliability_results.len(), 1);
     let result = &malformed.reliability_results[0];
     assert_eq!(result.monitored_oid, None);
@@ -121,7 +121,7 @@ fn malformed_reference_and_normal_transition_select_their_model_event_types() {
     assert_reliability_event_type(result, EventState::NORMAL, EventState::FAULT);
 
     let (mut db, _, _) = setup_out_of_range(90.0, 80.0, 20.0, 2.0);
-    let normal = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    let normal = evaluate_event_enrollments_report(&mut db, 1);
     assert!(normal.reliability_results.is_empty());
     assert_eq!(normal.transitions.len(), 1);
     assert_eq!(normal.transitions[0].event_type, EventType::OUT_OF_RANGE);
