@@ -8,7 +8,6 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use bacnet_types::constructed::BACnetCOVSubscription;
 use bacnet_types::enums::{
     ErrorClass, ErrorCode, ObjectType, PropertyIdentifier, Segmentation, ServiceSupported,
 };
@@ -159,8 +158,6 @@ pub struct DeviceObject {
     configured_services_supported: Vec<ServiceSupported>,
     /// Shared dynamic clock sample source. `None` is explicitly clockless.
     clock: Option<Arc<dyn ClockReader>>,
-    /// Active COV subscriptions maintained by the server.
-    active_cov_subscriptions: Vec<BACnetCOVSubscription>,
 }
 
 impl DeviceObject {
@@ -345,7 +342,6 @@ impl DeviceObject {
             protocol_object_types_supported,
             configured_services_supported: EXECUTED_SERVICES.to_vec(),
             clock: None,
-            active_cov_subscriptions: Vec::new(),
         })
     }
 
@@ -389,16 +385,6 @@ impl DeviceObject {
             PropertyIdentifier::DEVICE_UUID,
             PropertyValue::OctetString(uuid.to_vec()),
         );
-    }
-
-    /// Replace the entire active COV subscriptions list.
-    pub fn set_active_cov_subscriptions(&mut self, subs: Vec<BACnetCOVSubscription>) {
-        self.active_cov_subscriptions = subs;
-    }
-
-    /// Add a single COV subscription.
-    pub fn add_cov_subscription(&mut self, sub: BACnetCOVSubscription) {
-        self.active_cov_subscriptions.push(sub);
     }
 
     fn clock_frame(&self) -> Option<ClockFrame> {
@@ -531,12 +517,10 @@ impl BACnetObject for DeviceObject {
         }
 
         if property == PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS {
-            let mut buf = bytes::BytesMut::new();
-            bacnet_encoding::constructed::encode_cov_subscription_list(
-                &mut buf,
-                &self.active_cov_subscriptions,
-            );
-            return Ok(PropertyValue::ApplicationData(buf.to_vec()));
+            // Standalone default: the object holds no subscription state. A
+            // running `BACnetServer` owns the live list in its COV subscription
+            // table and projects it for network reads and `read_local`.
+            return Ok(PropertyValue::ApplicationData(Vec::new()));
         }
 
         self.properties

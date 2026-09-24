@@ -1,30 +1,102 @@
 use super::*;
+use crate::cov::active::ActiveCovSubscriptions;
+use bacnet_services::read_property::ReadPropertyRequest;
 
+/// ReadProperty for a responder without COV service execution: the Device's
+/// `Active_COV_Subscriptions` reads as its standalone empty list.
 pub(super) async fn read_property_response(
     db: &RwLock<ObjectDatabase>,
     request: &ConfirmedRequestPdu,
 ) -> Apdu {
-    read_property_response_observed(db, request, |_, _, _, _| {}).await
+    read_property_response_observed(db, None, request, |_, _, _, _| {}).await
+}
+
+/// Request-local live Device `Active_COV_Subscriptions` (Clause 12.11).
+///
+/// Lock order is database, then COV table: the caller holds the database read
+/// guard; the table read guard is held only to sample one instant and copy the
+/// live entries, and is released before any object read or encoding.
+pub(in crate::server) async fn active_cov_snapshot(
+    db: &ObjectDatabase,
+    cov_table: &RwLock<CovSubscriptionTable>,
+    device: ObjectIdentifier,
+) -> ActiveCovSubscriptions {
+    let entries = {
+        let table = cov_table.read().await;
+        table.active_cov_entries(Instant::now())
+    };
+    ActiveCovSubscriptions::project(db, device, entries)
+}
+
+/// Budgeted ReadPropertyMultiple under one database read guard. A single
+/// request-local Device projection serves every explicit and expanded row.
+pub(super) async fn read_property_multiple_observed(
+    db: &RwLock<ObjectDatabase>,
+    cov_table: &RwLock<CovSubscriptionTable>,
+    service_request: &[u8],
+    service_ack: &mut BytesMut,
+    budget: crate::server::ReadPropertyMultipleBudget,
+    mut completed: impl FnMut(
+        &ObjectDatabase,
+        ObjectIdentifier,
+        PropertyIdentifier,
+        Option<u32>,
+        Option<(ErrorClass, ErrorCode)>,
+    ),
+) -> Result<(), handlers::RpmFailure> {
+    let db = db.read().await;
+    let request = bacnet_services::rpm::ReadPropertyMultipleRequest::decode(service_request)
+        .map_err(handlers::RpmFailure::Service)?;
+    let live = match handlers::active_cov_device_for_rpm(&db, &request) {
+        Some(device) => Some(active_cov_snapshot(&db, cov_table, device).await),
+        None => None,
+    };
+    handlers::rpm_budgeted_request_observed(
+        &db,
+        live.as_ref(),
+        &request,
+        service_ack,
+        budget,
+        |oid, property, index, result| completed(&db, oid, property, index, result),
+    )
 }
 
 pub(super) async fn read_property_response_observed(
     db: &RwLock<ObjectDatabase>,
+    cov_table: Option<&RwLock<CovSubscriptionTable>>,
     request: &ConfirmedRequestPdu,
     mut completed: impl FnMut(
         &ObjectDatabase,
         ObjectIdentifier,
-        &bacnet_services::read_property::ReadPropertyRequest,
+        &ReadPropertyRequest,
         &Result<(), Error>,
     ),
 ) -> Apdu {
     let mut service_ack = BytesMut::with_capacity(512);
     let db = db.read().await;
-    match handlers::handle_read_property_observed(
-        &db,
-        &request.service_request,
-        &mut service_ack,
-        |oid, request, result| completed(&db, oid, request, result),
-    ) {
+    let result = match ReadPropertyRequest::decode(&request.service_request) {
+        Ok(decoded) => {
+            let lookup_oid = handlers::resolve_device_wildcard(&db, &decoded.object_identifier);
+            let live = match (
+                cov_table,
+                handlers::active_cov_device(&db, lookup_oid, decoded.property_identifier),
+            ) {
+                (Some(cov_table), Some(device)) => {
+                    Some(active_cov_snapshot(&db, cov_table, device).await)
+                }
+                _ => None,
+            };
+            handlers::read_property_request_observed(
+                &db,
+                live.as_ref(),
+                &decoded,
+                &mut service_ack,
+                |oid, request, result| completed(&db, oid, request, result),
+            )
+        }
+        Err(error) => Err(error),
+    };
+    match result {
         Ok(()) => Apdu::ComplexAck(ComplexAck {
             segmented: false,
             more_follows: false,

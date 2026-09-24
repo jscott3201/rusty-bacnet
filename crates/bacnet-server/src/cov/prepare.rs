@@ -35,11 +35,7 @@ pub(crate) fn prepare_value(
     value: &PropertyValue,
 ) -> Result<PreparedCovValue, Error> {
     let (sample, numeric) = validate_sample(object, property, index, value)?;
-    let increment = if numeric && property == PropertyIdentifier::PRESENT_VALUE {
-        increment.or_else(|| object.cov_increment())
-    } else {
-        increment
-    };
+    let increment = effective_increment(object, property, numeric, increment);
     let mut encoded = BytesMut::new();
     encode_property_value(&mut encoded, sample.value())?;
     Ok(PreparedCovValue {
@@ -48,6 +44,21 @@ pub(crate) fn prepare_value(
         numeric,
         increment,
     })
+}
+
+/// Sole increment rule: an explicit subscription override wins; otherwise only a
+/// numeric Present_Value inherits the object's current `COV_Increment`.
+pub(crate) fn effective_increment(
+    object: &dyn BACnetObject,
+    property: PropertyIdentifier,
+    numeric: bool,
+    explicit: Option<f32>,
+) -> Option<f32> {
+    if numeric && property == PropertyIdentifier::PRESENT_VALUE {
+        explicit.or_else(|| object.cov_increment())
+    } else {
+        explicit
+    }
 }
 
 /// Admission shares coordinate/retention checks without querying threshold policy.

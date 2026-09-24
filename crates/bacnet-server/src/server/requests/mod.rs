@@ -194,6 +194,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             s if s == ConfirmedServiceChoice::READ_PROPERTY => {
                 confirmed_response::read_property_response_observed(
                     db,
+                    Some(cov_table.as_ref()),
                     &req,
                     |db, oid, req, result| {
                         let result = match result {
@@ -227,16 +228,17 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     .await
             }
             s if s == ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE => {
-                let db = db.read().await;
-                let result = handlers::handle_rpm_budgeted_observed(
-                    &db,
+                let result = confirmed_response::read_property_multiple_observed(
+                    db,
+                    cov_table,
                     &req.service_request,
                     &mut ack_buf,
                     config.read_property_multiple_budget,
-                    |oid, property, index, result| {
-                        read_audits.extend(audit.read_intent(&db, oid, property, index, result));
+                    |db, oid, property, index, result| {
+                        read_audits.extend(audit.read_intent(db, oid, property, index, result));
                     },
-                );
+                )
+                .await;
                 if result.is_err() {
                     // No audited prefix for decode/work/response-buffer failure.
                     read_audits.clear();

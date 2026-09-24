@@ -34,6 +34,7 @@ use bacnet_types::MacAddr;
 
 use bytes::BytesMut;
 
+use crate::cov::active::ActiveCovSubscriptions;
 use crate::cov::{
     CovNotificationKind, CovSubscription, CovSubscriptionKey, CovSubscriptionSnapshot,
     CovSubscriptionTable, MultipleContextKey, SubscriberEndpoint,
@@ -50,7 +51,7 @@ mod object_mgmt;
 mod read_property;
 mod read_range;
 mod rpm_budget;
-pub(crate) use rpm_budget::{handle_rpm_budgeted_observed, RpmFailure};
+pub(crate) use rpm_budget::{rpm_budgeted_request_observed, RpmFailure};
 mod write_property;
 
 pub use alarm_event::*;

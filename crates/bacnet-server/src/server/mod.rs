@@ -773,6 +773,8 @@ mod shutdown;
 #[cfg(test)]
 mod acknowledge_alarm_tests;
 #[cfg(test)]
+mod active_cov_subscriptions_tests;
+#[cfg(test)]
 mod audit_log_query_tests;
 #[cfg(test)]
 mod binary_lighting_task_tests;

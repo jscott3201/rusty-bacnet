@@ -433,6 +433,9 @@ fn set_services_supported_overrides_default() {
     assert_eq!(ss.iter().count(), 1);
 }
 
+/// Standalone object data: the Device holds no subscription state. The live
+/// list is the server COV table's projection (bacnet-server wire tests); the
+/// constructed codec is covered by bacnet-encoding's golden vectors.
 #[test]
 fn active_cov_subscriptions_default_empty() {
     let dev = make_device();
@@ -451,80 +454,6 @@ fn active_cov_subscriptions_in_property_list() {
 }
 
 #[test]
-fn active_cov_subscriptions_after_add() {
-    use bacnet_types::constructed::{
-        BACnetCOVSubscription, BACnetObjectPropertyReference, BACnetRecipient,
-        BACnetRecipientProcess,
-    };
-
-    let mut dev = make_device();
-    let dev_oid = ObjectIdentifier::new(ObjectType::DEVICE, 7).unwrap();
-    let ao_oid = ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 3).unwrap();
-
-    dev.add_cov_subscription(BACnetCOVSubscription {
-        recipient: BACnetRecipientProcess {
-            recipient: BACnetRecipient::Device(dev_oid),
-            process_identifier: 7,
-        },
-        monitored_property_reference: BACnetObjectPropertyReference::new_indexed(ao_oid, 87, 2),
-        issue_confirmed_notifications: true,
-        time_remaining: 300,
-        cov_increment: Some(0.5),
-    });
-
-    let val = dev
-        .read_property(PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS, None)
-        .unwrap();
-    assert_eq!(
-        val,
-        PropertyValue::ApplicationData(vec![
-            0x0E, 0x0E, 0x0C, 0x02, 0x00, 0x00, 0x07, 0x0F, 0x19, 0x07, 0x0F, 0x1E, 0x0C, 0x00,
-            0x40, 0x00, 0x03, 0x19, 0x57, 0x29, 0x02, 0x1F, 0x29, 0x01, 0x3A, 0x01, 0x2C, 0x4C,
-            0x3F, 0x00, 0x00, 0x00,
-        ])
-    );
-}
-
-#[test]
-fn active_cov_subscriptions_without_increment() {
-    use bacnet_types::constructed::{
-        BACnetCOVSubscription, BACnetObjectPropertyReference, BACnetRecipient,
-        BACnetRecipientProcess,
-    };
-
-    let mut dev = make_device();
-    let bv_oid = ObjectIdentifier::new(ObjectType::BINARY_VALUE, 3).unwrap();
-
-    dev.add_cov_subscription(BACnetCOVSubscription {
-        recipient: BACnetRecipientProcess {
-            recipient: BACnetRecipient::Address(bacnet_types::constructed::BACnetAddress {
-                network_number: 0x1234,
-                mac_address: bacnet_types::MacAddr::from_slice(&[0xAA, 0xBB]),
-            }),
-            process_identifier: 9,
-        },
-        monitored_property_reference: BACnetObjectPropertyReference::new(
-            bv_oid,
-            PropertyIdentifier::STATUS_FLAGS.to_raw(),
-        ),
-        issue_confirmed_notifications: false,
-        time_remaining: 0,
-        cov_increment: None,
-    });
-
-    let val = dev
-        .read_property(PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS, None)
-        .unwrap();
-    assert_eq!(
-        val,
-        PropertyValue::ApplicationData(vec![
-            0x0E, 0x0E, 0x1E, 0x22, 0x12, 0x34, 0x62, 0xAA, 0xBB, 0x1F, 0x0F, 0x19, 0x09, 0x0F,
-            0x1E, 0x0C, 0x01, 0x40, 0x00, 0x03, 0x19, 0x6F, 0x1F, 0x29, 0x00, 0x39, 0x00,
-        ])
-    );
-}
-
-#[test]
 fn active_cov_subscriptions_write_denied() {
     let mut dev = make_device();
     let result = dev.write_property(
@@ -534,63 +463,6 @@ fn active_cov_subscriptions_write_denied() {
         None,
     );
     assert!(result.is_err());
-}
-
-#[test]
-fn set_active_cov_subscriptions_replaces() {
-    use bacnet_types::constructed::{
-        BACnetCOVSubscription, BACnetObjectPropertyReference, BACnetRecipient,
-        BACnetRecipientProcess,
-    };
-
-    let mut dev = make_device();
-    let dev_oid = ObjectIdentifier::new(ObjectType::DEVICE, 10).unwrap();
-    let ai1 = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-    let ai2 = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 2).unwrap();
-
-    // Add two subscriptions
-    let sub1 = BACnetCOVSubscription {
-        recipient: BACnetRecipientProcess {
-            recipient: BACnetRecipient::Device(dev_oid),
-            process_identifier: 1,
-        },
-        monitored_property_reference: BACnetObjectPropertyReference::new(
-            ai1,
-            PropertyIdentifier::PRESENT_VALUE.to_raw(),
-        ),
-        issue_confirmed_notifications: true,
-        time_remaining: 100,
-        cov_increment: None,
-    };
-    let sub2 = BACnetCOVSubscription {
-        recipient: BACnetRecipientProcess {
-            recipient: BACnetRecipient::Device(dev_oid),
-            process_identifier: 2,
-        },
-        monitored_property_reference: BACnetObjectPropertyReference::new(
-            ai2,
-            PropertyIdentifier::PRESENT_VALUE.to_raw(),
-        ),
-        issue_confirmed_notifications: false,
-        time_remaining: 200,
-        cov_increment: Some(1.0),
-    };
-    let subscriptions = vec![sub1, sub2];
-    let mut expected = bytes::BytesMut::new();
-    bacnet_encoding::constructed::encode_cov_subscription_list(&mut expected, &subscriptions);
-    dev.set_active_cov_subscriptions(subscriptions);
-
-    let val = dev
-        .read_property(PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS, None)
-        .unwrap();
-    assert_eq!(val, PropertyValue::ApplicationData(expected.to_vec()));
-
-    // Replace with empty
-    dev.set_active_cov_subscriptions(vec![]);
-    let val = dev
-        .read_property(PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS, None)
-        .unwrap();
-    assert_eq!(val, PropertyValue::ApplicationData(Vec::new()));
 }
 
 #[test]
