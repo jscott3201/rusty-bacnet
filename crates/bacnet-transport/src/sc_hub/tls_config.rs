@@ -94,7 +94,7 @@ pub struct ScHubTlsConfig {
     admission_policy: Option<super::ScHubAdmissionPolicy>,
     graceful_timeouts: super::ScHubGracefulTimeouts,
     probe_policy: super::ScHubProbePolicy,
-    unicast_send_budget: std::time::Duration,
+    relay_send_budget: std::time::Duration,
 }
 
 impl ScHubTlsConfig {
@@ -147,7 +147,7 @@ impl ScHubTlsConfig {
             admission_policy: None,
             graceful_timeouts: super::ScHubGracefulTimeouts::default(),
             probe_policy: super::ScHubProbePolicy::default(),
-            unicast_send_budget: std::time::Duration::from_secs(5),
+            relay_send_budget: std::time::Duration::from_secs(5),
         })
     }
 
@@ -258,7 +258,7 @@ impl ScHubTlsConfig {
     /// fn configure(tls: ScHubTlsConfig) -> Result<ScHubTlsConfig, bacnet_types::error::Error> {
     ///     let probe = ScHubProbePolicy::new(Duration::from_secs(2),
     ///         Duration::from_secs(10), Duration::from_secs(3), Duration::from_secs(1))?;
-    ///     tls.with_probe_policy(probe).with_unicast_send_budget(Duration::from_millis(750))
+    ///     tls.with_probe_policy(probe).with_relay_send_budget(Duration::from_millis(750))
     /// }
     /// ```
     pub fn with_probe_policy(mut self, policy: super::ScHubProbePolicy) -> Self {
@@ -283,30 +283,32 @@ impl fmt::Debug for ScHubTlsConfig {
 }
 
 impl ScHubTlsConfig {
-    /// Validate the NPDU/opaque unicast budget before TLS file I/O or bind.
+    /// Validate the transit relay budget before TLS file I/O or bind.
     /// Positive whole milliseconds must be at most `i64::MAX` (elapsed-tick
     /// headroom) and fit the platform monotonic clock.
-    pub fn validate_unicast_send_budget(
+    pub fn validate_relay_send_budget(
         budget: std::time::Duration,
     ) -> Result<(), bacnet_types::error::Error> {
-        super::timing::validate_milliseconds("unicast send budget", budget)
+        super::timing::validate_milliseconds("relay send budget", budget)
     }
 
-    /// Set one acquisition-plus-send budget for NPDU and opaque unicast.
+    /// Set one acquisition-plus-send budget for every transit relay attempt.
     /// Defaults to five seconds. Timeout does not retire, retry or fabricate a
-    /// Result; it cannot retract already buffered WebSocket bytes. Broadcast
-    /// fanout and BVLC-Result forwarding retain their separate existing budgets.
-    pub fn with_unicast_send_budget(
+    /// Result; it cannot retract already buffered WebSocket bytes. Applies to
+    /// NPDU/opaque unicast, each concurrent broadcast recipient, and forwarded
+    /// BVLC-Result. Probe, control, cleanup and graceful-shutdown policies remain
+    /// separate. Existing outcome counters remain limited to eligible unicast.
+    pub fn with_relay_send_budget(
         mut self,
         budget: std::time::Duration,
     ) -> Result<Self, bacnet_types::error::Error> {
-        Self::validate_unicast_send_budget(budget)?;
-        self.unicast_send_budget = budget;
+        Self::validate_relay_send_budget(budget)?;
+        self.relay_send_budget = budget;
         Ok(self)
     }
 
-    /// Configured NPDU/opaque unicast acquisition-plus-send budget.
-    pub fn unicast_send_budget(&self) -> std::time::Duration {
-        self.unicast_send_budget
+    /// Configured transit relay acquisition-plus-send budget.
+    pub fn relay_send_budget(&self) -> std::time::Duration {
+        self.relay_send_budget
     }
 }

@@ -36,7 +36,7 @@ class HubProbePolicyTests(mtls.MtlsFixture):
     async def test_configured_probe_emits_ack_refreshes_then_wrong_ack_expires(self):
         hub = await self.start(probe_scan_interval_ms=20, probe_idle_age_ms=50,
                                probe_ack_age_ms=80, probe_send_budget_ms=40,
-                               unicast_send_budget_ms=30)
+                               relay_send_budget_ms=30)
         endpoint = await self.register(hub, 0x42)
         # These observed probes arrive within one second; the default first idle
         # probe would require over 60s. Exact ms boundaries are paused Rust tests.
@@ -85,3 +85,25 @@ class HubProbePolicyTests(mtls.MtlsFixture):
                 await self.send(receiver[1], b"\x0a\0\x66\x77")
                 self.assertEqual(await self.binary(receiver[0]), b"\x0b\0\x66\x77")
                 await self.stop_hub(hub)
+
+    async def test_configured_relay_budget_serves_all_transit_families(self):
+        hub = await self.start(relay_send_budget_ms=37)
+        source = await self.register(hub, 0x42)
+        target = await self.register(hub, 0x43)
+        for function, destination, body in (
+            (1, b"\x43" * 6, b"\x01\0"),
+            (13, b"\x43" * 6, b"\x01\0"),
+            (1, b"\xff" * 6, b"\x01\0"),
+            (13, b"\xff" * 6, b"\x01\0"),
+            (0, b"\x43" * 6, b"\x02\0"),
+        ):
+            with self.subTest(function=function, broadcast=destination[0] == 255):
+                await self.send(source[1], bytes([function, 4, 0, 23]) + destination + body)
+                broadcast = destination[0] == 255
+                expected = bytes([function, 12 if broadcast else 8, 0, 23]) + b"\x42" * 6
+                if broadcast:
+                    expected += destination
+                self.assertEqual(await self.binary(target[0]), expected + body)
+        await self.send(source[1], b"\x0a\0\x66\x77")
+        self.assertEqual(await self.binary(source[0]), b"\x0b\0\x66\x77")
+        self.assertTrue(all(value == 0 for value in (await hub.status())["outcomes"].values()))

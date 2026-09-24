@@ -11,7 +11,7 @@ async fn blocked_unicast(function: u8, budget: Duration) {
     let config = tls
         .hub_config
         .clone()
-        .with_unicast_send_budget(budget)
+        .with_relay_send_budget(budget)
         .unwrap();
     let running = ScHub::start("127.0.0.1:0", config, [0x10; 6], [0x10; 16])
         .await

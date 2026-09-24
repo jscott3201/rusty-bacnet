@@ -356,9 +356,11 @@ Annex AB security profile or qualification of your credential provisioning.
   identity proof. See [conflict-aware admission](docs/conformance/standard-135-2020-ledger.md#hub-conflict-aware-admission).
 
 - Rust and Python Hub configuration supports monotonic, scan-driven optional
-  probes, a separate NPDU/opaque unicast send budget (default five seconds), and
+  probes, one transit relay send budget (default five seconds), and
   sender/global broadcast-rate limits. Probe ACK age is checked on later scans;
   it is not a hard closure deadline or a replacement for node keepalive.
+  The relay budget includes NPDU/opaque unicast, each concurrent broadcast
+  recipient, and forwarded BVLC-Result; control and shutdown sends stay separate.
   See [Hub operator policy](docs/conformance/standard-135-2020-ledger.md#hub-operator-timing-and-broadcast-policy).
 
 - Rust and Python Hub status expose fixed, saturating per-start outcome counters

@@ -125,10 +125,11 @@ pub(super) async fn relay_result(
     msg: &ScMessage,
     registered_vmac: Vmac,
     clients: &Clients,
-    source_sink: &Arc<Mutex<WsSink>>,
-    close_requested: &Arc<AtomicBool>,
+    source: (&Arc<Mutex<WsSink>>, &Arc<AtomicBool>),
+    relay_send_budget: std::time::Duration,
     diag: &mut DiagnosticThrottle,
 ) -> ResultRelayDisposition {
+    let (source_sink, close_requested) = source;
     let result_for = match decode_sc_bvlc_result(msg) {
         Ok(ScBvlcResult::Ack { result_for }) | Ok(ScBvlcResult::Nak { result_for, .. }) => {
             result_for
@@ -293,31 +294,23 @@ pub(super) async fn relay_result(
     if close_requested.load(Ordering::Acquire) {
         return ResultRelayDisposition::CloseSource;
     }
-    let send = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        if let Err(error) = super::relay_send::send(
+    let result = tokio::time::timeout(
+        relay_send_budget,
+        super::relay_send::send(
             &target,
             clients,
             Message::Binary(relay_buf.to_vec().into()),
             &super::relay_send::SocketIo,
-        )
-        .await
-        {
-            warn!("Hub: Result relay failed to {destination:02x?}: {error}");
-        }
-        ResultRelayDisposition::Continue
-    })
+        ),
+    )
     .await;
-    if let Ok(disposition) = send {
-        if disposition == ResultRelayDisposition::CloseSource
-            || close_requested.load(Ordering::Acquire)
-        {
-            return ResultRelayDisposition::CloseSource;
-        }
-        return ResultRelayDisposition::Continue;
-    }
     if close_requested.load(Ordering::Acquire) {
         return ResultRelayDisposition::CloseSource;
     }
-    warn!("Hub: Result relay timed out to {destination:02x?}");
+    match result {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => warn!("Hub: Result relay failed to {destination:02x?}: {error}"),
+        Err(_) => warn!("Hub: Result relay timed out to {destination:02x?}"),
+    }
     ResultRelayDisposition::Continue
 }

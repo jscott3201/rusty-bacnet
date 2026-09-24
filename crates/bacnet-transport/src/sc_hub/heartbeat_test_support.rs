@@ -246,6 +246,6 @@ pub(super) fn probe_runtime() -> super::timing::HubTiming {
     super::timing::HubTiming {
         origin: tokio::time::Instant::now() - Duration::from_secs(100),
         policy: ScHubProbePolicy::default(),
-        unicast_send_budget: Duration::from_secs(5),
+        relay_send_budget: Duration::from_secs(5),
     }
 }

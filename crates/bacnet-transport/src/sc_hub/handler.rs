@@ -218,7 +218,7 @@ pub(super) async fn run(
                     target,
                     &clients,
                     &write,
-                    timing.unicast_send_budget,
+                    timing.relay_send_budget,
                 )
                 .await
                     == ResultRelayDisposition::CloseSource
@@ -261,7 +261,7 @@ pub(super) async fn run(
                     target,
                     &clients,
                     &write,
-                    timing.unicast_send_budget,
+                    timing.relay_send_budget,
                 )
                 .await
                     == ResultRelayDisposition::CloseSource
@@ -304,7 +304,7 @@ pub(super) async fn run(
                     target,
                     &clients,
                     &write,
-                    timing.unicast_send_budget,
+                    timing.relay_send_budget,
                 )
                 .await
                     == ResultRelayDisposition::CloseSource
@@ -350,7 +350,7 @@ pub(super) async fn run(
                     target,
                     &clients,
                     &write,
-                    timing.unicast_send_budget,
+                    timing.relay_send_budget,
                 )
                 .await
                     == ResultRelayDisposition::CloseSource
@@ -594,8 +594,8 @@ pub(super) async fn run(
                     &sc_msg,
                     registered_vmac,
                     &clients,
-                    &write,
-                    &close_requested,
+                    (&write, &close_requested),
+                    timing.relay_send_budget,
                     &mut malformed_diag,
                 )
                 .await
@@ -703,7 +703,7 @@ pub(super) async fn run(
                             let clients = &clients;
                             async move {
                                 let result = tokio::time::timeout(
-                                    std::time::Duration::from_secs(5),
+                                    timing.relay_send_budget,
                                     super::relay_send::send(
                                         &target,
                                         clients,
@@ -746,7 +746,7 @@ pub(super) async fn run(
                                     &target,
                                     &clients,
                                     Message::Binary(relay_bytes.into()),
-                                    timing.unicast_send_budget,
+                                    timing.relay_send_budget,
                                     &SocketIo,
                                 )
                                 .await;

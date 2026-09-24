@@ -2572,8 +2572,10 @@ class ScHub:
     Strictly exceeded ages are checked at scans; ACK age starts at reservation,
     not completed send, and is not a hard closure deadline. Delayed ticks are
     skipped. Only matching valid ACKs refresh activity. Node keepalive is separate.
-    ``unicast_send_budget_ms`` independently bounds NPDU/opaque acquisition+send
-    (default 5000), without timeout-driven retirement, retry or fabricated Result.
+    ``relay_send_budget_ms`` bounds each NPDU/opaque unicast, concurrent broadcast
+    recipient and forwarded BVLC-Result acquisition+send attempt (default 5000),
+    without timeout-driven retirement, retry or fabricated Result. Probe, control,
+    cleanup and graceful shutdown stay separate. Unicast counters keep their scope.
     These values must be positive whole milliseconds <=2**63-1 and fit the native
     monotonic clock. Broadcast sender/global burst/per-second settings use native
     token buckets: bounds 1..=(2**64-1)//1_000_000_000, silent drops, existing counters.
@@ -2610,7 +2612,7 @@ class ScHub:
         broadcast_sender_per_second: int = 128,
         broadcast_global_burst: int = 4096,
         broadcast_global_per_second: int = 512,
-        unicast_send_budget_ms: int = 5000,
+        relay_send_budget_ms: int = 5000,
     ) -> None: ...
 
     async def start(self) -> None:

@@ -56,12 +56,12 @@ fn checked_policy_rejects_precision_zero_and_overflow_without_normative_bounds()
             values[index] = bad;
             assert!(ScHubProbePolicy::new(values[0], values[1], values[2], values[3]).is_err());
         }
-        assert!(ScHubTlsConfig::validate_unicast_send_budget(bad).is_err());
+        assert!(ScHubTlsConfig::validate_relay_send_budget(bad).is_err());
     }
     // Local probes are not constrained by initiating-node 3–300s timing.
     assert_eq!(policy(1, 300_001, 1, 1).idle_age(), ms(300_001));
-    assert!(ScHubTlsConfig::validate_unicast_send_budget(ms(1)).is_ok());
-    assert!(ScHubTlsConfig::validate_unicast_send_budget(ms(u64::MAX)).is_err());
+    assert!(ScHubTlsConfig::validate_relay_send_budget(ms(1)).is_ok());
+    assert!(ScHubTlsConfig::validate_relay_send_budget(ms(u64::MAX)).is_err());
 }
 
 #[tokio::test(start_paused = true)]

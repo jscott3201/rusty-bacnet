@@ -391,18 +391,23 @@ RESOURCES/OTHER NAK and admin-denial counter. Policies remain synchronous,
 nonblocking and panic-deny; they must not perform I/O or reenter the registry.
 
 
-Each admitted NPDU or addressed opaque unicast relay has one configurable local
-attempt (five seconds by default), including destination sink acquisition and WebSocket send. A timeout
+Every admitted transit relay attempt has one configurable local budget (five
+seconds by default), including destination sink acquisition and WebSocket send.
+It applies to NPDU/opaque unicast, each concurrent broadcast recipient, and
+forwarded BVLC-Result. A timeout
 lets that source process its next frame; it does not retry, fabricate a Result,
 or retire the destination solely for timing out. Terminal send errors retain the
 existing captured-connection retirement rules, and heartbeat liveness is separate.
 Cancellation cannot retract bytes already buffered by the WebSocket. Broadcast
-and forwarded Result attempts retain their existing bounds; the graceful shutdown
-budget may force cleanup before a blocked relay's send deadline.
+fanout remains concurrent; a healthy recipient need not wait for a blocked one.
+Probe, control, cleanup and graceful-shutdown policies remain separate; shutdown
+may force cleanup before a blocked relay's send deadline.
 
-`ScHubTlsConfig::with_unicast_send_budget(Duration)` validates this separate
-NPDU/opaque budget; `validate_unicast_send_budget` supports preflight before
-loading TLS files. `ScHubProbePolicy::new(scan_interval, idle_age, ack_age,
+`ScHubTlsConfig::with_relay_send_budget(Duration)` validates this separate
+transit budget; `validate_relay_send_budget` supports preflight before
+loading TLS files. This replaces the pre-1.0 unicast-only setting without an
+alias; update callers to `with_relay_send_budget`, `relay_send_budget` and
+`validate_relay_send_budget`. `ScHubProbePolicy::new(scan_interval, idle_age, ack_age,
 send_budget)` configures the optional accepting-Hub probe through
 `with_probe_policy`. Defaults are 30s/60s/5s/5s. Both policies require positive
 whole milliseconds, at most `i64::MAX` milliseconds to reserve tick headroom,

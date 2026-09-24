@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **SC Hub unified transit budget (Refs #774, #476):** replace the unfrozen
+  unicast-only Rust setting/validator with `with_relay_send_budget`,
+  `relay_send_budget` and `validate_relay_send_budget`, and the Python keyword
+  with `relay_send_budget_ms`. No aliases remain. Default five-second attempts
+  now share one configured budget across NPDU/opaque unicast, each concurrent
+  broadcast recipient and forwarded BVLC-Result, including sink acquisition.
+  Timeout does not retire, retry or fabricate a response. Probe/control/cleanup/
+  graceful policies remain distinct; unicast outcome counters keep their scope.
+  Real TLS tests cover concurrent fanout, replacement, later delivery and a
+  concurrent peer-close wave recovering capacity before joined shutdown.
+
 - **SC Hub outcome status (Refs #770, #476):** Rust `ScHubStatus` and Python's
   typed status dictionary include fixed per-start saturating decision counters.
   Actual committed replacement and matching-generation heartbeat removal count;
@@ -22,7 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one per-Hub monotonic millisecond origin, checked scan/idle/ACK/send settings,
   and skipped missed scans. ACK age remains scan-driven from reservation;
   only matching valid ACKs refresh activity. Rust/Python configure a separate
-  NPDU/opaque unicast send budget (default five seconds), with existing no-retry,
+  transit relay send budget (default five seconds; unified by #774), with existing no-retry,
   no-timeout-retirement semantics. Python also exposes the existing native
   sender/global broadcast-rate policy and counters, validated before file I/O.
   Initiating-node heartbeat bounds and broader Annex AB claims are unchanged.
