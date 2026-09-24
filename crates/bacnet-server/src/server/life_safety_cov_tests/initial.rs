@@ -20,7 +20,7 @@ async fn subscribe_initial_and_resub_ack_precede_notification_and_cancel_is_quie
             cov_increment: None,
         };
         let mut encoded = BytesMut::new();
-        request.encode(&mut encoded);
+        request.encode(&mut encoded).unwrap();
         encoded.freeze()
     };
 
@@ -115,3 +115,6 @@ async fn multiple_initial_and_resub_ack_precede_payload_and_cancel_is_quiet() {
     }
     assert!(fixture.cov_table.read().await.is_empty());
 }
+
+#[path = "property_parameters.rs"]
+mod property_parameters;

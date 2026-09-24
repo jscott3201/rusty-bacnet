@@ -1122,7 +1122,7 @@
   },
   {
    "id": "BACNET-13-COV-SUBSCRIPTIONS",
-   "standard_anchor": "Clauses 13.14-13.18",
+   "standard_anchor": "Clauses 13.14-13.18; §13.15.1.1 (printed707/PDF709); §13.15.1.3 Table13-20",
    "priority": "P1",
    "requirement_summary": "Server-side COV subscription procedures validate subscription inputs, preserve subscriber endpoints, emit initial COV notifications after accepted SubscribeCOV, SubscribeCOVProperty, and SubscribeCOVPropertyMultiple requests, and preserve notification service family on later changes.",
    "status": "implementation-present-needs-conformance-tests",
@@ -1140,6 +1140,9 @@
     "crates/rusty-bacnet/src/client/client_methods/enrollment_alarm_covmulti_who_writegroup.rs"
    ],
    "positive_tests": [
+    "crates/bacnet-services/src/cov_property_validation_tests.rs::subscribe_cov_property_positive_bounds_and_cancel_have_independent_wire_vectors",
+    "crates/bacnet-server/src/handlers/tests/cov_property_parameters.rs::subscribe_cov_property_positive_renewal_expiry_and_nonexistent_cancel",
+    "crates/bacnet-server/src/handlers/tests/cov_property_parameters.rs::subscribe_cov_ordinary_none_and_zero_lifetimes_remain_indefinite",
     "crates/bacnet-services/src/cov_multiple.rs::tests::subscribe_cov_property_multiple_uses_standard_tags",
     "crates/bacnet-services/src/cov_multiple_conformance_tests.rs::subscribe_encodes_false_timestamped_and_rejects_missing_required_booleans",
     "crates/bacnet-services/src/cov_multiple_conformance_tests.rs::notification_decodes_standard_datetime_and_primitive_time_of_change",
@@ -1161,6 +1164,10 @@
     "crates/bacnet-integration-tests/tests/server/error_cov.rs::cov_subscribe_then_cancel"
    ],
    "negative_tests": [
+    "crates/bacnet-services/src/cov_property_validation_tests.rs::subscribe_cov_property_outbound_pair_validation_is_transactional",
+    "crates/bacnet-client/src/client/cov_property_validation_tests.rs::subscribe_cov_property_invalid_raw_typed_requests_never_admit_or_send",
+    "crates/bacnet-server/src/handlers/tests/cov_property_parameters.rs::subscribe_cov_property_parameter_errors_precede_lookup_and_expired_entry_purge",
+    "crates/bacnet-server/src/server/life_safety_cov_tests/property_parameters.rs::subscribe_cov_property_invalid_resubscription_keeps_state_and_emits_only_error",
     "crates/bacnet-services/src/cov_multiple.rs::tests::subscribe_cov_property_multiple_rejects_malformed_header_fields",
     "crates/bacnet-services/src/cov_multiple_conformance_tests.rs::subscribe_rejects_empty_reference_lists_and_special_property_identifiers",
     "crates/bacnet-services/src/cov_multiple_conformance_tests.rs::timestamp_and_time_of_change_presence_must_agree",
@@ -1173,8 +1180,8 @@
     "crates/bacnet-integration-tests/tests/server/dcc.rs::dcc_disable_initiation_allows_rp_blocks_cov"
    ],
    "benchmarks": [],
-   "public_claims": [],
-   "notes": "Issue #82 evidence adds post-acceptance initial notifications for SubscribeCOV and SubscribeCOVProperty, COVNotificationMultiple APDUs with the multiple service choices for SubscribeCOVPropertyMultiple initial and later-change notifications, property-validation and subscription-capacity atomicity, routed subscriber endpoint preservation for SimpleAck, notification sends, and segmented ComplexAck responses, subscriber COV increment precedence, and server TSM invoke-ID collision avoidance for routed/confirmed notifications. Issue #83 evidence adds SubscribeCOVPropertyMultiple request lifetime encoding/decoding in the standard field order, mandatory issue-confirmed validation, paired lifetime/max-delay validation, cancellation handling for empty contexts and listed property specs, context lifetime refresh, and server-side subscription expiration from the decoded lifetime. Issue #342 evidence corrects both mandatory booleans, optional BACnetDateTime and primitive Time fields, nested-list cardinalities, prohibited monitored-property identifiers, cumulative decode/encode caps, pre-mutation encoder validation, local-standard-time server projection, active time-remaining projection, and duplicate-reference amplification. This row remains below supported status: ordered partial-success execution and first-failed-subscription provenance, property-specific COV eligibility/NOT_COV_PROPERTY, array-index error preservation, empty-spec context materialization, max-notification-delay queuing and timestamped change history, Daylight_Savings_Status adjustment, schema-aware ANY validation, shorter server lock hold for maximum-size requests, Active_COV_Multiple_Subscriptions synchronization, client-mode COV Multiple reception, outbound APDU size/segmentation policy, and fuller BIBB/PICS evidence remain separate work."
+   "public_claims": ["docs/rust-api.md#cov-subscriptions"],
+   "notes": "Issue #802 adds positive NonZeroU32 Rust single-property lifetimes and explicit cancellation, complete transactional typed request validation, and inbound pair/zero checks before lookup/purge/state. One missing optional field rejects as INCONSISTENT_PARAMETERS (selected syntax interpretation); paired zero returns SERVICES/VALUE_OUT_OF_RANGE. Structural decode remains permissive for those semantic values. Ordinary SubscribeCOV None/zero indefinite behavior is unchanged; its separate malformed dependency shape is not qualified here. Python has no direct single-property API and gains none. Issue #82 evidence adds post-acceptance initial notifications for SubscribeCOV and SubscribeCOVProperty, COVNotificationMultiple APDUs with the multiple service choices for SubscribeCOVPropertyMultiple initial and later-change notifications, property-validation and subscription-capacity atomicity, routed subscriber endpoint preservation for SimpleAck, notification sends, and segmented ComplexAck responses, subscriber COV increment precedence, and server TSM invoke-ID collision avoidance for routed/confirmed notifications. Issue #83 evidence adds SubscribeCOVPropertyMultiple request lifetime encoding/decoding in the standard field order, mandatory issue-confirmed validation, paired lifetime/max-delay validation, cancellation handling for empty contexts and listed property specs, context lifetime refresh, and server-side subscription expiration from the decoded lifetime. Issue #342 evidence corrects both mandatory booleans, optional BACnetDateTime and primitive Time fields, nested-list cardinalities, prohibited monitored-property identifiers, cumulative decode/encode caps, pre-mutation encoder validation, local-standard-time server projection, active time-remaining projection, and duplicate-reference amplification. This row remains below supported status: ordered partial-success execution and first-failed-subscription provenance, property-specific COV eligibility/NOT_COV_PROPERTY, array-index error preservation, empty-spec context materialization, max-notification-delay queuing and timestamped change history, Daylight_Savings_Status adjustment, schema-aware ANY validation, shorter server lock hold for maximum-size requests, Active_COV_Multiple_Subscriptions synchronization, client-mode COV Multiple reception, outbound APDU size/segmentation policy, and fuller BIBB/PICS evidence remain separate work."
   },
   {
    "id": "BACNET-19-SOURCE-READ-PROPERTY",

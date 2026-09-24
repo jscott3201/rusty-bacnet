@@ -300,7 +300,7 @@ async fn subscribe_cov_property_sends_property_request() {
                 PropertyIdentifier::PRESENT_VALUE,
                 Some(2),
                 false,
-                Some(300),
+                std::num::NonZeroU32::new(300).unwrap(),
                 Some(0.25),
             )
             .await;
@@ -366,7 +366,7 @@ async fn subscribe_cov_property_to_device_uses_routed_addressing() {
                 PropertyIdentifier::PRESENT_VALUE,
                 None,
                 true,
-                Some(600),
+                std::num::NonZeroU32::new(600).unwrap(),
                 Some(1.5),
             )
             .await;
