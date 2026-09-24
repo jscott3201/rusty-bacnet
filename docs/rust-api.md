@@ -1260,7 +1260,18 @@ fallible `subscribe`/`subscribe_multiple` methods and returns immutable
 completion takes the accepted snapshot, so an old initial or fanout completion
 cannot overwrite a renewed/recreated subscription. Checked generation exhaustion
 returns RESOURCES/NO_SPACE_TO_ADD_LIST_ELEMENT before live state changes;
-cancellation remains available. `BACnetServer::remove_peer_subscriptions` removes
+cancellation remains available. `CovTimeRemaining::at(expiry, now)` distinguishes
+indefinite, positive finite and expired lifetimes. Positive finite fractions round
+up, saturating at `u32::MAX`; only indefinite state projects to wire zero. This is
+our local representation policy, not a Standard-prescribed rounding formula.
+`CovSubscriptionTable::remaining_lifetime(snapshot, now)` checks the captured
+owner/key/generation and resolves the live expiry, including context-only renewal.
+Initial and later notifications recheck eligibility after property reads and before
+fresh admission. This is a point-in-time check, not byte retraction if cancellation
+races afterward. Multiple retains only values with their own current authority;
+a failed live read cannot authorize a stale sibling's payload or companion.
+Already admitted confirmed notifications retain their APDU and retry/ACK lifecycle.
+`BACnetServer::remove_peer_subscriptions` removes
 only the exact immediate endpoint plus routed source. `CovPeerKey` continues to
 group quota/rate accounting and does not authorize cross-router cleanup.
 

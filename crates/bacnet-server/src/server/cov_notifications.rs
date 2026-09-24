@@ -423,17 +423,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 continue;
             }
 
-            if budget.is_exhausted() {
-                counters
-                    .notifications_throttled_fanout
-                    .fetch_add(1, Ordering::Relaxed);
-                continue;
-            }
-
-            let time_remaining = sub.expires_at.map_or(0, |exp| {
-                exp.saturating_duration_since(Instant::now()).as_secs() as u32
-            });
-
             let notification_values = if let Some(prop) = sub.monitored_property {
                 if let Some(object) = snapshot {
                     life_safety::single_property_values(
@@ -457,6 +446,23 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             } else {
                 values.clone()
             };
+
+            // Resolve after every awaited read/callback and before fresh admission.
+            let time_remaining = {
+                let table = cov_table.read().await;
+                table
+                    .remaining_lifetime(sub, Instant::now())
+                    .and_then(crate::cov::CovTimeRemaining::wire_seconds)
+            };
+            let Some(time_remaining) = time_remaining else {
+                continue;
+            };
+            if budget.is_exhausted() {
+                counters
+                    .notifications_throttled_fanout
+                    .fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
 
             let notification = COVNotificationRequest {
                 subscriber_process_identifier: sub.subscriber_process_identifier,

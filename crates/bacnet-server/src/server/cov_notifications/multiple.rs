@@ -1,4 +1,4 @@
-use super::cov_clock::{cov_multiple_datetime, cov_multiple_time_remaining};
+use super::cov_clock::cov_multiple_datetime;
 use super::*;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
@@ -157,48 +157,27 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             return;
         }
 
-        if budget.is_exhausted() {
-            counters
-                .notifications_throttled_fanout
-                .fetch_add(1, Ordering::Relaxed);
-            return;
-        }
-
-        let representative = &subscriptions[0];
-        let (device_oid, timestamp) = {
+        let (device_oid, clock_frame) = {
             let db = db.read().await;
             let device_oid = db
                 .list_objects()
                 .into_iter()
                 .find(|o| o.object_type() == ObjectType::DEVICE)
                 .unwrap_or_else(|| ObjectIdentifier::new(ObjectType::DEVICE, 0).unwrap());
-            let timestamp = if subscriptions.iter().any(|sub| sub.timestamped) {
-                match db.clock_frame() {
-                    Some(clock_frame) if clock_frame.is_valid_actual_datetime() => {
-                        Some(cov_multiple_datetime(clock_frame))
-                    }
-                    _ => {
-                        warn!(
-                            "Skipping timestamped COVNotificationMultiple without a valid Device clock"
-                        );
-                        return;
-                    }
-                }
-            } else {
-                None
-            };
-
-            (device_oid, timestamp)
+            let clock_frame = subscriptions
+                .iter()
+                .any(|sub| sub.timestamped)
+                .then(|| db.clock_frame())
+                .flatten();
+            (device_oid, clock_frame)
         };
-        let (items, last_notified) = {
+        let (items, last_notified, representative, time_remaining, timestamp) = {
             let db = if snapshot.is_none() {
                 Some(db.read().await)
             } else {
                 None
             };
-            let mut items: Vec<COVNotificationItem> = Vec::new();
-            let mut last_notified = Vec::new();
-
+            let mut candidates = Vec::new();
             for sub in subscriptions {
                 let Some(property_identifier) = sub.monitored_property else {
                     continue;
@@ -209,7 +188,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 else {
                     continue;
                 };
-
                 let Ok(property_value) =
                     object.read_property(property_identifier, sub.monitored_property_array_index)
                 else {
@@ -219,24 +197,68 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 if encode_property_value(&mut value_buf, &property_value).is_err() {
                     continue;
                 }
+                let baseline = match object.read_property(PropertyIdentifier::PRESENT_VALUE, None) {
+                    Ok(PropertyValue::Real(pv)) => Some(pv),
+                    _ => None,
+                };
+                candidates.push((
+                    sub,
+                    COVNotificationValue {
+                        property_identifier,
+                        property_array_index: sub.monitored_property_array_index,
+                        value: value_buf.to_vec(),
+                        time_of_change: None,
+                    },
+                    baseline,
+                ));
+            }
 
-                if let Ok(PropertyValue::Real(pv)) =
-                    object.read_property(PropertyIdentifier::PRESENT_VALUE, None)
-                {
+            // Established lock order: DB read -> table read. No object callback
+            // runs under the table guard. Each prepared value owns its own check;
+            // a live sibling with a failed read cannot authorize a stale value.
+            let retained: Vec<_> = {
+                let table = cov_table.read().await;
+                let now = Instant::now();
+                candidates
+                    .into_iter()
+                    .filter_map(|(sub, value, baseline)| {
+                        table
+                            .remaining_lifetime(sub, now)
+                            .and_then(crate::cov::CovTimeRemaining::wire_seconds)
+                            .map(|remaining| (sub, value, baseline, remaining))
+                    })
+                    .collect()
+            };
+            let Some((representative, _, _, time_remaining)) = retained.first() else {
+                return;
+            };
+            let representative = *representative;
+            let time_remaining = *time_remaining;
+            let timestamp = if retained.iter().any(|(sub, _, _, _)| sub.timestamped) {
+                match clock_frame {
+                    Some(frame) if frame.is_valid_actual_datetime() => {
+                        Some(cov_multiple_datetime(frame))
+                    }
+                    _ => {
+                        warn!("Skipping timestamped COVNotificationMultiple without a valid Device clock");
+                        return;
+                    }
+                }
+            } else {
+                None
+            };
+            let mut items: Vec<COVNotificationItem> = Vec::new();
+            let mut last_notified = Vec::new();
+            let mut retained_subscriptions = Vec::new();
+            for (sub, mut value, baseline, _) in retained {
+                value.time_of_change = sub
+                    .timestamped
+                    .then(|| timestamp.map(|(_, time)| time))
+                    .flatten();
+                if let Some(pv) = baseline {
                     last_notified.push((sub.clone(), pv));
                 }
-
-                let value = COVNotificationValue {
-                    property_identifier,
-                    property_array_index: sub.monitored_property_array_index,
-                    value: value_buf.to_vec(),
-                    time_of_change: if sub.timestamped {
-                        timestamp.map(|(_, time)| time)
-                    } else {
-                        None
-                    },
-                };
-
+                retained_subscriptions.push(sub.clone());
                 if let Some(item) = items.iter_mut().find(|item| {
                     item.monitored_object_identifier == sub.monitored_object_identifier
                 }) {
@@ -248,19 +270,30 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     });
                 }
             }
-
             if let Some(db) = db.as_deref() {
-                life_safety::append_status_flags(db, subscriptions, timestamp, &mut items);
+                life_safety::append_status_flags(
+                    db,
+                    &retained_subscriptions,
+                    timestamp,
+                    &mut items,
+                );
             }
-
-            (items, last_notified)
+            (
+                items,
+                last_notified,
+                representative,
+                time_remaining,
+                timestamp,
+            )
         };
 
-        if items.is_empty() {
+        // From the final live decision through fresh admission there is no await.
+        if budget.is_exhausted() {
+            counters
+                .notifications_throttled_fanout
+                .fetch_add(1, Ordering::Relaxed);
             return;
         }
-
-        let time_remaining = cov_multiple_time_remaining(representative.expires_at);
 
         let notification = COVNotificationMultipleRequest {
             subscriber_process_identifier: representative.subscriber_process_identifier,

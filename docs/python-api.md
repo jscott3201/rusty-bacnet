@@ -392,6 +392,12 @@ Ordinary renewal may change confirmed mode; confirmed and unconfirmed Multiple
 contexts coexist independently. Different accepted array indexes stay distinct,
 and exact duplicate Multiple references use the final options once. Stale initial
 or change-notification completion cannot overwrite renewed/recreated entries.
+Live finite subscription notifications use positive ceiling seconds (bounded to
+`u32::MAX`); ordinary indefinite subscriptions continue to report zero. Expired or
+stale ownership at the final eligibility check cannot admit a new notification.
+This does not retract bytes if cancellation races afterward. A Multiple context-only renewal
+uses its current deadline, and each retained value must have its own live owner.
+An already admitted confirmed notification continues its retry/ACK lifecycle.
 These server guarantees do not add a Python Single-property API, empty finite
 Multiple contexts, delayed Multiple notifications or broader threshold support.
 See the [COV subscription ledger](conformance/support-summary.md).
