@@ -1505,6 +1505,9 @@ class BACnetClient:
         """Read a property from multiple discovered devices concurrently.
 
         ``requests`` is ``[(device_instance, object_id, property_id, array_index), ...]``.
+        ``max_concurrent`` must be positive and fit the native usize; None uses 32.
+        Zero raises ValueError synchronously; out-of-range integers raise OverflowError.
+        Results are returned in completion order.
         Returns ``[{"device_instance": int, "value": PropertyValue | None, "error": str | None}, ...]``.
         """
         ...
@@ -1523,6 +1526,9 @@ class BACnetClient:
     ) -> list[dict[str, Any]]:
         """Read multiple properties from multiple devices concurrently (RPM batch).
 
+        ``max_concurrent`` must be positive and fit the native usize; None uses 32.
+        Zero raises ValueError synchronously; out-of-range integers raise OverflowError.
+        Results are returned in completion order.
         Returns ``[{"device_instance": int, "results": Any | None, "error": str | None}, ...]``.
         """
         ...
@@ -1537,6 +1543,9 @@ class BACnetClient:
         """Write a property to multiple devices concurrently.
 
         ``requests`` is ``[(device_instance, object_id, property_id, value, priority, array_index), ...]``.
+        ``max_concurrent`` must be positive and fit the native usize; None uses 32.
+        Zero raises ValueError synchronously; out-of-range integers raise OverflowError.
+        Results are returned in completion order.
         Returns ``[{"device_instance": int, "error": str | None}, ...]``.
         """
         ...

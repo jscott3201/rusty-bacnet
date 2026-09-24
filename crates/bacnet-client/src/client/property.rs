@@ -1,3 +1,5 @@
+use std::num::NonZeroUsize;
+
 use super::*;
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
@@ -165,15 +167,16 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Read one property from multiple discovered devices concurrently.
     ///
     /// All reads are dispatched concurrently (up to `max_concurrent`,
-    /// default 32). Results are returned in completion order.
+    /// default 32). The nonzero limit prevents a stalled batch. Results are
+    /// returned in completion order; dropping the future cancels pending requests.
     pub async fn read_property_from_devices(
         &self,
         requests: Vec<DeviceReadRequest>,
-        max_concurrent: Option<usize>,
+        max_concurrent: Option<NonZeroUsize>,
     ) -> Vec<DeviceReadResult> {
         use futures_util::stream::{self, StreamExt};
 
-        let concurrency = max_concurrent.unwrap_or(DEFAULT_BATCH_CONCURRENCY);
+        let concurrency = max_concurrent.map_or(DEFAULT_BATCH_CONCURRENCY, NonZeroUsize::get);
 
         stream::iter(requests)
             .map(|req| async move {
@@ -199,15 +202,17 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     ///
     /// Sends an RPM to each device concurrently. This is the most efficient
     /// way to poll many properties across many devices — RPM batches within
-    /// a single device, and this method batches across devices.
+    /// a single device, and this method batches across devices. A nonzero limit
+    /// bounds concurrency (None uses 32). Results use completion order; dropping
+    /// the future cancels pending requests.
     pub async fn read_property_multiple_from_devices(
         &self,
         requests: Vec<DeviceRpmRequest>,
-        max_concurrent: Option<usize>,
+        max_concurrent: Option<NonZeroUsize>,
     ) -> Vec<DeviceRpmResult> {
         use futures_util::stream::{self, StreamExt};
 
-        let concurrency = max_concurrent.unwrap_or(DEFAULT_BATCH_CONCURRENCY);
+        let concurrency = max_concurrent.map_or(DEFAULT_BATCH_CONCURRENCY, NonZeroUsize::get);
 
         stream::iter(requests)
             .map(|req| async move {
@@ -369,15 +374,16 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Write one property on multiple discovered devices concurrently.
     ///
     /// All writes are dispatched concurrently (up to `max_concurrent`,
-    /// default 32). Results are returned in completion order.
+    /// default 32). The nonzero limit prevents a stalled batch. Results are
+    /// returned in completion order; dropping the future cancels pending requests.
     pub async fn write_property_to_devices(
         &self,
         requests: Vec<DeviceWriteRequest>,
-        max_concurrent: Option<usize>,
+        max_concurrent: Option<NonZeroUsize>,
     ) -> Vec<DeviceWriteResult> {
         use futures_util::stream::{self, StreamExt};
 
-        let concurrency = max_concurrent.unwrap_or(DEFAULT_BATCH_CONCURRENCY);
+        let concurrency = max_concurrent.map_or(DEFAULT_BATCH_CONCURRENCY, NonZeroUsize::get);
 
         stream::iter(requests)
             .map(|req| async move {

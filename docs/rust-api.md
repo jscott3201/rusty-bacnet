@@ -2109,3 +2109,12 @@ See the [Device recipient contract](device-audit-recipient.md) for supported rou
 metadata, failure semantics and shutdown ownership. The endpoint source profile
 uses the same typed Device value and a source-owned paired delivery path; it has
 the narrower role, route and service boundaries described above.
+
+### Multi-device batch concurrency
+
+`BACnetClient::{read_property_from_devices, read_property_multiple_from_devices,
+write_property_to_devices}` take `Option<std::num::NonZeroUsize>` for their
+concurrency limit. `None` uses 32; `Some(NonZeroUsize::new(1).unwrap())` serializes
+the requests. Zero is unrepresentable at this boundary. All three retain their
+`Vec` results in completion order, complete empty batches, and cancel pending
+requests when the batch future is dropped.
