@@ -134,7 +134,7 @@ async fn targetless_reset_duplicate_replays_identical_simple_ack_without_second_
                     monitored_object_identifier: oid,
                     issue_confirmed_notifications: false,
                     expires_at: None,
-                    last_notified_sample: None,
+                    last_notified_observation: None,
                     monitored_property: None,
                     monitored_property_array_index: None,
                     cov_increment: None,

@@ -67,7 +67,10 @@ async fn invalid_renewal(lifetime: u32) {
         after.issue_confirmed_notifications,
         before.issue_confirmed_notifications
     );
-    assert_eq!(after.last_notified_sample, before.last_notified_sample);
+    assert_eq!(
+        after.last_notified_observation,
+        before.last_notified_observation
+    );
     assert_eq!(after.cov_increment, before.cov_increment);
     assert_eq!(table.peer_subscription_count(&before.peer_key()), 1);
     assert_eq!(table.peer_indefinite_count(&before.peer_key()), 0);

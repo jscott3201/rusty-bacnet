@@ -16,6 +16,9 @@ pub use identity::*;
 mod admission;
 mod sample;
 pub use sample::CovSample;
+mod observation;
+pub use observation::CovObservation;
+pub(crate) mod flags;
 mod lifetime;
 pub(crate) mod prepare;
 pub use lifetime::CovTimeRemaining;
@@ -45,8 +48,8 @@ pub struct CovSubscription {
     pub issue_confirmed_notifications: bool,
     /// When this subscription expires (None = infinite lifetime).
     pub expires_at: Option<Instant>,
-    /// Last validated selected sample (Present_Value for an ordinary object subscription).
-    pub last_notified_sample: Option<CovSample>,
+    /// Last delivered selected-value/declared-flags pair.
+    pub last_notified_observation: Option<CovObservation>,
     /// Monitored property for Single-property and Multiple-reference subscriptions.
     pub monitored_property: Option<PropertyIdentifier>,
     /// Accepted property index; absent, zero and element indexes are independent.
@@ -281,10 +284,10 @@ impl CovSubscriptionTable {
     }
 
     /// Complete only the captured generation, never a renewal or recreated entry.
-    pub fn set_last_notified_sample(
+    pub fn set_last_notified_observation(
         &mut self,
         snapshot: &CovSubscriptionSnapshot,
-        value: CovSample,
+        value: CovObservation,
     ) -> bool {
         if !self.is_current(snapshot) {
             return false;
@@ -293,7 +296,7 @@ impl CovSubscriptionTable {
             .get_mut(snapshot.key())
             .unwrap()
             .subscription
-            .last_notified_sample = Some(value);
+            .last_notified_observation = Some(value);
         true
     }
 
@@ -308,7 +311,9 @@ impl CovSubscriptionTable {
             (Some(increment), Some(current)) => {
                 match (
                     current.value(),
-                    sub.last_notified_sample.as_ref().map(CovSample::value),
+                    sub.last_notified_observation
+                        .as_ref()
+                        .map(|o| o.sample().value()),
                 ) {
                     (
                         bacnet_types::primitives::PropertyValue::Real(current),

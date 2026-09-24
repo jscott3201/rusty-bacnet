@@ -1277,9 +1277,12 @@ group quota/rate accounting and does not authorize cross-router cleanup.
 
 Property subscriptions now prepare one selected-coordinate `CovSample` for comparison,
 wire payload and fenced baseline completion; a failed selected read or encoding
-never substitutes Present_Value. The pre-1.0 table API replaces the float baseline
-with `last_notified_sample: Option<CovSample>` and
-`set_last_notified_sample(snapshot, sample)`. `CovSample::new(&value)` is fallible;
+never substitutes Present_Value. The pre-1.0 table API uses `last_notified_observation: Option<CovObservation>`
+and `set_last_notified_observation(snapshot, observation)`. Each observation pairs
+a required `CovSample` with compact absent/present flags.
+`CovObservation::new(sample, flags)` validates present flags; private immutable
+fields expose `sample()` and `status_flags()` (the four used bits).
+`CovSample::new(&value)` is fallible;
 its private immutable storage is normalized and shared by snapshot clones. It
 bounds retention before copying/recursive encoding to 32 nested List levels
 (root List is level 1), 1,024 nodes including empty Lists, and 65,536 scalar/raw
@@ -1310,12 +1313,31 @@ report. Same-type nonfinite samples compare IEEE bits; identical NaN payloads an
 infinities are stable. Structural equality also preserves float bits, while finite
 numeric signed zeros compare equal. These are explicit local exceptional-value
 policies, not Standard-prescribed arithmetic. Existing ordinary whole-object
-triggers, Life Safety status-change triggers and confirmed-admission versus
-unconfirmed-success baseline timing are preserved.
+numeric/nonnumeric eligibility, Life Safety committed-delta triggers and
+confirmed-admission versus unconfirmed-success baseline timing are preserved.
+
+Applicable Status_Flags changes independently trigger ordinary and property COV.
+Property reports include the selected value and declared-present flags; explicit
+flags appear once and Multiple emits one companion per retained object. Effective
+`property_list()` declares presence. Present flags must be a one-byte BitString
+with `unused_bits = 4` and zero unused low bits. Selected read/encoding/cap failure
+or declared-present flags failure skips the whole observation, including ordinary
+Present_Value: no partial flags-only report and no baseline advance. This transient
+failure policy is local. An absent companion is distinct from no delivered baseline;
+a later present value can trigger, disappearance alone cannot. A successful
+selected-value report while absent records absence. An unreported absent-and-same-
+value-return cycle is not tracked.
+
+Multiple reads flags once per object **within each notification context**, pairing
+selected values under the same DB/snapshot borrow, then releasing it before
+transport. Separate contexts may sample at different times; custom interior-mutability
+callbacks are not promised atomic hardware sampling. Only references surviving
+late lifetime/ownership checks authorize companions, timestamps and paired baseline
+completion. Ordinary nonnumeric/no-increment fanout retains its existing behavior.
 
 This profile does not add empty finite Multiple contexts, delayed Multiple
 notifications, live Device subscription-property projection, general numeric
-whole-array reduction or broader Status_Flags observation.
+whole-array reduction or specialized object-specific report sets.
 
 
 ```rust

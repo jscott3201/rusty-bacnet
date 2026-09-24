@@ -63,7 +63,13 @@ impl BACnetObject for CustomPoint {
         &self.name
     }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Borrowed(&[])
+        Cow::Borrowed(&[
+            PropertyIdentifier::PRESENT_VALUE,
+            PropertyIdentifier::TRACKING_VALUE,
+            PropertyIdentifier::SILENCED,
+            PropertyIdentifier::OPERATION_EXPECTED,
+            PropertyIdentifier::STATUS_FLAGS,
+        ])
     }
     fn read_property(&self, p: PropertyIdentifier, _: Option<u32>) -> Result<PropertyValue, Error> {
         match p {

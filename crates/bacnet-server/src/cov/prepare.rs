@@ -12,8 +12,8 @@ use bytes::BytesMut;
 pub(crate) struct PreparedCovValue {
     pub sample: CovSample,
     pub encoded: Vec<u8>,
-    numeric: bool,
-    increment: Option<f32>,
+    pub(super) numeric: bool,
+    pub(super) increment: Option<f32>,
 }
 impl PreparedCovValue {
     pub fn reports(&self, previous: Option<&CovSample>) -> bool {

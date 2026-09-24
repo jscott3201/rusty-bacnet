@@ -153,7 +153,7 @@ async fn fire_cov(server: &BACnetServer<HeldTransport>, kind: CovNotificationKin
             monitored_object_identifier: oid,
             issue_confirmed_notifications: true,
             expires_at: None,
-            last_notified_sample: None,
+            last_notified_observation: None,
             monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
             monitored_property_array_index: None,
             cov_increment: None,

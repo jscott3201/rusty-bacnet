@@ -135,7 +135,7 @@ fn clockless_timestamped_cov_multiple_rejects_atomically_but_can_cancel() {
             monitored_object_identifier: oid,
             issue_confirmed_notifications: false,
             expires_at: None,
-            last_notified_sample: None,
+            last_notified_observation: None,
             monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
             monitored_property_array_index: None,
             cov_increment: Some(0.5),

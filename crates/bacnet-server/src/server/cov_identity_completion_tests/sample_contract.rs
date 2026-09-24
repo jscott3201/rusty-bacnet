@@ -80,7 +80,7 @@ async fn fixture(
     *fixture.db.write().await = db;
     state.lock().unwrap().reads = 0;
     let mut sub = proposal(kind, false, SELECTED);
-    sub.last_notified_sample = None;
+    sub.last_notified_observation = None;
     sub.cov_increment = None;
     let accepted = fixture.table.write().await.subscribe(sub).unwrap();
     (fixture, state, accepted)
@@ -133,9 +133,10 @@ async fn cov_sample_one_selected_read_drives_wire_and_baseline() {
                     .await
                     .get_subscription(accepted.key())
                     .unwrap()
-                    .last_notified_sample
+                    .last_notified_observation
                     .as_ref()
                     .unwrap()
+                    .sample()
                     .value(),
                 &PropertyValue::Unsigned(n as u64)
             );
@@ -155,7 +156,7 @@ async fn cov_sample_failed_oversized_or_changed_shape_never_falls_back_or_advanc
             .await
             .get_subscription(accepted.key())
             .unwrap()
-            .last_notified_sample
+            .last_notified_observation
             .clone();
         for mode in 0..4 {
             {
@@ -176,7 +177,7 @@ async fn cov_sample_failed_oversized_or_changed_shape_never_falls_back_or_advanc
                     .await
                     .get_subscription(accepted.key())
                     .unwrap()
-                    .last_notified_sample,
+                    .last_notified_observation,
                 before
             );
         }
@@ -199,7 +200,7 @@ async fn cov_sample_multiple_mixed_eligibility_has_independent_payload_and_basel
         false,
         PropertyIdentifier::PRESENT_VALUE,
     );
-    pv.last_notified_sample = None;
+    pv.last_notified_observation = None;
     pv.cov_increment = Some(100.0);
     let second = f.table.write().await.subscribe(pv).unwrap();
     f.fire(true, &[first.clone(), second.clone()]).await;
@@ -215,9 +216,10 @@ async fn cov_sample_multiple_mixed_eligibility_has_independent_payload_and_basel
         table
             .get_subscription(first.key())
             .unwrap()
-            .last_notified_sample
+            .last_notified_observation
             .as_ref()
             .unwrap()
+            .sample()
             .value(),
         &PropertyValue::Unsigned(6)
     );
@@ -225,9 +227,10 @@ async fn cov_sample_multiple_mixed_eligibility_has_independent_payload_and_basel
         table
             .get_subscription(second.key())
             .unwrap()
-            .last_notified_sample
+            .last_notified_observation
             .as_ref()
             .unwrap()
+            .sample()
             .value(),
         &PropertyValue::Real(10.0)
     );
