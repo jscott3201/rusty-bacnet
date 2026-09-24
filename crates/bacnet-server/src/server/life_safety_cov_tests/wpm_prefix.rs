@@ -23,7 +23,7 @@ fn malformed_indexed_value_after_description(oid: ObjectIdentifier, description:
         }],
     };
     let mut encoded = BytesMut::new();
-    request.encode(&mut encoded);
+    request.encode(&mut encoded).unwrap();
     assert_eq!(encoded.last(), Some(&0x1f));
     encoded.truncate(encoded.len() - 1);
     bacnet_encoding::primitives::encode_ctx_unsigned(
@@ -78,7 +78,7 @@ async fn event_enrollment_prefix_commit_returns_exact_error_through_server_dispa
         }],
     };
     let mut encoded = BytesMut::new();
-    request.encode(&mut encoded);
+    request.encode(&mut encoded).unwrap();
 
     fixture
         .dispatch(
@@ -218,7 +218,7 @@ async fn failed_wpm_sends_formal_error_before_committed_prefix_cov() {
         }],
     };
     let mut encoded = BytesMut::new();
-    request.encode(&mut encoded);
+    request.encode(&mut encoded).unwrap();
 
     fixture
         .dispatch(
@@ -314,7 +314,7 @@ async fn failed_wpm_sends_generic_cov_for_non_life_safety_prefix_only() {
         }],
     };
     let mut encoded = BytesMut::new();
-    request.encode(&mut encoded);
+    request.encode(&mut encoded).unwrap();
 
     fixture
         .dispatch(

@@ -400,7 +400,8 @@ async fn object_audit_policy_wpm_each_element_captures_committed_prestate() {
                 .collect(),
         }],
     }
-    .encode(&mut bytes);
+    .encode(&mut bytes)
+    .unwrap();
     assert!(matches!(
         dispatch(
             &f.server,

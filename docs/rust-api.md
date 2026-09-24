@@ -136,6 +136,14 @@ remote commandability rules.
 
 ### ReadPropertyMultiple / WritePropertyMultiple
 
+`WritePropertyMultipleRequest::validate` checks the whole outbound request;
+`encode` returns `Result` and leaves an existing buffer unchanged on validation
+failure. Requests and each object's write list must be nonempty, targets cannot
+be ALL/REQUIRED/OPTIONAL, and supplied priorities must be 1–16. Omitted priority,
+index zero, proprietary properties, NULL and empty list values remain legal.
+Direct and device-directed clients reject invalid requests before admission or
+discovery. Inbound cursor/no-op and ordered-prefix error semantics are separate.
+
 ReadPropertyMultiple response indexes follow the effective object declaration:
 requested indexes remain on known arrays, including index zero and inline array
 errors; scalar results omit them. Unknown objects/properties or unavailable

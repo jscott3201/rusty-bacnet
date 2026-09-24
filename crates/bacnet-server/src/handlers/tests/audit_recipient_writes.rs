@@ -126,7 +126,8 @@ fn wpm(db: &mut ObjectDatabase, values: &[&[u8]]) -> WritePropertyMultipleOutcom
                 .collect(),
         }],
     }
-    .encode(&mut request);
+    .encode(&mut request)
+    .unwrap();
     handle_write_property_multiple_detailed(
         db,
         &request,

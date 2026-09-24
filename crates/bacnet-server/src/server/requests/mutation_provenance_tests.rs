@@ -165,7 +165,8 @@ async fn wpm_elements_share_one_reassembled_snapshot() {
                 },
             ],
         }
-        .encode(&mut bytes);
+        .encode(&mut bytes)
+        .unwrap();
         let response = dispatch_admitted(
             &fixture,
             &decisions,

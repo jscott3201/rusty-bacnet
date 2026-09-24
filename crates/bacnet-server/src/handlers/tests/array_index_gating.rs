@@ -236,7 +236,7 @@ fn wpm_single(
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
     handle_write_property_multiple(db, &buf).map(|_| ())
 }
 
@@ -740,7 +740,7 @@ fn wpm_gate_rejection_keeps_valid_prefix() {
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
     assert_not_an_array(
         handle_write_property_multiple(&mut db, &buf).map(|_| ()),
         "WPM with one gated reference",

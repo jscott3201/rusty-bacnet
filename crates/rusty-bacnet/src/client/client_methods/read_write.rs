@@ -199,7 +199,7 @@ impl BACnetClient {
         )>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        let rust_specs = py_to_wpm_specs(specs);
+        let rust_specs = py_to_wpm_specs(specs)?;
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let mac = parse_address(&address)?;

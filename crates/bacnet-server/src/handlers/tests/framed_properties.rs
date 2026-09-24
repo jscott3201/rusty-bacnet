@@ -389,7 +389,7 @@ fn recipient_list_framed_wire_round_trip_via_wpm() {
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
     handle_write_property_multiple(&mut db, &buf).unwrap();
     assert_eq!(
         read_raw(&db, oid, PropertyIdentifier::RECIPIENT_LIST),

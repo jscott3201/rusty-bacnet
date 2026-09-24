@@ -365,7 +365,13 @@ Return format: `list[dict]` where each dict has:
 
 #### `write_property_multiple(address, specs)`
 
-Write multiple properties to multiple objects in one request.
+Write multiple properties to multiple objects in one request. Both direct and
+device-directed WPM validate the entire input synchronously before creating an
+operation or starting discovery. Empty request/property lists, ALL/REQUIRED/OPTIONAL
+targets, and priorities 0 or 17–255 raise `ValueError`; integers outside the native
+u8 range raise `OverflowError`. Omitted priority, priorities 1–16, index zero,
+proprietary properties, NULL and empty list **values** remain valid. This is local
+request validation; remote property availability and commandability are not inferred.
 
 ```python
 await client.write_property_multiple("192.168.1.100:47808", [

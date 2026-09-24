@@ -26,7 +26,7 @@ fn wpm_handler_success() {
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
     handle_write_property_multiple(&mut db, &buf).unwrap();
 

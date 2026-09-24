@@ -81,29 +81,37 @@ pub(crate) fn py_to_wpm_specs(
             Option<u32>,
         )>,
     )>,
-) -> Vec<WriteAccessSpecification> {
-    specs
+) -> PyResult<Vec<WriteAccessSpecification>> {
+    let specs = specs
         .into_iter()
         .map(|(oid, props)| {
             let list_of_properties = props
                 .into_iter()
                 .map(|(pid, val, priority, array_index)| {
                     let mut buf = BytesMut::new();
-                    let _ = encode_property_value(&mut buf, &val.inner);
-                    BACnetPropertyValue {
+                    encode_property_value(&mut buf, &val.inner)
+                        .map_err(crate::errors::to_py_err)?;
+                    Ok(BACnetPropertyValue {
                         property_identifier: pid.to_rust(),
                         property_array_index: array_index,
                         value: buf.to_vec(),
                         priority,
-                    }
+                    })
                 })
-                .collect();
-            WriteAccessSpecification {
+                .collect::<PyResult<Vec<_>>>()?;
+            Ok(WriteAccessSpecification {
                 object_identifier: oid.to_rust(),
                 list_of_properties,
-            }
+            })
         })
-        .collect()
+        .collect::<PyResult<Vec<_>>>()?;
+    let request = bacnet_services::wpm::WritePropertyMultipleRequest {
+        list_of_write_access_specs: specs,
+    };
+    request
+        .validate()
+        .map_err(|error| PyValueError::new_err(error.to_string()))?;
+    Ok(request.list_of_write_access_specs)
 }
 
 // ---------------------------------------------------------------------------

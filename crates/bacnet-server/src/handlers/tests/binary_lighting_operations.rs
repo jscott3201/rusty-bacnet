@@ -3,7 +3,6 @@
 use super::*;
 use bacnet_objects::lighting::BinaryLightingOutputObject;
 use bacnet_services::common::BACnetPropertyValue;
-use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleRequest};
 use std::time::Duration;
 
 fn encode_value(value: PropertyValue) -> Vec<u8> {
@@ -45,26 +44,21 @@ fn wpm(
     oid: ObjectIdentifier,
     writes: Vec<(PropertyIdentifier, Option<u32>, PropertyValue, Option<u8>)>,
 ) -> Result<(), Error> {
-    let request = WritePropertyMultipleRequest {
-        list_of_write_access_specs: vec![WriteAccessSpecification {
-            object_identifier: oid,
-            list_of_properties: writes
-                .into_iter()
-                .map(
-                    |(property_identifier, property_array_index, value, priority)| {
-                        BACnetPropertyValue {
-                            property_identifier,
-                            property_array_index,
-                            value: encode_value(value),
-                            priority,
-                        }
-                    },
-                )
-                .collect(),
-        }],
-    };
+    // Exercise inbound semantics, including invalid remote priorities. Do not
+    // pass these peer fixtures through outbound typed-request validation.
     let mut bytes = BytesMut::new();
-    request.encode(&mut bytes);
+    bacnet_encoding::primitives::encode_ctx_object_id(&mut bytes, 0, &oid);
+    bacnet_encoding::tags::encode_opening_tag(&mut bytes, 1);
+    for (property_identifier, property_array_index, value, priority) in writes {
+        BACnetPropertyValue {
+            property_identifier,
+            property_array_index,
+            value: encode_value(value),
+            priority,
+        }
+        .encode(&mut bytes);
+    }
+    bacnet_encoding::tags::encode_closing_tag(&mut bytes, 1);
     handle_write_property_multiple(db, &bytes).map(|_| ())
 }
 

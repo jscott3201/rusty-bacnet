@@ -175,7 +175,7 @@ fn write_property_multiple_name_rename_refreshes_index() {
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
     handle_write_property_multiple(&mut db, &buf).unwrap();
 
@@ -214,7 +214,7 @@ fn write_property_multiple_failed_attempt_is_mutation_free_and_prefix_index_stay
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
     assert!(
         handle_write_property_multiple(&mut db, &buf).is_err(),
@@ -253,7 +253,7 @@ fn write_property_multiple_failed_attempt_is_mutation_free_and_prefix_index_stay
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
     assert!(
         handle_write_property_multiple(&mut db, &buf).is_err(),
@@ -344,7 +344,7 @@ fn write_property_multiple_cross_object_name_move() {
         ],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
     handle_write_property_multiple(&mut db, &buf).unwrap();
     assert_eq!(db.get(&oid_a).unwrap().object_name(), "BV-A2");

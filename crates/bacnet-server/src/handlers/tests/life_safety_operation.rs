@@ -297,7 +297,7 @@ fn life_safety_properties_cannot_be_bypassed_through_write_property_multiple() {
         }],
     };
     let mut encoded = BytesMut::new();
-    request.encode(&mut encoded);
+    request.encode(&mut encoded).unwrap();
 
     let error = handle_write_property_multiple(&mut db, &encoded).unwrap_err();
     assert_protocol_error(error, ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED);

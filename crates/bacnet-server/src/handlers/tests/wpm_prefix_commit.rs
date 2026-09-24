@@ -28,7 +28,7 @@ fn encode_request(oid: ObjectIdentifier, properties: Vec<BACnetPropertyValue>) -
         }],
     };
     let mut bytes = BytesMut::new();
-    request.encode(&mut bytes);
+    request.encode(&mut bytes).unwrap();
     bytes
 }
 

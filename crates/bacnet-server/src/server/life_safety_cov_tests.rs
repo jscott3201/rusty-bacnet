@@ -581,7 +581,7 @@ async fn network_write_property_and_multiple_use_exact_status_deltas() {
         }],
     };
     let mut encoded = BytesMut::new();
-    request.encode(&mut encoded);
+    request.encode(&mut encoded).unwrap();
     fixture
         .dispatch(
             3,

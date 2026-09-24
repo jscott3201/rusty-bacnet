@@ -274,7 +274,8 @@ async fn audit_reporter_monitored_objects_network_writes_are_denied_without_muta
                             ],
                         }],
                     }
-                    .encode(&mut bytes);
+                    .encode(&mut bytes)
+                    .unwrap();
                     ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE
                 } else {
                     WritePropertyRequest {

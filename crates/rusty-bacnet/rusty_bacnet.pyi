@@ -1494,6 +1494,10 @@ class BACnetClient:
         """Write multiple properties on a remote device (WritePropertyMultiple).
 
         ``specs`` is ``[(object_id, [(property_id, value, priority, array_index), ...]), ...]``.
+        Empty request/property lists, ALL/REQUIRED/OPTIONAL targets and u8
+        priorities outside 1..16 raise ValueError synchronously for the whole
+        request. Priorities outside u8 raise OverflowError. None, index zero,
+        proprietary properties, NULL and empty list values remain allowed.
         """
         ...
 
@@ -1693,7 +1697,13 @@ class BACnetClient:
             ]
         ],
     ) -> None:
-        """Write multiple properties to a device by instance number (auto-routing)."""
+        """Write multiple properties to a device by instance number (auto-routing).
+
+        Same whole-request validation as write_property_multiple, synchronously
+        before discovery or dispatch: nonempty request/property lists, no special
+        selectors, priority None or 1..16. Invalid u8 priorities/structure raise
+        ValueError; priorities outside u8 raise OverflowError.
+        """
         ...
 
     async def add_device(

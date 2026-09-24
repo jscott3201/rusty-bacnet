@@ -152,7 +152,8 @@ fn multi_target_wpm(specs: Vec<(ObjectIdentifier, Vec<BACnetPropertyValue>)>) ->
             )
             .collect(),
     }
-    .encode(&mut bytes);
+    .encode(&mut bytes)
+    .unwrap();
     bytes.freeze()
 }
 
