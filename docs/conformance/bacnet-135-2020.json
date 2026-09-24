@@ -1725,7 +1725,40 @@
    ],
    "benchmarks": [],
    "public_claims": [],
-   "notes": "Split child of BACNET-12-OBJECT-MODEL (#182; behavior change - trailing bytes previously dropped between the single-element decoder and the arm now decide the write, and malformed value payloads map to PROPERTY / INVALID_DATA_ENCODING instead of the SERVICES/OTHER a propagated raw decoding error produced). A value TLV-truncated so far that framing breaks is refused by the shared incremental service grammar before that write is attempted. Unlocks covered here: MSI Alarm_Values whole-list writes (the pin in handlers/list.rs flipped from pinned failure to per-element-validated success) and the datetime-paired value properties completing #270 (DateTime Value PV / Priority_Array entries, Relinquish_Default on DateTime Value + DateTime Pattern Value; see BACNET-12-RELINQUISH-DEFAULT-WRITABILITY). #401 adds the narrow zero-element exception for Fault_Signals; other empty propertyValue payloads remain refused. WPM decodes and commits each complete attempt in order and stops at the first failure. Known residues (follow-ups, not regressions): AddListElement/RemoveListElement still break their listOfElements loop on an undecodable element instead of erroring (#182's wider scope); Enumerated contents wider than four octets still truncate to u32 (#277, explicitly untouched); and properties declared SEQUENCE OF beyond the four reference arms (e.g. LIST_OF_OBJECT_PROPERTY_REFERENCES) keep their pre-existing arm-level behavior."
+   "notes": "Split child of BACNET-12-OBJECT-MODEL (#182; behavior change - trailing bytes previously dropped between the single-element decoder and the arm now decide the write, and malformed value payloads map to PROPERTY / INVALID_DATA_ENCODING instead of the SERVICES/OTHER a propagated raw decoding error produced). A value TLV-truncated so far that framing breaks is refused by the shared incremental service grammar before that write is attempted. Unlocks covered here: MSI Alarm_Values whole-list writes (the pin in handlers/list.rs flipped from pinned failure to per-element-validated success) and the datetime-paired value properties completing #270 (DateTime Value PV / Priority_Array entries, Relinquish_Default on DateTime Value + DateTime Pattern Value; see BACNET-12-RELINQUISH-DEFAULT-WRITABILITY). #401 adds the narrow zero-element exception for Fault_Signals; other empty propertyValue payloads remain refused. WPM decodes and commits each complete attempt in order and stops at the first failure. AddListElement/RemoveListElement now validate all elements before mutation and reject malformed tails atomically (#279). Remaining separate residues: Enumerated contents wider than four octets still truncate to u32 (#277, explicitly untouched); and properties declared SEQUENCE OF beyond the four reference arms (e.g. LIST_OF_OBJECT_PROPERTY_REFERENCES) keep their pre-existing arm-level behavior."
+  },
+  {
+   "id": "BACNET-15-LIST-ELEMENT-OUTBOUND-VALIDATION",
+   "standard_anchor": "Clauses 15.1.1.1 and 15.2.1.1 (printed731/733, PDF733/735)",
+   "priority": "P1",
+   "requirement_summary": "Typed AddListElement and RemoveListElement requests require a nonzero optional array index and one or more completely framed encoded elements. Whole-request preflight precedes buffer append and client transaction admission. Both Python methods validate synchronously before future creation or client access.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-services/src/list_manipulation.rs::validate",
+    "crates/bacnet-services/src/list_manipulation.rs::validate_elements_framing",
+    "crates/bacnet-client/src/client/file_list.rs::add_list_element",
+    "crates/rusty-bacnet/src/client/client_methods/file_list_private_text_life.rs::remove_list_element"
+   ],
+   "positive_tests": [
+    "crates/bacnet-services/src/list_validation_tests.rs::list_outbound_structural_only_preserves_empty_values_vendor_context_and_boolean",
+    "crates/bacnet-services/src/list_validation_tests.rs::list_outbound_depth_budget_includes_service_wrapper_and_tag_length_limit",
+    "crates/bacnet-client/src/client/list_validation_tests.rs::list_validation_both_services_preserve_structural_values_and_exact_wire",
+    "crates/rusty-bacnet/tests/test_list_validation.py::test_both_services_preserve_structural_values_and_exact_wire"
+   ],
+   "negative_tests": [
+    "crates/bacnet-services/src/list_validation_tests.rs::list_outbound_invalid_tail_preserves_existing_buffer",
+    "crates/bacnet-services/src/list_validation_tests.rs::list_outbound_empty_zero_index_and_bad_framing_are_transactional",
+    "crates/bacnet-client/src/client/list_validation_tests.rs::list_validation_invalid_requests_do_not_admit_or_send",
+    "crates/rusty-bacnet/tests/test_list_validation.py::test_invalid_requests_synchronously_before_start_or_address",
+    "crates/rusty-bacnet/tests/test_list_validation.py::test_invalid_requests_send_no_prefix"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md List Manipulation",
+    "docs/python-api.md List Manipulation",
+    "crates/rusty-bacnet/rusty_bacnet.pyi list methods"
+   ],
+   "notes": "Refs #798. Local structural preflight reuses tag decoding and its 1 MiB per-tag length bound and 32-level context depth, including the service outer [3]. Application Boolean consumes no payload. Empty-valued elements, context/constructed/vendor values, unknown application tags and opaque primitive contents remain available; this does not validate every primitive representation or the remote property datatype. A malformed late tail leaves the existing output prefix unchanged. Native u32 extraction failures remain Python OverflowError; index zero, empty bytes and framing failures become synchronous ValueError. Inbound grammar/error precedence and #279 all-elements-before-mutation behavior are unchanged and retain independent raw fixtures. No broader list-property or complete service conformance claim."
   },
   {
    "id": "BACNET-15-WPM-OUTBOUND-VALIDATION",

@@ -895,6 +895,8 @@ mod device_events_tests;
 #[cfg(test)]
 mod event_notification_tests;
 #[cfg(test)]
+mod list_validation_tests;
+#[cfg(test)]
 mod peer_max_apdu_tests;
 #[cfg(test)]
 mod peer_segmentation_tests;

@@ -1,4 +1,4 @@
-//! AddListElement / RemoveListElement services per ASHRAE 135-2020 Clause 15.3.
+//! AddListElement / RemoveListElement services per ASHRAE 135-2020 Clauses 15.1 and 15.2.
 
 use bacnet_encoding::{primitives, tags};
 use bacnet_types::enums::PropertyIdentifier;
@@ -19,7 +19,30 @@ pub struct ListElementRequest {
 }
 
 impl ListElementRequest {
-    pub fn encode(&self, buf: &mut BytesMut) {
+    /// Validate local outbound constraints without interpreting element values.
+    ///
+    /// Requires elements and a nonzero optional index. Tag headers, lengths and
+    /// balanced context nesting use the shared parser limits, counting the outer
+    /// service [3] wrapper. Application Boolean has no payload octets. Primitive
+    /// value forms, vendor semantics and remote property types are not checked.
+    pub fn validate(&self) -> Result<(), Error> {
+        if self.property_array_index == Some(0) {
+            return Err(Error::Encoding(
+                "ListElement array index must be nonzero".into(),
+            ));
+        }
+        if self.list_of_elements.is_empty() {
+            return Err(Error::Encoding(
+                "ListElement requires at least one encoded element".into(),
+            ));
+        }
+        validate_elements_framing(&self.list_of_elements)
+            .map_err(|error| Error::Encoding(format!("ListElement framing: {error}")))
+    }
+
+    /// Encode transactionally; invalid input leaves the caller's buffer unchanged.
+    pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
+        self.validate()?;
         // [0] objectIdentifier
         primitives::encode_ctx_object_id(buf, 0, &self.object_identifier);
         // [1] propertyIdentifier
@@ -32,6 +55,7 @@ impl ListElementRequest {
         tags::encode_opening_tag(buf, 3);
         buf.extend_from_slice(&self.list_of_elements);
         tags::encode_closing_tag(buf, 3);
+        Ok(())
     }
 
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
@@ -108,6 +132,50 @@ impl ListElementRequest {
     }
 }
 
+// The surrounding service [3] is already open: callers cannot close it from
+// within the element bytes, and it consumes one slot of the shared depth limit.
+// This framing-only walk deliberately does not decode application values.
+fn validate_elements_framing(data: &[u8]) -> Result<(), Error> {
+    let mut open_tags = [0; tags::MAX_CONTEXT_NESTING_DEPTH];
+    open_tags[0] = 3;
+    let mut depth = 1;
+    let mut offset = 0;
+    while offset < data.len() {
+        let (tag, next) = tags::decode_tag(data, offset)?;
+        if tag.is_opening {
+            if depth == open_tags.len() {
+                return Err(Error::decoding(
+                    offset,
+                    "context nesting exceeds shared limit",
+                ));
+            }
+            open_tags[depth] = tag.number;
+            depth += 1;
+            offset = next;
+        } else if tag.is_closing {
+            if depth == 1 || open_tags[depth - 1] != tag.number {
+                return Err(Error::decoding(
+                    offset,
+                    "unmatched or mismatched closing tag",
+                ));
+            }
+            depth -= 1;
+            offset = next;
+        } else if tag.class == tags::TagClass::Application && tag.number == tags::app_tag::BOOLEAN {
+            offset = next;
+        } else {
+            offset = next
+                .checked_add(tag.length as usize)
+                .filter(|&end| end <= data.len())
+                .ok_or_else(|| Error::decoding(next, "tag contents exceed element bytes"))?;
+        }
+    }
+    if depth != 1 {
+        return Err(Error::decoding(offset, "unclosed context tag"));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -138,7 +206,7 @@ mod tests {
             list_of_elements: elements.clone(),
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         let decoded = ListElementRequest::decode(&buf).unwrap();
         assert_eq!(decoded.object_identifier, req.object_identifier);
         assert_eq!(decoded.property_identifier, req.property_identifier);
@@ -156,7 +224,7 @@ mod tests {
             list_of_elements: elements.clone(),
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         let decoded = ListElementRequest::decode(&buf).unwrap();
         assert_eq!(decoded.property_array_index, Some(3));
         assert_eq!(decoded.list_of_elements, elements);
@@ -227,7 +295,7 @@ mod tests {
             list_of_elements: vec![0x21, 0x2A],
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         assert!(ListElementRequest::decode(&buf[..1]).is_err());
     }
 
@@ -240,7 +308,7 @@ mod tests {
             list_of_elements: vec![0x21, 0x2A],
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         assert!(ListElementRequest::decode(&buf[..3]).is_err());
     }
 
@@ -253,7 +321,7 @@ mod tests {
             list_of_elements: vec![0x21, 0x2A],
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         let half = buf.len() / 2;
         assert!(ListElementRequest::decode(&buf[..half]).is_err());
     }
@@ -263,3 +331,7 @@ mod tests {
         assert!(ListElementRequest::decode(&[0xFF, 0xFF, 0xFF]).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "list_validation_tests.rs"]
+mod validation_tests;

@@ -217,6 +217,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     }
 
     /// Add elements to a list property on a remote device.
+    ///
+    /// Rejects index zero, empty elements and malformed tag framing before
+    /// transaction admission or traffic. Element datatype remains target-owned.
     pub async fn add_list_element(
         &self,
         destination_mac: &[u8],
@@ -234,7 +237,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             list_of_elements,
         };
         let mut buf = BytesMut::new();
-        request.encode(&mut buf);
+        request.encode(&mut buf)?;
 
         let _ = self
             .confirmed_request(
@@ -248,6 +251,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     }
 
     /// Remove elements from a list property on a remote device.
+    ///
+    /// Rejects index zero, empty elements and malformed tag framing before
+    /// transaction admission or traffic. Element datatype remains target-owned.
     pub async fn remove_list_element(
         &self,
         destination_mac: &[u8],
@@ -265,7 +271,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             list_of_elements,
         };
         let mut buf = BytesMut::new();
-        request.encode(&mut buf);
+        request.encode(&mut buf)?;
 
         let _ = self
             .confirmed_request(
