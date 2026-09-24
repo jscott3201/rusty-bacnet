@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **SC Hub reciprocal WebSocket Close (Refs #776):** registered, pre-Connect
+  and graceful Disconnect-Ack-wait peers receive Tungstenite's queued Close
+  reply through the existing bounded lease cleanup. The Hub preserves the peer's
+  allowed code/reason, removes only the matching registration and reclaims its
+  active slot. A peer closing before Disconnect-Ack still produces a forced
+  shutdown outcome; forceful abort may forgo the reply. No TLS `close_notify`
+  or broader Annex AB conformance claim is added.
+
 - **Endpoint ReadRange and source Audit READ (Refs #771, #345):** the shared
   endpoint client initiates unsegmented ReadRange through the same prepared
   request, retry, cancellation and source-reporting owners as ReadProperty.

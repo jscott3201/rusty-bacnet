@@ -49,17 +49,8 @@ pub(super) async fn run(
                 // Hub graceful shutdown: Disconnect exchange (established) or
                 // silent Close (half-handshake) owns this task from here;
                 // the existing lease cleanup still retires the registration.
-                super::graceful::exchange(
-                    peer_addr,
-                    &mut read,
-                    &write,
-                    &clients,
-                    lease.vmac,
-                    &close_requested,
-                    &close_notify,
-                    &graceful,
-                )
-                .await;
+                super::graceful::exchange(peer_addr, &mut read, &write, &clients, lease, &graceful)
+                    .await;
                 break;
             };
             next
@@ -67,6 +58,9 @@ pub(super) async fn run(
         let Some(msg_result) = msg_result else {
             break;
         };
+        if matches!(&msg_result, Ok(Message::Close(_))) {
+            lease.note_peer_close();
+        }
         #[cfg(test)]
         deadline.received.fetch_add(1, Ordering::Release);
         if close_requested.load(Ordering::Acquire) {

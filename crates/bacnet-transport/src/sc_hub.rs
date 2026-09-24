@@ -617,3 +617,6 @@ mod outcome_tests;
 
 #[cfg(test)]
 mod relay_budget_tests;
+
+#[cfg(test)]
+mod peer_close_tests;
