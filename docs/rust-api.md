@@ -928,6 +928,15 @@ notification state. The served Table 12-61 surface no longer includes the
 previous compatibility-only `Status_Flags`, `Out_Of_Service`, or `Reliability`
 properties.
 
+`bacnet_server::event_enrollment::evaluate_event_enrollments_report` returns
+one `EventEnrollmentEvaluationReport` containing committed `transitions`,
+`reliability_results`, and typed `diagnostics`. `ObservationUnavailable` remains
+distinct from an ordinary `NoTransition`, and Reliability commit diagnostics keep
+their own stage. `evaluate_event_enrollments` deliberately returns only event
+transitions. The pre-1.0 duplicate detailed report API has been removed; use the
+unqualified types and complete report entrypoint. The public report contract is
+covered by [the external-crate tests](../crates/bacnet-server/tests/event_enrollment_report.rs).
+
 #### Logging & Trending (5)
 
 | Type | Constructor |

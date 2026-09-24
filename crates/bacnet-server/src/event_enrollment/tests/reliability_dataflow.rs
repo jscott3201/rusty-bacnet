@@ -85,7 +85,7 @@ fn source_rejection_does_not_suppress_changed_reliability_fault_reentry() {
     let enrollment_oid = enrollment.object_identifier();
     db.add(Box::new(enrollment)).unwrap();
 
-    let first = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    let first = evaluate_event_enrollments_report(&mut db, 1);
     assert_eq!(first.reliability_results.len(), 1);
     assert_eq!(
         first.reliability_results[0].new_reliability,
@@ -93,10 +93,10 @@ fn source_rejection_does_not_suppress_changed_reliability_fault_reentry() {
     );
     assert!(first
         .diagnostics
-        .contains(&EventEnrollmentDetailedEvaluationDiagnostic {
+        .contains(&EventEnrollmentEvaluationDiagnostic {
             enrollment_oid,
-            stage: EventEnrollmentDetailedEvaluationStage::EvaluationSource,
-            outcome: EventEnrollmentDetailedEvaluationOutcome::Rejected,
+            stage: EventEnrollmentEvaluationStage::EvaluationSource,
+            outcome: EventEnrollmentEvaluationOutcome::Rejected,
         }));
     assert_eq!(
         timestamp_at(&db, enrollment_oid, 2),
@@ -118,7 +118,7 @@ fn source_rejection_does_not_suppress_changed_reliability_fault_reentry() {
         )
         .unwrap();
 
-    let second = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    let second = evaluate_event_enrollments_report(&mut db, 1);
     assert_eq!(second.reliability_results.len(), 1);
     assert_eq!(
         second.reliability_results[0].previous_reliability,
@@ -137,10 +137,10 @@ fn source_rejection_does_not_suppress_changed_reliability_fault_reentry() {
     );
     assert!(second
         .diagnostics
-        .contains(&EventEnrollmentDetailedEvaluationDiagnostic {
+        .contains(&EventEnrollmentEvaluationDiagnostic {
             enrollment_oid,
-            stage: EventEnrollmentDetailedEvaluationStage::EvaluationSource,
-            outcome: EventEnrollmentDetailedEvaluationOutcome::Rejected,
+            stage: EventEnrollmentEvaluationStage::EvaluationSource,
+            outcome: EventEnrollmentEvaluationOutcome::Rejected,
         }));
     assert_eq!(reliability(&db, enrollment_oid), Reliability::OVER_RANGE);
     assert_eq!(

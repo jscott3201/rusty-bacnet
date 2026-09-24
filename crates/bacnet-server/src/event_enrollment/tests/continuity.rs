@@ -103,17 +103,17 @@ fn public_snapshot(db: &mut ObjectDatabase, oid: ObjectIdentifier) -> PublicSnap
 }
 
 fn assert_observation_gap(
-    report: &EventEnrollmentDetailedEvaluationReport,
+    report: &EventEnrollmentEvaluationReport,
     enrollment_oid: ObjectIdentifier,
 ) {
     assert!(report.transitions.is_empty());
     assert!(report.reliability_results.is_empty());
     assert!(report
         .diagnostics
-        .contains(&EventEnrollmentDetailedEvaluationDiagnostic {
+        .contains(&EventEnrollmentEvaluationDiagnostic {
             enrollment_oid,
-            stage: EventEnrollmentDetailedEvaluationStage::Reliability,
-            outcome: EventEnrollmentDetailedEvaluationOutcome::ObservationUnavailable,
+            stage: EventEnrollmentEvaluationStage::Reliability,
+            outcome: EventEnrollmentEvaluationOutcome::ObservationUnavailable,
         }));
 }
 
@@ -176,7 +176,7 @@ fn removed_same_target_clears_all_continuity_and_restarts_full_delay() {
 
     let removed = db.remove(&target_oid).unwrap().unwrap();
     let before = public_snapshot(&mut db, enrollment_oid);
-    let report = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    let report = evaluate_event_enrollments_report(&mut db, 1);
     assert_observation_gap(&report, enrollment_oid);
     assert_private_reset(&db, enrollment_oid);
     assert_eq!(public_snapshot(&mut db, enrollment_oid), before);
@@ -224,7 +224,7 @@ fn cov_restore_and_valid_retarget_each_establish_a_fresh_baseline() {
     assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
 
     let mut removed = db.remove(&first_oid).unwrap().unwrap();
-    let report = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    let report = evaluate_event_enrollments_report(&mut db, 1);
     assert_observation_gap(&report, enrollment_oid);
     assert_private_reset(&db, enrollment_oid);
     set_input_value(removed.as_mut(), PropertyValue::Real(30.0));
@@ -292,12 +292,12 @@ fn change_of_state_does_not_reuse_pre_gap_last_offnormal_identity() {
 
     let mut removed = db.remove(&target_oid).unwrap().unwrap();
     set_input_value(removed.as_mut(), PropertyValue::Enumerated(0));
-    let report = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    let report = evaluate_event_enrollments_report(&mut db, 1);
     assert_observation_gap(&report, enrollment_oid);
     assert_private_reset(&db, enrollment_oid);
     db.add(removed).unwrap();
 
-    let restored = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    let restored = evaluate_event_enrollments_report(&mut db, 1);
     assert!(restored.transitions.is_empty());
     assert_eq!(
         db.get(&enrollment_oid)
@@ -332,7 +332,7 @@ fn retarget_to_missing_then_restore_clears_old_owner_and_restarts_delay() {
         missing_oid,
         PropertyIdentifier::PRESENT_VALUE,
     );
-    let report = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    let report = evaluate_event_enrollments_report(&mut db, 1);
     assert_observation_gap(&report, enrollment_oid);
     assert_private_reset(&db, enrollment_oid);
 
@@ -362,7 +362,7 @@ fn foreign_target_gap_clears_private_continuity_without_public_transition() {
         )))
         .unwrap();
     let before = public_snapshot(&mut db, enrollment_oid);
-    let report = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    let report = evaluate_event_enrollments_report(&mut db, 1);
     assert_observation_gap(&report, enrollment_oid);
     assert_private_reset(&db, enrollment_oid);
     assert_eq!(public_snapshot(&mut db, enrollment_oid), before);
@@ -476,7 +476,7 @@ fn transient_indexed_read_resets_once_and_preserves_public_coordinates() {
     );
     let before = public_snapshot(&mut db, enrollment_oid);
 
-    let report = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    let report = evaluate_event_enrollments_report(&mut db, 1);
     assert_observation_gap(&report, enrollment_oid);
     assert_private_reset(&db, enrollment_oid);
     assert_eq!(writes.load(Ordering::SeqCst), 1);
@@ -496,7 +496,7 @@ fn transient_monitored_reliability_read_clears_continuity() {
         source,
     );
 
-    let report = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    let report = evaluate_event_enrollments_report(&mut db, 1);
     assert_observation_gap(&report, enrollment_oid);
     assert_private_reset(&db, enrollment_oid);
     assert_eq!(writes.load(Ordering::SeqCst), 1);
@@ -542,7 +542,7 @@ fn missing_fault_status_flags_observation_clears_continuity() {
     let enrollment_oid = enrollment.object_identifier();
     db.add(Box::new(enrollment)).unwrap();
 
-    let report = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    let report = evaluate_event_enrollments_report(&mut db, 1);
     assert_observation_gap(&report, enrollment_oid);
     assert_private_reset(&db, enrollment_oid);
 }
@@ -591,7 +591,7 @@ fn floating_setpoint_gap_overwrites_queued_ownership_and_resets_once() {
     db.add(Box::new(enrollment)).unwrap();
     let before = public_snapshot(&mut db, enrollment_oid);
 
-    let report = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    let report = evaluate_event_enrollments_report(&mut db, 1);
     assert_observation_gap(&report, enrollment_oid);
     assert_private_reset(&db, enrollment_oid);
     assert_eq!(writes.load(Ordering::SeqCst), 1);
@@ -635,12 +635,12 @@ fn ownerless_floating_gap_discards_staged_ownership_without_source_write() {
     db.add(Box::new(enrollment)).unwrap();
     let before = public_snapshot(&mut db, enrollment_oid);
 
-    let report = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    let report = evaluate_event_enrollments_report(&mut db, 1);
     assert_observation_gap(&report, enrollment_oid);
     assert_private_reset(&db, enrollment_oid);
     assert!(!report.diagnostics.iter().any(|diagnostic| {
-        diagnostic.stage == EventEnrollmentDetailedEvaluationStage::EvaluationSource
-            && diagnostic.outcome == EventEnrollmentDetailedEvaluationOutcome::Rejected
+        diagnostic.stage == EventEnrollmentEvaluationStage::EvaluationSource
+            && diagnostic.outcome == EventEnrollmentEvaluationOutcome::Rejected
     }));
     assert_eq!(writes.load(Ordering::SeqCst), 1);
     assert!(!db.enrollment_eval_state_invalidated(&enrollment_oid));
@@ -670,21 +670,21 @@ fn rejected_gap_resets_remain_visible_alongside_observation_diagnostic() {
     let enrollment_oid = enrollment.object_identifier();
     db.add(Box::new(enrollment)).unwrap();
 
-    let report = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    let report = evaluate_event_enrollments_report(&mut db, 1);
     assert_observation_gap(&report, enrollment_oid);
     assert!(report
         .diagnostics
-        .contains(&EventEnrollmentDetailedEvaluationDiagnostic {
+        .contains(&EventEnrollmentEvaluationDiagnostic {
             enrollment_oid,
-            stage: EventEnrollmentDetailedEvaluationStage::EvaluationSource,
-            outcome: EventEnrollmentDetailedEvaluationOutcome::Rejected,
+            stage: EventEnrollmentEvaluationStage::EvaluationSource,
+            outcome: EventEnrollmentEvaluationOutcome::Rejected,
         }));
     assert!(report
         .diagnostics
-        .contains(&EventEnrollmentDetailedEvaluationDiagnostic {
+        .contains(&EventEnrollmentEvaluationDiagnostic {
             enrollment_oid,
-            stage: EventEnrollmentDetailedEvaluationStage::EvaluationState,
-            outcome: EventEnrollmentDetailedEvaluationOutcome::Rejected,
+            stage: EventEnrollmentEvaluationStage::EvaluationState,
+            outcome: EventEnrollmentEvaluationOutcome::Rejected,
         }));
     assert_eq!(writes.load(Ordering::SeqCst), 1);
     assert!(db.enrollment_eval_state_invalidated(&enrollment_oid));
@@ -703,12 +703,12 @@ fn ownerless_gap_skips_redundant_rejected_source_reset() {
     let enrollment_oid = enrollment.object_identifier();
     db.add(Box::new(enrollment)).unwrap();
 
-    let report = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    let report = evaluate_event_enrollments_report(&mut db, 1);
     assert_observation_gap(&report, enrollment_oid);
     assert_private_reset(&db, enrollment_oid);
     assert!(!report.diagnostics.iter().any(|diagnostic| {
-        diagnostic.stage == EventEnrollmentDetailedEvaluationStage::EvaluationSource
-            && diagnostic.outcome == EventEnrollmentDetailedEvaluationOutcome::Rejected
+        diagnostic.stage == EventEnrollmentEvaluationStage::EvaluationSource
+            && diagnostic.outcome == EventEnrollmentEvaluationOutcome::Rejected
     }));
     assert_eq!(writes.load(Ordering::SeqCst), 1);
     assert!(!db.enrollment_eval_state_invalidated(&enrollment_oid));
@@ -723,7 +723,7 @@ fn invalid_indexed_configuration_remains_configuration_error() {
     let enrollment = ReferenceValueObject::new(Some(indexed_reference_value(target_oid, 17)));
     db.add(Box::new(enrollment)).unwrap();
 
-    let report = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    let report = evaluate_event_enrollments_report(&mut db, 1);
     assert!(report.transitions.is_empty());
     assert_eq!(report.reliability_results.len(), 1);
     assert_eq!(
@@ -731,6 +731,6 @@ fn invalid_indexed_configuration_remains_configuration_error() {
         bacnet_types::enums::Reliability::CONFIGURATION_ERROR
     );
     assert!(!report.diagnostics.iter().any(|diagnostic| {
-        diagnostic.outcome == EventEnrollmentDetailedEvaluationOutcome::ObservationUnavailable
+        diagnostic.outcome == EventEnrollmentEvaluationOutcome::ObservationUnavailable
     }));
 }

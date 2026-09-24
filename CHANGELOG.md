@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Event Enrollment evaluation now exposes one complete report through
+  `evaluate_event_enrollments_report` (#815). The unqualified report includes
+  `reliability_results`, the `Reliability` diagnostic stage and the distinct
+  `ObservationUnavailable` outcome. This pre-1.0 API change removes the duplicate
+  detailed API and lossy projection; `evaluate_event_enrollments` remains a
+  transitions-only convenience. Evaluation and notification delivery are unchanged.
+
 - COV now pairs the selected sample with validated optional Status_Flags (#817).
   Status-only changes bypass numeric thresholds, and property reports include
   present flags once per object. The pre-1.0 table API replaces the sample-only

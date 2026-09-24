@@ -3,10 +3,7 @@ use bacnet_objects::event::EventStateChange;
 use bacnet_types::enums::EventType;
 use bacnet_types::primitives::ObjectIdentifier;
 
-use super::{
-    evaluate_event_enrollments_for_delivery, EventEnrollmentDetailedEvaluationReport,
-    EventEnrollmentEvaluationReport,
-};
+use super::{evaluate_event_enrollments_for_delivery, EventEnrollmentEvaluationReport};
 
 /// A state transition detected during event enrollment evaluation.
 #[derive(Debug, Clone, PartialEq)]
@@ -34,6 +31,10 @@ pub struct EventEnrollmentTransition {
 /// transition actions for every indicated transition that fires — same-state
 /// included — and returns the fired transitions.
 ///
+/// This convenience returns only event transitions. Use
+/// [`evaluate_event_enrollments_report`] for committed Reliability results and
+/// observation/commit diagnostics from the same evaluation pass.
+///
 /// `interval_secs` is the driving task's evaluation period in wall-clock
 /// seconds; the lifecycle passes its (clamped to >= 1)
 /// `event_enrollment_interval_secs`. The conversion is never-fire-early, and
@@ -46,27 +47,14 @@ pub fn evaluate_event_enrollments(
     evaluate_event_enrollments_report(db, interval_secs).transitions
 }
 
-/// Evaluate all EventEnrollment objects and expose legacy commit diagnostics.
+/// Evaluate all EventEnrollment objects and return the complete report.
 ///
-/// This preserves the original report shape. Reliability results and typed
-/// observation diagnostics are available from
-/// [`evaluate_event_enrollments_detailed_report`].
+/// Includes committed Reliability results and typed evaluation, observation,
+/// and commit diagnostics. Only results whose complete object-owned commit
+/// succeeds appear in `transitions` or `reliability_results`.
 pub fn evaluate_event_enrollments_report(
     db: &mut ObjectDatabase,
     interval_secs: u64,
 ) -> EventEnrollmentEvaluationReport {
-    evaluate_event_enrollments_detailed_report(db, interval_secs).into_legacy()
-}
-
-/// Evaluate all EventEnrollment objects and expose every detailed result.
-///
-/// Unlike [`evaluate_event_enrollments_report`], this additive API includes
-/// committed Reliability results plus typed Reliability and observation
-/// diagnostics. Only results whose complete object-owned commit succeeds
-/// appear in `transitions` or `reliability_results`.
-pub fn evaluate_event_enrollments_detailed_report(
-    db: &mut ObjectDatabase,
-    interval_secs: u64,
-) -> EventEnrollmentDetailedEvaluationReport {
     evaluate_event_enrollments_for_delivery(db, interval_secs).report
 }
