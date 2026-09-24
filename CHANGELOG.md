@@ -22,6 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Pre-1.0 AddListElement/RemoveListElement request encoding now returns `Result`
+  and rejects index zero, empty elements and malformed tag framing transactionally.
+  Rust clients reject before admission; both Python methods validate synchronously.
+  Empty-valued/context/constructed/vendor elements remain opaque; inbound target
+  validation and malformed-list atomicity are unchanged (#798).
+
 - Pre-1.0 WPM request encoding now returns `Result` and validates all writes
   transactionally. Empty outer/nested write lists, special property selectors and
   invalid priorities fail before client admission/discovery. Both Python WPM

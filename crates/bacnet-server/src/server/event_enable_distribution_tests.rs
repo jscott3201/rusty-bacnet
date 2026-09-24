@@ -222,7 +222,7 @@ impl Fixture {
             list_of_elements: vec![0x21, value],
         };
         let mut encoded = BytesMut::new();
-        request.encode(&mut encoded);
+        request.encode(&mut encoded).unwrap();
         let mut db = self.db.write().await;
         handle_add_list_element(&mut db, &encoded)
             .expect("AddListElement is the working network Alarm_Values route");
@@ -236,7 +236,7 @@ impl Fixture {
             list_of_elements: vec![0x21, value],
         };
         let mut encoded = BytesMut::new();
-        request.encode(&mut encoded);
+        request.encode(&mut encoded).unwrap();
         let mut db = self.db.write().await;
         handle_remove_list_element(&mut db, &encoded)
             .expect("RemoveListElement must remove the commissioned alarm value");

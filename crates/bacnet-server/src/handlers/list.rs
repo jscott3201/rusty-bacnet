@@ -162,13 +162,19 @@ mod tests {
         array_index: Option<u32>,
     ) -> BytesMut {
         let mut encoded = BytesMut::new();
-        ListElementRequest {
-            object_identifier: oid,
-            property_identifier: PropertyIdentifier::ALARM_VALUES,
-            property_array_index: array_index,
-            list_of_elements,
+        // Raw ingress fixture: intentionally permits malformed/empty/index-zero requests.
+        bacnet_encoding::primitives::encode_ctx_object_id(&mut encoded, 0, &oid);
+        bacnet_encoding::primitives::encode_ctx_enumerated(
+            &mut encoded,
+            1,
+            PropertyIdentifier::ALARM_VALUES.to_raw(),
+        );
+        if let Some(index) = array_index {
+            bacnet_encoding::primitives::encode_ctx_unsigned(&mut encoded, 2, u64::from(index));
         }
-        .encode(&mut encoded);
+        encoded.extend_from_slice(&[0x3e]);
+        encoded.extend_from_slice(&list_of_elements);
+        encoded.extend_from_slice(&[0x3f]);
         encoded
     }
 
@@ -380,7 +386,7 @@ mod tests {
             list_of_elements: framed_bytes(&[framed_dest(20)]),
         };
         let mut buf = BytesMut::new();
-        request.encode(&mut buf);
+        request.encode(&mut buf).unwrap();
         handle_remove_list_element(&mut db, &buf).unwrap();
         assert_eq!(device_instances(&db, oid), vec![10, 30]);
         // The wire form re-encodes as exactly the two remaining destinations.
@@ -401,7 +407,7 @@ mod tests {
             list_of_elements: framed_bytes(&[framed_dest(99)]),
         };
         let mut buf = BytesMut::new();
-        request.encode(&mut buf);
+        request.encode(&mut buf).unwrap();
         handle_remove_list_element(&mut db, &buf).unwrap();
         assert_eq!(device_instances(&db, oid), vec![10, 20]);
         assert_eq!(
@@ -421,7 +427,7 @@ mod tests {
             list_of_elements: framed_bytes(&[framed_dest(20), framed_dest(30)]),
         };
         let mut buf = BytesMut::new();
-        request.encode(&mut buf);
+        request.encode(&mut buf).unwrap();
         handle_add_list_element(&mut db, &buf).unwrap();
         assert_eq!(device_instances(&db, oid), vec![10, 20, 30]);
         assert_eq!(
@@ -443,7 +449,7 @@ mod tests {
             list_of_elements: vec![0x21, 0x2A],
         };
         let mut buf = BytesMut::new();
-        request.encode(&mut buf);
+        request.encode(&mut buf).unwrap();
         let err = handle_remove_list_element(&mut db, &buf).unwrap_err();
         match err {
             Error::Protocol { class, code } => {

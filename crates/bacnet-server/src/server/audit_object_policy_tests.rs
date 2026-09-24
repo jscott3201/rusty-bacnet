@@ -521,7 +521,8 @@ async fn object_audit_policy_also_filters_list_and_file_execution_failures() {
             property_array_index: None,
             list_of_elements: encoded(&PropertyValue::CharacterString("not a list".into())),
         }
-        .encode(&mut bytes);
+        .encode(&mut bytes)
+        .unwrap();
         assert!(matches!(
             dispatch(
                 &f.server,

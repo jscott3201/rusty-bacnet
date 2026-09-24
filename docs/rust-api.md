@@ -236,8 +236,20 @@ use bacnet_services::alarm_event::{
 ### List Manipulation
 
 ```rust
-use bacnet_services::list_manipulation::{AddListElementRequest, RemoveListElementRequest};
+use bacnet_services::list_manipulation::ListElementRequest;
 ```
+
+The shared AddListElement/RemoveListElement request exposes `validate()` and
+transactional `encode(&mut BytesMut) -> Result<(), Error>`. A supplied array index
+must be nonzero, and `list_of_elements` must contain at least one complete encoded
+element. Validation checks tag framing with the shared parser limits (1 MiB per
+primitive tag and 32 context levels including the service's outer `[3]`). It
+honors application Boolean's no-payload encoding and preserves empty-valued,
+constructed, context and vendor values. It does not validate every application
+primitive or infer the remote property's datatype. Invalid requests leave the
+output buffer unchanged; both client methods reject before transaction admission
+or traffic. Inbound decoding and target property validation remain separate.
+
 
 ### Private Transfer
 

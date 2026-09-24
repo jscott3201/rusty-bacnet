@@ -287,26 +287,25 @@ pub(super) fn cases() -> Vec<(ConfirmedServiceChoice, Bytes, MutationTarget)> {
             object_identifier: oid(ObjectType::BINARY_VALUE, 2)
         }
     );
-    case!(
-        ADD_LIST_ELEMENT,
-        AddListElement,
-        ListElementRequest {
+    for (service, element) in [
+        (ConfirmedServiceChoice::ADD_LIST_ELEMENT, 2),
+        (ConfirmedServiceChoice::REMOVE_LIST_ELEMENT, 1),
+    ] {
+        let request = ListElementRequest {
             object_identifier: oid(ObjectType::MULTI_STATE_INPUT, 1),
             property_identifier: PropertyIdentifier::ALARM_VALUES,
             property_array_index: None,
-            list_of_elements: value(PropertyValue::Unsigned(2)),
-        }
-    );
-    case!(
-        REMOVE_LIST_ELEMENT,
-        RemoveListElement,
-        ListElementRequest {
-            object_identifier: oid(ObjectType::MULTI_STATE_INPUT, 1),
-            property_identifier: PropertyIdentifier::ALARM_VALUES,
-            property_array_index: None,
-            list_of_elements: value(PropertyValue::Unsigned(1)),
-        }
-    );
+            list_of_elements: value(PropertyValue::Unsigned(element)),
+        };
+        let mut bytes = BytesMut::new();
+        request.encode(&mut bytes).unwrap();
+        let target = if service == ConfirmedServiceChoice::ADD_LIST_ELEMENT {
+            MutationTarget::AddListElement(request)
+        } else {
+            MutationTarget::RemoveListElement(request)
+        };
+        cases.push((service, bytes.freeze(), target));
+    }
     case!(
         ATOMIC_WRITE_FILE,
         AtomicWriteFile,

@@ -1943,7 +1943,14 @@ class BACnetClient:
         list_of_elements: bytes,
         array_index: Optional[int] = None,
     ) -> None:
-        """Add elements to a list property (AddListElement service)."""
+        """Add elements to a list property (AddListElement service).
+        Requires nonempty, completely framed element bytes and a nonzero optional
+        index. Invalid framing/index zero raises ValueError synchronously before
+        client access; indexes outside u32 raise OverflowError. Empty-valued,
+        constructed/context/vendor elements are retained without remote datatype
+        validation. Shared limits: 1 MiB per tag, 32 context levels including the
+        service wrapper; application Boolean has no payload bytes.
+        """
         ...
 
     async def remove_list_element(
@@ -1954,7 +1961,14 @@ class BACnetClient:
         list_of_elements: bytes,
         array_index: Optional[int] = None,
     ) -> None:
-        """Remove elements from a list property (RemoveListElement service)."""
+        """Remove elements from a list property (RemoveListElement service).
+        Requires nonempty, completely framed element bytes and a nonzero optional
+        index. Invalid framing/index zero raises ValueError synchronously before
+        client access; indexes outside u32 raise OverflowError. Empty-valued,
+        constructed/context/vendor elements are retained without remote datatype
+        validation. Shared limits: 1 MiB per tag, 32 context levels including the
+        service wrapper; application Boolean has no payload bytes.
+        """
         ...
 
     # --- Private transfer ---

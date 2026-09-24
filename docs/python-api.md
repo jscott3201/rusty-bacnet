@@ -759,6 +759,16 @@ result = await client.atomic_write_file(
 
 ### List Manipulation
 
+Both methods require a nonempty sequence of complete encoded elements and a
+nonzero optional `array_index`. Empty-valued elements (for example an empty
+OctetString) are valid; an empty byte sequence is not. Invalid framing or index
+zero raises `ValueError` synchronously before future creation, address parsing or
+client access. Indexes outside native `u32` extraction raise `OverflowError`.
+Framing uses the shared 1 MiB per-tag length and 32-level context limits, including
+the service's outer `[3]`, and handles application Boolean without payload bytes.
+Context, constructed and vendor encodings remain opaque: this does not validate
+every application primitive or the remote property's datatype.
+
 #### `add_list_element(address, object_id, property_id, list_of_elements, array_index=None)`
 
 ```python

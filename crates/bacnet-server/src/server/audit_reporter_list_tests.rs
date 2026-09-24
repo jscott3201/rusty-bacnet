@@ -9,13 +9,15 @@ fn list_request(
     delta: Vec<u8>,
 ) -> Bytes {
     let mut bytes = BytesMut::new();
-    ListElementRequest {
-        object_identifier: target,
-        property_identifier: property,
-        property_array_index: index,
-        list_of_elements: delta,
+    // Preserve independently authored malformed inbound fixtures.
+    bacnet_encoding::primitives::encode_ctx_object_id(&mut bytes, 0, &target);
+    bacnet_encoding::primitives::encode_ctx_enumerated(&mut bytes, 1, property.to_raw());
+    if let Some(index) = index {
+        bacnet_encoding::primitives::encode_ctx_unsigned(&mut bytes, 2, u64::from(index));
     }
-    .encode(&mut bytes);
+    bytes.extend_from_slice(&[0x3e]);
+    bytes.extend_from_slice(&delta);
+    bytes.extend_from_slice(&[0x3f]);
     bytes.freeze()
 }
 

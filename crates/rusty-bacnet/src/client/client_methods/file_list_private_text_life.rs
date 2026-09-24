@@ -127,8 +127,15 @@ impl BACnetClient {
         array_index: Option<u32>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        let oid = object_id.to_rust();
-        let pid = property_id.to_rust();
+        let request = bacnet_services::list_manipulation::ListElementRequest {
+            object_identifier: object_id.to_rust(),
+            property_identifier: property_id.to_rust(),
+            property_array_index: array_index,
+            list_of_elements,
+        };
+        request
+            .validate()
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let mac = parse_address(&address)?;
@@ -138,9 +145,15 @@ impl BACnetClient {
                     PyRuntimeError::new_err("client not started — use 'async with'")
                 })?)
             };
-            c.add_list_element(&mac, oid, pid, array_index, list_of_elements)
-                .await
-                .map_err(to_py_err)?;
+            c.add_list_element(
+                &mac,
+                request.object_identifier,
+                request.property_identifier,
+                request.property_array_index,
+                request.list_of_elements,
+            )
+            .await
+            .map_err(to_py_err)?;
             Ok(())
         })
     }
@@ -158,8 +171,15 @@ impl BACnetClient {
         array_index: Option<u32>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        let oid = object_id.to_rust();
-        let pid = property_id.to_rust();
+        let request = bacnet_services::list_manipulation::ListElementRequest {
+            object_identifier: object_id.to_rust(),
+            property_identifier: property_id.to_rust(),
+            property_array_index: array_index,
+            list_of_elements,
+        };
+        request
+            .validate()
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let mac = parse_address(&address)?;
@@ -169,9 +189,15 @@ impl BACnetClient {
                     PyRuntimeError::new_err("client not started — use 'async with'")
                 })?)
             };
-            c.remove_list_element(&mac, oid, pid, array_index, list_of_elements)
-                .await
-                .map_err(to_py_err)?;
+            c.remove_list_element(
+                &mac,
+                request.object_identifier,
+                request.property_identifier,
+                request.property_array_index,
+                request.list_of_elements,
+            )
+            .await
+            .map_err(to_py_err)?;
             Ok(())
         })
     }
