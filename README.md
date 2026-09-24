@@ -222,6 +222,11 @@ beyond this isolated lab. See the [local-lab guide](https://jscott3201.github.io
 and [examples directory](examples/) for other setups; review their network and
 credential requirements before running them.
 
+In the current development checkout, Python `BACnetServer` exposes the native
+static `mutation_policy="permissive" | "deny_all"` option. Deny-all covers the existing network mutation services; reads
+and trusted local writes remain available. See the [policy scope](docs/mutation-policy.md)
+and `BACNET-LOCAL-MUTATION-POLICY` [evidence](docs/conformance/standard-135-2020-ledger.md#python-standalone-mutation-policy).
+
 ## CLI reads
 
 With the same local server running:

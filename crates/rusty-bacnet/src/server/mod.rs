@@ -110,6 +110,7 @@ pub struct BACnetServer {
     mstp_max_info_frames: u8,
     // Passwords
     dcc_password: Option<String>,
+    mutation_policy: bacnet_server::mutation::MutationPolicy,
     dcc_policy: server::DccPolicy,
     dcc_source_restriction: Option<server::DccSourceRestriction>,
     dcc_disable_rate_limit: Option<server::DccDisableRateLimit>,

@@ -2,7 +2,7 @@
 
 Rust operators can set `ServerConfig::mutation_policy` or call
 `.mutation_policy(bacnet_server::mutation::MutationPolicy::DenyAll)` on the generic,
-B/IP or SC server builder. The default, `Permissive`, preserves existing behavior:
+B/IP or SC server builder. The native default is `Permissive`:
 an absent authorizer allows; an installed authorizer must approve. `DenyAll` denies
 covered decisions even with an allow-all authorizer, without invoking it, using
 SERVICES / SERVICE_REQUEST_DENIED. Both modes accept any authorizer configuration.
@@ -78,16 +78,27 @@ SERVICES / SERVICE_REQUEST_DENIED.
   `set_present_value_local`, life-safety arming) stay ungated by design — the
   same documented bypass contract as the RB-09 precedent. No raw
   server-receive path skips `mutations::Request`.
-- The shared endpoint adapter stays read-only: mutation choices are rejected
-  through the existing responder (`UNRECOGNIZED_SERVICE`, or
-  `SEGMENTATION_NOT_SUPPORTED` for segmented traffic) with no second policy
-  gate and no mutation extension.
-- LifeSafetyOperation keeps its own authorizer without provenance; the same
-  unknown-origin gap exists there for consistency and is out of scope.
-- The Python surface exposes no mutation policy knobs: `write_property_local`
-  is trusted-local by design, the same contract as the Rust `write_local`.
-  Python-hosted servers therefore run the default permissive behavior for
-  network mutations.
+- The shared endpoint has a separate narrow [Device-write authorizer](rust-api.md#authorized-endpoint-device-writes);
+  this standalone policy does not configure it.
+- LifeSafetyOperation, DeviceCommunicationControl, ReinitializeDevice and Audit
+  keep their separate policy and configuration paths.
+
+## Python configuration
+
+`BACnetServer(..., mutation_policy="permissive")` selects the same native default.
+Set the keyword-only option to `"deny_all"` to deny valid inbound WriteProperty,
+WritePropertyMultiple, CreateObject, DeleteObject, AddListElement,
+RemoveListElement, AtomicWriteFile, SubscribeCOV, SubscribeCOVProperty and
+SubscribeCOVPropertyMultiple decisions through the existing Rust gate. Denials
+use SERVICES / SERVICE_REQUEST_DENIED (with WPM's existing failed-reference shape).
+No Python callback or separate authorization gate is installed.
+
+Other strings raise `ValueError`, and non-strings raise `TypeError` synchronously
+in the constructor, before startup drains registrations or performs transport
+I/O. Reads and trusted local `write_property_local` calls remain available under
+`"deny_all"`. The option does not configure DCC, ReinitializeDevice, LifeSafety,
+Audit or endpoint authorization, and does not establish a certificate principal.
+
 
 `BACnetServer::mutation_decision_counters()` exposes fixed per-service saturating
 `u64` totals, including after `stop()`: `allow_total`, `deny_total` (all denials),

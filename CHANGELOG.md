@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Python standalone mutation policy (Refs #768):** `BACnetServer` accepts the
+  keyword-only `mutation_policy="permissive" | "deny_all"`, validated before
+  startup and passed to the existing native gate. The native default remains
+  permissive; deny-all covers the ten existing mutation services while reads
+  and trusted local writes remain available. DCC, ReinitializeDevice, LifeSafety,
+  Audit and endpoint authorization stay separate. No Python callback is added.
+
 - **SC Hub unified transit budget (Refs #774, #476):** replace the unfrozen
   unicast-only Rust setting/validator with `with_relay_send_budget`,
   `relay_send_budget` and `validate_relay_send_budget`, and the Python keyword

@@ -202,6 +202,7 @@ mod tests {
             mstp_max_master: 127,
             mstp_max_info_frames: 1,
             dcc_password: None,
+            mutation_policy: bacnet_server::mutation::MutationPolicy::default(),
             dcc_policy: server::DccPolicy::default(),
             dcc_source_restriction: None,
             dcc_disable_rate_limit: None,

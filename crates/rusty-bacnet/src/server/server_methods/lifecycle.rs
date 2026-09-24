@@ -84,6 +84,7 @@ impl BACnetServer {
         let sc_heartbeat_timeout_ms = self.sc_heartbeat_timeout_ms;
         let ipv6_interface = self.ipv6_interface.clone();
         let dcc_password = self.dcc_password.clone();
+        let mutation_policy = self.mutation_policy;
         let dcc_policy = self.dcc_policy;
         let dcc_source_restriction = self.dcc_source_restriction.clone();
         let dcc_disable_rate_limit = self.dcc_disable_rate_limit;
@@ -201,6 +202,7 @@ impl BACnetServer {
 
             let mut builder = builder
                 .database(db)
+                .mutation_policy(mutation_policy)
                 .request_admission_policy(request_admission_policy)
                 .read_property_multiple_budget(read_property_multiple_budget)
                 .get_alarm_summary_budget(get_alarm_summary_budget)
