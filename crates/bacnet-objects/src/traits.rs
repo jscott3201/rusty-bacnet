@@ -87,6 +87,15 @@ pub trait BACnetObject: Send + Sync {
         crate::audit::ObjectAuditPolicy::default()
     }
 
+    /// Optional sealed built-in AV/BV policy assignment authority. Custom objects
+    /// remain on their ordinary writer path; adapters may forward this capability.
+    #[doc(hidden)]
+    fn audit_policy_authority_internal(
+        &mut self,
+    ) -> Option<crate::audit::AuditPolicyAuthority<'_>> {
+        None
+    }
+
     /// The optional built-in Reporter authority.
     #[doc(hidden)]
     fn audit_reporter_internal(&self) -> Option<&crate::audit::AuditReporterObject> {

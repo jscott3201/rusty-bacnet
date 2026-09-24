@@ -100,6 +100,14 @@ impl BinaryValueObject {
 }
 
 impl BACnetObject for BinaryValueObject {
+    fn audit_policy_authority_internal(
+        &mut self,
+    ) -> Option<crate::audit::AuditPolicyAuthority<'_>> {
+        Some(crate::audit::AuditPolicyAuthority::new(
+            &mut self.audit_policy,
+        ))
+    }
+
     fn audit_object_policy_internal(&self) -> crate::audit::ObjectAuditPolicy {
         self.audit_policy
     }

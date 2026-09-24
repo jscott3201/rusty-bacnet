@@ -105,3 +105,45 @@ class ObjectAuditPolicyTests(unittest.IsolatedAsyncioTestCase):
                         self.assertTrue(all(r["operation"] == rb.AuditOperation.WRITE for r in records))
                 finally: await child.stop()
             finally: await parent.stop()
+
+    async def test_unresolved_route_refuses_mandatory_policy_change_before_commit(self):
+        child = rb.BACnetServer(8131, interface="127.0.0.1", port=0)
+        child.add_audit_reporter(1, "reporter")
+        child.configure_audit_reporters([
+            {"instance": 1, "audit_level": "audit_all", "auditable_operations": 0,
+             "issue_confirmed_notifications": False}
+        ])
+        child.configure_audit_recipient({
+            "kind": "device",
+            "object_identifier": rb.ObjectIdentifier(rb.ObjectType.DEVICE, 8130),
+        })  # Valid provision, deliberately no immutable Device route.
+        child.add_analog_value(1, "av", audit_level="none", auditable_operations=0)
+        child.add_binary_value(1, "bv", audit_level="audit_all", auditable_operations=0)
+        await child.start()
+        try:
+            address = await child.local_address()
+            async with rb.BACnetClient(interface="127.0.0.1", port=0, apdu_timeout_ms=1000) as client:
+                cases = [
+                    (rb.ObjectType.ANALOG_VALUE, rb.PropertyIdentifier.AUDIT_LEVEL,
+                     rb.PropertyValue.enumerated(1)),
+                    (rb.ObjectType.BINARY_VALUE, rb.PropertyIdentifier.AUDITABLE_OPERATIONS,
+                     rb.PropertyValue.bit_string(7, b"\x80")),
+                ]
+                for kind, prop, changed in cases:
+                    target = rb.ObjectIdentifier(kind, 1)
+                    before = await client.read_property(address, target, prop)
+                    with self.subTest(kind=kind, property=prop):
+                        with self.assertRaises(rb.BacnetProtocolError) as caught:
+                            await client.write_property(address, target, prop, changed)
+                        self.assertEqual(caught.exception.error_class, rb.ErrorClass.SERVICES.to_raw())
+                        self.assertEqual(caught.exception.error_code, rb.ErrorCode.SERVICE_REQUEST_DENIED.to_raw())
+                        self.assertEqual(await client.read_property(address, target, prop), before)
+                        # Equal and NULL writes remain successful no-ops, and an
+                        # ordinary write is not upgraded into mandatory admission.
+                        await client.write_property(address, target, prop, before)
+                        await client.write_property(address, target, prop, rb.PropertyValue.null())
+                        await client.write_property(address, target, rb.PropertyIdentifier.DESCRIPTION,
+                                                    rb.PropertyValue.character_string("ordinary"))
+                        self.assertEqual(await client.read_property(address, target, prop), before)
+        finally:
+            await child.stop()
