@@ -15,14 +15,20 @@ impl BACnetObject for AuditReporterObject {
         selectors: Option<Vec<BACnetObjectSelector>>,
         priorities: BACnetPriorityFilter,
     ) -> Result<(), Error> {
-        // Validate the only fallible setting before changing any field. The
-        // remaining settings are already typed and cannot fail.
-        self.set_audit_level(level)?;
-        self.set_auditable_operations(operations);
-        self.set_issue_confirmed_notifications(confirmed);
-        self.set_monitored_objects(selectors);
-        self.set_audit_priority_filter(priorities);
-        Ok(())
+        let mut next = self.configuration_internal();
+        next.audit_level = level;
+        next.auditable_operations = operations;
+        next.confirmed = confirmed;
+        next.monitored_objects = selectors;
+        next.audit_priority_filter = priorities;
+        self.change_configuration(next, None)
+    }
+
+    fn audit_reporter_authority_internal(&mut self) -> Option<AuditReporterAuthority<'_>> {
+        Some(AuditReporterAuthority(self))
+    }
+    fn bind_clock_internal(&mut self, clock: Option<Arc<dyn ClockReader>>) {
+        self.clock = clock;
     }
 
     fn object_identifier(&self) -> ObjectIdentifier {
@@ -34,7 +40,9 @@ impl BACnetObject for AuditReporterObject {
     }
 
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
-        reporter_metadata::effective_properties(self.monitored_objects.is_some())
+        reporter_metadata::effective_properties(
+            self.configuration_internal().monitored_objects.is_some(),
+        )
     }
 
     fn read_property(
@@ -42,6 +50,7 @@ impl BACnetObject for AuditReporterObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        let configuration = self.configuration_internal();
         match property {
             p if p == PropertyIdentifier::OBJECT_IDENTIFIER => {
                 Ok(PropertyValue::ObjectIdentifier(self.oid))
@@ -49,9 +58,9 @@ impl BACnetObject for AuditReporterObject {
             p if p == PropertyIdentifier::OBJECT_NAME => {
                 Ok(PropertyValue::CharacterString(self.name.clone()))
             }
-            p if p == PropertyIdentifier::DESCRIPTION => {
-                Ok(PropertyValue::CharacterString(self.description.clone()))
-            }
+            p if p == PropertyIdentifier::DESCRIPTION => Ok(PropertyValue::CharacterString(
+                configuration.description.clone(),
+            )),
             p if p == PropertyIdentifier::OBJECT_TYPE => Ok(PropertyValue::Enumerated(
                 ObjectType::AUDIT_REPORTER.to_raw(),
             )),
@@ -69,25 +78,30 @@ impl BACnetObject for AuditReporterObject {
             p if p == PropertyIdentifier::EVENT_STATE => {
                 Ok(PropertyValue::Enumerated(EventState::NORMAL.to_raw()))
             }
-            p if p == PropertyIdentifier::AUDIT_LEVEL => {
-                Ok(PropertyValue::Enumerated(self.audit_level.to_raw()))
-            }
+            p if p == PropertyIdentifier::AUDIT_LEVEL => Ok(PropertyValue::Enumerated(
+                configuration.audit_level.to_raw(),
+            )),
             p if p == PropertyIdentifier::AUDIT_SOURCE_REPORTER => {
                 Ok(PropertyValue::Boolean(false))
             }
             p if p == PropertyIdentifier::AUDITABLE_OPERATIONS => {
-                let (unused_bits, data) = self.auditable_operations.to_bacnet();
+                let (unused_bits, data) = configuration.auditable_operations.to_bacnet();
                 Ok(PropertyValue::BitString { unused_bits, data })
             }
             p if p == PropertyIdentifier::AUDIT_PRIORITY_FILTER => {
-                let (unused_bits, data) = self.audit_priority_filter.to_bacnet();
+                let (unused_bits, data) = configuration.audit_priority_filter.to_bacnet();
                 Ok(PropertyValue::BitString { unused_bits, data })
             }
             p if p == PropertyIdentifier::ISSUE_CONFIRMED_NOTIFICATIONS => {
                 Ok(PropertyValue::Boolean(self.status.confirmed()))
             }
-            p if p == PropertyIdentifier::MONITORED_OBJECTS && self.monitored_objects.is_some() => {
-                let selectors = self.monitored_objects.as_ref().expect("presence checked");
+            p if p == PropertyIdentifier::MONITORED_OBJECTS
+                && configuration.monitored_objects.is_some() =>
+            {
+                let selectors = configuration
+                    .monitored_objects
+                    .as_ref()
+                    .expect("presence checked");
                 match array_index {
                     None => Ok(PropertyValue::List(
                         selectors
@@ -115,19 +129,12 @@ impl BACnetObject for AuditReporterObject {
     fn write_property(
         &mut self,
         property: PropertyIdentifier,
-        _array_index: Option<u32>,
+        array_index: Option<u32>,
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
         if property == PropertyIdentifier::DESCRIPTION {
-            if let PropertyValue::CharacterString(s) = value {
-                self.description = s;
-                return Ok(());
-            }
-            return Err(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
-            });
+            return AuditReporterAuthority(self).write_description(value, array_index, None);
         }
         Err(Error::Protocol {
             class: ErrorClass::PROPERTY.to_raw() as u32,

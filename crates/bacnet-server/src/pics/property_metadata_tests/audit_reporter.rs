@@ -1,5 +1,5 @@
 use super::*;
-use crate::server::AuditReporterConfig;
+use crate::server::AuditReportersConfig;
 use PropertyIdentifier as P;
 
 fn expected_rows(monitored: bool) -> Vec<(PropertyIdentifier, bool, bool, bool)> {
@@ -39,15 +39,18 @@ fn exercise_instances(configured_instances: &[Option<u32>]) {
                     let mut reporter =
                         AuditReporterObject::new(instance, format!("ar-{instance}")).unwrap();
                     if configured == Some(instance) {
-                        reporter.set_monitored_objects(Some(vec![]));
+                        reporter.set_monitored_objects(Some(vec![])).unwrap();
                     }
                     db.add(Box::new(reporter)).unwrap();
                 }
                 for selected in [1, 2] {
                     let config = ServerConfig {
-                        audit_reporter: Some(AuditReporterConfig {
-                            reporter: ObjectIdentifier::new(ObjectType::AUDIT_REPORTER, selected)
-                                .unwrap(),
+                        audit_reporters: Some(AuditReportersConfig {
+                            reporters: vec![ObjectIdentifier::new(
+                                ObjectType::AUDIT_REPORTER,
+                                selected,
+                            )
+                            .unwrap()],
                         }),
                         ..Default::default()
                     };
@@ -107,7 +110,9 @@ fn pics_audit_reporter_union_is_independent_of_instance_traversal() {
     let first = AuditReporterObject::new(1, "ar-1").unwrap();
     let mut second = AuditReporterObject::new(2, "ar-2").unwrap();
     for configured in [false, true] {
-        second.set_monitored_objects(configured.then(Vec::new));
+        second
+            .set_monitored_objects(configured.then(Vec::new))
+            .unwrap();
         // Force both traversals rather than depending on which HashMap order a
         // particular test run happens to produce. Use the production union path.
         for objects in [

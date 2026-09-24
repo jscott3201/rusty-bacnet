@@ -90,7 +90,9 @@ async fn recipient_wire_change_notifies_both_even_when_ordinary_reporting_is_dis
     for level in [AuditLevel::NONE, AuditLevel::AUDIT_ALL] {
         let mut reporter = reporter();
         reporter.set_audit_level(level).unwrap();
-        reporter.set_auditable_operations(AuditOperationFlags::empty());
+        reporter
+            .set_auditable_operations(AuditOperationFlags::empty())
+            .unwrap();
         let mut fixture = fixture(reporter).await;
         assert!(matches!(
             change(&fixture, &device(21)).await,

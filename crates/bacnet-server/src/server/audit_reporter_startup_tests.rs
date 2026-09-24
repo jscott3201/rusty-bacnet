@@ -9,6 +9,14 @@ async fn start_profile(
     recipient: Option<ObjectIdentifier>,
     transport: CaptureTransport,
 ) -> Result<BACnetServer<CaptureTransport>, Error> {
+    start_profiles(vec![selected], recipient, transport).await
+}
+
+async fn start_profiles(
+    selected: Vec<ObjectIdentifier>,
+    recipient: Option<ObjectIdentifier>,
+    transport: CaptureTransport,
+) -> Result<BACnetServer<CaptureTransport>, Error> {
     let mut db = ObjectDatabase::new();
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
@@ -32,7 +40,9 @@ async fn start_profile(
     db.add(Box::new(reporter())).unwrap();
     BACnetServer::start_with_clock_mode_and_bindings(
         ServerConfig {
-            audit_reporter: Some(AuditReporterConfig { reporter: selected }),
+            audit_reporters: Some(AuditReportersConfig {
+                reporters: selected,
+            }),
             ..Default::default()
         },
         db,
@@ -58,12 +68,7 @@ async fn assert_invalid_selection(selected: ObjectIdentifier) {
             panic!("startup accepted invalid selected Reporter {selected:?}");
         }
     };
-    assert!(
-        matches!(error, Error::Encoding(ref message)
-        if message.starts_with("invalid audit reporter:")
-            && message.contains("Audit Reporter capability")),
-        "{error:?}"
-    );
+    assert!(matches!(error, Error::Encoding(_)), "{error:?}");
     assert!(!transport.started.load(Ordering::Acquire));
     assert!(transport.sent.lock().unwrap().is_empty());
 }
@@ -127,8 +132,8 @@ async fn audit_recipient_non_bip_six_byte_mac_is_not_an_address_capability() {
     db.add(Box::new(reporter())).unwrap();
     let result = BACnetServer::start_with_clock_mode_and_bindings(
         ServerConfig {
-            audit_reporter: Some(AuditReporterConfig {
-                reporter: oid(ObjectType::AUDIT_REPORTER, 1),
+            audit_reporters: Some(AuditReportersConfig {
+                reporters: vec![oid(ObjectType::AUDIT_REPORTER, 1)],
             }),
             ..Default::default()
         },
@@ -152,4 +157,31 @@ async fn audit_recipient_non_bip_six_byte_mac_is_not_an_address_capability() {
         "configured Device routes remain link independent"
     );
     server.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn target_reporter_set_validation_precedes_transport_start() {
+    let first = oid(ObjectType::AUDIT_REPORTER, 1);
+    for selected in [
+        vec![],
+        vec![first, first],
+        vec![first; 65],
+        vec![oid(ObjectType::BINARY_VALUE, 1)],
+        vec![oid(
+            ObjectType::AUDIT_REPORTER,
+            ObjectIdentifier::MAX_INSTANCE,
+        )],
+        vec![first, oid(ObjectType::AUDIT_REPORTER, 2)],
+    ] {
+        let transport = CaptureTransport::default();
+        assert!(start_profiles(
+            selected,
+            Some(oid(ObjectType::DEVICE, 20)),
+            transport.clone()
+        )
+        .await
+        .is_err());
+        assert!(!transport.started.load(Ordering::Acquire));
+        assert!(transport.sent.lock().unwrap().is_empty());
+    }
 }

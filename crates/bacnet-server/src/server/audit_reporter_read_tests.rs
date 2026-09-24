@@ -21,7 +21,7 @@ fn read_reporter() -> AuditReporterObject {
     let mut reporter = reporter();
     let mut operations = AuditOperationFlags::empty();
     operations.insert(AuditOperation::READ);
-    reporter.set_auditable_operations(operations);
+    reporter.set_auditable_operations(operations).unwrap();
     reporter
 }
 
@@ -116,8 +116,7 @@ fn wire(response: &Apdu) -> Bytes {
 #[tokio::test]
 async fn audit_reporter_rp_success_exact_identity_no_values_and_unchanged_response() {
     let mut fixture = server(read_reporter()).await;
-    let mut plain = server(read_reporter()).await;
-    plain.server.config.audit_reporter = None;
+    let mut plain = plain_server(read_reporter()).await;
     let target = oid(ObjectType::BINARY_VALUE, 1);
     let data = rp(target, PropertyIdentifier::PRESENT_VALUE, None);
     let response = dispatch(
@@ -324,8 +323,7 @@ async fn audit_reporter_rp_execution_errors_map_result_but_unknown_outcomes_are_
 #[tokio::test]
 async fn audit_reporter_rpm_expanded_order_inline_errors_and_response_parity() {
     let mut fixture = server(read_reporter()).await;
-    let mut plain = server(read_reporter()).await;
-    plain.server.config.audit_reporter = None;
+    let mut plain = plain_server(read_reporter()).await;
     let reads = add_probe(&fixture, || Error::Encoding("mapped inline".into())).await;
     add_probe(&plain, || Error::Encoding("mapped inline".into())).await;
     let missing = oid(ObjectType::BINARY_VALUE, 99);
@@ -453,32 +451,26 @@ async fn audit_reporter_read_operation_levels_and_selection_apply_to_rp_and_rpm(
             vec![first, input, reporter_oid],
             true,
         ),
-        (
-            AuditLevel::AUDIT_ALL,
-            true,
-            Some(vec![]),
-            vec![reporter_oid],
-            true,
-        ),
+        (AuditLevel::AUDIT_ALL, true, Some(vec![]), vec![], true),
         (
             AuditLevel::AUDIT_ALL,
             true,
             Some(vec![Selector::None]),
-            vec![reporter_oid],
+            vec![],
             true,
         ),
         (
             AuditLevel::AUDIT_ALL,
             true,
             Some(vec![Selector::Object(first), Selector::Object(first)]),
-            vec![first, reporter_oid],
+            vec![first],
             true,
         ),
         (
             AuditLevel::AUDIT_ALL,
             true,
             Some(vec![Selector::ObjectType(ObjectType::ANALOG_INPUT)]),
-            vec![input, reporter_oid],
+            vec![input],
             true,
         ),
     ] {
@@ -486,10 +478,14 @@ async fn audit_reporter_read_operation_levels_and_selection_apply_to_rp_and_rpm(
             let mut reporter = read_reporter();
             reporter.set_audit_level(level).unwrap();
             if !bit {
-                reporter.set_auditable_operations(AuditOperationFlags::empty());
+                reporter
+                    .set_auditable_operations(AuditOperationFlags::empty())
+                    .unwrap();
             }
-            reporter.set_monitored_objects(selection.clone());
-            reporter.set_audit_priority_filter(BACnetPriorityFilter::empty());
+            reporter.set_monitored_objects(selection.clone()).unwrap();
+            reporter
+                .set_audit_priority_filter(BACnetPriorityFilter::empty())
+                .unwrap();
             let mut fixture = server(reporter).await;
             let mut specs = Vec::new();
             let mut expected_records = Vec::new();

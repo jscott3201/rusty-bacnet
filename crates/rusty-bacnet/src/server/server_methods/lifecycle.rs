@@ -11,13 +11,15 @@ impl BACnetServer {
         if let Some(sink) = audit_notification_sink {
             sink.validate(&pending)?;
         }
-        let audit_reporter = self.audit_reporter.clone();
+        let audit_reporter = self.audit_reporters.clone();
         let mut recipient_input = self
             .audit_recipient
             .lock()
             .map_err(|_| PyRuntimeError::new_err("recipient lock poisoned"))?;
         if let Some(profile) = &audit_reporter {
-            audit_configuration::pending_audit_reporter_index(&pending, profile.reporter)?;
+            for reporter in &profile.reporters {
+                audit_configuration::pending_audit_reporter_index(&pending, *reporter)?;
+            }
             let recipient = recipient_input.as_ref().ok_or_else(|| {
                 pyo3::exceptions::PyValueError::new_err(
                     "target Audit requires configure_audit_recipient before start",
@@ -32,7 +34,7 @@ impl BACnetServer {
         }
         let mut builder = server::BACnetServer::generic_builder();
         if let Some(profile) = audit_reporter {
-            builder = builder.audit_reporter(profile);
+            builder = builder.audit_reporters(profile);
         }
         for binding in self.device_bindings.values() {
             builder = builder

@@ -349,10 +349,14 @@ async fn audit_reporter_list_filters_selection_and_self_target_do_not_change_exe
             let mut reporter = reporter();
             reporter.set_audit_level(level).unwrap();
             if !write_bit {
-                reporter.set_auditable_operations(AuditOperationFlags::empty());
+                reporter
+                    .set_auditable_operations(AuditOperationFlags::empty())
+                    .unwrap();
             }
-            reporter.set_audit_priority_filter(BACnetPriorityFilter::empty());
-            reporter.set_monitored_objects(selection);
+            reporter
+                .set_audit_priority_filter(BACnetPriorityFilter::empty())
+                .unwrap();
+            reporter.set_monitored_objects(selection).unwrap();
             let mut fixture = server(reporter).await;
             let mut object = MultiStateInputObject::new(1, "list", 3).unwrap();
             object.set_alarm_values(vec![1]);

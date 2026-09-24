@@ -184,9 +184,13 @@ async fn audit_reporter_execution_failures_obey_level_operation_and_priority_fil
             let mut reporter = reporter();
             reporter.set_audit_level(level).unwrap();
             if !write_bit {
-                reporter.set_auditable_operations(AuditOperationFlags::empty());
+                reporter
+                    .set_auditable_operations(AuditOperationFlags::empty())
+                    .unwrap();
             }
-            reporter.set_audit_priority_filter(BACnetPriorityFilter::from_bits(0x8001));
+            reporter
+                .set_audit_priority_filter(BACnetPriorityFilter::from_bits(0x8001))
+                .unwrap();
             let mut fixture = server(reporter).await;
             let response = if multiple {
                 let mut property = element(PropertyIdentifier::PRESENT_VALUE, vec![0x91, 9]);
@@ -239,7 +243,9 @@ async fn audit_reporter_execution_failures_obey_level_operation_and_priority_fil
 async fn audit_reporter_noncommandable_execution_failure_ignores_priority_filter() {
     let mut reporter = reporter();
     reporter.set_audit_level(AuditLevel::AUDIT_CONFIG).unwrap();
-    reporter.set_audit_priority_filter(BACnetPriorityFilter::empty());
+    reporter
+        .set_audit_priority_filter(BACnetPriorityFilter::empty())
+        .unwrap();
     let mut fixture = server(reporter).await;
     let response = dispatch(
         &fixture.server,
@@ -317,7 +323,9 @@ async fn audit_reporter_policy_denial_of_invalid_values_never_enters_execution()
 #[tokio::test]
 async fn audit_reporter_failed_self_write_and_delivery_do_not_recurse() {
     let mut reporter = reporter();
-    reporter.set_auditable_operations(AuditOperationFlags::empty());
+    reporter
+        .set_auditable_operations(AuditOperationFlags::empty())
+        .unwrap();
     let mut fixture = server(reporter).await;
     fixture.transport.fail.store(true, Ordering::Release);
     let response = dispatch(
@@ -398,7 +406,9 @@ async fn audit_reporter_execution_failures_without_recipient_do_not_accumulate()
 async fn audit_reporter_execution_failures_saturate_without_queue_retry_or_recursive_records() {
     for confirmed in [false, true] {
         let mut reporter = reporter();
-        reporter.set_issue_confirmed_notifications(confirmed);
+        reporter
+            .set_issue_confirmed_notifications(confirmed)
+            .unwrap();
         let mut fixture = server(reporter).await;
         fixture.transport.block.store(true, Ordering::Release);
         for _ in 0..100 {

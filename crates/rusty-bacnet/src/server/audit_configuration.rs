@@ -5,7 +5,7 @@ use bacnet_types::constructed::BACnetObjectSelector;
 use bacnet_types::enums::{AuditLevel, ObjectType};
 use bacnet_types::primitives::ObjectIdentifier;
 use pyo3::exceptions::{PyTypeError, PyValueError};
-use pyo3::types::{PyBool, PyInt, PyList};
+use pyo3::types::{PyBool, PyDict, PyInt, PyList};
 
 use crate::types::PyObjectType;
 
@@ -156,71 +156,43 @@ impl BACnetServer {
 
 #[pymethods]
 impl BACnetServer {
-    /// Configure one registered target Reporter before start(). The first valid
-    /// call fixes its identity; later calls replace its Reporter settings.
-    /// All validation precedes mutation. None selects catch-all objects/all priorities;
-    /// an empty list selects no ordinary targets. A missing binding is a runtime fault.
-    #[pyo3(signature = (instance, *, audit_level, auditable_operations, issue_confirmed_notifications, monitored_objects=None, audit_priority_filter=None))]
-    fn configure_audit_reporter(
-        &mut self,
-        instance: &Bound<'_, PyAny>,
-        audit_level: &Bound<'_, PyAny>,
-        auditable_operations: &Bound<'_, PyAny>,
-        issue_confirmed_notifications: &Bound<'_, PyAny>,
-        monitored_objects: Option<&Bound<'_, PyAny>>,
-        audit_priority_filter: Option<&Bound<'_, PyAny>>,
-    ) -> PyResult<()> {
-        let reporter = instance_identifier(instance, "instance", ObjectType::AUDIT_REPORTER)?;
-        let level = match audit_level.extract::<&str>()? {
-            "none" => AuditLevel::NONE,
-            "audit_config" => AuditLevel::AUDIT_CONFIG,
-            "audit_all" => AuditLevel::AUDIT_ALL,
-            _ => {
-                return Err(PyValueError::new_err(
-                    "audit_level must be 'none', 'audit_config', or 'audit_all'",
-                ))
-            }
-        };
-        if auditable_operations.is_instance_of::<PyBool>()
-            || !auditable_operations.is_instance_of::<PyInt>()
-        {
-            return Err(PyTypeError::new_err(
-                "auditable_operations must be an integer (not bool)",
-            ));
-        }
-        let bits = auditable_operations.extract::<u64>().map_err(|_| {
-            PyValueError::new_err("auditable_operations must be in 0..=18446744073709551615")
-        })?;
-        let operations = AuditOperationFlags::from_bits(bits)
-            .map_err(|error| PyValueError::new_err(error.to_string()))?;
-        if !issue_confirmed_notifications.is_instance_of::<PyBool>() {
-            return Err(PyTypeError::new_err(
-                "issue_confirmed_notifications must be bool",
-            ));
-        }
-        let confirmed = issue_confirmed_notifications.extract::<bool>()?;
-        let selectors = monitored_object_selectors(monitored_objects)?;
-        let priorities = priority_filter(audit_priority_filter)?;
+    /// Configure one through 64 registered target Reporters before start().
+    /// Each dict owns one complete configuration; the entire list is validated
+    /// before any pending object changes. A later valid call replaces the set.
+    fn configure_audit_reporters(&mut self, reporters: &Bound<'_, PyAny>) -> PyResult<()> {
+        let configs = parse_reporters(reporters)?;
+        let identities = configs.iter().map(|value| value.identifier).collect();
         {
             let mut pending = self.lock_pending()?;
             self.check_forwarding_configuration()?;
-            let index = pending_audit_reporter_index(&pending, reporter)?;
-            if self
-                .audit_reporter
-                .as_ref()
-                .is_some_and(|selected| selected.reporter != reporter)
-            {
-                return Err(PyValueError::new_err(
-                    "cannot select a different Audit Reporter after configuration",
-                ));
+            let indices = configs
+                .iter()
+                .map(|value| pending_audit_reporter_index(&pending, value.identifier))
+                .collect::<PyResult<Vec<_>>>()?;
+            for index in &indices {
+                pending[*index]
+                    .audit_reporter_authority_internal()
+                    .ok_or_else(|| {
+                        PyValueError::new_err("selected object lacks concrete Reporter authority")
+                    })?
+                    .validate_installation()
+                    .map_err(to_py_err)?;
             }
-            pending[index]
-                .configure_audit_reporter_internal(
-                    level, operations, confirmed, selectors, priorities,
-                )
-                .map_err(to_py_err)?;
+            for (config, index) in configs.into_iter().zip(indices) {
+                pending[index]
+                    .configure_audit_reporter_internal(
+                        config.level,
+                        config.operations,
+                        config.confirmed,
+                        config.selectors,
+                        config.priorities,
+                    )
+                    .map_err(to_py_err)?;
+            }
         }
-        self.audit_reporter = Some(server::AuditReporterConfig { reporter });
+        self.audit_reporters = Some(server::AuditReportersConfig {
+            reporters: identities,
+        });
         Ok(())
     }
 
@@ -361,4 +333,111 @@ impl BACnetServer {
             _ => Err(PyValueError::new_err("recipient must be a concrete remote Device or a supported direct unicast B/IP address")),
         }
     }
+}
+
+struct ReporterConfiguration {
+    identifier: ObjectIdentifier,
+    level: AuditLevel,
+    operations: AuditOperationFlags,
+    confirmed: bool,
+    selectors: Option<Vec<BACnetObjectSelector>>,
+    priorities: BACnetPriorityFilter,
+}
+
+fn parse_reporters(value: &Bound<'_, PyAny>) -> PyResult<Vec<ReporterConfiguration>> {
+    let values = value
+        .cast_exact::<PyList>()
+        .map_err(|_| PyTypeError::new_err("reporters must be a list of configuration dicts"))?;
+    if !(1..=64).contains(&values.len()) {
+        return Err(PyValueError::new_err(
+            "configure one through 64 target Audit Reporters",
+        ));
+    }
+    let mut result = Vec::with_capacity(values.len());
+    for value in values.iter() {
+        let config = value
+            .cast_exact::<PyDict>()
+            .map_err(|_| PyTypeError::new_err("each Reporter configuration must be a dict"))?;
+        for key in config.keys() {
+            if !matches!(
+                key.extract::<&str>()?,
+                "instance"
+                    | "audit_level"
+                    | "auditable_operations"
+                    | "issue_confirmed_notifications"
+                    | "monitored_objects"
+                    | "audit_priority_filter"
+            ) {
+                return Err(PyValueError::new_err(
+                    "unknown Reporter configuration field",
+                ));
+            }
+        }
+        let required = |name| {
+            config
+                .get_item(name)?
+                .ok_or_else(|| PyValueError::new_err(format!("missing Reporter field: {name}")))
+        };
+        let identifier = instance_identifier(
+            &required("instance")?,
+            "instance",
+            ObjectType::AUDIT_REPORTER,
+        )?;
+        if identifier.instance_number() == ObjectIdentifier::MAX_INSTANCE {
+            return Err(PyValueError::new_err(
+                "Reporter instance must be concrete (0..=4194302)",
+            ));
+        }
+        let level = match required("audit_level")?.extract::<&str>()? {
+            "none" => AuditLevel::NONE,
+            "audit_config" => AuditLevel::AUDIT_CONFIG,
+            "audit_all" => AuditLevel::AUDIT_ALL,
+            _ => {
+                return Err(PyValueError::new_err(
+                    "audit_level must be 'none', 'audit_config', or 'audit_all'",
+                ))
+            }
+        };
+        let operations = required("auditable_operations")?;
+        if operations.is_instance_of::<PyBool>() || !operations.is_instance_of::<PyInt>() {
+            return Err(PyTypeError::new_err(
+                "auditable_operations must be an integer (not bool)",
+            ));
+        }
+        let bits = operations.extract::<u64>().map_err(|_| {
+            PyValueError::new_err("auditable_operations must be in 0..=18446744073709551615")
+        })?;
+        let operations = AuditOperationFlags::from_bits(bits)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        let confirmed = required("issue_confirmed_notifications")?;
+        if !confirmed.is_instance_of::<PyBool>() {
+            return Err(PyTypeError::new_err(
+                "issue_confirmed_notifications must be bool",
+            ));
+        }
+        let selectors = config
+            .get_item("monitored_objects")?
+            .filter(|value| !value.is_none());
+        let priorities = config
+            .get_item("audit_priority_filter")?
+            .filter(|value| !value.is_none());
+        result.push(ReporterConfiguration {
+            identifier,
+            level,
+            operations,
+            confirmed: confirmed.extract()?,
+            selectors: monitored_object_selectors(selectors.as_ref())?,
+            priorities: priority_filter(priorities.as_ref())?,
+        });
+    }
+    result.sort_by_key(|value| value.identifier.instance_number());
+    if result
+        .windows(2)
+        .any(|pair| pair[0].identifier == pair[1].identifier)
+    {
+        return Err(PyValueError::new_err(
+            "duplicate target Audit Reporter instance",
+        ));
+    }
+    Ok(result)
 }

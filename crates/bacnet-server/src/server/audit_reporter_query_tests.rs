@@ -12,8 +12,7 @@ mod boundary;
 async fn audit_reporter_query_empty_nonempty_zero_and_pages_are_value_free_and_unchanged() {
     for count in [0, 3] {
         let mut fixture = server(read_reporter()).await;
-        let mut plain = server(read_reporter()).await;
-        plain.server.config.audit_reporter = None;
+        let mut plain = plain_server(read_reporter()).await;
         let (reads, persistence) = add_log(&fixture, count, "real").await;
         let (plain_reads, _) = add_log(&plain, count, "real").await;
         let snapshot = persistence.0.lock().unwrap().clone();
@@ -72,8 +71,7 @@ async fn audit_reporter_query_empty_nonempty_zero_and_pages_are_value_free_and_u
 #[tokio::test]
 async fn audit_reporter_query_filters_remain_query_only_not_notification_fields() {
     let mut fixture = server(read_reporter()).await;
-    let mut plain = server(read_reporter()).await;
-    plain.server.config.audit_reporter = None;
+    let mut plain = plain_server(read_reporter()).await;
     add_log(&fixture, 3, "real").await;
     add_log(&plain, 3, "real").await;
     for (i, (filter, sequences)) in [
@@ -147,8 +145,7 @@ async fn audit_reporter_query_execution_errors_have_exact_result_and_response_pa
         ),
     ] {
         let mut fixture = server(read_reporter()).await;
-        let mut plain = server(read_reporter()).await;
-        plain.server.config.audit_reporter = None;
+        let mut plain = plain_server(read_reporter()).await;
         let (reads, _) = add_log(&fixture, 0, mode).await;
         add_log(&plain, 0, mode).await;
         let mut query = query(None, 1);
@@ -218,10 +215,14 @@ async fn audit_reporter_query_read_bit_levels_and_monitored_objects_gate_success
             let mut reporter = read_reporter();
             reporter.set_audit_level(level).unwrap();
             if !bit {
-                reporter.set_auditable_operations(AuditOperationFlags::empty());
+                reporter
+                    .set_auditable_operations(AuditOperationFlags::empty())
+                    .unwrap();
             }
-            reporter.set_monitored_objects(selection.clone());
-            reporter.set_audit_priority_filter(BACnetPriorityFilter::empty());
+            reporter.set_monitored_objects(selection.clone()).unwrap();
+            reporter
+                .set_audit_priority_filter(BACnetPriorityFilter::empty())
+                .unwrap();
             let mut fixture = server(reporter).await;
             add_log(&fixture, 0, mode).await;
             let response = dispatch(&fixture.server, SERVICE, encode(&query(None, 1))).await;

@@ -65,10 +65,7 @@ impl DeviceAuthority<'_> {
     pub fn provisioned_audit_recipient(&self) -> Option<&BACnetRecipient> {
         self.0.recipient.value.as_ref()
     }
-    pub fn install_audit_recipient(
-        &mut self,
-        sink: &Arc<dyn AuditRecipientChangeSink>,
-    ) -> Result<(), Error> {
+    pub fn validate_audit_recipient_installation(&self) -> Result<(), Error> {
         if self.0.recipient.value.is_none()
             || self
                 .0
@@ -80,6 +77,13 @@ impl DeviceAuthority<'_> {
         {
             return Err(property_error(ErrorCode::WRITE_ACCESS_DENIED));
         }
+        Ok(())
+    }
+    pub fn install_audit_recipient(
+        &mut self,
+        sink: &Arc<dyn AuditRecipientChangeSink>,
+    ) -> Result<(), Error> {
+        self.validate_audit_recipient_installation()?;
         self.0.recipient.sink = Some(Arc::downgrade(sink));
         Ok(())
     }

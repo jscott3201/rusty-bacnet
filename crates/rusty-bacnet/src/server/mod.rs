@@ -124,7 +124,7 @@ pub struct BACnetServer {
     read_range_budget: server::ReadRangeBudget,
     get_event_information_budget: server::GetEventInformationBudget,
     audit_notification_sink: Option<AuditNotificationSink>,
-    audit_reporter: Option<server::AuditReporterConfig>,
+    audit_reporters: Option<server::AuditReportersConfig>,
     audit_recipient: std::sync::Mutex<Option<bacnet_types::constructed::BACnetRecipient>>,
     device_bindings: std::collections::BTreeMap<u32, server::DeviceBinding>,
     /// Freeze forwarding and Reporter settings at ownership transfer, including startup in flight.

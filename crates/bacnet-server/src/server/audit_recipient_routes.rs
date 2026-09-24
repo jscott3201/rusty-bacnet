@@ -32,7 +32,7 @@ impl AuditRoutes {
         bindings: &DeviceBindingTable,
         transport: &T,
     ) -> Result<Self, Error> {
-        let routes = if config.audit_reporter.is_some() {
+        let routes = if config.audit_reporters.is_some() {
             Self::capture(bindings, transport)
         } else {
             Self::default()
@@ -48,7 +48,7 @@ impl AuditRoutes {
         config: &ServerConfig,
         network: &mut NetworkLayer<T>,
     ) -> Result<Arc<Self>, Error> {
-        if config.audit_reporter.is_some() {
+        if config.audit_reporters.is_some() {
             self.bip_broadcast = network.transport().bip_broadcast_endpoint();
             // A generic link can learn its broadcast identity during start.
             // Invoke caller code once here, never during target production or

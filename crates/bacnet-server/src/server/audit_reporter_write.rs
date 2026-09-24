@@ -3,6 +3,7 @@ use super::*;
 
 pub(super) struct WriteSelection {
     ordinary: bool,
+    captured_description: Option<(ObjectIdentifier, PropertyValue)>,
     change: Option<(
         ObjectIdentifier,
         PropertyIdentifier,
@@ -11,6 +12,22 @@ pub(super) struct WriteSelection {
 }
 impl WriteSelection {
     pub(super) fn selected(&self, db: &ObjectDatabase, success: bool) -> bool {
+        if success
+            && self
+                .captured_description
+                .as_ref()
+                .is_some_and(|(oid, before)| {
+                    db.get(oid)
+                        .and_then(|object| {
+                            object
+                                .read_property(PropertyIdentifier::DESCRIPTION, None)
+                                .ok()
+                        })
+                        .is_some_and(|after| after != *before)
+                })
+        {
+            return false;
+        }
         self.ordinary
             || (success
                 && self.change.is_some_and(|(oid, property, before)| {
@@ -32,20 +49,15 @@ impl WriteSelection {
 impl<T: TransportPort + 'static> WriteCommitObserver for WriteAudit<'_, T> {
     fn before(&mut self, db: &ObjectDatabase, write: WriteTarget<'_>) {
         self.pending = None;
-        let Some(profile) = &self.config.audit_reporter else {
+        let Some((selected_reporter, reporter_attempt)) = self.select_write(db, write.oid) else {
             return;
         };
-        let Some(reporter) = db
-            .get(&profile.reporter)
-            .and_then(|object| object.audit_reporter_internal())
-        else {
-            return;
-        };
+        let reporter = &selected_reporter.configuration;
         let device = local_device(db);
         let route = device
             .and_then(|device| recipient(db, device))
             .and_then(|value| self.transactions.audit_routes.get()?.resolve(&value));
-        let status = reporter.status_internal();
+        let status = Arc::clone(&selected_reporter.status);
         status.set_configured(device.is_some() && route.is_some());
         let Some(device) = device else { return };
         let Some(object) = db.get(&write.oid) else {
@@ -60,8 +72,8 @@ impl<T: TransportPort + 'static> WriteCommitObserver for WriteAudit<'_, T> {
         .then_some(write.priority.unwrap_or(16));
         let object_policy = object.audit_object_policy_internal();
         let policy = object_policy.effective_internal(reporter);
-        let ordinary = if write.oid.object_type() == ObjectType::AUDIT_REPORTER {
-            reporter.reports_write_internal(write.property, command_priority, true)
+        let ordinary = if reporter_attempt {
+            true
         } else {
             policy.reports(
                 AuditOperation::WRITE,
@@ -77,11 +89,22 @@ impl<T: TransportPort + 'static> WriteCommitObserver for WriteAudit<'_, T> {
                 }
                 _ => false,
             };
-        if !reporter.monitors_object_internal(write.oid) || (!ordinary && !mandatory) {
+        if !ordinary && !mandatory {
             return;
         }
         let selection = WriteSelection {
             ordinary,
+            captured_description: (write.property == PropertyIdentifier::DESCRIPTION
+                && object
+                    .audit_reporter_internal()
+                    .is_some_and(|r| r.captures_changes_internal()))
+            .then(|| {
+                object
+                    .read_property(PropertyIdentifier::DESCRIPTION, None)
+                    .ok()
+                    .map(|value| (write.oid, value))
+            })
+            .flatten(),
             change: mandatory.then_some((write.oid, write.property, object_policy)),
         };
         let current_value = object
@@ -90,16 +113,11 @@ impl<T: TransportPort + 'static> WriteCommitObserver for WriteAudit<'_, T> {
             .and_then(|value| small_value(&value));
         self.pending = Some(PendingWrite {
             selection: Some(selection),
-            failure: self.failure_ticket(
-                &status,
-                reporter.confirmed_internal(),
-                device,
-                route.clone(),
-            ),
+            failure: self.failure_ticket(&status, reporter.confirmed, device, route.clone()),
             route,
             completion: status.begin_delivery(),
             status,
-            confirmed: reporter.confirmed_internal(),
+            confirmed: reporter.confirmed,
             notification: BACnetAuditNotification {
                 source_timestamp: None,
                 target_timestamp: None,

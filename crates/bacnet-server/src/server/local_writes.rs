@@ -277,6 +277,30 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         Ok(())
     }
 
+    pub(super) async fn execute_initial_staging_plans(&self) {
+        let staging_oids = {
+            let database = self.db.read().await;
+            database.find_by_type(ObjectType::STAGING)
+        };
+        let staging_plans = {
+            let mut database = self.db.write().await;
+            Self::take_staging_plans(&mut database, &staging_oids)
+        };
+        Self::execute_staging_plans(
+            &self.db,
+            &self.network,
+            &self.cov_table,
+            &self.cov_in_flight,
+            &self.server_tsm,
+            &self.notification_transactions,
+            &self.device_bindings,
+            &self.comm_state,
+            &self.config,
+            staging_plans,
+        )
+        .await;
+    }
+
     pub(super) fn take_staging_plans(
         db: &mut ObjectDatabase,
         oids: &[ObjectIdentifier],

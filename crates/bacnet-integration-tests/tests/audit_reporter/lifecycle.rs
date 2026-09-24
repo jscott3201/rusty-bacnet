@@ -27,18 +27,20 @@ async fn audit_reporter_create_delete_reach_real_log_over_udp() {
     ] {
         operations.insert(operation);
     }
-    reporter.set_auditable_operations(operations);
-    reporter.set_issue_confirmed_notifications(true);
-    reporter.set_monitored_objects(Some(vec![BACnetObjectSelector::ObjectType(
-        ObjectType::BINARY_VALUE,
-    )]));
+    reporter.set_auditable_operations(operations).unwrap();
+    reporter.set_issue_confirmed_notifications(true).unwrap();
+    reporter
+        .set_monitored_objects(Some(vec![BACnetObjectSelector::ObjectType(
+            ObjectType::BINARY_VALUE,
+        )]))
+        .unwrap();
     target_db.add(Box::new(reporter)).unwrap();
     let mut target = BACnetServer::builder()
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
         .database(target_db)
-        .audit_reporter(AuditReporterConfig {
-            reporter: oid(ObjectType::AUDIT_REPORTER, 1),
+        .audit_reporters(AuditReportersConfig {
+            reporters: vec![oid(ObjectType::AUDIT_REPORTER, 1)],
         })
         .device_binding(
             DeviceBinding::local(oid(ObjectType::DEVICE, 20), logger.local_mac()).unwrap(),

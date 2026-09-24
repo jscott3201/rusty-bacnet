@@ -21,6 +21,8 @@ use crate::common::read_property_list_property;
 use crate::property_metadata::PropertyMetadata;
 use crate::traits::BACnetObject;
 
+mod association;
+pub use association::{SelectedAuditReporter, TargetAuditAssociation};
 mod object_policy;
 pub use object_policy::{AuditPriorityPolicy, EffectiveAuditPolicy, ObjectAuditPolicy};
 
@@ -30,6 +32,7 @@ pub use forwarding::AuditLogForwarding;
 mod notification;
 mod persistence;
 mod receipt;
+mod reporter_change;
 mod reporter_metadata;
 mod reporter_object;
 mod reporter_status;
@@ -41,6 +44,9 @@ pub use persistence::{
 pub use receipt::{
     CompletedAuditReceipt, ConfirmedAuditNotificationOutcome, MAX_AUDIT_RECEIPT_KEY_BYTES,
     MAX_COMPLETED_AUDIT_RECEIPTS,
+};
+pub use reporter_change::{
+    AuditReporterAuthority, AuditReporterChangeSink, AuditReporterConfiguration,
 };
 pub use reporter_status::{AuditDeliveryToken, AuditReporterStatus};
 
@@ -620,103 +626,67 @@ impl BACnetObject for AuditLogObject {
 pub struct AuditReporterObject {
     oid: ObjectIdentifier,
     name: String,
-    description: String,
     status: Arc<AuditReporterStatus>,
-    audit_level: AuditLevel,
-    auditable_operations: AuditOperationFlags,
-    audit_priority_filter: BACnetPriorityFilter,
-    monitored_objects: Option<Vec<BACnetObjectSelector>>,
+    change_sink: Option<std::sync::Weak<dyn AuditReporterChangeSink>>,
+    change_owner: std::sync::Weak<crate::database::AuditOwnership>,
+    clock: Option<Arc<dyn ClockReader>>,
 }
 
 impl AuditReporterObject {
     /// Construct a disabled target Reporter, not yet bound to a server destination.
     pub fn new(instance: u32, name: impl Into<String>) -> Result<Self, Error> {
-        let oid = ObjectIdentifier::new(ObjectType::AUDIT_REPORTER, instance)?;
         Ok(Self {
-            oid,
+            oid: ObjectIdentifier::new(ObjectType::AUDIT_REPORTER, instance)?,
             name: name.into(),
-            description: String::new(),
             status: Arc::new(AuditReporterStatus::default()),
-            audit_level: AuditLevel::NONE,
-            auditable_operations: AuditOperationFlags::empty(),
-            audit_priority_filter: BACnetPriorityFilter::all(),
-            monitored_objects: None,
+            change_sink: None,
+            change_owner: std::sync::Weak::new(),
+            clock: None,
         })
     }
-
-    /// Set the description string.
-    pub fn set_description(&mut self, desc: impl Into<String>) {
-        self.description = desc.into();
+    /// Change Description through the installed target owner, if any.
+    pub fn set_description(&mut self, desc: impl Into<String>) -> Result<(), Error> {
+        AuditReporterAuthority(self).write_description(
+            PropertyValue::CharacterString(desc.into()),
+            None,
+            None,
+        )
     }
-
-    /// Target selection for the single-Reporter profile, before record creation.
+    /// Nominal selector membership; mandatory self-reporting is a separate election.
     #[doc(hidden)]
     pub fn monitors_object_internal(&self, target: ObjectIdentifier) -> bool {
-        target.object_type() == ObjectType::AUDIT_REPORTER
-            || self.monitored_objects.as_ref().is_none_or(|selectors| {
-                selectors.iter().any(|selector| match selector {
-                    BACnetObjectSelector::None => false,
-                    BACnetObjectSelector::Object(object) => *object == target,
-                    BACnetObjectSelector::ObjectType(kind) => *kind == target.object_type(),
-                })
-            })
+        self.configuration_internal().monitors(target)
     }
-
-    /// Select a failed by-type CREATE before a representable OID was assigned.
-    /// Exact identifiers cannot match an unknown identity; no sentinel is used.
     #[doc(hidden)]
     pub fn monitors_unassigned_create_internal(&self, kind: ObjectType) -> bool {
-        self.monitored_objects.as_ref().is_none_or(|selectors| {
-            selectors.iter().any(|selector| {
-                matches!(selector, BACnetObjectSelector::ObjectType(selected) if *selected == kind)
-            })
-        })
+        self.configuration_internal().monitors_unassigned(kind)
     }
-
-    /// Reporter-level filter for the immediate target-WRITE profile.
-    ///
-    /// `command_priority` is present only for a commandable property (use 16
-    /// for an omitted command priority). AUDIT_CONFIG treats Present_Value as
-    /// operational and all other properties as configuration. Proprietary levels
-    /// use AUDIT_ALL behavior. External writes to Reporters bypass the operation
-    /// filter as required by Clause 19.6.2; internal status changes are not writes.
+    /// Evaluate an already associated Reporter's WRITE filter.
     #[doc(hidden)]
     pub fn reports_write_internal(
         &self,
         property: PropertyIdentifier,
         command_priority: Option<u8>,
-        reporter_target: bool,
     ) -> bool {
-        if self.audit_level == AuditLevel::NONE {
-            return false;
-        }
-        if reporter_target {
-            return true;
-        }
         ObjectAuditPolicy::default()
-            .effective_internal(self)
+            .effective_internal(&self.configuration_internal())
             .reports(
                 bacnet_types::enums::AuditOperation::WRITE,
                 Some(property),
                 command_priority,
             )
     }
-
-    /// Object-instance-owned status handle; replacement objects cannot receive
-    /// stale delivery results from an earlier object at the same identifier.
+    /// Instance-owned configuration and delivery authority.
     #[doc(hidden)]
     pub fn status_internal(&self) -> Arc<AuditReporterStatus> {
         Arc::clone(&self.status)
     }
-
-    /// Delivery mode sampled at the observed mutation boundary.
     #[doc(hidden)]
     pub fn confirmed_internal(&self) -> bool {
         self.status.confirmed()
     }
-
     fn reliability(&self) -> Reliability {
-        if self.audit_level == AuditLevel::NONE {
+        if !self.configuration_internal().enabled() {
             Reliability::NO_FAULT_DETECTED
         } else {
             self.status.reliability()

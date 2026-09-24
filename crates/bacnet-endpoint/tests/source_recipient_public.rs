@@ -70,7 +70,7 @@ async fn client_only_public_recipient_write_delivers_old_and_new_and_preserves_n
         .unwrap();
     let mut reporter = AuditReporterObject::new(1, "Source").unwrap();
     reporter.set_audit_level(AuditLevel::NONE).unwrap();
-    reporter.set_issue_confirmed_notifications(false);
+    reporter.set_issue_confirmed_notifications(false).unwrap();
     db.add(Box::new(reporter)).unwrap();
     let mut session = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
         .role(SessionRole::ClientOnly)

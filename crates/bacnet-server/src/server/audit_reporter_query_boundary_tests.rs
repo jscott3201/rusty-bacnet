@@ -12,8 +12,7 @@ async fn audit_reporter_query_decode_validation_and_ack_encode_failures_are_sile
     ] {
         let mode = if case == "bad ack" { case } else { "real" };
         let mut fixture = server(read_reporter()).await;
-        let mut plain = server(read_reporter()).await;
-        plain.server.config.audit_reporter = None;
+        let mut plain = plain_server(read_reporter()).await;
         let (reads, _) = add_log(&fixture, 1, mode).await;
         add_log(&plain, 1, mode).await;
         let mut request = query(None, 1);
@@ -162,8 +161,7 @@ async fn audit_reporter_query_dcc_duplicate_and_overload_are_silent() {
 async fn audit_reporter_query_outbound_segmentation_and_divergence_are_silent() {
     for segmented in [false, true] {
         let mut fixture = server(read_reporter()).await;
-        let mut plain = server(read_reporter()).await;
-        plain.server.config.audit_reporter = None;
+        let mut plain = plain_server(read_reporter()).await;
         let (reads, _) = add_log(&fixture, 1, "large").await;
         add_log(&plain, 1, "large").await;
         for fixture in [&mut fixture, &mut plain] {

@@ -20,6 +20,19 @@ This does not promote the row or global evidence pins; #345/#782 remain open.
 - Addenda/errata status: ASHRAE 135-2020 Errata Summary 2024-04-29 (v1) reviewed for the supported subset. Item 7 (Clause 21.6, p. 886): successful-actions-only corrected from BOOLEAN (struck through, removed) to BACnetSuccessFilter (italic, added), tags [7]/[4]. Item 8 (Clause 21.2.3, p. 865): start-at-sequence-number corrected from Unsigned32 (struck through, removed) to Unsigned64 (italic, added), tag [2] OPTIONAL. Both items visually verified from the rendered errata p. 3 (strikeout = removed, italics = added per the p. 1 convention); not inferred from concatenated text extraction. The implementation encodes the corrected BACnetSuccessFilter/u64 contract after the RB-02 codec and RB-20 runtime/Python migrations; `BACNET-13-AUDIT-WIRE-MODELS` remains `implementation-present-needs-source-review` pending broader Audit review.
 - PR-0808 evidence row: `BACNET-12-ALERT-ENROLLMENT-TABLE-12-61` is `supported-with-clause-evidence` for the served object model only; it is not an Alert evaluator or notification-generation claim.
 
+## Multiple target Audit Reporters
+
+Refs #782 extends the in-progress `BACNET-13-AUDIT-WIRE-MODELS` row with
+1–64 configured target Reporters, enabled nominal lowest-instance election,
+per-Reporter overlap health/loss contexts, and one global admission budget.
+Live Rust configuration setters and aggregate updates capture changes atomically;
+Python authors the plural set before startup. Supported network Reporter WRITE
+attempts retain exact provenance and known failures; no-op/failure retention is
+an explicit local policy. Mandatory self fallback does not create nominal overlap.
+The [target contract](../target-audit-reporters.md) links behavioral evidence and
+separates local policy from clause requirements. Source mode remains exactly one,
+network configuration remains limited, and parent #345/global pins/statuses stay unchanged.
+
 ## Endpoint RPM source READ
 
 Refs #780 extends the in-progress `BACNET-19-SOURCE-READ-PROPERTY` row with

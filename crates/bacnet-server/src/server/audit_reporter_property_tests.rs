@@ -94,7 +94,7 @@ async fn audit_reporter_monitored_objects_rp_rpm_property_list_and_pics_agree() 
     ] {
         let configured = selection.is_some();
         let mut reporter = reporter();
-        reporter.set_monitored_objects(selection);
+        reporter.set_monitored_objects(selection).unwrap();
         let mut fixture = server(reporter).await;
         for index in [
             None,
@@ -240,7 +240,7 @@ async fn audit_reporter_monitored_objects_network_writes_are_denied_without_muta
         for multiple in [false, true] {
             for index in [None, Some(0), Some(1)] {
                 let mut reporter = reporter();
-                reporter.set_monitored_objects(selection.clone());
+                reporter.set_monitored_objects(selection.clone()).unwrap();
                 let mut fixture = server(reporter).await;
                 let target = oid(ObjectType::AUDIT_REPORTER, 1);
                 let before = fixture

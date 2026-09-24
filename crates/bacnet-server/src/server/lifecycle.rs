@@ -13,6 +13,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         clock_config: Option<ClockConfig>,
         configured_device_bindings: Vec<DeviceBinding>,
     ) -> Result<Self, Error> {
+        if let Some(profile) = &mut config.audit_reporters {
+            profile.canonicalize()?;
+        }
         // Validate every configured route against the concrete transport before
         // mutating the database or starting network work.
         let is_broadcast = |mac: &[u8]| transport.is_broadcast_mac(mac);
@@ -803,27 +806,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             binary_lighting_operation_task,
             local_mac,
         };
-        let staging_oids = {
-            let database = server.db.read().await;
-            database.find_by_type(ObjectType::STAGING)
-        };
-        let staging_plans = {
-            let mut database = server.db.write().await;
-            Self::take_staging_plans(&mut database, &staging_oids)
-        };
-        Self::execute_staging_plans(
-            &server.db,
-            &server.network,
-            &server.cov_table,
-            &server.cov_in_flight,
-            &server.server_tsm,
-            &server.notification_transactions,
-            &server.device_bindings,
-            &server.comm_state,
-            &server.config,
-            staging_plans,
-        )
-        .await;
+        server.execute_initial_staging_plans().await;
         Ok(server)
     }
 }

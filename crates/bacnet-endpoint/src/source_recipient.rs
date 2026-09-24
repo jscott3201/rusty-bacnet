@@ -200,7 +200,7 @@ impl SourceRecipient {
                 let mut attempts = attempts.into_iter();
                 let first = attempts.next().unwrap();
                 let second = attempts.next().unwrap();
-                Ok(async move {
+                Ok(Some(async move {
                     let run = |(route, permit, reserved, bytes),
                                completion: delivery::Completion| {
                         let egress = egress.clone();
@@ -213,7 +213,7 @@ impl SourceRecipient {
                         }
                     };
                     tokio::join!(run(first, first_completion), run(second, second_completion));
-                })
+                }))
             })
         })?;
         self.failures.recipient_changed();

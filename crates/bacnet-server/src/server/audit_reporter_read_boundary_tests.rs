@@ -170,7 +170,9 @@ async fn audit_reporter_read_audit_log_targets_are_not_excluded() {
         }
     }
     let mut reporter = read_reporter();
-    reporter.set_monitored_objects(Some(vec![Selector::ObjectType(ObjectType::AUDIT_LOG)]));
+    reporter
+        .set_monitored_objects(Some(vec![Selector::ObjectType(ObjectType::AUDIT_LOG)]))
+        .unwrap();
     let mut fixture = server(reporter).await;
     let log = AuditLogObject::new(9, "read log", 4, Arc::new(Memory(StdMutex::new(None)))).unwrap();
     fixture.server.db.write().await.add(Box::new(log)).unwrap();
@@ -364,8 +366,10 @@ async fn audit_reporter_rpm_256_results_reuse_64_permits_summary_deadline_and_no
         let mut flags = AuditOperationFlags::empty();
         flags.insert(AuditOperation::READ);
         flags.insert(AuditOperation::AUDITING_FAILURE);
-        reporter.set_auditable_operations(flags);
-        reporter.set_issue_confirmed_notifications(confirmed);
+        reporter.set_auditable_operations(flags).unwrap();
+        reporter
+            .set_issue_confirmed_notifications(confirmed)
+            .unwrap();
         let mut fixture = server(reporter).await;
         let reads = add_probe(&fixture, || Error::Encoding("unused".into())).await;
         fixture.transport.block.store(true, Ordering::Release);

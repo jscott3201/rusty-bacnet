@@ -20,8 +20,10 @@ fn typed_device_authority_is_forwarded_without_copying() {
         .device_authority_internal()
         .unwrap()
         .object_identifier();
-    let owner =
-        bacnet_objects::database::AuditOwnership::new(oid(ObjectType::DEVICE, 123), selected());
+    let owner = bacnet_objects::database::AuditOwnership::for_source(
+        oid(ObjectType::DEVICE, 123),
+        selected(),
+    );
     source_reporter::install(&mut object, &owner).unwrap();
     let mut forwarded = object.device_authority_internal().unwrap();
     assert_eq!(forwarded.object_identifier(), original);
@@ -533,12 +535,8 @@ async fn custom_capabilities_clocks_indexes_and_private_state_are_retained() {
         );
         let reporter = object.audit_reporter_internal().unwrap();
         assert!(reporter.monitors_object_internal(target()));
-        assert!(reporter.reports_write_internal(PropertyIdentifier::PRESENT_VALUE, Some(8), false));
-        assert!(!reporter.reports_write_internal(
-            PropertyIdentifier::PRESENT_VALUE,
-            Some(16),
-            false
-        ));
+        assert!(reporter.reports_write_internal(PropertyIdentifier::PRESENT_VALUE, Some(8)));
+        assert!(!reporter.reports_write_internal(PropertyIdentifier::PRESENT_VALUE, Some(16)));
         let before = object
             .property_list()
             .iter()

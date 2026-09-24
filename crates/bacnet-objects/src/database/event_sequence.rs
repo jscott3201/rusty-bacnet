@@ -18,6 +18,17 @@ impl EventSequence {
         *number = number.wrapping_add(1);
         Ok(value)
     }
+    /// Reserve a bounded aggregate's consecutive timestamps, committing none on error.
+    pub fn transaction_many<R, E>(
+        &self,
+        count: u16,
+        prepare_commit: impl FnOnce(u16) -> Result<R, E>,
+    ) -> Result<R, E> {
+        let mut number = self.0.lock().unwrap();
+        let result = prepare_commit(*number)?;
+        *number = number.wrapping_add(count);
+        Ok(result)
+    }
     pub(super) fn current(&self) -> u16 {
         *self.0.lock().unwrap()
     }

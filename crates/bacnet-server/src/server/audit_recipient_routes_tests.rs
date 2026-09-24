@@ -8,7 +8,7 @@ async fn audit_target_routes_are_callback_free_after_startup() {
         let mut operations = AuditOperationFlags::empty();
         operations.insert(AuditOperation::READ);
         operations.insert(AuditOperation::WRITE);
-        reporter.set_auditable_operations(operations);
+        reporter.set_auditable_operations(operations).unwrap();
         let mut fixture = try_server(
             reporter,
             &[10],
@@ -118,8 +118,8 @@ async fn audit_target_routes_use_actual_bound_bip_broadcast_port() {
     let transport = bacnet_transport::bip::BipTransport::new(Ipv4Addr::LOCALHOST, 0, broadcast);
     let mut server = BACnetServer::start_with_clock_mode_and_bindings(
         ServerConfig {
-            audit_reporter: Some(AuditReporterConfig {
-                reporter: oid(ObjectType::AUDIT_REPORTER, 1),
+            audit_reporters: Some(AuditReportersConfig {
+                reporters: vec![oid(ObjectType::AUDIT_REPORTER, 1)],
             }),
             ..Default::default()
         },
@@ -204,8 +204,8 @@ async fn audit_target_routes_revalidate_generic_next_hops_after_startup() {
             assert_eq!(transport.bip_broadcast_endpoint(), None);
             let mut server = BACnetServer::start_with_clock_mode_and_bindings(
                 ServerConfig {
-                    audit_reporter: Some(AuditReporterConfig {
-                        reporter: oid(ObjectType::AUDIT_REPORTER, 1),
+                    audit_reporters: Some(AuditReportersConfig {
+                        reporters: vec![oid(ObjectType::AUDIT_REPORTER, 1)],
                     }),
                     ..Default::default()
                 },
@@ -350,8 +350,8 @@ async fn audit_source_correlation_uses_post_start_generic_route_eligibility() {
         transport.learned_broadcast = Some(MacAddr::from_slice(&[0x42]));
         let mut server = BACnetServer::start_with_clock_mode_and_bindings(
             ServerConfig {
-                audit_reporter: Some(AuditReporterConfig {
-                    reporter: oid(ObjectType::AUDIT_REPORTER, 1),
+                audit_reporters: Some(AuditReportersConfig {
+                    reporters: vec![oid(ObjectType::AUDIT_REPORTER, 1)],
                 }),
                 ..Default::default()
             },

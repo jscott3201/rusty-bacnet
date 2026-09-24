@@ -20,7 +20,7 @@ mod read;
 mod write;
 use write::WriteSelection;
 
-/// One locally configured target READ/WRITE/CREATE/DELETE Reporter and unicast recipient.
+/// A bounded set of target READ/WRITE/CREATE/DELETE Reporters sharing one Device recipient.
 ///
 /// Reports successful inbound WP/WPM elements, AddListElement/RemoveListElement,
 /// AtomicWriteFile, CreateObject/DeleteObject operations, and authorized execution errors.
@@ -40,7 +40,7 @@ use write::WriteSelection;
 /// send/ACK has one total three-second deadline and no retries. Overflow or
 /// delivery failure sets COMMUNICATION_FAILURE, never changes the write result,
 /// and retains no ordinary record. Resource-admission drops can be summarized
-/// by one memory-only, saturating AUDITING_FAILURE count when its operation bit
+/// by one memory-only, saturating AUDITING_FAILURE count per Reporter when its operation bit
 /// and Audit_Level are enabled. One owned worker waits for capacity and coalesces
 /// further drops; summary failure never counts itself. Values over 32 octets are omitted.
 /// The complete APDU must fit the server's limit; outbound segmentation is not
@@ -58,7 +58,10 @@ use write::WriteSelection;
 /// Locally configured Monitored_Objects selects ordinary targets by exact object
 /// or object type. Omitted selection preserves catch-all behavior; an empty or
 /// all-NULL selection reports no ordinary targets. Reporter writes bypass it.
-/// Network selection writes and multi-Reporter arbitration are not supported.
+/// Enabled nominal overlaps fault all affected Reporters; only the lowest instance
+/// emits, before ordinary filters. Live local setters and aggregate changes use
+/// atomic admission; equal configuration is silent. Network selection writes are
+/// not supported. See docs/target-audit-reporters.md for selected fallback policies.
 /// CREATE/DELETE require their operation bit, count as configuration operations,
 /// and ignore the priority filter. Records use the final/candidate created OID or
 /// captured deleted OID, with no property, priority, or values; initial values do
@@ -93,7 +96,7 @@ use write::WriteSelection;
 /// ```no_run
 /// use bacnet_objects::{audit::AuditReporterObject, database::ObjectDatabase,
 ///     device::{DeviceConfig, DeviceObject}};
-/// use bacnet_server::server::{AuditReporterConfig, BACnetServer, DeviceBinding};
+/// use bacnet_server::server::{AuditReportersConfig, BACnetServer, DeviceBinding};
 /// use bacnet_types::{bitstring::AuditOperationFlags, enums::{AuditLevel,
 ///     AuditOperation, ObjectType}, primitives::ObjectIdentifier, constructed::BACnetRecipient};
 /// # async fn example() -> Result<(), bacnet_types::error::Error> {
@@ -106,12 +109,12 @@ use write::WriteSelection;
 /// reporter.set_audit_level(AuditLevel::AUDIT_ALL)?;
 /// let mut operations = AuditOperationFlags::empty();
 /// operations.insert(AuditOperation::WRITE);
-/// reporter.set_auditable_operations(operations);
-/// reporter.set_issue_confirmed_notifications(true);
+/// reporter.set_auditable_operations(operations)?;
+/// reporter.set_issue_confirmed_notifications(true)?;
 /// db.add(Box::new(reporter))?;
 /// let mut server = BACnetServer::builder().database(db)
-///     .audit_reporter(AuditReporterConfig {
-///         reporter: ObjectIdentifier::new(ObjectType::AUDIT_REPORTER, 1)?,
+///     .audit_reporters(AuditReportersConfig {
+///         reporters: vec![ObjectIdentifier::new(ObjectType::AUDIT_REPORTER, 1)?],
 ///     })
 ///     .device_binding(DeviceBinding::local(recipient, [127, 0, 0, 1, 0xBA, 0xC1])?)?
 ///     .build().await?;
@@ -120,23 +123,47 @@ use write::WriteSelection;
 /// # }
 /// ```
 #[derive(Debug, Clone)]
-pub struct AuditReporterConfig {
-    /// The one AuditReporterObject selected for this server.
-    pub reporter: ObjectIdentifier,
+pub struct AuditReportersConfig {
+    /// Between one and 64 distinct concrete target Reporter identifiers.
+    /// Startup validates and canonicalizes them by instance; this is a local bound.
+    pub reporters: Vec<ObjectIdentifier>,
+}
+
+impl AuditReportersConfig {
+    pub(super) fn canonicalize(&mut self) -> Result<(), Error> {
+        if self.reporters.is_empty()
+            || self.reporters.len() > 64
+            || self.reporters.iter().any(|oid| {
+                oid.object_type() != ObjectType::AUDIT_REPORTER
+                    || oid.instance_number() == ObjectIdentifier::MAX_INSTANCE
+            })
+        {
+            return Err(Error::Encoding(
+                "target Audit requires 1..=64 concrete Reporter identifiers".into(),
+            ));
+        }
+        self.reporters.sort_by_key(|oid| oid.instance_number());
+        if self.reporters.windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err(Error::Encoding(
+                "duplicate target Audit Reporter identifier".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl<T: TransportPort + 'static> ServerBuilder<T> {
-    /// Enable the narrow target audit profile; see [`AuditReporterConfig`].
-    pub fn audit_reporter(mut self, profile: AuditReporterConfig) -> Self {
-        self.config.audit_reporter = Some(profile);
+    /// Enable the narrow target audit profile; see [`AuditReportersConfig`].
+    pub fn audit_reporters(mut self, profile: AuditReportersConfig) -> Self {
+        self.config.audit_reporters = Some(profile);
         self
     }
 }
 
 impl BipServerBuilder {
-    /// Enable the narrow target audit profile; see [`AuditReporterConfig`].
-    pub fn audit_reporter(mut self, profile: AuditReporterConfig) -> Self {
-        self.config.audit_reporter = Some(profile);
+    /// Enable the narrow target audit profile; see [`AuditReportersConfig`].
+    pub fn audit_reporters(mut self, profile: AuditReportersConfig) -> Self {
+        self.config.audit_reporters = Some(profile);
         self
     }
 }
@@ -239,7 +266,7 @@ impl<'a, T: TransportPort + 'static> WriteAudit<'a, T> {
     ) -> Self {
         // Entries were checked against the concrete link at configuration or
         // observation admission. Correlation needs no caller code under locks.
-        let known_source = if config.audit_reporter.is_some() {
+        let known_source = if config.audit_reporters.is_some() {
             bindings
                 .read()
                 .await
@@ -276,6 +303,36 @@ impl<'a, T: TransportPort + 'static> WriteAudit<'a, T> {
 }
 
 impl<T: TransportPort + 'static> WriteAudit<'_, T> {
+    pub(super) fn select(
+        &self,
+        target: Option<ObjectIdentifier>,
+        kind: ObjectType,
+    ) -> Option<bacnet_objects::audit::SelectedAuditReporter> {
+        self.transactions
+            .audit_association
+            .get()?
+            .select(target, kind, None)
+    }
+    /// Local attempt-accounting policy for the supported network WRITE family.
+    /// A configured enabled Reporter falls back to itself without adding nominal
+    /// membership. Ordinary targets (including a disabled Reporter) use filters.
+    pub(super) fn select_write(
+        &self,
+        db: &ObjectDatabase,
+        target: ObjectIdentifier,
+    ) -> Option<(bacnet_objects::audit::SelectedAuditReporter, bool)> {
+        let mandatory = db
+            .get(&target)
+            .and_then(|object| object.audit_reporter_internal())
+            .is_some_and(|reporter| reporter.configuration_internal().enabled());
+        let association = self.transactions.audit_association.get()?;
+        let selected = if mandatory {
+            association.select_change(target, None)
+        } else {
+            association.select(Some(target), target.object_type(), None)
+        }?;
+        Some((selected, mandatory))
+    }
     /// The file handler calls once after execution, while still holding the DB
     /// guard, and never for decoder rejections or configured budget overload.
     pub(super) fn file_completed(
@@ -285,20 +342,15 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         result: &Result<(), Error>,
     ) {
         self.pending = None;
-        let Some(profile) = &self.config.audit_reporter else {
+        let Some((selected_reporter, mandatory)) = self.select_write(db, target) else {
             return;
         };
-        let Some(reporter) = db
-            .get(&profile.reporter)
-            .and_then(|object| object.audit_reporter_internal())
-        else {
-            return;
-        };
+        let reporter = &selected_reporter.configuration;
         let device = local_device(db);
         let route = device
             .and_then(|device| recipient(db, device))
             .and_then(|value| self.transactions.audit_routes.get()?.resolve(&value));
-        let status = reporter.status_internal();
+        let status = Arc::clone(&selected_reporter.status);
         status.set_configured(device.is_some() && route.is_some());
         let Some(device) = device else { return };
         let policy = db
@@ -306,26 +358,21 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
             .map(|object| object.audit_object_policy_internal())
             .unwrap_or_default()
             .effective_internal(reporter);
-        let selected = if target.object_type() == ObjectType::AUDIT_REPORTER {
-            policy.reporter_enabled
+        let selected = if mandatory {
+            true
         } else {
             policy.reports(AuditOperation::WRITE, None, None)
         };
-        if !selected || !reporter.monitors_object_internal(target) {
+        if !selected {
             return;
         }
         self.pending = Some(PendingWrite {
             selection: None,
-            failure: self.failure_ticket(
-                &status,
-                reporter.confirmed_internal(),
-                device,
-                route.clone(),
-            ),
+            failure: self.failure_ticket(&status, reporter.confirmed, device, route.clone()),
             route,
             completion: status.begin_delivery(),
             status,
-            confirmed: reporter.confirmed_internal(),
+            confirmed: reporter.confirmed,
             notification: BACnetAuditNotification {
                 source_timestamp: None,
                 target_timestamp: None,
@@ -362,20 +409,16 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         current: Option<&PropertyValue>,
     ) {
         self.pending = None;
-        let Some(profile) = &self.config.audit_reporter else {
-            return;
-        };
-        let Some(reporter) = db
-            .get(&profile.reporter)
-            .and_then(|object| object.audit_reporter_internal())
+        let Some((selected_reporter, mandatory)) = self.select_write(db, request.object_identifier)
         else {
             return;
         };
+        let reporter = &selected_reporter.configuration;
         let device = local_device(db);
         let route = device
             .and_then(|device| recipient(db, device))
             .and_then(|value| self.transactions.audit_routes.get()?.resolve(&value));
-        let status = reporter.status_internal();
+        let status = Arc::clone(&selected_reporter.status);
         status.set_configured(device.is_some() && route.is_some());
         let Some(device) = device else { return };
         let policy = db
@@ -383,8 +426,8 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
             .map(|object| object.audit_object_policy_internal())
             .unwrap_or_default()
             .effective_internal(reporter);
-        let selected = if request.object_identifier.object_type() == ObjectType::AUDIT_REPORTER {
-            reporter.reports_write_internal(request.property_identifier, None, true)
+        let selected = if mandatory {
+            true
         } else {
             policy.reports(
                 AuditOperation::WRITE,
@@ -392,21 +435,16 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
                 None,
             )
         };
-        if !selected || !reporter.monitors_object_internal(request.object_identifier) {
+        if !selected {
             return;
         }
         self.pending = Some(PendingWrite {
             selection: None,
-            failure: self.failure_ticket(
-                &status,
-                reporter.confirmed_internal(),
-                device,
-                route.clone(),
-            ),
+            failure: self.failure_ticket(&status, reporter.confirmed, device, route.clone()),
             route,
             completion: status.begin_delivery(),
             status,
-            confirmed: reporter.confirmed_internal(),
+            confirmed: reporter.confirmed,
             notification: BACnetAuditNotification {
                 source_timestamp: None,
                 target_timestamp: None,
@@ -453,25 +491,20 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         use_object_policy: bool,
     ) {
         self.pending = None;
-        let Some(profile) = &self.config.audit_reporter else {
+        let Some(selected_reporter) = self.select(target, kind) else {
             return;
         };
-        let Some(reporter) = db
-            .get(&profile.reporter)
-            .and_then(|object| object.audit_reporter_internal())
-        else {
-            return;
-        };
+        let reporter = &selected_reporter.configuration;
         let device = local_device(db);
         let route = device
             .and_then(|device| recipient(db, device))
             .and_then(|value| self.transactions.audit_routes.get()?.resolve(&value));
-        let status = reporter.status_internal();
+        let status = Arc::clone(&selected_reporter.status);
         status.set_configured(device.is_some() && route.is_some());
         let Some(device) = device else { return };
         let selected = target.map_or_else(
-            || reporter.monitors_unassigned_create_internal(kind),
-            |oid| reporter.monitors_object_internal(oid),
+            || reporter.monitors_unassigned(kind),
+            |oid| reporter.monitors(oid),
         );
         let policy = target
             .filter(|_| use_object_policy)
@@ -484,16 +517,11 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         }
         self.pending = Some(PendingWrite {
             selection: None,
-            failure: self.failure_ticket(
-                &status,
-                reporter.confirmed_internal(),
-                device,
-                route.clone(),
-            ),
+            failure: self.failure_ticket(&status, reporter.confirmed, device, route.clone()),
             route,
             completion: status.begin_delivery(),
             status,
-            confirmed: reporter.confirmed_internal(),
+            confirmed: reporter.confirmed,
             notification: BACnetAuditNotification {
                 source_timestamp: None,
                 target_timestamp: None,

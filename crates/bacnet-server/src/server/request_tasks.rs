@@ -160,7 +160,7 @@ mod audit_lifetime_tests {
     async fn admitted_request_retains_audit_membership_until_its_frame_is_destroyed() {
         use bacnet_objects::database::AuditOwnership;
         use bacnet_types::{enums::ObjectType, primitives::ObjectIdentifier};
-        let owner = AuditOwnership::new(
+        let owner = AuditOwnership::for_source(
             ObjectIdentifier::new(ObjectType::DEVICE, 10).unwrap(),
             ObjectIdentifier::new(ObjectType::AUDIT_REPORTER, 1).unwrap(),
         );
