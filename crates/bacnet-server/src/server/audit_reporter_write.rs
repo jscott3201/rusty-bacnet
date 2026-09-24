@@ -4,7 +4,7 @@ use super::*;
 pub(super) struct WriteSelection {
     ordinary: bool,
     captured_description: Option<(ObjectIdentifier, PropertyValue)>,
-    change: Option<(
+    pub(super) change: Option<(
         ObjectIdentifier,
         PropertyIdentifier,
         bacnet_objects::audit::ObjectAuditPolicy,
@@ -142,6 +142,15 @@ impl<T: TransportPort + 'static> WriteCommitObserver for WriteAudit<'_, T> {
                 result: None,
             },
         });
+    }
+
+    fn commit_policy(
+        &mut self,
+        db: &mut ObjectDatabase,
+        write: WriteTarget<'_>,
+        value: &PropertyValue,
+    ) -> Option<Result<(), Error>> {
+        self.commit_mandatory_policy(db, write, value)
     }
 
     fn committed(&mut self, db: &mut ObjectDatabase) {

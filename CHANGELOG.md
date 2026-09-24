@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Eligible AV/BV Audit policy changes now reserve their immediate notification
+  before committing through network WP/WPM and `BACnetServer::write_local` (#809).
+  Unavailable route, runtime, capacity, confirmed lease or APDU fit returns
+  SERVICES/SERVICE_REQUEST_DENIED without changing the policy or consuming an
+  event sequence. This is a local admission policy; ordinary writes remain
+  best-effort and successful delivery is not guaranteed.
+
 - Ordinary SubscribeCOV typed request encoding now returns `Result` and rejects
   a lifetime without confirmed-notification mode before appending bytes (#805).
   The server rejects that malformed shape before lookup, expiry cleanup or state

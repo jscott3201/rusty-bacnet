@@ -77,6 +77,12 @@ impl BACnetObject for SourceReporter {
         self.wrapped.audit_reporter_authority_internal()
     }
 
+    fn audit_policy_authority_internal(
+        &mut self,
+    ) -> Option<bacnet_objects::audit::AuditPolicyAuthority<'_>> {
+        self.wrapped.audit_policy_authority_internal()
+    }
+
     fn audit_object_policy_internal(&self) -> bacnet_objects::audit::ObjectAuditPolicy {
         self.wrapped.audit_object_policy_internal()
     }

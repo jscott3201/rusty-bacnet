@@ -1615,7 +1615,12 @@ server.add_binary_value(8, "Enable", audit_level="audit_config")
 
 Actual Audit_Level changes bypass the object's own NONE/WRITE suppression under
 an enabled Reporter; actual Auditable_Operations changes bypass WRITE while the
-effective level is enabled. Equal-value and failed writes retain ordinary filters.
+effective level is enabled. These eligible actual changes reserve immediate
+notification resources before mutation. A missing route or unavailable runtime,
+capacity, confirmed lease or APDU fit returns SERVICES/SERVICE_REQUEST_DENIED;
+the property remains unchanged. This is a local admission policy, not a delivery
+guarantee. Equal-value, NULL and ordinary writes retain their existing behavior;
+other failed writes retain ordinary filters.
 AV/BV absent/NULL priority filters inherit the Reporter under the object-specific
 clauses, despite conflicting generic wording. See the [Rust policy contract](rust-api.md#object-owned-avbv-audit-policy)
 for the interpretation, WPM/local-write behavior, and bounded lifecycle support.

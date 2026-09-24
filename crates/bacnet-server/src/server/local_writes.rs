@@ -70,7 +70,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// and event notifications that a network [`WriteProperty`] does. When target
     /// Audit reporting is configured, the same observer records eligible local
     /// writes with local Device provenance and no invoke ID; Device recipient
-    /// changes retain their sole old/new pair owner.
+    /// changes retain their sole old/new pair owner. Eligible actual AV/BV Audit
+    /// policy changes reserve immediate delivery before assignment; unavailable
+    /// resources return SERVICES/SERVICE_REQUEST_DENIED without a policy change.
     ///
     /// This is the server-owned local-mutation entry point: it performs the
     /// write under the database lock — routing `OBJECT_NAME` through the name
@@ -192,17 +194,42 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
                 LocalWrite::ApplicationInputPresentValue => None,
             };
-            let object = db.get_mut(oid).expect("existence checked above");
-            let result = match write {
+            let prepared = match write {
                 LocalWrite::Property {
                     property,
                     array_index,
                     priority,
-                } => object.write_property(property, array_index, value, priority),
-                LocalWrite::ApplicationInputPresentValue => {
-                    object.set_present_value_internal(value)
+                } => {
+                    let encoded = audit_reporter::small_value(&value).unwrap_or_default();
+                    audit.as_mut().and_then(|audit| {
+                        audit.commit_policy(
+                            &mut db,
+                            WriteTarget {
+                                oid: *oid,
+                                property,
+                                array_index,
+                                priority,
+                                value: &encoded,
+                            },
+                            &value,
+                        )
+                    })
                 }
+                LocalWrite::ApplicationInputPresentValue => None,
             };
+            let result = prepared.unwrap_or_else(|| {
+                let object = db.get_mut(oid).expect("existence checked above");
+                match write {
+                    LocalWrite::Property {
+                        property,
+                        array_index,
+                        priority,
+                    } => object.write_property(property, array_index, value, priority),
+                    LocalWrite::ApplicationInputPresentValue => {
+                        object.set_present_value_internal(value)
+                    }
+                }
+            });
             if let Err(error) = result {
                 if let Some(audit) = &mut audit {
                     audit.failed(&mut db, &error);

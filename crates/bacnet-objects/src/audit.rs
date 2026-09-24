@@ -24,7 +24,9 @@ use crate::traits::BACnetObject;
 mod association;
 pub use association::{SelectedAuditReporter, TargetAuditAssociation};
 mod object_policy;
+mod policy_authority;
 pub use object_policy::{AuditPriorityPolicy, EffectiveAuditPolicy, ObjectAuditPolicy};
+pub use policy_authority::{AuditPolicyAuthority, PreparedAuditPolicyWrite};
 
 mod forwarding;
 mod log_metadata;

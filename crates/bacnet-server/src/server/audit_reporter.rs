@@ -20,6 +20,9 @@ mod read;
 mod write;
 use write::WriteSelection;
 
+#[path = "audit_policy_precommit.rs"]
+mod policy_precommit;
+
 /// A bounded set of target READ/WRITE/CREATE/DELETE Reporters sharing one Device recipient.
 ///
 /// Reports successful inbound WP/WPM elements, AddListElement/RemoveListElement,

@@ -2152,6 +2152,17 @@ policy. Successful BV CREATE uses the created policy, DELETE captures it before
 removal, and failed CREATE uses Reporter fallback. Network AV creation remains
 unsupported. Source reporting ignores remote object policy.
 
+For those eligible actual setting changes, network WP, each WPM element and
+`BACnetServer::write_local` prepare the immediate notification before assigning
+the built-in policy field. Unavailable route, runtime, send capacity, confirmed
+lease or APDU fit returns SERVICES/SERVICE_REQUEST_DENIED without changing that
+field, consuming a clockless sequence or retaining a worker/lease. WPM keeps its
+successful prefix and stops at the denied element. This stronger admission rule
+is a local policy, not a Standard-mandated write rejection. A successful admission
+owns one bounded delivery attempt; later send/ACK failure cannot undo the write.
+Ordinary, equal and NULL writes keep their existing best-effort behavior. No
+delayed queue or Send_Now support is implied.
+
 `BACnetServer::write_local` uses the same target observer, with local Device
 provenance and no invoke ID. Device recipient changes still emit only their
 old/new pair. Physical Input sampling through `set_present_value_local` is silent;

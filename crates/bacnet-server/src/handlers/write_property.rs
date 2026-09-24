@@ -1,6 +1,7 @@
 use super::*;
 
 /// Borrowed write coordinates; never retained across the synchronous commit.
+#[derive(Clone, Copy)]
 pub(crate) struct WriteTarget<'a> {
     pub oid: ObjectIdentifier,
     pub property: PropertyIdentifier,
@@ -11,8 +12,18 @@ pub(crate) struct WriteTarget<'a> {
 
 pub(crate) trait WriteCommitObserver: Send {
     fn before(&mut self, db: &ObjectDatabase, write: WriteTarget<'_>);
+    /// Handle an eligible sealed policy assignment through atomic Audit admission.
+    /// None keeps the ordinary object writer; Some owns the complete result.
+    fn commit_policy(
+        &mut self,
+        _db: &mut ObjectDatabase,
+        _write: WriteTarget<'_>,
+        _value: &PropertyValue,
+    ) -> Option<Result<(), Error>> {
+        None
+    }
     fn committed(&mut self, db: &mut ObjectDatabase);
-    /// Execution returned an error after `before`; never called for policy denial.
+    /// Execution returned an error after `before`; never called for authorization denial.
     fn failed(&mut self, db: &mut ObjectDatabase, error: &Error);
 }
 
@@ -183,26 +194,29 @@ pub(crate) fn handle_write_property_multiple_observed(
             }
         }
         snapshots.capture_before_write(db, oid);
-        if let Some(observer) = observer.as_deref_mut() {
-            observer.before(
-                db,
-                WriteTarget {
-                    oid,
-                    property,
-                    array_index: reference.property_array_index,
-                    priority: attempt.priority,
-                    value: &attempt.value,
-                },
-            );
-        }
-        let write = write_with_source(
-            db.get_mut(&oid).expect("existence checked above"),
+        let target = WriteTarget {
+            oid,
             property,
-            reference.property_array_index,
-            value,
-            attempt.priority,
-            source,
-        );
+            array_index: reference.property_array_index,
+            priority: attempt.priority,
+            value: &attempt.value,
+        };
+        if let Some(observer) = observer.as_deref_mut() {
+            observer.before(db, target);
+        }
+        let prepared = observer
+            .as_deref_mut()
+            .and_then(|observer| observer.commit_policy(db, target, &value));
+        let write = prepared.unwrap_or_else(|| {
+            write_with_source(
+                db.get_mut(&oid).expect("existence checked above"),
+                property,
+                reference.property_array_index,
+                value,
+                attempt.priority,
+                source,
+            )
+        });
         if let Err(error) = write {
             if let Some(observer) = observer.as_deref_mut() {
                 observer.failed(db, &error);
@@ -428,26 +442,29 @@ pub(crate) fn handle_write_property_observed(
             }
         }
     }
+    let target = WriteTarget {
+        oid,
+        property: request.property_identifier,
+        array_index: request.property_array_index,
+        priority: request.priority,
+        value: &request.property_value,
+    };
     if let Some(observer) = observer.as_deref_mut() {
-        observer.before(
-            db,
-            WriteTarget {
-                oid,
-                property: request.property_identifier,
-                array_index: request.property_array_index,
-                priority: request.priority,
-                value: &request.property_value,
-            },
-        );
+        observer.before(db, target);
     }
-    let result = write_with_source(
-        db.get_mut(&oid).expect("existence checked above"),
-        request.property_identifier,
-        request.property_array_index,
-        value,
-        request.priority,
-        source,
-    );
+    let prepared = observer
+        .as_deref_mut()
+        .and_then(|observer| observer.commit_policy(db, target, &value));
+    let result = prepared.unwrap_or_else(|| {
+        write_with_source(
+            db.get_mut(&oid).expect("existence checked above"),
+            request.property_identifier,
+            request.property_array_index,
+            value,
+            request.priority,
+            source,
+        )
+    });
     if let Err(error) = result {
         if let Some(observer) = observer {
             observer.failed(db, &error);

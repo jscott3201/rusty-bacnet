@@ -552,3 +552,6 @@ async fn object_audit_policy_also_filters_list_and_file_execution_failures() {
         f.server.stop().await.unwrap();
     }
 }
+
+#[path = "audit_policy_precommit_tests.rs"]
+mod precommit;
