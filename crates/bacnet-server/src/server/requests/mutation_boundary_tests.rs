@@ -140,7 +140,7 @@ async fn denied_subscription_cancellations_preserve_existing_entries() {
             MutationTarget::SubscribeCovPropertyMultiple(mut request) => {
                 request.lifetime = None;
                 request.max_notification_delay = None;
-                request.encode(&mut cancellation);
+                request.encode(&mut cancellation).unwrap();
             }
             _ => unreachable!(),
         }

@@ -33,7 +33,7 @@ fn subscribe_cov_property_multiple_round_trip() {
         }],
     };
     let mut buf = BytesMut::new();
-    req.encode(&mut buf);
+    req.encode(&mut buf).unwrap();
     let decoded = SubscribeCOVPropertyMultipleRequest::decode(&buf).unwrap();
     assert_eq!(req, decoded);
 }
@@ -59,7 +59,7 @@ fn subscribe_cov_property_multiple_uses_standard_tags() {
         }],
     };
     let mut buf = BytesMut::new();
-    req.encode(&mut buf);
+    req.encode(&mut buf).unwrap();
 
     let mut offset = 0;
     for tag_number in [0, 1, 2, 3] {
@@ -111,7 +111,7 @@ fn subscribe_cov_property_multiple_minimal() {
         }],
     };
     let mut buf = BytesMut::new();
-    req.encode(&mut buf);
+    req.encode(&mut buf).unwrap();
     let decoded = SubscribeCOVPropertyMultipleRequest::decode(&buf).unwrap();
     assert_eq!(req, decoded);
 }

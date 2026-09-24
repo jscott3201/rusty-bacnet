@@ -1769,6 +1769,11 @@ class BACnetClient:
         ``issue_confirmed_notifications`` is required, including for cancellation requests.
         For subscriptions and re-subscriptions, ``lifetime`` and ``max_notification_delay`` are both required.
         For whole-context cancellations, pass an empty ``specs`` list and omit both fields.
+        Complete timing and nested-reference validation raises ``ValueError`` synchronously,
+        before an awaitable, address parsing, client-state access or I/O. Each supplied
+        object needs references; ALL/REQUIRED/OPTIONAL selectors are prohibited and the
+        cumulative reference limit is 10,000. Empty outer lists remain encodable with
+        valid finite timing, without claiming bundled-server empty-context support.
         """
         ...
 

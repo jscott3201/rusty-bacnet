@@ -346,33 +346,36 @@ pub(super) fn cases() -> Vec<(ConfirmedServiceChoice, Bytes, MutationTarget)> {
         bytes.freeze(),
         MutationTarget::SubscribeCovProperty(request),
     ));
-    case!(
-        SUBSCRIBE_COV_PROPERTY_MULTIPLE,
-        SubscribeCovPropertyMultiple,
-        SubscribeCOVPropertyMultipleRequest {
-            subscriber_process_identifier: 41,
-            issue_confirmed_notifications: false,
-            lifetime: Some(600),
-            max_notification_delay: Some(1),
-            list_of_cov_subscription_specifications: vec![COVSubscriptionSpecification {
-                monitored_object_identifier: object,
-                list_of_cov_references: [
-                    PropertyIdentifier::PRESENT_VALUE,
-                    PropertyIdentifier::STATUS_FLAGS
-                ]
-                .into_iter()
-                .map(|property| COVReference {
-                    monitored_property: PropertyReference {
-                        property_identifier: property,
-                        property_array_index: None
-                    },
-                    cov_increment: None,
-                    timestamped: false,
-                })
-                .collect(),
-            }],
-        }
-    );
+    let request = SubscribeCOVPropertyMultipleRequest {
+        subscriber_process_identifier: 41,
+        issue_confirmed_notifications: false,
+        lifetime: Some(600),
+        max_notification_delay: Some(1),
+        list_of_cov_subscription_specifications: vec![COVSubscriptionSpecification {
+            monitored_object_identifier: object,
+            list_of_cov_references: [
+                PropertyIdentifier::PRESENT_VALUE,
+                PropertyIdentifier::STATUS_FLAGS,
+            ]
+            .into_iter()
+            .map(|property| COVReference {
+                monitored_property: PropertyReference {
+                    property_identifier: property,
+                    property_array_index: None,
+                },
+                cov_increment: None,
+                timestamped: false,
+            })
+            .collect(),
+        }],
+    };
+    let mut bytes = BytesMut::new();
+    request.encode(&mut bytes).unwrap();
+    cases.push((
+        ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY_MULTIPLE,
+        bytes.freeze(),
+        MutationTarget::SubscribeCovPropertyMultiple(request),
+    ));
     cases
 }
 

@@ -165,26 +165,6 @@ impl BACnetClient {
         max_notification_delay: Option<u32>,
         lifetime: Option<u32>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        match (lifetime, max_notification_delay) {
-            (None, None) => {}
-            (Some(lifetime), Some(max_delay)) => {
-                if lifetime == 0 {
-                    return Err(PyValueError::new_err("lifetime must be non-zero"));
-                }
-                if max_delay > 3600 || max_delay >= lifetime {
-                    return Err(PyValueError::new_err(
-                        "max_notification_delay must be <= 3600 and less than lifetime",
-                    ));
-                }
-            }
-            _ => {
-                return Err(PyValueError::new_err(
-                    "lifetime and max_notification_delay must be both present or both absent",
-                ));
-            }
-        }
-
-        let inner = self.inner.clone();
         let rust_specs: Vec<COVSubscriptionSpecification> = specs
             .into_iter()
             .map(|(oid, refs)| COVSubscriptionSpecification {
@@ -203,6 +183,17 @@ impl BACnetClient {
             })
             .collect();
 
+        let req = SubscribeCOVPropertyMultipleRequest {
+            subscriber_process_identifier,
+            issue_confirmed_notifications,
+            lifetime,
+            max_notification_delay,
+            list_of_cov_subscription_specifications: rust_specs,
+        };
+        let mut buf = BytesMut::new();
+        req.encode(&mut buf)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        let inner = self.inner.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let mac = parse_address(&address)?;
             let c = {
@@ -211,15 +202,6 @@ impl BACnetClient {
                     PyRuntimeError::new_err("client not started — use 'async with'")
                 })?)
             };
-            let req = SubscribeCOVPropertyMultipleRequest {
-                subscriber_process_identifier,
-                issue_confirmed_notifications,
-                lifetime,
-                max_notification_delay,
-                list_of_cov_subscription_specifications: rust_specs,
-            };
-            let mut buf = BytesMut::new();
-            req.try_encode(&mut buf).map_err(to_py_err)?;
             c.confirmed_request(
                 &mac,
                 ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY_MULTIPLE,

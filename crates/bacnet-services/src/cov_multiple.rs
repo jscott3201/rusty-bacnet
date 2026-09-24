@@ -48,19 +48,14 @@ pub struct SubscribeCOVPropertyMultipleRequest {
 }
 
 impl SubscribeCOVPropertyMultipleRequest {
-    /// Encode a validated request without mutating `buf` on failure.
-    pub fn try_encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
+    /// Validate the complete request, then append it without mutating `buf` on failure.
+    ///
+    /// Empty outer specifications are encodable for cancellation and valid finite timing;
+    /// encoding alone does not establish a server-side subscription context.
+    pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
         self.validate()?;
         self.encode_validated(buf);
         Ok(())
-    }
-
-    /// Encode a request known to satisfy the service model.
-    ///
-    /// Dynamic or untrusted models should use [`Self::try_encode`] instead.
-    pub fn encode(&self, buf: &mut BytesMut) {
-        self.try_encode(buf)
-            .expect("valid SubscribeCOVPropertyMultiple request");
     }
 
     fn validate(&self) -> Result<(), Error> {
