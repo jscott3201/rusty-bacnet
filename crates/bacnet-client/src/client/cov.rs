@@ -25,7 +25,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         request: SubscribeCOVRequest,
     ) -> Result<(), Error> {
         let mut buf = BytesMut::new();
-        request.encode(&mut buf);
+        request.encode(&mut buf)?;
 
         let _ = self
             .confirmed_request_inner(target, ConfirmedServiceChoice::SUBSCRIBE_COV, &buf)
@@ -103,13 +103,15 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         confirmed: bool,
         lifetime: Option<u32>,
     ) -> Result<(), Error> {
-        let (mac, routing) = self.resolve_device(device_instance).await?;
         let request = Self::subscribe_cov_request(
             subscriber_process_identifier,
             monitored_object_identifier,
             Some(confirmed),
             lifetime,
         );
+
+        request.validate()?;
+        let (mac, routing) = self.resolve_device(device_instance).await?;
 
         if let Some((dnet, dadr)) = routing {
             self.send_subscribe_cov_request(
@@ -157,13 +159,15 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         subscriber_process_identifier: u32,
         monitored_object_identifier: ObjectIdentifier,
     ) -> Result<(), Error> {
-        let (mac, routing) = self.resolve_device(device_instance).await?;
         let request = Self::subscribe_cov_request(
             subscriber_process_identifier,
             monitored_object_identifier,
             None,
             None,
         );
+
+        request.validate()?;
+        let (mac, routing) = self.resolve_device(device_instance).await?;
 
         if let Some((dnet, dadr)) = routing {
             self.send_subscribe_cov_request(
@@ -331,3 +335,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 #[cfg(test)]
 #[path = "cov_property_validation_tests.rs"]
 mod property_validation_tests;
+
+#[cfg(test)]
+#[path = "cov_request_validation_tests.rs"]
+mod request_validation_tests;

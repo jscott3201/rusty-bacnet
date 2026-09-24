@@ -76,7 +76,7 @@ async fn peer_quota_isolation() {
             lifetime: Some(300),
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         let mut table = server.cov_table.write().await;
         let db = server.db.read().await;
         handle_subscribe_cov(&mut table, &db, &peer_a, &buf).unwrap();
@@ -91,7 +91,7 @@ async fn peer_quota_isolation() {
             lifetime: Some(300),
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         let mut table = server.cov_table.write().await;
         let db = server.db.read().await;
         let err = handle_subscribe_cov(&mut table, &db, &peer_a, &buf).unwrap_err();
@@ -119,7 +119,7 @@ async fn peer_quota_isolation() {
             lifetime: Some(300),
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         let mut table = server.cov_table.write().await;
         let db = server.db.read().await;
         handle_subscribe_cov(&mut table, &db, &peer_b, &buf).unwrap();
@@ -166,7 +166,7 @@ async fn reserved_capacity_preservation() {
             lifetime: Some(300),
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         let mut table = server.cov_table.write().await;
         let db = server.db.read().await;
         handle_subscribe_cov(&mut table, &db, &unreserved_peer, &buf).unwrap();
@@ -181,7 +181,7 @@ async fn reserved_capacity_preservation() {
             lifetime: Some(300),
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         let mut table = server.cov_table.write().await;
         let db = server.db.read().await;
         let err = handle_subscribe_cov(&mut table, &db, &unreserved_peer, &buf).unwrap_err();
@@ -207,7 +207,7 @@ async fn reserved_capacity_preservation() {
             lifetime: Some(300),
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         let mut table = server.cov_table.write().await;
         let db = server.db.read().await;
         handle_subscribe_cov(&mut table, &db, reserved_mac.as_slice(), &buf).unwrap();
@@ -223,7 +223,7 @@ async fn reserved_capacity_preservation() {
             lifetime: Some(300),
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         let mut table = server.cov_table.write().await;
         let db = server.db.read().await;
         let err = handle_subscribe_cov(&mut table, &db, reserved_mac.as_slice(), &buf).unwrap_err();
@@ -272,7 +272,7 @@ async fn indefinite_subscription_policy() {
             lifetime: None,
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         let mut table = server.cov_table.write().await;
         let db = server.db.read().await;
         let err = handle_subscribe_cov(&mut table, &db, &peer, &buf).unwrap_err();
@@ -300,7 +300,7 @@ async fn indefinite_subscription_policy() {
             lifetime: Some(300),
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         let mut table = server.cov_table.write().await;
         let db = server.db.read().await;
         handle_subscribe_cov(&mut table, &db, &peer, &buf).unwrap();
@@ -332,7 +332,7 @@ async fn indefinite_subscription_policy() {
             lifetime: None,
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         let mut table = server2.cov_table.write().await;
         let db = server2.db.read().await;
         handle_subscribe_cov(&mut table, &db, &peer, &buf).unwrap();
@@ -347,7 +347,7 @@ async fn indefinite_subscription_policy() {
             lifetime: None,
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         let mut table = server2.cov_table.write().await;
         let db = server2.db.read().await;
         let err = handle_subscribe_cov(&mut table, &db, &peer, &buf).unwrap_err();
@@ -396,7 +396,7 @@ async fn disconnect_and_expiry_cleanup_releases_quota() {
             lifetime: Some(300),
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         let mut table = server.cov_table.write().await;
         let db = server.db.read().await;
         handle_subscribe_cov(&mut table, &db, &peer, &buf).unwrap();
@@ -412,7 +412,7 @@ async fn disconnect_and_expiry_cleanup_releases_quota() {
             lifetime: Some(300),
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         let mut table = server.cov_table.write().await;
         let db = server.db.read().await;
         assert!(handle_subscribe_cov(&mut table, &db, &peer, &buf).is_err());
@@ -433,7 +433,7 @@ async fn disconnect_and_expiry_cleanup_releases_quota() {
             lifetime: Some(300),
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         let mut table = server.cov_table.write().await;
         let db = server.db.read().await;
         handle_subscribe_cov(&mut table, &db, &peer, &buf).unwrap();

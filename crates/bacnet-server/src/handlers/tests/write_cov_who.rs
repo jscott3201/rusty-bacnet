@@ -51,7 +51,7 @@ fn subscribe_cov_handler_success() {
         lifetime: Some(300),
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
     let subscriptions = handle_subscribe_cov_with_initial(&mut table, &db, &mac, &buf).unwrap();
     assert_eq!(subscriptions.len(), 1);
@@ -132,7 +132,7 @@ fn subscribe_cov_update_existing_entry_allowed_at_capacity() {
         lifetime: Some(300),
     };
     let mut buf = BytesMut::new();
-    original.encode(&mut buf);
+    original.encode(&mut buf).unwrap();
     handle_subscribe_cov(&mut table, &db, &mac, &buf).unwrap();
     assert_eq!(table.len(), 1024);
 
@@ -143,7 +143,7 @@ fn subscribe_cov_update_existing_entry_allowed_at_capacity() {
         lifetime: Some(600),
     };
     let mut buf = BytesMut::new();
-    update.encode(&mut buf);
+    update.encode(&mut buf).unwrap();
     let subscriptions = handle_subscribe_cov_with_initial(&mut table, &db, &mac, &buf).unwrap();
 
     assert_eq!(subscriptions.len(), 1);
@@ -492,7 +492,7 @@ fn subscribe_cov_records_routed_subscriber_endpoint() {
         lifetime: Some(300),
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
     let subscriptions = handle_subscribe_cov_with_initial_endpoint(
         &mut table,
@@ -525,7 +525,7 @@ fn subscribe_cov_unknown_object_fails() {
         lifetime: Some(300),
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
     assert!(handle_subscribe_cov(&mut table, &db, &mac, &buf).is_err());
     assert!(table.is_empty());
@@ -546,7 +546,7 @@ fn subscribe_cov_cancellation() {
         lifetime: Some(300),
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
     handle_subscribe_cov(&mut table, &db, &mac, &buf).unwrap();
     assert_eq!(table.len(), 1);
 
@@ -558,7 +558,7 @@ fn subscribe_cov_cancellation() {
         lifetime: None,
     };
     let mut buf = BytesMut::new();
-    cancel.encode(&mut buf);
+    cancel.encode(&mut buf).unwrap();
     let subscriptions = handle_subscribe_cov_with_initial(&mut table, &db, &mac, &buf).unwrap();
     assert!(subscriptions.is_empty());
     assert!(table.is_empty());

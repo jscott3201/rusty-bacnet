@@ -388,6 +388,11 @@ await client.write_property_multiple("192.168.1.100:47808", [
 
 #### `subscribe_cov(address, subscriber_process_identifier, monitored_object_identifier, confirmed, lifetime=None)`
 
+`confirmed` explicitly selects notification mode. A `None` or zero lifetime
+creates an indefinite subscription; positive lifetimes are seconds. Use
+`unsubscribe_cov` to cancel. The client always supplies the required mode,
+including when the lifetime is omitted.
+
 ```python
 await client.subscribe_cov(
     "192.168.1.100:47808",

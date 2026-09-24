@@ -1731,7 +1731,11 @@ class BACnetClient:
         confirmed: bool,
         lifetime: Optional[int] = None,
     ) -> None:
-        """Subscribe to Change-of-Value notifications for an object."""
+        """Subscribe to Change-of-Value notifications for an object.
+
+        lifetime=None or 0 is indefinite; positive values are seconds.
+        Use unsubscribe_cov for cancellation. confirmed always supplies the mode.
+        """
         ...
 
     async def unsubscribe_cov(

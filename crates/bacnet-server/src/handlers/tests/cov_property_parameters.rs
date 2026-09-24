@@ -158,7 +158,7 @@ fn subscribe_cov_ordinary_none_and_zero_lifetimes_remain_indefinite() {
             lifetime,
         };
         let mut bytes = BytesMut::new();
-        request.encode(&mut bytes);
+        request.encode(&mut bytes).unwrap();
         let initial = handle_subscribe_cov_with_initial(&mut table, &db, &[1], &bytes).unwrap();
         assert_eq!(initial.len(), 1);
         assert!(initial[0].expires_at.is_none());

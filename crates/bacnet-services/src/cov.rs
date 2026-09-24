@@ -35,7 +35,19 @@ impl SubscribeCOVRequest {
         self.issue_confirmed_notifications.is_none() && self.lifetime.is_none()
     }
 
-    pub fn encode(&self, buf: &mut BytesMut) {
+    /// Lifetime requires an explicit notification mode; mode alone is indefinite.
+    pub fn validate(&self) -> Result<(), Error> {
+        if self.lifetime.is_some() && self.issue_confirmed_notifications.is_none() {
+            return Err(Error::Encoding(
+                "SubscribeCOV lifetime requires confirmed-notification mode".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Append a valid request, leaving the buffer unchanged on validation failure.
+    pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
+        self.validate()?;
         // [0] subscriber-process-identifier
         primitives::encode_ctx_unsigned(buf, 0, self.subscriber_process_identifier as u64);
         // [1] monitored-object-identifier
@@ -48,6 +60,7 @@ impl SubscribeCOVRequest {
         if let Some(lifetime) = self.lifetime {
             primitives::encode_ctx_unsigned(buf, 3, lifetime as u64);
         }
+        Ok(())
     }
 
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
@@ -314,7 +327,7 @@ mod tests {
             lifetime: Some(300),
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         let decoded = SubscribeCOVRequest::decode(&buf).unwrap();
         assert_eq!(req, decoded);
         assert!(!decoded.is_cancellation());
@@ -330,7 +343,7 @@ mod tests {
             lifetime: None,
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         let decoded = SubscribeCOVRequest::decode(&buf).unwrap();
         assert_eq!(req, decoded);
         assert!(decoded.is_cancellation());
@@ -384,7 +397,7 @@ mod tests {
             lifetime: Some(300),
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         assert!(SubscribeCOVRequest::decode(&buf[..1]).is_err());
     }
 
@@ -398,7 +411,7 @@ mod tests {
             lifetime: Some(300),
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         assert!(SubscribeCOVRequest::decode(&buf[..2]).is_err());
     }
 
@@ -412,7 +425,7 @@ mod tests {
             lifetime: Some(300),
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         assert!(SubscribeCOVRequest::decode(&buf[..3]).is_err());
     }
 
@@ -657,3 +670,7 @@ mod tests {
 #[cfg(test)]
 #[path = "cov_property_validation_tests.rs"]
 mod property_validation_tests;
+
+#[cfg(test)]
+#[path = "cov_request_validation_tests.rs"]
+mod request_validation_tests;

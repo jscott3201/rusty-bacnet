@@ -135,7 +135,8 @@ async fn audit_reporter_create_delete_success_uses_final_identity_without_initia
                 issue_confirmed_notifications: Some(false),
                 lifetime: Some(60),
             }
-            .encode(&mut bytes);
+            .encode(&mut bytes)
+            .unwrap();
             handlers::handle_subscribe_cov(&mut table, &db, SOURCE, &bytes).unwrap();
         }
         assert_eq!(table.len(), 2);
