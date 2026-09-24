@@ -22,6 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Pre-1.0 WP encoding now returns `Result` and rejects priorities outside 1–16
+  transactionally. Direct/routed clients reject before lookup/admission/traffic;
+  Python direct, device-based, and multi-device WP validate synchronously, with
+  complete batch validation before dispatch. NULL and inbound error behavior stay
+  unchanged; WPM is a separate API.
+
 - Multi-device RP/RPM/WP batch limits now use `Option<NonZeroUsize>` in Rust.
   Python rejects zero synchronously with `ValueError`, including empty batches.
   `None` still selects 32; result shapes and completion order are unchanged.

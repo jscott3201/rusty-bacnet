@@ -13,7 +13,7 @@
 | Dimension | Value | Count |
 |---|---|---|
 | Priority | P0 | 16 |
-| Priority | P1 | 47 |
+| Priority | P1 | 48 |
 | Priority | P2 | 5 |
 | Priority | P3 | 4 |
 | Status | deferred-pending-owner-decision | 2 |
@@ -25,7 +25,7 @@
 | Status | implementation-present-needs-state-machine-audit | 4 |
 | Status | implementation-present-needs-timeout-tests | 1 |
 | Status | implementation-present-needs-window-tests | 1 |
-| Status | in-progress | 13 |
+| Status | in-progress | 14 |
 | Status | supported-with-clause-evidence | 19 |
 | Status | unknown-pending-source-review | 4 |
 | Status | unsupported-by-design | 3 |
@@ -34,6 +34,7 @@
 
 | ID | Anchor | Priority | Status | Public Claims |
 |---|---|---|---|---|
+| `BACNET-15-WP-OUTBOUND-PRIORITY` | Clause 15.9.1.1 Priority, printed page 752 / PDF page 754; inbound error and noncommandable rules printed page 753 / PDF page 755 | P1 | in-progress | 2 |
 | `BACNET-LOCAL-MUTATION-POLICY` | Local operator authorization policy; Clauses 14, 15 and 13 COV service execution boundaries; not a normative authentication claim | P1 | in-progress | 4 |
 | `BACNET-15-ENDPOINT-DEVICE-WRITE` | Clause 15.9; Clause 12.11 Protocol_Services_Supported | P1 | in-progress | 3 |
 | `BACNET-4-ARCHITECTURE` | Clause 4 | P2 | implementation-present-needs-source-review | 2 |

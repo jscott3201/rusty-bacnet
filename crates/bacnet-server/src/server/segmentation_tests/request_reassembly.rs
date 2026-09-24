@@ -212,7 +212,7 @@ pub(super) fn write_property_payload(text: &str) -> Vec<u8> {
         priority: None,
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
     buf.to_vec()
 }
 

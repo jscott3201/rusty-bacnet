@@ -105,7 +105,8 @@ fn wp(db: &mut ObjectDatabase, value: &[u8]) -> Result<ObjectIdentifier, Error> 
         property_value: value.to_vec(),
         priority: None,
     }
-    .encode(&mut request);
+    .encode(&mut request)
+    .unwrap();
     handle_write_property(db, &request)
 }
 

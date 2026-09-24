@@ -315,6 +315,15 @@ print(value.value)  # 72.5
 
 #### `write_property(address, object_id, property_id, value, priority=None, array_index=None)`
 
+All three single-property entrypoints (`write_property`, `write_property_to_device`,
+and `write_property_to_devices`) accept omitted priority or 1–16. Values 0 or
+17–255 raise synchronous `ValueError` before a future, device lookup, or traffic;
+values outside the native u8 range raise `OverflowError`. A multi-device batch
+validates every input before dispatch, so an invalid later priority cannot send a
+valid prefix. Valid batches retain per-device outcomes and completion order.
+Supplied valid priority is ignored by a noncommandable remote property; NULL
+relinquishment semantics are unchanged.
+
 ```python
 await client.write_property(
     "192.168.1.100:47808",

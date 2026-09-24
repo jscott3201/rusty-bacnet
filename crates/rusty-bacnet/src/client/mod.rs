@@ -49,6 +49,11 @@ use crate::types::{
     PyReinitializedState,
 };
 
+fn validate_write_priority(priority: Option<u8>) -> PyResult<()> {
+    bacnet_services::write_property::validate_priority(priority)
+        .map_err(|error| PyValueError::new_err(error.to_string()))
+}
+
 /// Async BACnet client for reading/writing properties on remote devices.
 ///
 /// Usage:

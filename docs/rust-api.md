@@ -125,6 +125,15 @@ use bacnet_services::rp::{ReadPropertyRequest, ReadPropertyACK};
 use bacnet_services::wp::WritePropertyRequest;
 ```
 
+`WritePropertyRequest::encode` returns `Result<(), Error>` and validates its
+optional priority before modifying the destination buffer. Only omission or
+1–16 is accepted, including NULL and noncommandable writes. Direct and routed
+client WP paths propagate invalid input as a local `Error::Encoding` before
+transaction admission or traffic; device-based calls validate before lookup.
+This outbound contract does not change inbound semantic-error responses or
+remote commandability rules.
+
+
 ### ReadPropertyMultiple / WritePropertyMultiple
 
 ```rust

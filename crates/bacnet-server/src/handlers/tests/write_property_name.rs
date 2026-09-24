@@ -28,7 +28,7 @@ fn encode_name_write(oid: ObjectIdentifier, name: &str) -> Vec<u8> {
         priority: None,
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
     buf.to_vec()
 }
 
@@ -138,7 +138,7 @@ fn write_object_name_empty_or_wrong_type_still_rejected() {
         priority: None,
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
     assert!(handle_write_property(&mut db, &buf).is_err());
     assert_eq!(db.get(&oid_a).unwrap().object_name(), "BV-A");
     assert!(db.find_by_name("BV-A").is_some());

@@ -363,7 +363,7 @@ mod tests {
             priority: None,
         };
         encoded.clear();
-        request.encode(&mut encoded);
+        request.encode(&mut encoded).unwrap();
         let decoded = WritePropertyRequest::decode(&encoded).unwrap();
         assert_eq!(decoded, request);
 
@@ -397,7 +397,7 @@ mod tests {
             priority: Some(8),
         };
         encoded.clear();
-        request.encode(&mut encoded);
+        request.encode(&mut encoded).unwrap();
         assert_eq!(WritePropertyRequest::decode(&encoded).unwrap(), request);
     }
 
