@@ -46,7 +46,10 @@ pub use audit_record::{
     decode_audit_log_record, decode_audit_log_record_result_at, encode_audit_log_record,
     encode_audit_log_record_result,
 };
-pub use cov_subscription::{encode_cov_subscription, encode_cov_subscription_list};
+pub use cov_subscription::{
+    encode_cov_multiple_subscription, encode_cov_multiple_subscription_list,
+    encode_cov_subscription, encode_cov_subscription_list,
+};
 pub use event_parameter::{decode_event_parameter, encode_event_parameter};
 pub use fault_parameter::{decode_fault_parameters, encode_fault_parameters};
 pub use object_property_reference::{

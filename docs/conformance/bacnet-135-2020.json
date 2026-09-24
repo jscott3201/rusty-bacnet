@@ -760,9 +760,57 @@
    "benchmarks": [],
    "public_claims": [],
    "notes": "Split child of BACNET-12-OBJECT-MODEL (#183, #813). The server-owned CovSubscriptionTable is the sole live authority for SubscribeCOV and SubscribeCOVProperty entries; DeviceObject no longer holds a competing manual list. Network ReadProperty, budgeted ReadPropertyMultiple (explicit, repeated, wildcard-Device, ALL and OPTIONAL rows) and BACnetServer::read_local resolve the selected local Device's value through one request-local projection: under the database read guard, the COV table read guard samples one monotonic instant and copies non-expired entries without purging, then is released before object reads or encoding. Direct subscribers encode as network 0 plus source MAC; routed subscribers encode the remote NPDU source, not the router MAC. Whole-object entries name Present_Value (Access_Event for Access Point, Table 13-1 footnote 1); single-property entries keep the property and the absent, zero or element index. Indefinite lifetimes report zero, finite lifetimes report rounded-up seconds, and reached deadlines are omitted before the periodic purge. cov-increment appears only for a numeric monitored value, using the notification rule (explicit override, else the object's current COV_Increment for numeric Present_Value); entries whose object was deleted are omitted. Wire tests decode each entry and cover initial empty, direct and routed acceptance, renewal, exact cancellation, expiry, DeleteObject, exact peer cleanup, rejected requests, repeated-reference and selector agreement under a concurrent renew/cancel race, read-only and non-array rejection, selected-Device scope and stopped-server reporting; codec golden vectors remain in bacnet-encoding. Limits: raw ObjectDatabase/DeviceObject reads and the low-level handle_read_property/handle_read_property_multiple helpers return the standalone empty list, the composition EndpointResponder has no COV table, and SubscribeCOVPropertyMultiple contexts belong to Active_COV_Multiple_Subscriptions (#814) and are not listed. This is not a full COV or BTL claim."
-  },
-  {
-   "id": "BACNET-12-NOTIFICATION-FORWARDER-WITHDRAWAL",
+   },
+   {
+    "id": "BACNET-12-DEVICE-ACTIVE-COV-MULTIPLE-SUBSCRIPTIONS",
+    "standard_anchor": "Clause 12.11, Table 12-13 footnote 18 and Active_COV_Multiple_Subscriptions; Clause 13.16.2; Clause 12.1.5.2; Clauses 20 and 21 BACnetCOVMultipleSubscription, BACnetRecipientProcess, BACnetRecipient, BACnetPropertyReference, ReadProperty-ACK, and ReadAccessResult productions",
+    "priority": "P1",
+    "requirement_summary": "On a running server that executes SubscribeCOVPropertyMultiple, Device Active_COV_Multiple_Subscriptions reads list every live COV-multiple context from the server COV table as an ordered BACnetLIST of complete BACnetCOVMultipleSubscription sequences; the property is present in Property_List, read-only and not array-indexable.",
+    "status": "in-progress",
+    "code_anchors": [
+     "crates/bacnet-types/src/constructed/mod.rs::BACnetCOVMultipleSubscription",
+     "crates/bacnet-encoding/src/constructed/cov_subscription.rs::encode_cov_multiple_subscription",
+     "crates/bacnet-encoding/src/constructed/cov_subscription.rs::encode_cov_multiple_subscription_list",
+     "crates/bacnet-server/src/cov/admission.rs::CovSubscriptionTable::subscribe",
+     "crates/bacnet-server/src/cov/admission.rs::CovSubscriptionTable::subscribe_multiple",
+     "crates/bacnet-server/src/cov/active/multiple.rs::CovSubscriptionTable::active_cov_multiple_entries",
+     "crates/bacnet-server/src/cov/active/multiple.rs::ActiveCovMultipleSubscriptions::project",
+     "crates/bacnet-server/src/cov/active.rs::LiveDeviceCov::resolve",
+     "crates/bacnet-server/src/server/requests/confirmed_response.rs::active_cov_snapshot",
+     "crates/bacnet-server/src/handlers/read_property.rs::active_cov_device_for_rpm",
+     "crates/bacnet-server/src/handlers/cov.rs::handle_subscribe_cov_property_multiple_request_endpoint",
+     "crates/bacnet-server/src/server/handles.rs::BACnetServer::read_local",
+     "crates/bacnet-objects/src/device/metadata.rs::BASE",
+     "crates/bacnet-objects/src/device/mod.rs::DeviceObject::read_property"
+    ],
+    "positive_tests": [
+     "crates/bacnet-encoding/src/constructed/tests/cov_subscription.rs::cov_multiple_subscription_nested_specifications_golden",
+     "crates/bacnet-encoding/src/constructed/tests/cov_subscription.rs::cov_multiple_subscription_address_recipient_empty_specifications_golden",
+     "crates/bacnet-encoding/src/constructed/tests/cov_subscription.rs::cov_multiple_subscription_list_is_bare_concatenation",
+     "crates/bacnet-server/src/cov/active/multiple/tests.rs::active_cov_multiple_entries_follow_context_refresh_without_purging_or_single",
+     "crates/bacnet-server/src/cov/active/multiple/tests.rs::active_cov_multiple_projection_groups_contexts_and_omits_deleted_objects",
+     "crates/bacnet-server/src/cov/active/multiple/tests.rs::live_device_cov_resolves_only_selected_lists",
+     "crates/bacnet-server/src/cov/tests.rs::cov_multiple_context_lifetime_refreshes_and_expires",
+     "crates/bacnet-server/src/handlers/tests/cov_multiple_parameters.rs::subscribe_cov_property_multiple_context_delay_is_last_write_wins_per_form",
+     "crates/bacnet-server/src/server/active_cov_multiple_subscriptions_tests.rs::active_cov_multiple_wire_is_listed_readable_and_live_after_acceptance",
+     "crates/bacnet-server/src/server/active_cov_multiple_subscriptions_tests.rs::active_cov_multiple_wire_groups_references_by_recipient_and_form",
+     "crates/bacnet-server/src/server/active_cov_multiple_subscriptions_tests.rs::active_cov_multiple_wire_renewal_cancellation_expiry_and_cleanup_are_exact",
+     "crates/bacnet-server/src/server/active_cov_multiple_subscriptions_tests.rs::active_cov_multiple_wire_rpm_rp_and_local_reads_agree_within_scope",
+     "crates/bacnet-server/src/handlers/tests/property_metadata/device.rs::rpm_device_property_metadata_pics_and_database_are_exact",
+     "crates/bacnet-objects/src/device/tests.rs::active_cov_multiple_subscriptions_standalone_optional_read_only_list"
+    ],
+    "negative_tests": [
+     "crates/bacnet-server/src/server/active_cov_multiple_subscriptions_tests.rs::active_cov_multiple_wire_empty_spec_and_rejected_input_leave_the_list_unchanged",
+     "crates/bacnet-server/src/handlers/tests/cov_multiple_parameters.rs::subscribe_cov_property_multiple_rejects_invalid_service_parameters",
+     "crates/bacnet-server/src/cov/identity_tests.rs::cov_identity_batch_reserves_only_final_duplicates_and_exhaustion_is_atomic",
+     "crates/bacnet-objects/src/device/tests.rs::active_cov_multiple_subscriptions_standalone_optional_read_only_list"
+    ],
+    "benchmarks": [],
+    "public_claims": [],
+    "notes": "Split child of BACNET-12-OBJECT-MODEL (#814). The server-owned CovSubscriptionTable is the canonical owner of SubscribeCOVPropertyMultiple contexts: every Multiple reference enters through subscribe_multiple, which stores the admitting request's maximum notification delay on each reference and refreshes the expiry and delay of every reference in the exact context (endpoint, process, form) together, last write wins; the generic subscribe rejects Multiple identities before any table effect, and in-repository fixtures were migrated to the context owner. The delay is reported only; it does not queue or delay any notification. Network ReadProperty, budgeted ReadPropertyMultiple (explicit, repeated, wildcard-Device, ALL and OPTIONAL rows) and BACnetServer::read_local resolve the selected local Device's value through the same request-local projection as Active_COV_Subscriptions: under the database read guard, the COV table read guard samples one monotonic instant and copies the selected lists' non-expired entries without purging, then is released before object reads or encoding. Each list entry is one context: recipient (direct = network 0 plus source MAC; routed = remote NPDU source, not the router MAC), process, form, one rounded-up remaining lifetime from the notification Time_Remaining primitive, the maximum notification delay, and references grouped by monitored object with the accepted property and absent, zero or element index, the numeric increment in use (explicit override, else the object's current COV_Increment for numeric Present_Value; omitted otherwise) and the timestamped flag. Contexts are ordered by the shared recipient endpoint order, then process and form; references by object, property and index. Reached deadlines are omitted before the periodic purge, references on deleted objects are omitted, and a context left without references is removed; an accepted empty-spec finite request adds no row (it refreshes only an existing context of its form). Active_COV_Subscriptions never lists Multiple references. Wire tests decode every context field with an independent decoder across Property_List membership, direct and routed recipients, confirmed and unconfirmed forms of one recipient, empty-spec renewal and additive re-subscription of one form without collapsing the other, cancellation of one reference versus the entire context, absent-context cancellation, sub-second expiry, DeleteObject, exact peer cleanup, atomic rejected re-subscriptions (unknown object/property, non-COV object, clockless timestamped, quota, lifetime zero and delay not below lifetime) leaving references, lifetime and delay unchanged, RP/RPM/read_local agreement with one snapshot under a concurrent subscribe/cancel race, read-only and non-array rejection, UNKNOWN_OBJECT precedence, selected-Device scope and stopped-server reporting; codec golden vectors are hand-assembled in bacnet-encoding. Pre-fix wire reproduction at dev 59c28e2a: Property_List omitted the property and ReadProperty returned PROPERTY/UNKNOWN_PROPERTY before and after an accepted SubscribeCOVPropertyMultiple. Limits: Multiple contexts are always finite (no indefinite form exists); Property_List inclusion is unconditional, so a DeviceObject::set_services_supported override that drops SubscribeCOVPropertyMultiple still lists the property; a remote subscriber reached through two different routers forms two exact-endpoint contexts that encode the same recipient; raw ObjectDatabase/DeviceObject reads and the low-level RP/RPM helpers return the standalone empty list; the composition EndpointResponder has no COV table; delayed or queued Multiple notification delivery under Max_Notification_Delay is not implemented or claimed. This is not a full COV or BTL claim."
+   },
+   {
+    "id": "BACNET-12-NOTIFICATION-FORWARDER-WITHDRAWAL",
    "standard_anchor": "Clause 12.51 (pp. 497-503), Table 12-58 (p. 500); Clause 13.2.5.1 (p. 643); Clause 21 BACnetEventNotificationSubscription and BACnetProcessIdSelection productions (pp. 904, 924)",
    "priority": "P1",
    "requirement_summary": "Bundled devices do not advertise or expose Notification Forwarder object support until the object implements notification redistribution, subscriptions, filtering, and the required loop, port, and network restrictions.",

@@ -119,10 +119,10 @@ mod tests {
             timestamped: false,
         };
         let mut table = CovSubscriptionTable::new();
-        let snapshot = table.subscribe(proposal.clone()).unwrap();
+        let snapshot = table.admit_for_test(proposal.clone(), 0).unwrap();
         let context = snapshot.key().multiple_context().unwrap().clone();
         table
-            .subscribe_multiple(&context, now + Duration::from_secs(10), vec![])
+            .subscribe_multiple(&context, now + Duration::from_secs(10), 0, vec![])
             .unwrap();
         assert_eq!(
             table
@@ -137,10 +137,10 @@ mod tests {
         );
         assert_eq!(snapshot.expires_at, proposal.expires_at);
         let foreign = CovSubscriptionTable::new()
-            .subscribe(proposal.clone())
+            .admit_for_test(proposal.clone(), 0)
             .unwrap();
         assert_eq!(table.remaining_lifetime(&foreign, now), None);
-        table.subscribe(proposal).unwrap();
+        table.admit_for_test(proposal, 0).unwrap();
         assert_eq!(table.remaining_lifetime(&snapshot, now), None);
         table.unsubscribe(snapshot.key());
         assert_eq!(table.remaining_lifetime(&snapshot, now), None);

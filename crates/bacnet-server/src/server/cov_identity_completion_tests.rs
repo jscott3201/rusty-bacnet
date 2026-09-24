@@ -54,7 +54,9 @@ fn proposal(
         subscriber_process_identifier: 1,
         monitored_object_identifier: object(),
         issue_confirmed_notifications: confirmed,
-        expires_at: None,
+        // A Multiple context always has a finite lifetime.
+        expires_at: (kind == CovNotificationKind::Multiple)
+            .then(|| Instant::now() + Duration::from_secs(3600)),
         last_notified_observation: Some(
             crate::cov::CovObservation::new(
                 crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(1.0))
@@ -198,7 +200,7 @@ async fn stale_completion(
         .table
         .write()
         .await
-        .subscribe(original.clone())
+        .admit_for_test(original.clone(), 0)
         .unwrap()];
     if kind == CovNotificationKind::Multiple {
         snapshots.push(
@@ -206,7 +208,10 @@ async fn stale_completion(
                 .table
                 .write()
                 .await
-                .subscribe(proposal(kind, confirmed, PropertyIdentifier::COV_INCREMENT))
+                .admit_for_test(
+                    proposal(kind, confirmed, PropertyIdentifier::COV_INCREMENT),
+                    0,
+                )
                 .unwrap(),
         );
     }
@@ -240,7 +245,7 @@ async fn stale_completion(
                 )
                 .unwrap(),
             );
-            table.subscribe(renewed).unwrap();
+            table.admit_for_test(renewed, 0).unwrap();
         }
     }
     drop(db_guard);

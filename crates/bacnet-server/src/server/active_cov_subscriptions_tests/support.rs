@@ -9,18 +9,24 @@ use bacnet_objects::analog::AnalogValueObject;
 pub(super) use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_services::common::PropertyReference;
 use bacnet_services::cov::{SubscribeCOVPropertyRequest, SubscribeCOVRequest};
+use bacnet_services::cov_multiple::{
+    COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
+};
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_services::rpm::{
     ReadAccessSpecification, ReadPropertyMultipleACK, ReadPropertyMultipleRequest,
 };
 use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};
 pub(super) use bacnet_types::constructed::{
-    BACnetAddress, BACnetCOVSubscription, BACnetObjectPropertyReference, BACnetRecipient,
+    BACnetAddress, BACnetCOVMultipleSubscription, BACnetCOVReference, BACnetCOVSubscription,
+    BACnetCOVSubscriptionSpecification, BACnetObjectPropertyReference, BACnetRecipient,
     BACnetRecipientProcess,
 };
 
 const DEVICE_INSTANCE: u32 = 813;
 pub(super) const ACTIVE: PropertyIdentifier = PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS;
+pub(super) const MULTIPLE: PropertyIdentifier =
+    PropertyIdentifier::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS;
 pub(super) const PV: PropertyIdentifier = PropertyIdentifier::PRESENT_VALUE;
 
 pub(super) struct WireTransport {
@@ -127,6 +133,52 @@ pub(super) fn subscribe_cov_property(
     .encode(&mut request)
     .unwrap();
     (ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY, request)
+}
+
+/// `(property, index, increment, timestamped)` of one COV reference.
+pub(super) type MultipleReference = (PropertyIdentifier, Option<u32>, Option<f32>, bool);
+
+/// SubscribeCOVPropertyMultiple from `process` in the `confirmed` form, with
+/// the request shape of the handler tests. `terms` is
+/// `(lifetime, max_notification_delay)`; `None` omits both (cancellation).
+pub(super) fn subscribe_cov_property_multiple(
+    process: u32,
+    confirmed: bool,
+    terms: Option<(u32, u32)>,
+    specs: Vec<(ObjectIdentifier, Vec<MultipleReference>)>,
+) -> (ConfirmedServiceChoice, BytesMut) {
+    let mut request = BytesMut::new();
+    SubscribeCOVPropertyMultipleRequest {
+        subscriber_process_identifier: process,
+        issue_confirmed_notifications: confirmed,
+        lifetime: terms.map(|(lifetime, _)| lifetime),
+        max_notification_delay: terms.map(|(_, delay)| delay),
+        list_of_cov_subscription_specifications: specs
+            .into_iter()
+            .map(|(object, references)| COVSubscriptionSpecification {
+                monitored_object_identifier: object,
+                list_of_cov_references: references
+                    .into_iter()
+                    .map(
+                        |(property, index, cov_increment, timestamped)| COVReference {
+                            monitored_property: PropertyReference {
+                                property_identifier: property,
+                                property_array_index: index,
+                            },
+                            cov_increment,
+                            timestamped,
+                        },
+                    )
+                    .collect(),
+            })
+            .collect(),
+    }
+    .encode(&mut request)
+    .unwrap();
+    (
+        ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY_MULTIPLE,
+        request,
+    )
 }
 
 /// ReadPropertyMultiple specifications: object plus `(property, index)` rows.
@@ -292,6 +344,15 @@ impl Wire {
     pub(super) async fn rpm(&mut self, specs: RpmSpecs) -> ReadPropertyMultipleACK {
         rpm_ack(self.send(&direct(), rpm_request(specs)).await)
     }
+
+    /// Encoded wire ReadProperty value of the selected Device's Multiple list.
+    pub(super) async fn multiple_bytes(&mut self) -> Vec<u8> {
+        self.read(device(), MULTIPLE, None).await.unwrap()
+    }
+
+    pub(super) async fn multiple(&mut self) -> Vec<BACnetCOVMultipleSubscription> {
+        decode_contexts(&self.multiple_bytes().await)
+    }
 }
 
 pub(super) fn simple_ack(response: Apdu) {
@@ -406,4 +467,223 @@ pub(super) fn find(
         .unwrap_or_else(|| panic!("process {process} missing: {subscriptions:?}"));
     assert!(matching.next().is_none(), "process {process} duplicated");
     entry
+}
+
+// --- Active_COV_Multiple_Subscriptions (#814) ---
+
+/// An untimestamped reference without an explicit increment.
+pub(super) fn plain(property: PropertyIdentifier) -> MultipleReference {
+    (property, None, None, false)
+}
+
+pub(super) fn reference(
+    property: PropertyIdentifier,
+    index: Option<u32>,
+    cov_increment: Option<f32>,
+    timestamped: bool,
+) -> BACnetCOVReference {
+    BACnetCOVReference {
+        property_identifier: property,
+        property_array_index: index,
+        cov_increment,
+        timestamped,
+    }
+}
+
+pub(super) fn spec(
+    object: ObjectIdentifier,
+    list_of_cov_references: Vec<BACnetCOVReference>,
+) -> BACnetCOVSubscriptionSpecification {
+    BACnetCOVSubscriptionSpecification {
+        monitored_object_identifier: object,
+        list_of_cov_references,
+    }
+}
+
+/// A context with `time_remaining` zeroed; lifetimes are checked by range.
+pub(super) fn context(
+    peer: &Peer,
+    process: u32,
+    confirmed: bool,
+    max_notification_delay: u32,
+    specs: Vec<BACnetCOVSubscriptionSpecification>,
+) -> BACnetCOVMultipleSubscription {
+    BACnetCOVMultipleSubscription {
+        recipient: BACnetRecipientProcess {
+            recipient: address(peer),
+            process_identifier: process,
+        },
+        issue_confirmed_notifications: confirmed,
+        time_remaining: 0,
+        max_notification_delay,
+        list_of_cov_subscription_specifications: specs,
+    }
+}
+
+/// Zero every lifetime after checking it against its `(low, high)` bound.
+pub(super) fn untimed(
+    contexts: &[BACnetCOVMultipleSubscription],
+    lifetimes: &[(u32, u32)],
+) -> Vec<BACnetCOVMultipleSubscription> {
+    assert_eq!(contexts.len(), lifetimes.len(), "{contexts:?}");
+    contexts
+        .iter()
+        .zip(lifetimes)
+        .map(|(context, (low, high))| {
+            assert!(
+                (*low..=*high).contains(&context.time_remaining),
+                "{} outside {low}..={high}",
+                context.time_remaining
+            );
+            BACnetCOVMultipleSubscription {
+                time_remaining: 0,
+                ..context.clone()
+            }
+        })
+        .collect()
+}
+
+/// Enumerated identifiers of a wire `Property_List` value.
+pub(super) fn property_list(data: &[u8]) -> Vec<u32> {
+    let mut identifiers = Vec::new();
+    let mut pos = 0;
+    while pos < data.len() {
+        let (tag, start) = tags::decode_tag(data, pos).unwrap();
+        let end = start + tag.length as usize;
+        identifiers.push(primitives::decode_unsigned(&data[start..end]).unwrap() as u32);
+        pos = end;
+    }
+    identifiers
+}
+
+/// Every successful row for `property` in one RPM response.
+pub(super) fn rows(ack: &ReadPropertyMultipleACK, property: PropertyIdentifier) -> Vec<Vec<u8>> {
+    ack.list_of_read_access_results
+        .iter()
+        .flat_map(|result| &result.list_of_results)
+        .filter(|row| row.property_identifier == property)
+        .map(|row| row.property_value.clone().expect("row value"))
+        .collect()
+}
+
+/// Independent test decoder for a `BACnetLIST of BACnetCOVMultipleSubscription`
+/// (Clause 21): `[0]` BACnetRecipientProcess, `[1]` BOOLEAN, `[2]` Unsigned,
+/// `[3]` Unsigned and `[4]` SEQUENCE OF { `[0]` BACnetObjectIdentifier, `[1]`
+/// SEQUENCE OF { `[0]` BACnetPropertyReference, `[1]` REAL OPTIONAL, `[2]`
+/// BOOLEAN } }, entries concatenated bare. Every level must be consumed.
+pub(super) fn decode_contexts(data: &[u8]) -> Vec<BACnetCOVMultipleSubscription> {
+    fn primitive(data: &[u8], pos: usize, number: u8) -> (&[u8], usize) {
+        let (tag, start) = tags::decode_tag(data, pos).unwrap();
+        assert!(
+            tag.is_context(number) && !tag.is_opening && !tag.is_closing,
+            "expected primitive [{number}] at {pos}"
+        );
+        let end = start + tag.length as usize;
+        (&data[start..end], end)
+    }
+    fn constructed(data: &[u8], pos: usize, number: u8) -> (&[u8], usize) {
+        let (tag, start) = tags::decode_tag(data, pos).unwrap();
+        assert!(tag.is_opening_tag(number), "expected [{number}] at {pos}");
+        tags::extract_context_value(data, start, number).unwrap()
+    }
+    fn unsigned(data: &[u8]) -> u32 {
+        primitives::decode_unsigned(data).unwrap() as u32
+    }
+    fn boolean(data: &[u8]) -> bool {
+        assert_eq!(data.len(), 1);
+        data[0] != 0
+    }
+    fn references(data: &[u8]) -> Vec<BACnetCOVReference> {
+        let mut references = Vec::new();
+        let mut pos = 0;
+        while pos < data.len() {
+            let (property, mut next) = constructed(data, pos, 0);
+            let (identifier, after) = primitive(property, 0, 0);
+            let index = (after < property.len()).then(|| {
+                let (index, end) = primitive(property, after, 1);
+                assert_eq!(end, property.len());
+                unsigned(index)
+            });
+            let mut cov_increment = None;
+            if tags::decode_tag(data, next).unwrap().0.is_context(1) {
+                let (increment, after) = primitive(data, next, 1);
+                cov_increment = Some(primitives::decode_real(increment).unwrap());
+                next = after;
+            }
+            let (timestamped, next) = primitive(data, next, 2);
+            references.push(reference(
+                PropertyIdentifier::from_raw(unsigned(identifier)),
+                index,
+                cov_increment,
+                boolean(timestamped),
+            ));
+            pos = next;
+        }
+        references
+    }
+
+    let mut contexts = Vec::new();
+    let mut pos = 0;
+    while pos < data.len() {
+        let (process, next) = constructed(data, pos, 0);
+        let (recipient_bytes, after_recipient) = constructed(process, 0, 0);
+        let (recipient, used) = decode_recipient(recipient_bytes, 0).unwrap();
+        assert_eq!(used, recipient_bytes.len());
+        let (process_id, process_end) = primitive(process, after_recipient, 1);
+        assert_eq!(process_end, process.len());
+        let (confirmed, next) = primitive(data, next, 1);
+        let (time_remaining, next) = primitive(data, next, 2);
+        let (delay, next) = primitive(data, next, 3);
+        let (specs, next) = constructed(data, next, 4);
+        let mut list = Vec::new();
+        let mut spec_pos = 0;
+        while spec_pos < specs.len() {
+            let (object, after) = primitive(specs, spec_pos, 0);
+            let (refs, after) = constructed(specs, after, 1);
+            list.push(spec(
+                ObjectIdentifier::decode(object).unwrap(),
+                references(refs),
+            ));
+            spec_pos = after;
+        }
+        contexts.push(BACnetCOVMultipleSubscription {
+            recipient: BACnetRecipientProcess {
+                recipient,
+                process_identifier: unsigned(process_id),
+            },
+            issue_confirmed_notifications: boolean(confirmed),
+            time_remaining: unsigned(time_remaining),
+            max_notification_delay: unsigned(delay),
+            list_of_cov_subscription_specifications: list,
+        });
+        pos = next;
+    }
+    contexts
+}
+
+/// A SubscribeCOVPropertyMultiple with timing the checked request encoder
+/// refuses to produce (one unconfirmed Present_Value reference on AV-1).
+pub(super) fn out_of_range(
+    process: u32,
+    lifetime: u32,
+    delay: u32,
+) -> (ConfirmedServiceChoice, BytesMut) {
+    let mut request = BytesMut::new();
+    primitives::encode_ctx_unsigned(&mut request, 0, u64::from(process));
+    primitives::encode_ctx_boolean(&mut request, 1, false);
+    primitives::encode_ctx_unsigned(&mut request, 2, u64::from(lifetime));
+    primitives::encode_ctx_unsigned(&mut request, 3, u64::from(delay));
+    tags::encode_opening_tag(&mut request, 4);
+    primitives::encode_ctx_object_id(&mut request, 0, &av(1));
+    tags::encode_opening_tag(&mut request, 1);
+    tags::encode_opening_tag(&mut request, 0);
+    primitives::encode_ctx_unsigned(&mut request, 0, u64::from(PV.to_raw()));
+    tags::encode_closing_tag(&mut request, 0);
+    primitives::encode_ctx_boolean(&mut request, 2, false);
+    tags::encode_closing_tag(&mut request, 1);
+    tags::encode_closing_tag(&mut request, 4);
+    (
+        ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY_MULTIPLE,
+        request,
+    )
 }

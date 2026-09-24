@@ -8,6 +8,10 @@ use support::*;
 
 mod support;
 
+// Shares this suite's wire harness; Multiple contexts are a separate property.
+#[path = "active_cov_multiple_subscriptions_tests.rs"]
+mod active_cov_multiple_subscriptions_tests;
+
 #[tokio::test]
 async fn active_cov_wire_lists_accepted_ordinary_and_single_subscriptions() {
     let mut wire = Wire::start(ServerConfig::default()).await;

@@ -27,7 +27,9 @@ fn subscription(
         subscriber_process_identifier: process_id,
         monitored_object_identifier: point_oid(),
         issue_confirmed_notifications: false,
-        expires_at: None,
+        // A Multiple context always has a finite lifetime.
+        expires_at: (kind == CovNotificationKind::Multiple)
+            .then(|| Instant::now() + Duration::from_secs(3600)),
         last_notified_observation: None,
         monitored_property: property,
         monitored_property_array_index: None,
@@ -88,7 +90,7 @@ impl ExactFixture {
         {
             let mut table = cov_table.write().await;
             for subscription in subscriptions {
-                table.subscribe(subscription).unwrap();
+                table.admit_for_test(subscription, 0).unwrap();
             }
         }
         Self {
@@ -371,7 +373,7 @@ impl DispatchFixture {
         {
             let mut table = cov_table.write().await;
             for subscription in subscriptions {
-                table.subscribe(subscription).unwrap();
+                table.admit_for_test(subscription, 0).unwrap();
             }
         }
         Self {

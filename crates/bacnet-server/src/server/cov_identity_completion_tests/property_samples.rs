@@ -21,7 +21,7 @@ async fn selected_change(kind: CovNotificationKind, property: PropertyIdentifier
         let mut sub = proposal(kind, false, property);
         sub.last_notified_observation = None;
         sub.cov_increment = increment;
-        let accepted = fixture.table.write().await.subscribe(sub).unwrap();
+        let accepted = fixture.table.write().await.admit_for_test(sub, 0).unwrap();
         fixture.fire(true, &[accepted]).await;
         assert_eq!(fixture.sent.lock().unwrap().len(), 1);
         fixture.sent.lock().unwrap().clear();

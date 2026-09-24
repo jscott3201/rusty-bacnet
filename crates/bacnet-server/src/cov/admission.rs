@@ -1,9 +1,17 @@
 use super::*;
 
 impl CovSubscriptionTable {
-    /// Accept an insertion or renewal after quota and generation preflight.
+    /// Accept an ordinary or Single insertion or renewal after quota and
+    /// generation preflight. Multiple references are rejected before any table
+    /// effect: they enter only through [`subscribe_multiple`](Self::subscribe_multiple),
+    /// which owns their shared context lifetime and maximum notification delay.
     pub fn subscribe(&mut self, sub: CovSubscription) -> Result<CovSubscriptionSnapshot, Error> {
         let key = sub.key()?;
+        if key.multiple_context().is_some() {
+            return Err(Error::Encoding(
+                "Multiple references must be admitted through subscribe_multiple".into(),
+            ));
+        }
         self.purge_expired();
         let existing = self.subs.get(&key).cloned();
         self.check_admission(
@@ -12,15 +20,18 @@ impl CovSubscriptionTable {
             existing.as_deref(),
         )?;
         let generation = self.reserve_generations(1)?;
-        Ok(self.publish(key, sub, generation))
+        Ok(self.publish(key, sub, generation, None))
     }
 
     /// Atomically accept final unique Multiple references and refresh their exact context.
     /// All identities/options are validated before quota/generation reservation or refresh.
+    /// The request's expiry and maximum notification delay become the whole
+    /// context's (last write wins); the delay is reported, never acted on.
     pub fn subscribe_multiple(
         &mut self,
         context: &MultipleContextKey,
         expires_at: Instant,
+        max_notification_delay: u32,
         mut subscriptions: Vec<CovSubscription>,
     ) -> Result<Vec<CovSubscriptionSnapshot>, Error> {
         for sub in &subscriptions {
@@ -51,6 +62,7 @@ impl CovSubscriptionTable {
             if entry.key.multiple_context() == Some(context) {
                 previously_indefinite += usize::from(entry.expires_at.is_none());
                 entry.subscription.expires_at = Some(expires_at);
+                entry.max_notification_delay = Some(max_notification_delay);
             }
         }
         if let Some(count) = self.peer_indefinite_counts.get_mut(&peer) {
@@ -67,9 +79,31 @@ impl CovSubscriptionTable {
                     sub.key().expect("validated identity"),
                     sub,
                     first_generation + offset as u64,
+                    Some(max_notification_delay),
                 )
             })
             .collect())
+    }
+
+    /// Test fixture: admit one proposal through its family's production
+    /// owner. A Multiple reference is a one-reference `subscribe_multiple`
+    /// request (finite expiry required) that refreshes its exact context with
+    /// the supplied maximum notification delay.
+    #[cfg(test)]
+    pub(crate) fn admit_for_test(
+        &mut self,
+        sub: CovSubscription,
+        max_notification_delay: u32,
+    ) -> Result<CovSubscriptionSnapshot, Error> {
+        let Some(context) = sub.key()?.multiple_context().cloned() else {
+            return self.subscribe(sub);
+        };
+        let expires_at = sub
+            .expires_at
+            .expect("Multiple contexts always have a finite lifetime");
+        let mut accepted =
+            self.subscribe_multiple(&context, expires_at, max_notification_delay, vec![sub])?;
+        Ok(accepted.remove(0))
     }
 
     fn reserve_generations(&mut self, count: usize) -> Result<u64, Error> {
@@ -98,12 +132,14 @@ impl CovSubscriptionTable {
         key: CovSubscriptionKey,
         sub: CovSubscription,
         generation: u64,
+        max_notification_delay: Option<u32>,
     ) -> CovSubscriptionSnapshot {
         let snapshot = CovSubscriptionSnapshot {
             key,
             generation,
             owner: Arc::clone(&self.owner),
             subscription: sub.clone(),
+            max_notification_delay,
         };
         let peer = sub.peer_key();
         let new_indefinite = sub.expires_at.is_none();

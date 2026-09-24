@@ -212,10 +212,10 @@ pub(crate) fn handle_rpm_budgeted_observed(
 /// Observations are provisional until this entire call succeeds. The caller
 /// must discard them on failure; callbacks carry the requested index (which may
 /// differ from the response index) and no property values. `live` is the one
-/// request-local Device `Active_COV_Subscriptions` value reused by every row.
+/// request-local set of Device COV list values reused by every row.
 pub(crate) fn rpm_budgeted_request_observed(
     db: &ObjectDatabase,
-    live: Option<&ActiveCovSubscriptions>,
+    live: Option<&LiveDeviceCov>,
     request: &ReadPropertyMultipleRequest,
     buf: &mut BytesMut,
     budget: ReadPropertyMultipleBudget,

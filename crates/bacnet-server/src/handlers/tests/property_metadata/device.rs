@@ -86,6 +86,7 @@ fn rpm_device_property_metadata_pics_and_database_are_exact() {
                 P::DESCRIPTION,
                 P::ACTIVE_COV_SUBSCRIPTIONS,
                 P::LAST_RESTART_REASON,
+                P::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS,
                 P::DEVICE_UUID,
             ];
             if segmentation_supported != Segmentation::NONE {
@@ -213,12 +214,15 @@ fn rpm_device_property_metadata_pics_and_database_are_exact() {
                 object.read_property(P::OBJECT_LIST, Some(0)).unwrap(),
                 PropertyValue::Unsigned(2)
             );
-            assert_eq!(
-                object
-                    .read_property(P::ACTIVE_COV_SUBSCRIPTIONS, None)
-                    .unwrap(),
-                PropertyValue::ApplicationData(vec![])
-            );
+            for list in [
+                P::ACTIVE_COV_SUBSCRIPTIONS,
+                P::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS,
+            ] {
+                assert_eq!(
+                    object.read_property(list, None).unwrap(),
+                    PropertyValue::ApplicationData(vec![])
+                );
+            }
         }
     }
 }

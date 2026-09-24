@@ -34,7 +34,7 @@ use bacnet_types::MacAddr;
 
 use bytes::BytesMut;
 
-use crate::cov::active::ActiveCovSubscriptions;
+use crate::cov::active::{LiveCovSelection, LiveDeviceCov};
 use crate::cov::{
     CovNotificationKind, CovSubscription, CovSubscriptionKey, CovSubscriptionSnapshot,
     CovSubscriptionTable, MultipleContextKey, SubscriberEndpoint,

@@ -43,7 +43,7 @@ async fn cov_lifetime_held_initial_and_fanout_expiry_admit_nothing() {
                 let mut sub = proposal(kind, confirmed, PropertyIdentifier::PRESENT_VALUE);
                 let expiry = Instant::now() + Duration::from_millis(100);
                 sub.expires_at = Some(expiry);
-                let snapshots = vec![fixture.table.write().await.subscribe(sub).unwrap()];
+                let snapshots = vec![fixture.table.write().await.admit_for_test(sub, 0).unwrap()];
                 let db_guard = fixture.db.write().await;
                 let mut work = Box::pin(fixture.fire(initial, &snapshots));
                 assert!(futures_util::poll!(work.as_mut()).is_pending());
@@ -92,7 +92,7 @@ async fn cov_lifetime_context_refresh_uses_live_expiry_without_replacing_snapsho
                 PropertyIdentifier::PRESENT_VALUE,
             );
             sub.expires_at = Some(Instant::now() + Duration::from_secs(1));
-            let snapshots = vec![fixture.table.write().await.subscribe(sub).unwrap()];
+            let snapshots = vec![fixture.table.write().await.admit_for_test(sub, 0).unwrap()];
             let old_expiry = snapshots[0].expires_at;
             let db_guard = fixture.db.write().await;
             let mut work = Box::pin(fixture.fire(initial, &snapshots));
@@ -103,6 +103,7 @@ async fn cov_lifetime_context_refresh_uses_live_expiry_without_replacing_snapsho
                     .subscribe_multiple(
                         snapshots[0].key().multiple_context().unwrap(),
                         Instant::now() + Duration::from_secs(1000),
+                        0,
                         vec![],
                     )
                     .unwrap();
@@ -145,7 +146,12 @@ async fn cov_lifetime_admitted_confirmed_retry_survives_expiry_and_ack_drains() 
         let mut sub = proposal(kind, true, PropertyIdentifier::PRESENT_VALUE);
         let expiry = Instant::now() + Duration::from_millis(100);
         sub.expires_at = Some(expiry);
-        let snapshots = vec![fixture.table.write().await.subscribe(sub.clone()).unwrap()];
+        let snapshots = vec![fixture
+            .table
+            .write()
+            .await
+            .admit_for_test(sub.clone(), 0)
+            .unwrap()];
         fixture.fire(true, &snapshots).await;
         tokio::time::timeout(Duration::from_secs(2), async {
             while fixture.sent.lock().unwrap().is_empty() {
@@ -169,7 +175,9 @@ async fn cov_lifetime_admitted_confirmed_retry_survives_expiry_and_ack_drains() 
             assert_eq!(frames[0], frames[1], "retry retains the admitted APDU");
             assert_eq!(remaining(frames[0].clone(), kind), 1);
         }
-        sub.expires_at = None;
+        // A Multiple context always has a finite lifetime.
+        sub.expires_at = (kind == CovNotificationKind::Multiple)
+            .then(|| Instant::now() + Duration::from_secs(300));
         sub.last_notified_observation = Some(
             crate::cov::CovObservation::new(
                 crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(99.0))
@@ -178,7 +186,7 @@ async fn cov_lifetime_admitted_confirmed_retry_survives_expiry_and_ack_drains() 
             )
             .unwrap(),
         );
-        let replacement = fixture.table.write().await.subscribe(sub).unwrap();
+        let replacement = fixture.table.write().await.admit_for_test(sub, 0).unwrap();
         fixture.finish(true).await;
         assert_eq!(fixture.transactions.active_count(), 0);
         assert_eq!(
