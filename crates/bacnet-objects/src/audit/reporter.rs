@@ -693,11 +693,12 @@ fn audit_reporter_lifecycle_configuration_filters_do_not_use_priority() {
             reporter.set_auditable_operations(flags);
             for operation in [AuditOperation::CREATE, AuditOperation::DELETE] {
                 assert_eq!(
-                    reporter.reports_lifecycle_internal(operation),
+                    crate::audit::ObjectAuditPolicy::default()
+                        .effective_internal(&reporter)
+                        .reports(operation, None, None),
                     level != AuditLevel::NONE && selected == operation
                 );
             }
-            assert!(!reporter.reports_lifecycle_internal(AuditOperation::WRITE));
         }
     }
 }

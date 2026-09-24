@@ -5,9 +5,7 @@ use super::notification_transactions::{
 use super::*;
 use crate::handlers::{WriteCommitObserver, WriteTarget};
 use bacnet_objects::audit::AuditReporterStatus;
-use bacnet_objects::traits::BACnetObject;
 use bacnet_services::audit::AuditNotificationRequest;
-use bacnet_types::bitstring::AuditOperationFlags;
 use bacnet_types::constructed::{
     AuditPropertyReference, BACnetAddress, BACnetAuditNotification, BACnetRecipient,
 };
@@ -18,13 +16,17 @@ const DELIVERY_TIMEOUT: Duration = Duration::from_secs(3);
 #[path = "audit_reporter_read.rs"]
 mod read;
 
+#[path = "audit_reporter_write.rs"]
+mod write;
+use write::WriteSelection;
+
 /// One locally configured target READ/WRITE/CREATE/DELETE Reporter and unicast recipient.
 ///
 /// Reports successful inbound WP/WPM elements, AddListElement/RemoveListElement,
 /// AtomicWriteFile, CreateObject/DeleteObject operations, and authorized execution errors.
 /// Policy denials and undecoded/unattempted elements remain silent. Successes
 /// omit Result; execution failures include the mapped BACnet Error. There is no
-/// source-side reporting, per-object override, batching, forwarding, or durable outbox.
+/// source-side reporting, batching, forwarding, or durable outbox.
 /// Provision the typed recipient on the built-in Device before startup; configure
 /// Device routes with `device_binding`. Startup requires exactly one concrete
 /// built-in Device, a provision, and the selected Reporter capability. Unresolved
@@ -47,9 +49,10 @@ mod read;
 /// failure occurred after that delivery began. Unconfirmed success proves only
 /// transport acceptance, not storage by the recipient.
 ///
-/// Audit_Source_Reporter remains false. Per-object overrides, source reporting,
-/// ordinary direct local-write reporting and ordinary batching remain unsupported.
-/// Recipient changes are the explicit local-write exception.
+/// Audit_Source_Reporter remains false. AV/BV instance-owned overrides apply to
+/// target observations. Supported `write_local` operations share this observer;
+/// raw database authoring remains a bypass. Source reporting and ordinary batching
+/// remain outside this target profile.
 /// Ordinary sensor samples and internal reliability updates never enter this
 /// producer. An enabled external write to a Reporter produces one record.
 /// Locally configured Monitored_Objects selects ordinary targets by exact object
@@ -183,11 +186,12 @@ pub(super) struct WriteAudit<'a, T: TransportPort> {
     transactions: &'a Arc<NotificationTransactions>,
     comm_state: &'a Arc<AtomicU8>,
     source: BACnetRecipient,
-    invoke_id: u8,
+    invoke_id: Option<u8>,
     pending: Option<PendingWrite>,
 }
 
 struct PendingWrite {
+    selection: Option<WriteSelection>,
     route: Option<Arc<ConfirmedRecipientRoute>>,
     failure: Option<AuditFailureTicket<Arc<ConfirmedRecipientRoute>>>,
     completion: bacnet_objects::audit::AuditDeliveryToken,
@@ -200,8 +204,26 @@ impl<'a, T: TransportPort + 'static> WriteAudit<'a, T> {
     pub(super) fn write_source(&self) -> bacnet_objects::device::AuditWriteSource {
         bacnet_objects::device::AuditWriteSource {
             device: self.source.clone(),
-            invoke_id: self.invoke_id,
+            invoke_id: self.invoke_id.expect("network write source"),
         }
+    }
+
+    pub(super) fn local(
+        config: &'a ServerConfig,
+        network: &'a Arc<NetworkLayer<T>>,
+        transactions: &'a Arc<NotificationTransactions>,
+        comm_state: &'a Arc<AtomicU8>,
+        db: &ObjectDatabase,
+    ) -> Option<Self> {
+        Some(Self {
+            config,
+            network,
+            transactions,
+            comm_state,
+            source: BACnetRecipient::Device(local_device(db)?),
+            invoke_id: None,
+            pending: None,
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -247,108 +269,9 @@ impl<'a, T: TransportPort + 'static> WriteAudit<'a, T> {
             transactions,
             comm_state,
             source,
-            invoke_id,
+            invoke_id: Some(invoke_id),
             pending: None,
         }
-    }
-}
-
-impl<T: TransportPort + 'static> WriteCommitObserver for WriteAudit<'_, T> {
-    fn before(&mut self, db: &ObjectDatabase, write: WriteTarget<'_>) {
-        self.pending = None;
-        let Some(profile) = &self.config.audit_reporter else {
-            return;
-        };
-        let Some(reporter) = db
-            .get(&profile.reporter)
-            .and_then(|object| object.audit_reporter_internal())
-        else {
-            return;
-        };
-        let device = local_device(db);
-        let route = device
-            .and_then(|device| recipient(db, device))
-            .and_then(|value| self.transactions.audit_routes.get()?.resolve(&value));
-        let status = reporter.status_internal();
-        status.set_configured(device.is_some() && route.is_some());
-        let Some(device) = device else { return };
-        let Some(object) = db.get(&write.oid) else {
-            return;
-        };
-        // Standard commandable properties use Present_Value + Priority_Array.
-        // A supplied priority on Description (etc.) must never filter the write.
-        let command_priority = (write.property == PropertyIdentifier::PRESENT_VALUE
-            && object
-                .property_list()
-                .contains(&PropertyIdentifier::PRIORITY_ARRAY))
-        .then_some(write.priority.unwrap_or(16));
-        if !reporter.monitors_object_internal(write.oid)
-            || !reporter.reports_write_internal(
-                write.property,
-                command_priority,
-                write.oid.object_type() == ObjectType::AUDIT_REPORTER,
-            )
-        {
-            return;
-        }
-        let current_value = object
-            .read_property(write.property, write.array_index)
-            .ok()
-            .and_then(|value| small_value(&value));
-        self.pending = Some(PendingWrite {
-            failure: self.failure_ticket(
-                &status,
-                reporter.confirmed_internal(),
-                device,
-                route.clone(),
-            ),
-            route,
-            completion: status.begin_delivery(),
-            status,
-            confirmed: reporter.confirmed_internal(),
-            notification: BACnetAuditNotification {
-                source_timestamp: None,
-                target_timestamp: None,
-                source_device: self.source.clone(),
-                source_object: None,
-                operation: AuditOperation::WRITE,
-                source_comment: None,
-                target_comment: None,
-                invoke_id: Some(self.invoke_id),
-                source_user_id: None,
-                source_user_role: None,
-                target_device: BACnetRecipient::Device(device),
-                target_object: Some(write.oid),
-                target_property: Some(AuditPropertyReference {
-                    property_identifier: write.property,
-                    property_array_index: write.array_index.map(u64::from),
-                }),
-                target_priority: command_priority,
-                target_value: (write.value.len() <= 32).then(|| write.value.to_vec()),
-                current_value,
-                result: None,
-            },
-        });
-    }
-
-    fn committed(&mut self, db: &mut ObjectDatabase) {
-        self.complete(db, None);
-    }
-
-    fn failed(&mut self, db: &mut ObjectDatabase, error: &Error) {
-        // An unknown transaction outcome is not an execution failure. In
-        // particular, never manufacture an Error for a timeout/Reject/Abort.
-        if matches!(
-            error,
-            Error::Timeout(_) | Error::Reject { .. } | Error::Abort { .. }
-        ) {
-            self.pending = None;
-            return;
-        }
-        self.complete(
-            db,
-            Some(super::requests::confirmed_response::error_fields(error)),
-        );
     }
 }
 
@@ -378,27 +301,21 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         let status = reporter.status_internal();
         status.set_configured(device.is_some() && route.is_some());
         let Some(device) = device else { return };
-        // Read actual Reporter configuration, not a synthetic property-write
-        // target. File writes are locally designated configuration operations.
-        let enabled = matches!(
-            reporter.read_property(PropertyIdentifier::AUDIT_LEVEL, None),
-            Ok(PropertyValue::Enumerated(level)) if level != AuditLevel::NONE.to_raw()
-        );
-        let write_enabled =
-            match reporter.read_property(PropertyIdentifier::AUDITABLE_OPERATIONS, None) {
-                Ok(PropertyValue::BitString { unused_bits, data }) => {
-                    AuditOperationFlags::from_bacnet(unused_bits, &data)
-                        .is_ok_and(|operations| operations.contains(AuditOperation::WRITE))
-                }
-                _ => false,
-            };
-        if !enabled
-            || !reporter.monitors_object_internal(target)
-            || (!write_enabled && target.object_type() != ObjectType::AUDIT_REPORTER)
-        {
+        let policy = db
+            .get(&target)
+            .map(|object| object.audit_object_policy_internal())
+            .unwrap_or_default()
+            .effective_internal(reporter);
+        let selected = if target.object_type() == ObjectType::AUDIT_REPORTER {
+            policy.reporter_enabled
+        } else {
+            policy.reports(AuditOperation::WRITE, None, None)
+        };
+        if !selected || !reporter.monitors_object_internal(target) {
             return;
         }
         self.pending = Some(PendingWrite {
+            selection: None,
             failure: self.failure_ticket(
                 &status,
                 reporter.confirmed_internal(),
@@ -417,7 +334,7 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
                 operation: AuditOperation::WRITE,
                 source_comment: None,
                 target_comment: None,
-                invoke_id: Some(self.invoke_id),
+                invoke_id: self.invoke_id,
                 source_user_id: None,
                 source_user_role: None,
                 target_device: BACnetRecipient::Device(device),
@@ -461,16 +378,25 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         let status = reporter.status_internal();
         status.set_configured(device.is_some() && route.is_some());
         let Some(device) = device else { return };
-        if !reporter.monitors_object_internal(request.object_identifier)
-            || !reporter.reports_write_internal(
-                request.property_identifier,
+        let policy = db
+            .get(&request.object_identifier)
+            .map(|object| object.audit_object_policy_internal())
+            .unwrap_or_default()
+            .effective_internal(reporter);
+        let selected = if request.object_identifier.object_type() == ObjectType::AUDIT_REPORTER {
+            reporter.reports_write_internal(request.property_identifier, None, true)
+        } else {
+            policy.reports(
+                AuditOperation::WRITE,
+                Some(request.property_identifier),
                 None,
-                request.object_identifier.object_type() == ObjectType::AUDIT_REPORTER,
             )
-        {
+        };
+        if !selected || !reporter.monitors_object_internal(request.object_identifier) {
             return;
         }
         self.pending = Some(PendingWrite {
+            selection: None,
             failure: self.failure_ticket(
                 &status,
                 reporter.confirmed_internal(),
@@ -489,7 +415,7 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
                 operation: AuditOperation::WRITE,
                 source_comment: None,
                 target_comment: None,
-                invoke_id: Some(self.invoke_id),
+                invoke_id: self.invoke_id,
                 source_user_id: None,
                 source_user_role: None,
                 target_device: BACnetRecipient::Device(device),
@@ -524,6 +450,7 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         operation: AuditOperation,
         target: Option<ObjectIdentifier>,
         kind: ObjectType,
+        use_object_policy: bool,
     ) {
         self.pending = None;
         let Some(profile) = &self.config.audit_reporter else {
@@ -546,10 +473,17 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
             || reporter.monitors_unassigned_create_internal(kind),
             |oid| reporter.monitors_object_internal(oid),
         );
-        if !selected || !reporter.reports_lifecycle_internal(operation) {
+        let policy = target
+            .filter(|_| use_object_policy)
+            .and_then(|oid| db.get(&oid))
+            .map(|object| object.audit_object_policy_internal())
+            .unwrap_or_default()
+            .effective_internal(reporter);
+        if !selected || !policy.reports(operation, None, None) {
             return;
         }
         self.pending = Some(PendingWrite {
+            selection: None,
             failure: self.failure_ticket(
                 &status,
                 reporter.confirmed_internal(),
@@ -568,7 +502,7 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
                 operation,
                 source_comment: None,
                 target_comment: None,
-                invoke_id: Some(self.invoke_id),
+                invoke_id: self.invoke_id,
                 source_user_id: None,
                 source_user_role: None,
                 target_device: BACnetRecipient::Device(device),
@@ -597,6 +531,13 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         let Some(mut pending) = self.pending.take() else {
             return;
         };
+        if pending
+            .selection
+            .as_ref()
+            .is_some_and(|selection| !selection.selected(db, result.is_none()))
+        {
+            return;
+        }
         if pending.route.is_none() {
             return;
         }
@@ -787,7 +728,7 @@ impl Drop for DeliveryCompletion {
 
 /// Table 19-4 permits omission above 32 encoded octets. Bound encoding work,
 /// including nested lists, before handing a value to the ordinary encoder.
-fn small_value(value: &PropertyValue) -> Option<Vec<u8>> {
+pub(super) fn small_value(value: &PropertyValue) -> Option<Vec<u8>> {
     fn append(value: &PropertyValue, out: &mut BytesMut, remaining: &mut usize) -> Option<()> {
         if *remaining == 0 || out.len() > 32 {
             return None;

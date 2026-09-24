@@ -690,3 +690,6 @@ mod intrinsic;
 
 #[path = "source_reporter_life_safety_tests.rs"]
 mod life_safety;
+
+#[path = "source_reporter_policy_tests.rs"]
+mod object_policy;

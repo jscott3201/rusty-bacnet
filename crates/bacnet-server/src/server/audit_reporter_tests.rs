@@ -676,11 +676,23 @@ async fn audit_reporter_noncommandable_present_value_ignores_priority_filter() {
     assert!(matches!(response, Apdu::SimpleAck(_)));
     settle().await;
     let records = notifications(&fixture.transport.sent);
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].notifications[0].target_priority, None);
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].notifications[0].invoke_id, None);
     assert_eq!(
-        records[0].notifications[0].target_value,
+        records[0].notifications[0]
+            .target_property
+            .as_ref()
+            .unwrap()
+            .property_identifier,
+        PropertyIdentifier::OUT_OF_SERVICE
+    );
+    assert_eq!(records[1].notifications[0].target_priority, None);
+    assert_eq!(
+        records[1].notifications[0].target_value,
         Some(vec![0x44, 0x41, 0x20, 0, 0])
     );
     fixture.server.stop().await.unwrap();
 }
+
+#[path = "audit_object_policy_tests.rs"]
+mod object_policy;

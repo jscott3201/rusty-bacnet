@@ -13,6 +13,7 @@ mod metadata;
 
 /// BACnet Analog Value object.
 pub struct AnalogValueObject {
+    audit_policy: crate::audit::ObjectAuditPolicy,
     oid: ObjectIdentifier,
     name: String,
     description: String,
@@ -44,10 +45,18 @@ pub struct AnalogValueObject {
 }
 
 impl AnalogValueObject {
+    /// Provision independently optional Audit properties before registration.
+    /// Raw object configuration bypasses server notification ownership; use
+    /// BACnetServer::write_local or WP/WPM for live property mutations.
+    pub fn set_audit_policy(&mut self, policy: crate::audit::ObjectAuditPolicy) {
+        self.audit_policy = policy;
+    }
+
     /// Create a new Analog Value object.
     pub fn new(instance: u32, name: impl Into<String>, units: u32) -> Result<Self, Error> {
         let oid = ObjectIdentifier::new(ObjectType::ANALOG_VALUE, instance)?;
         Ok(Self {
+            audit_policy: crate::audit::ObjectAuditPolicy::default(),
             oid,
             name: name.into(),
             description: String::new(),
@@ -125,6 +134,10 @@ impl AnalogValueObject {
 }
 
 impl BACnetObject for AnalogValueObject {
+    fn audit_object_policy_internal(&self) -> crate::audit::ObjectAuditPolicy {
+        self.audit_policy
+    }
+
     fn object_identifier(&self) -> ObjectIdentifier {
         self.oid
     }
@@ -138,6 +151,9 @@ impl BACnetObject for AnalogValueObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        if let Some(result) = self.audit_policy.read(property, array_index) {
+            return result;
+        }
         if property == PropertyIdentifier::STATUS_FLAGS {
             return Ok(common::compute_status_flags(
                 self.status_flags,
@@ -215,6 +231,12 @@ impl BACnetObject for AnalogValueObject {
         value: PropertyValue,
         priority: Option<u8>,
     ) -> Result<(), Error> {
+        if let Some(result) = self
+            .audit_policy
+            .write(property, array_index, &value, priority)
+        {
+            return result;
+        }
         common::write_priority_array_direct!(self, property, array_index, value, |v| {
             if let PropertyValue::Real(f) = v {
                 if !f.is_finite() {

@@ -81,6 +81,9 @@ const BASE: &[PropertyMetadata] = &[
 
 pub(super) fn for_object(object: &AnalogValueObject) -> Cow<'_, [PropertyMetadata]> {
     let mut rows = Cow::Borrowed(BASE);
+    if object.audit_policy != crate::audit::ObjectAuditPolicy::default() {
+        rows.to_mut().extend(object.audit_policy.metadata());
+    }
     // Fault limits are paired; engineering bounds are independently readable.
     if object.fault_out_of_range.limits.is_some() {
         rows.to_mut().extend([

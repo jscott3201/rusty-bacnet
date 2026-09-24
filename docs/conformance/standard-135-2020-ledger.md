@@ -2,6 +2,13 @@
 
 > DRAFT internal support evidence. This ledger is not a BTL certification claim, a formal PICS, or a formal BIBB declaration.
 
+AV/BV object-owned policy (#781) extends the existing Audit row with independently
+optional live properties and effective target filtering. Supported server
+`write_local` shares the observer; physical Input sampling/raw DB authoring remain
+separate. The object-specific absent/NULL priority inheritance interpretation
+conflicts with generic §19.6.3 and is documented in the [Rust API](../rust-api.md#object-owned-avbv-audit-policy).
+This does not promote the row or global evidence pins; #345/#782 remain open.
+
 ## Scope
 
 - Standard: ANSI/ASHRAE Standard 135-2020.

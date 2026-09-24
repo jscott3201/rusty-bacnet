@@ -76,9 +76,13 @@ const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
-pub(super) fn for_object(_object: &BinaryValueObject) -> Cow<'_, [PropertyMetadata]> {
-    // This binary implementation has no instance-conditional bounds.
-    Cow::Borrowed(BASE)
+pub(super) fn for_object(object: &BinaryValueObject) -> Cow<'_, [PropertyMetadata]> {
+    // Optional Audit rows belong to this particular value instance.
+    let mut rows = Cow::Borrowed(BASE);
+    if object.audit_policy != crate::audit::ObjectAuditPolicy::default() {
+        rows.to_mut().extend(object.audit_policy.metadata());
+    }
+    rows
 }
 
 #[cfg(test)]

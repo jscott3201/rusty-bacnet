@@ -80,8 +80,14 @@ pub trait BACnetObject: Send + Sync {
         None
     }
 
-    /// Opt-in server-owned target Audit Reporter capability. Objects without
-    /// this capability remain inert for target reporting.
+    /// Snapshot of object-owned target Audit overrides. Absent fields inherit
+    /// the selected Reporter; source reporting does not inspect remote policies.
+    #[doc(hidden)]
+    fn audit_object_policy_internal(&self) -> crate::audit::ObjectAuditPolicy {
+        crate::audit::ObjectAuditPolicy::default()
+    }
+
+    /// The optional built-in Reporter authority.
     #[doc(hidden)]
     fn audit_reporter_internal(&self) -> Option<&crate::audit::AuditReporterObject> {
         None

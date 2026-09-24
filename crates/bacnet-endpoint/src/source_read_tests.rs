@@ -472,3 +472,60 @@ mod property_identity;
 
 #[path = "source_rpm_tests.rs"]
 mod rpm;
+
+#[tokio::test]
+async fn source_read_ignores_remote_and_same_oid_local_value_object_policy() {
+    use bacnet_objects::{analog::AnalogValueObject, audit::ObjectAuditPolicy};
+    use bacnet_server::server::{BACnetServer, ServerConfig};
+    let (mut sink, mut records) = network().await;
+    let policy = ObjectAuditPolicy {
+        level: Some(AuditLevel::NONE),
+        operations: Some(AuditOperationFlags::empty()),
+        ..Default::default()
+    };
+    let mut remote_db = crate::DeviceIdentity::new(456, 42)
+        .unwrap()
+        .build_database()
+        .unwrap();
+    let mut remote = AnalogValueObject::new(7, "remote", 62).unwrap();
+    remote.set_audit_policy(policy);
+    remote_db.add(Box::new(remote)).unwrap();
+    let mut remote_server = BACnetServer::start_clockless(
+        ServerConfig::default(),
+        remote_db,
+        BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST),
+    )
+    .await
+    .unwrap();
+    let mut db = database(false);
+    let mut local = AnalogValueObject::new(7, "unrelated same OID", 62).unwrap();
+    local.set_audit_policy(policy);
+    db.add(Box::new(local)).unwrap();
+    let mut session = session(db, SessionRole::ClientOnly, &sink);
+    session.start().await.unwrap();
+    for property in [
+        PropertyIdentifier::AUDITABLE_OPERATIONS,
+        PropertyIdentifier::PRESENT_VALUE,
+    ] {
+        let result = session
+            .client()
+            .unwrap()
+            .read_property(remote_server.local_mac(), target(), property, None)
+            .await
+            .unwrap();
+        assert_eq!(result.property_identifier, property);
+        let (record, invoke) = notification(&receive(&mut records).await, false);
+        assert_eq!(invoke, None);
+        assert_eq!(record.operation, AuditOperation::READ);
+        assert_eq!(record.target_object, Some(target()));
+        assert_eq!(
+            record.target_property.unwrap().property_identifier,
+            property
+        );
+        assert!(record.target_value.is_none() && record.current_value.is_none());
+    }
+    assert!(records.try_recv().is_err());
+    session.stop().await.unwrap();
+    remote_server.stop().await.unwrap();
+    sink.stop().await.unwrap();
+}

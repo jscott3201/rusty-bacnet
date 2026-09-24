@@ -110,45 +110,65 @@ pub(crate) fn handle_create_object_observed(
         .flatten();
     let name = format!("{:?}-{}", object_type, instance);
 
-    let object: Box<dyn bacnet_objects::traits::BACnetObject> =
-        if object_type == ObjectType::ANALOG_INPUT {
-            Box::new(bacnet_objects::analog::AnalogInputObject::new(
-                instance, &name, 95,
-            )?)
-        } else if object_type == ObjectType::ANALOG_OUTPUT {
-            Box::new(bacnet_objects::analog::AnalogOutputObject::new(
-                instance, &name, 95,
-            )?)
-        } else if object_type == ObjectType::BINARY_INPUT {
-            Box::new(bacnet_objects::binary::BinaryInputObject::new(
-                instance, &name,
-            )?)
-        } else if object_type == ObjectType::BINARY_OUTPUT {
-            Box::new(bacnet_objects::binary::BinaryOutputObject::new(
-                instance, &name,
-            )?)
-        } else if object_type == ObjectType::BINARY_VALUE {
-            Box::new(bacnet_objects::binary::BinaryValueObject::new(
-                instance, &name,
-            )?)
-        } else if object_type == ObjectType::MULTI_STATE_INPUT {
-            Box::new(bacnet_objects::multistate::MultiStateInputObject::new(
-                instance, &name, 2,
-            )?)
-        } else if object_type == ObjectType::MULTI_STATE_OUTPUT {
-            Box::new(bacnet_objects::multistate::MultiStateOutputObject::new(
-                instance, &name, 2,
-            )?)
-        } else if object_type == ObjectType::MULTI_STATE_VALUE {
-            Box::new(bacnet_objects::multistate::MultiStateValueObject::new(
-                instance, &name, 2,
-            )?)
-        } else {
-            return Err(Error::Protocol {
-                class: ErrorClass::OBJECT.to_raw() as u32,
-                code: ErrorCode::UNSUPPORTED_OBJECT_TYPE.to_raw() as u32,
-            });
-        };
+    let object: Box<dyn bacnet_objects::traits::BACnetObject> = if object_type
+        == ObjectType::ANALOG_INPUT
+    {
+        Box::new(bacnet_objects::analog::AnalogInputObject::new(
+            instance, &name, 95,
+        )?)
+    } else if object_type == ObjectType::ANALOG_OUTPUT {
+        Box::new(bacnet_objects::analog::AnalogOutputObject::new(
+            instance, &name, 95,
+        )?)
+    } else if object_type == ObjectType::BINARY_INPUT {
+        Box::new(bacnet_objects::binary::BinaryInputObject::new(
+            instance, &name,
+        )?)
+    } else if object_type == ObjectType::BINARY_OUTPUT {
+        Box::new(bacnet_objects::binary::BinaryOutputObject::new(
+            instance, &name,
+        )?)
+    } else if object_type == ObjectType::BINARY_VALUE {
+        let mut object = bacnet_objects::binary::BinaryValueObject::new(instance, &name)?;
+        // Initial values provision only the optional rows actually requested.
+        // Normal WP cannot materialize an absent property. Values still pass
+        // the same writer below, including rollback on invalid initialization.
+        let mut policy = bacnet_objects::audit::ObjectAuditPolicy::default();
+        for value in &request.list_of_initial_values {
+            match value.property_identifier {
+                PropertyIdentifier::AUDIT_LEVEL => {
+                    policy.level = Some(bacnet_types::enums::AuditLevel::DEFAULT)
+                }
+                PropertyIdentifier::AUDITABLE_OPERATIONS => {
+                    policy.operations = Some(bacnet_types::bitstring::AuditOperationFlags::empty())
+                }
+                PropertyIdentifier::AUDIT_PRIORITY_FILTER => {
+                    policy.priority_filter =
+                        Some(bacnet_objects::audit::AuditPriorityPolicy::Inherit)
+                }
+                _ => {}
+            }
+        }
+        object.set_audit_policy(policy);
+        Box::new(object)
+    } else if object_type == ObjectType::MULTI_STATE_INPUT {
+        Box::new(bacnet_objects::multistate::MultiStateInputObject::new(
+            instance, &name, 2,
+        )?)
+    } else if object_type == ObjectType::MULTI_STATE_OUTPUT {
+        Box::new(bacnet_objects::multistate::MultiStateOutputObject::new(
+            instance, &name, 2,
+        )?)
+    } else if object_type == ObjectType::MULTI_STATE_VALUE {
+        Box::new(bacnet_objects::multistate::MultiStateValueObject::new(
+            instance, &name, 2,
+        )?)
+    } else {
+        return Err(Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::UNSUPPORTED_OBJECT_TYPE.to_raw() as u32,
+        });
+    };
 
     let created_oid = object.object_identifier();
     *target = Some(created_oid);

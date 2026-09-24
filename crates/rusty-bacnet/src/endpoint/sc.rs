@@ -241,11 +241,25 @@ impl PyScEndpoint {
     }
 
     /// Add an Analog Value object (before start).
-    #[pyo3(signature = (instance, name, units=62))]
-    fn add_analog_value(&self, instance: u32, name: &str, units: u32) -> PyResult<()> {
-        make_analog_value(instance, name, units)?;
+    #[pyo3(signature = (instance, name, units=62, *, audit_level=None, auditable_operations=None, audit_priority_filter=None))]
+    fn add_analog_value(
+        &self,
+        instance: u32,
+        name: &str,
+        units: u32,
+        audit_level: Option<&str>,
+        auditable_operations: Option<&Bound<'_, PyAny>>,
+        audit_priority_filter: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
+        let audit_policy = crate::object_audit_policy::parse(
+            audit_level,
+            auditable_operations,
+            audit_priority_filter,
+        )?;
+        make_analog_value(instance, name, units, audit_policy)?;
         self.push_pending(PendingObject::AnalogValue {
             instance,
+            audit_policy,
             name: name.to_string(),
             units,
         })
@@ -262,11 +276,24 @@ impl PyScEndpoint {
     }
 
     /// Add a Binary Value object (before start).
-    #[pyo3(signature = (instance, name))]
-    fn add_binary_value(&self, instance: u32, name: &str) -> PyResult<()> {
-        make_binary_value(instance, name)?;
+    #[pyo3(signature = (instance, name, *, audit_level=None, auditable_operations=None, audit_priority_filter=None))]
+    fn add_binary_value(
+        &self,
+        instance: u32,
+        name: &str,
+        audit_level: Option<&str>,
+        auditable_operations: Option<&Bound<'_, PyAny>>,
+        audit_priority_filter: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
+        let audit_policy = crate::object_audit_policy::parse(
+            audit_level,
+            auditable_operations,
+            audit_priority_filter,
+        )?;
+        make_binary_value(instance, name, audit_policy)?;
         self.push_pending(PendingObject::BinaryValue {
             instance,
+            audit_policy,
             name: name.to_string(),
         })
     }

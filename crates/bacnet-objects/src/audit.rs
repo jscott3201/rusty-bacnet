@@ -21,6 +21,9 @@ use crate::common::read_property_list_property;
 use crate::property_metadata::PropertyMetadata;
 use crate::traits::BACnetObject;
 
+mod object_policy;
+pub use object_policy::{AuditPriorityPolicy, EffectiveAuditPolicy, ObjectAuditPolicy};
+
 mod forwarding;
 mod log_metadata;
 pub use forwarding::AuditLogForwarding;
@@ -670,22 +673,6 @@ impl AuditReporterObject {
         })
     }
 
-    /// Lifecycle operations are configuration operations, never priority filtered.
-    /// Unlike Reporter property writes, they require their own operation bit.
-    #[doc(hidden)]
-    pub fn reports_lifecycle_internal(
-        &self,
-        operation: bacnet_types::enums::AuditOperation,
-    ) -> bool {
-        self.audit_level != AuditLevel::NONE
-            && matches!(
-                operation,
-                bacnet_types::enums::AuditOperation::CREATE
-                    | bacnet_types::enums::AuditOperation::DELETE
-            )
-            && self.auditable_operations.contains(operation)
-    }
-
     /// Reporter-level filter for the immediate target-WRITE profile.
     ///
     /// `command_priority` is present only for a commandable property (use 16
@@ -706,11 +693,13 @@ impl AuditReporterObject {
         if reporter_target {
             return true;
         }
-        self.auditable_operations
-            .contains(bacnet_types::enums::AuditOperation::WRITE)
-            && !(self.audit_level == AuditLevel::AUDIT_CONFIG
-                && property == PropertyIdentifier::PRESENT_VALUE)
-            && command_priority.is_none_or(|priority| self.audit_priority_filter.contains(priority))
+        ObjectAuditPolicy::default()
+            .effective_internal(self)
+            .reports(
+                bacnet_types::enums::AuditOperation::WRITE,
+                Some(property),
+                command_priority,
+            )
     }
 
     /// Object-instance-owned status handle; replacement objects cannot receive
