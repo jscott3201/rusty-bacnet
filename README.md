@@ -223,9 +223,12 @@ and [examples directory](examples/) for other setups; review their network and
 credential requirements before running them.
 
 In the current development checkout, Python `BACnetServer` exposes the native
-static `mutation_policy="permissive" | "deny_all"` option. Deny-all covers the existing network mutation services; reads
-and trusted local writes remain available. See the [policy scope](docs/mutation-policy.md)
-and `BACNET-LOCAL-MUTATION-POLICY` [evidence](docs/conformance/standard-135-2020-ledger.md#python-standalone-mutation-policy).
+static `mutation_policy="permissive" | "deny_all"` option. Deny-all covers ten
+confirmed mutation services; reads and trusted local writes remain available.
+DCC, ReinitializeDevice, LifeSafety and Audit retain separate controls. See the
+[exact service coverage](docs/mutation-policy.md#python-configuration) and
+`BACNET-LOCAL-MUTATION-POLICY`
+[evidence](docs/conformance/standard-135-2020-ledger.md#python-standalone-mutation-policy).
 
 ## CLI reads
 
