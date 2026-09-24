@@ -88,7 +88,7 @@ impl ExactFixture {
         {
             let mut table = cov_table.write().await;
             for subscription in subscriptions {
-                table.subscribe(subscription);
+                table.subscribe(subscription).unwrap();
             }
         }
         Self {
@@ -275,71 +275,6 @@ async fn exact_multiple_cov_groups_matching_properties_and_one_status_flags() {
 }
 
 #[tokio::test]
-async fn initial_single_and_multiple_life_safety_payloads_include_one_status_flags() {
-    let single = subscription(
-        Some(PropertyIdentifier::OPERATION_EXPECTED),
-        CovNotificationKind::Single,
-        1,
-    );
-    let mut multiple = subscription(
-        Some(PropertyIdentifier::SILENCED),
-        CovNotificationKind::Multiple,
-        2,
-    );
-    multiple.subscriber_mac = single.subscriber_mac.clone();
-    let fixture = ExactFixture::new([single.clone(), multiple.clone()]).await;
-
-    BACnetServer::<RecordingTransport>::fire_initial_cov_notification(
-        &fixture.db,
-        &fixture.network,
-        &fixture.cov_table,
-        &fixture.cov_in_flight,
-        &fixture.transactions,
-        &fixture.comm_state,
-        &ServerConfig::default(),
-        &single,
-    )
-    .await;
-    BACnetServer::<RecordingTransport>::fire_initial_cov_notification_multiple(
-        &fixture.db,
-        &fixture.network,
-        &fixture.cov_table,
-        &fixture.cov_in_flight,
-        &fixture.transactions,
-        &fixture.comm_state,
-        &ServerConfig::default(),
-        &[multiple],
-    )
-    .await;
-
-    let apdus = fixture.take_apdus();
-    assert_eq!(apdus.len(), 2);
-    assert_eq!(
-        single_properties(&apdus[0]),
-        vec![
-            PropertyIdentifier::OPERATION_EXPECTED,
-            PropertyIdentifier::STATUS_FLAGS,
-        ]
-    );
-    let Apdu::UnconfirmedRequest(request) = &apdus[1] else {
-        panic!("expected unconfirmed multiple notification");
-    };
-    let notification = COVNotificationMultipleRequest::decode(&request.service_request).unwrap();
-    let properties: Vec<_> = notification.list_of_cov_notifications[0]
-        .list_of_values
-        .iter()
-        .map(|value| value.property_identifier)
-        .collect();
-    assert_eq!(
-        properties,
-        vec![
-            PropertyIdentifier::SILENCED,
-            PropertyIdentifier::STATUS_FLAGS,
-        ]
-    );
-}
-
-#[tokio::test]
 async fn trusted_rearm_and_local_oos_write_notify_only_actual_deltas() {
     let sent = StdArc::new(StdMutex::new(Vec::new()));
     let mut server = BACnetServer::<RecordingTransport>::generic_builder()
@@ -349,11 +284,16 @@ async fn trusted_rearm_and_local_oos_write_notify_only_actual_deltas() {
         .build()
         .await
         .unwrap();
-    server.cov_table.write().await.subscribe(subscription(
-        Some(PropertyIdentifier::OPERATION_EXPECTED),
-        CovNotificationKind::Single,
-        1,
-    ));
+    server
+        .cov_table
+        .write()
+        .await
+        .subscribe(subscription(
+            Some(PropertyIdentifier::OPERATION_EXPECTED),
+            CovNotificationKind::Single,
+            1,
+        ))
+        .unwrap();
 
     server
         .set_life_safety_operation_expected_local(&point_oid(), LifeSafetyOperation::SILENCE)
@@ -420,7 +360,7 @@ impl DispatchFixture {
         {
             let mut table = cov_table.write().await;
             for subscription in subscriptions {
-                table.subscribe(subscription);
+                table.subscribe(subscription).unwrap();
             }
         }
         Self {
@@ -453,6 +393,24 @@ impl DispatchFixture {
         service_choice: ConfirmedServiceChoice,
         service_request: Bytes,
     ) {
+        self.dispatch_at(
+            &self.source_mac,
+            None,
+            invoke_id,
+            service_choice,
+            service_request,
+        )
+        .await;
+    }
+
+    async fn dispatch_at(
+        &self,
+        source: &MacAddr,
+        routed: Option<&NpduAddress>,
+        invoke_id: u8,
+        service_choice: ConfirmedServiceChoice,
+        service_request: Bytes,
+    ) {
         BACnetServer::<RecordingTransport>::handle_confirmed_request(
             &self.db,
             &self.network,
@@ -468,8 +426,8 @@ impl DispatchFixture {
             &self.dcc_timer,
             &self.config,
             &Arc::new(crate::server::request_tasks::RequestTasks::default()).spawner(),
-            &self.source_mac,
-            None,
+            source,
+            routed.cloned(),
             ConfirmedRequestPdu {
                 segmented: false,
                 more_follows: false,
@@ -713,3 +671,9 @@ mod initial;
 mod routed;
 mod schedule;
 mod wpm_prefix;
+
+#[path = "life_safety_cov_tests/identity.rs"]
+mod identity;
+
+#[path = "life_safety_cov_tests/identity_arrays.rs"]
+mod identity_arrays;

@@ -30,7 +30,7 @@ fn make_sub(mac: &[u8], process_id: u32, oid: ObjectIdentifier) -> CovSubscripti
 #[test]
 fn subscribe_and_lookup() {
     let mut table = CovSubscriptionTable::new();
-    table.subscribe(make_sub(&[1, 2, 3], 1, ai1()));
+    table.subscribe(make_sub(&[1, 2, 3], 1, ai1())).unwrap();
     assert_eq!(table.len(), 1);
     assert_eq!(table.subscriptions_for(&ai1()).len(), 1);
     assert_eq!(table.subscriptions_for(&ai2()).len(), 0);
@@ -39,9 +39,9 @@ fn subscribe_and_lookup() {
 #[test]
 fn unsubscribe() {
     let mut table = CovSubscriptionTable::new();
-    table.subscribe(make_sub(&[1, 2, 3], 1, ai1()));
-    assert!(table.unsubscribe(&[1, 2, 3], 1, ai1()));
-    assert!(!table.unsubscribe(&[1, 2, 3], 1, ai1())); // already removed
+    table.subscribe(make_sub(&[1, 2, 3], 1, ai1())).unwrap();
+    assert!(table.unsubscribe(&make_sub(&[1, 2, 3], 1, ai1()).key().unwrap()));
+    assert!(!table.unsubscribe(&make_sub(&[1, 2, 3], 1, ai1()).key().unwrap())); // already removed
     assert!(table.is_empty());
 }
 
@@ -50,7 +50,7 @@ fn expired_subscriptions_purged_on_lookup() {
     let mut table = CovSubscriptionTable::new();
     let mut sub = make_sub(&[1, 2, 3], 1, ai1());
     sub.expires_at = Some(Instant::now() - Duration::from_secs(1)); // already expired
-    table.subscribe(sub);
+    table.subscribe(sub).unwrap();
     assert_eq!(table.subscriptions_for(&ai1()).len(), 0);
     assert!(table.is_empty());
 }
@@ -58,8 +58,8 @@ fn expired_subscriptions_purged_on_lookup() {
 #[test]
 fn multiple_subscribers_same_object() {
     let mut table = CovSubscriptionTable::new();
-    table.subscribe(make_sub(&[1, 2, 3], 1, ai1()));
-    table.subscribe(make_sub(&[4, 5, 6], 2, ai1()));
+    table.subscribe(make_sub(&[1, 2, 3], 1, ai1())).unwrap();
+    table.subscribe(make_sub(&[4, 5, 6], 2, ai1())).unwrap();
     assert_eq!(table.subscriptions_for(&ai1()).len(), 2);
 }
 
@@ -132,8 +132,8 @@ fn should_notify_zero_increment_always_fires() {
 #[test]
 fn set_last_notified_value_updates() {
     let mut table = CovSubscriptionTable::new();
-    table.subscribe(make_sub(&[1, 2, 3], 1, ai1()));
-    table.set_last_notified_value(&[1, 2, 3], None, 1, ai1(), None, 72.5);
+    let snapshot = table.subscribe(make_sub(&[1, 2, 3], 1, ai1())).unwrap();
+    table.set_last_notified_value(&snapshot, 72.5);
 
     let subs = table.subscriptions_for(&ai1());
     assert_eq!(subs[0].last_notified_value, Some(72.5));
@@ -144,11 +144,11 @@ fn upsert_replaces_existing() {
     let mut table = CovSubscriptionTable::new();
     let mut sub = make_sub(&[1, 2, 3], 1, ai1());
     sub.issue_confirmed_notifications = false;
-    table.subscribe(sub);
+    table.subscribe(sub).unwrap();
     // Same (mac, process_id, object) key — replaces the existing entry
     let mut sub2 = make_sub(&[1, 2, 3], 1, ai1());
     sub2.issue_confirmed_notifications = true;
-    table.subscribe(sub2);
+    table.subscribe(sub2).unwrap();
     assert_eq!(table.len(), 1);
     let subs = table.subscriptions_for(&ai1());
     assert!(subs[0].issue_confirmed_notifications);
@@ -158,8 +158,8 @@ fn upsert_replaces_existing() {
 fn same_subscriber_different_objects_both_exist() {
     let mut table = CovSubscriptionTable::new();
     // Same (mac, process_id) but different monitored objects
-    table.subscribe(make_sub(&[1, 2, 3], 1, ai1()));
-    table.subscribe(make_sub(&[1, 2, 3], 1, ai2()));
+    table.subscribe(make_sub(&[1, 2, 3], 1, ai1())).unwrap();
+    table.subscribe(make_sub(&[1, 2, 3], 1, ai2())).unwrap();
     assert_eq!(table.len(), 2);
     assert_eq!(table.subscriptions_for(&ai1()).len(), 1);
     assert_eq!(table.subscriptions_for(&ai2()).len(), 1);
@@ -170,11 +170,10 @@ fn purge_expired_removes_stale_subscriptions() {
     let mut table = CovSubscriptionTable::new();
     let mut sub1 = make_sub(&[1, 2, 3], 1, ai1());
     sub1.expires_at = Some(Instant::now() - Duration::from_secs(10));
-    table.subscribe(sub1);
-
     let mut sub2 = make_sub(&[4, 5, 6], 2, ai1());
     sub2.expires_at = None; // infinite lifetime
-    table.subscribe(sub2);
+    table.subscribe(sub2).unwrap();
+    table.subscribe(sub1).unwrap();
 
     let purged = table.purge_expired();
     assert_eq!(purged, 1);
@@ -191,19 +190,26 @@ fn cov_multiple_context_lifetime_refreshes_and_expires() {
     present_value.notification_kind = CovNotificationKind::Multiple;
     present_value.monitored_property = Some(PropertyIdentifier::PRESENT_VALUE);
     present_value.expires_at = Some(original_expiry);
-    table.subscribe(present_value);
+    table.subscribe(present_value).unwrap();
 
     let mut status_flags = make_sub(&[1, 2, 3], 1, ai1());
     status_flags.notification_kind = CovNotificationKind::Multiple;
     status_flags.monitored_property = Some(PropertyIdentifier::STATUS_FLAGS);
     status_flags.expires_at = Some(original_expiry);
-    table.subscribe(status_flags);
+    table.subscribe(status_flags).unwrap();
 
     let mut single = make_sub(&[1, 2, 3], 1, ai1());
     single.expires_at = Some(original_expiry);
-    table.subscribe(single);
+    table.subscribe(single).unwrap();
 
-    table.refresh_cov_multiple_context_lifetime(&[1, 2, 3], None, 1, false, Some(refreshed_expiry));
+    let context = MultipleContextKey {
+        endpoint: SubscriberEndpoint::new(&[1, 2, 3], None),
+        process_id: 1,
+        confirmed: false,
+    };
+    table
+        .subscribe_multiple(&context, refreshed_expiry, vec![])
+        .unwrap();
 
     let multiple_expiries: Vec<_> = table
         .subs
@@ -221,13 +227,9 @@ fn cov_multiple_context_lifetime_refreshes_and_expires() {
         .any(|sub| sub.notification_kind == CovNotificationKind::Single
             && sub.expires_at == Some(original_expiry)));
 
-    table.refresh_cov_multiple_context_lifetime(
-        &[1, 2, 3],
-        None,
-        1,
-        false,
-        Some(Instant::now() - Duration::from_secs(1)),
-    );
+    table
+        .subscribe_multiple(&context, Instant::now() - Duration::from_secs(1), vec![])
+        .unwrap();
 
     assert_eq!(table.purge_expired(), 2);
     assert_eq!(table.len(), 1);
@@ -240,7 +242,7 @@ fn cov_multiple_context_lifetime_refreshes_and_expires() {
 #[test]
 fn purge_expired_returns_zero_when_none_expired() {
     let mut table = CovSubscriptionTable::new();
-    table.subscribe(make_sub(&[1, 2, 3], 1, ai1()));
+    table.subscribe(make_sub(&[1, 2, 3], 1, ai1())).unwrap();
     let purged = table.purge_expired();
     assert_eq!(purged, 0);
     assert_eq!(table.len(), 1);
@@ -260,7 +262,7 @@ fn default_policy_allows_1024th_subscription() {
                 .expect("subscription admitted");
             let mut sub = make_sub(&mac, proc_id, oid);
             sub.expires_at = Some(Instant::now() + Duration::from_secs(300));
-            table.subscribe(sub);
+            table.subscribe(sub).unwrap();
         }
     }
     assert_eq!(table.len(), 1024);
@@ -325,7 +327,7 @@ fn expired_subscriptions_immediately_release_quota_on_admission() {
     // Create a subscription with an expiry in the past
     let mut sub = make_sub(&[1, 2, 3], 1, ai1());
     sub.expires_at = Some(Instant::now() - Duration::from_secs(5));
-    table.subscribe(sub);
+    table.subscribe(sub).unwrap();
     assert_eq!(table.len(), 1);
 
     // Admitting a new subscription from the same peer immediately purges the expired subscription

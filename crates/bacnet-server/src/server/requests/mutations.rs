@@ -13,8 +13,8 @@ use bacnet_services::object_mgmt::{CreateObjectRequest, DeleteObjectRequest};
 use bacnet_services::write_property::WritePropertyRequest;
 
 pub(super) enum InitialCovNotification {
-    Single(CovSubscription),
-    Multiple(Vec<CovSubscription>),
+    Single(Box<CovSubscriptionSnapshot>),
+    Multiple(Vec<CovSubscriptionSnapshot>),
 }
 
 /// Borrowed dispatch inputs; constructed only after the DCC precheck.
@@ -243,6 +243,7 @@ impl Request<'_> {
                 initial_cov_notifications.extend(
                     subscriptions
                         .into_iter()
+                        .map(Box::new)
                         .map(InitialCovNotification::Single),
                 );
                 self.simple_ack()
@@ -276,6 +277,7 @@ impl Request<'_> {
                 initial_cov_notifications.extend(
                     subscriptions
                         .into_iter()
+                        .map(Box::new)
                         .map(InitialCovNotification::Single),
                 );
                 self.simple_ack()

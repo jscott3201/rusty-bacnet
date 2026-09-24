@@ -1246,6 +1246,29 @@ methods already supply the mode and retain their optional lifetime signatures.
 Python exposes ordinary COV and PropertyMultiple, not the single-property API.
 These boundaries are tracked in the [COV subscription ledger](conformance/support-summary.md).
 
+The bundled server keeps ordinary object, Single-property and Multiple-reference
+subscriptions independent. Their identity includes the exact immediate transport
+endpoint and optional routed NPDU source, process, object, property and optional
+array index. Absent, zero and element indexes differ. Confirmed mode is mutable
+for ordinary/Single renewal; confirmed and unconfirmed Multiple contexts coexist.
+Exact duplicates in a Multiple request use the last options once, with quota and
+generation capacity reserved before any accepted context refresh.
+
+The public `CovSubscriptionTable` accepts proposed `CovSubscription` values through
+fallible `subscribe`/`subscribe_multiple` methods and returns immutable
+`CovSubscriptionSnapshot` values. Lookup/cancellation use `CovSubscriptionKey`;
+completion takes the accepted snapshot, so an old initial or fanout completion
+cannot overwrite a renewed/recreated subscription. Checked generation exhaustion
+returns RESOURCES/NO_SPACE_TO_ADD_LIST_ELEMENT before live state changes;
+cancellation remains available. `BACnetServer::remove_peer_subscriptions` removes
+only the exact immediate endpoint plus routed source. `CovPeerKey` continues to
+group quota/rate accounting and does not authorize cross-router cleanup.
+
+This identity contract does not add empty finite Multiple contexts, delayed
+Multiple notifications, live Device subscription-property projection or broader
+property-specific COV threshold support.
+
+
 ```rust
 // Subscribe to one property with an explicit finite lifetime.
 client.subscribe_cov_property(&mac, process_id, oid,

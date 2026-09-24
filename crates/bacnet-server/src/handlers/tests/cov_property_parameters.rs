@@ -40,9 +40,9 @@ fn subscribe_cov_property_parameter_errors_precede_lookup_and_expired_entry_purg
         &raw(object(1), Some(true), Some(300)),
     )
     .unwrap();
-    let mut expired = seeded[0].clone();
+    let mut expired = (*seeded[0]).clone();
     expired.expires_at = Some(Instant::now() - Duration::from_secs(1));
-    table.subscribe(expired.clone());
+    table.subscribe(expired.clone()).unwrap();
     for target in [object(1), object(999)] {
         for (confirmed, lifetime, reject) in [
             (Some(false), None, true),
@@ -71,13 +71,13 @@ fn subscribe_cov_property_parameter_errors_precede_lookup_and_expired_entry_purg
                 "invalid request must not purge even expired entries"
             );
             let current = table
-                .get_subscription(
-                    &MacAddr::from_slice(&mac),
-                    None,
-                    7,
-                    object(1),
-                    Some(PropertyIdentifier::PRESENT_VALUE),
-                )
+                .get_subscription(&crate::cov::CovSubscriptionKey::Property {
+                    endpoint: crate::cov::SubscriberEndpoint::new(&MacAddr::from_slice(&mac), None),
+                    process_id: 7,
+                    object: object(1),
+                    property: PropertyIdentifier::PRESENT_VALUE,
+                    index: None,
+                })
                 .unwrap();
             assert_eq!(current.expires_at, expired.expires_at);
             assert_eq!(

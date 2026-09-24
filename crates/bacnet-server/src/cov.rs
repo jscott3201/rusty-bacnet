@@ -11,13 +11,20 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::MacAddr;
 
+mod identity;
+pub use identity::*;
+mod admission;
+
 mod policy;
 pub use policy::*;
 
 #[cfg(test)]
+mod identity_tests;
+#[cfg(test)]
 mod tests;
 
-/// An active COV subscription.
+/// Proposed COV subscription data. Table acceptance validates its canonical
+/// identity and returns an immutable [`CovSubscriptionSnapshot`] for delivery.
 #[derive(Debug, Clone)]
 pub struct CovSubscription {
     /// MAC address of the subscriber.
@@ -28,16 +35,17 @@ pub struct CovSubscription {
     pub subscriber_process_identifier: u32,
     /// The object being monitored.
     pub monitored_object_identifier: ObjectIdentifier,
-    /// Whether to send ConfirmedCOVNotification (true) or Unconfirmed (false).
+    /// Notification form. Mutable renewal data for ordinary/Single subscriptions;
+    /// part of the canonical identity for Multiple references.
     pub issue_confirmed_notifications: bool,
     /// When this subscription expires (None = infinite lifetime).
     pub expires_at: Option<Instant>,
     /// Last present_value for which a COV notification was sent.
     /// Used with COV_Increment to decide whether to fire again.
     pub last_notified_value: Option<f32>,
-    /// Property-level filter (SubscribeCOVProperty only).
+    /// Monitored property for Single-property and Multiple-reference subscriptions.
     pub monitored_property: Option<PropertyIdentifier>,
-    /// Array index within monitored property (SubscribeCOVProperty only).
+    /// Accepted property index; absent, zero and element indexes are independent.
     pub monitored_property_array_index: Option<u32>,
     /// COV increment override (SubscribeCOVProperty only).
     pub cov_increment: Option<f32>,
@@ -48,7 +56,7 @@ pub struct CovSubscription {
 }
 
 impl CovSubscription {
-    /// Derive the canonical peer identity for this subscription.
+    /// Derive the quota/rate group, not cancellation or replacement identity.
     pub fn peer_key(&self) -> CovPeerKey {
         CovPeerKey::from_endpoint(&self.subscriber_mac, self.subscriber_network.as_ref())
     }
@@ -63,22 +71,12 @@ pub enum CovNotificationKind {
     Multiple,
 }
 
-/// Key for uniquely identifying a subscription:
-/// (subscriber endpoint, process_id, monitored_object, monitored_property).
-/// Including monitored_property ensures SubscribeCOV (whole-object) and
-/// SubscribeCOVProperty (per-property) coexist as independent subscriptions.
-type SubKey = (
-    MacAddr,
-    Option<NpduAddress>,
-    u32,
-    ObjectIdentifier,
-    Option<PropertyIdentifier>,
-);
-
 /// Table of active COV subscriptions.
 #[derive(Debug)]
 pub struct CovSubscriptionTable {
-    subs: HashMap<SubKey, CovSubscription>,
+    subs: HashMap<CovSubscriptionKey, CovSubscriptionSnapshot>,
+    generation: u64,
+    owner: Arc<()>,
     peer_counts: HashMap<CovPeerKey, usize>,
     peer_indefinite_counts: HashMap<CovPeerKey, usize>,
     policy: CovPolicy,
@@ -103,6 +101,8 @@ impl CovSubscriptionTable {
     pub fn with_policy(policy: CovPolicy, counters: Arc<AtomicCovCounters>) -> Self {
         Self {
             subs: HashMap::new(),
+            generation: 0,
+            owner: Arc::new(()),
             peer_counts: HashMap::new(),
             peer_indefinite_counts: HashMap::new(),
             policy: policy.sanitized(),
@@ -144,81 +144,17 @@ impl CovSubscriptionTable {
         self.peer_indefinite_counts.get(peer).copied().unwrap_or(0)
     }
 
-    /// Add or update a subscription.
-    pub fn subscribe(&mut self, sub: CovSubscription) {
-        let key = (
-            sub.subscriber_mac.clone(),
-            sub.subscriber_network.clone(),
-            sub.subscriber_process_identifier,
-            sub.monitored_object_identifier,
-            sub.monitored_property,
-        );
-        let peer = sub.peer_key();
-        let new_indefinite = sub.expires_at.is_none();
-        if let Some(old) = self.subs.insert(key, sub) {
-            let old_indefinite = old.expires_at.is_none();
-            if old_indefinite != new_indefinite {
-                if new_indefinite {
-                    *self.peer_indefinite_counts.entry(peer).or_default() += 1;
-                } else if let Some(count) = self.peer_indefinite_counts.get_mut(&peer) {
-                    *count = count.saturating_sub(1);
-                    if *count == 0 {
-                        self.peer_indefinite_counts.remove(&peer);
-                    }
-                }
-            }
-        } else {
-            *self.peer_counts.entry(peer.clone()).or_default() += 1;
-            if new_indefinite {
-                *self.peer_indefinite_counts.entry(peer).or_default() += 1;
-            }
-            self.counters
-                .subscriptions_created
-                .fetch_add(1, Ordering::Relaxed);
-        }
-        self.counters
-            .subscriptions_active
-            .store(self.subs.len() as u64, Ordering::Relaxed);
+    /// Get an accepted entry by its complete typed identity.
+    pub fn get_subscription(&self, key: &CovSubscriptionKey) -> Option<&CovSubscriptionSnapshot> {
+        self.subs.get(key)
     }
 
-    /// Get an active subscription by exact key if present.
-    pub fn get_subscription(
-        &self,
-        mac: &MacAddr,
-        network: Option<&NpduAddress>,
-        process_id: u32,
-        monitored_object: ObjectIdentifier,
-        monitored_property: Option<PropertyIdentifier>,
-    ) -> Option<&CovSubscription> {
-        self.subs.get(&(
-            mac.clone(),
-            network.cloned(),
-            process_id,
-            monitored_object,
-            monitored_property,
-        ))
+    /// Whether an exact subscription identity is present.
+    pub fn contains(&self, key: &CovSubscriptionKey) -> bool {
+        self.subs.contains_key(key)
     }
 
-    /// Whether a subscription key is already present.
-    pub fn contains(
-        &self,
-        mac: &MacAddr,
-        network: Option<&NpduAddress>,
-        process_id: u32,
-        monitored_object: ObjectIdentifier,
-        monitored_property: Option<PropertyIdentifier>,
-    ) -> bool {
-        self.get_subscription(
-            mac,
-            network,
-            process_id,
-            monitored_object,
-            monitored_property,
-        )
-        .is_some()
-    }
-
-    fn remove_internal(&mut self, key: &SubKey, was_cancelled: bool) -> bool {
+    fn remove_internal(&mut self, key: &CovSubscriptionKey, was_cancelled: bool) -> bool {
         if let Some(sub) = self.subs.remove(key) {
             let peer = sub.peer_key();
             if let Some(count) = self.peer_counts.get_mut(&peer) {
@@ -249,139 +185,21 @@ impl CovSubscriptionTable {
         }
     }
 
-    /// Remove a subscription by subscriber MAC, process identifier, and monitored object.
-    pub fn unsubscribe(
-        &mut self,
-        mac: &[u8],
-        process_id: u32,
-        monitored_object: ObjectIdentifier,
-    ) -> bool {
-        self.unsubscribe_at(mac, None, process_id, monitored_object)
+    /// Cancel only the exact family/form/property/index identity.
+    pub fn unsubscribe(&mut self, key: &CovSubscriptionKey) -> bool {
+        self.remove_internal(key, true)
     }
 
-    /// Remove a whole-object subscription for a specific subscriber endpoint.
-    pub fn unsubscribe_at(
-        &mut self,
-        mac: &[u8],
-        network: Option<&NpduAddress>,
-        process_id: u32,
-        monitored_object: ObjectIdentifier,
-    ) -> bool {
-        let key = (
-            MacAddr::from_slice(mac),
-            network.cloned(),
-            process_id,
-            monitored_object,
-            None,
-        );
-        self.remove_internal(&key, true)
-    }
-
-    /// Unsubscribe a per-property subscription.
-    pub fn unsubscribe_property(
-        &mut self,
-        mac: &[u8],
-        process_id: u32,
-        monitored_object: ObjectIdentifier,
-        monitored_property: PropertyIdentifier,
-    ) -> bool {
-        self.unsubscribe_property_at(mac, None, process_id, monitored_object, monitored_property)
-    }
-
-    /// Unsubscribe a per-property subscription for a specific subscriber endpoint.
-    pub fn unsubscribe_property_at(
-        &mut self,
-        mac: &[u8],
-        network: Option<&NpduAddress>,
-        process_id: u32,
-        monitored_object: ObjectIdentifier,
-        monitored_property: PropertyIdentifier,
-    ) -> bool {
-        let key = (
-            MacAddr::from_slice(mac),
-            network.cloned(),
-            process_id,
-            monitored_object,
-            Some(monitored_property),
-        );
-        self.remove_internal(&key, true)
-    }
-
-    /// Remove every COV-multiple subscription in a subscriber context.
-    pub fn unsubscribe_cov_multiple_context(
-        &mut self,
-        mac: &[u8],
-        network: Option<&NpduAddress>,
-        process_id: u32,
-        confirmed: bool,
-    ) {
-        let mac = MacAddr::from_slice(mac);
-        let to_remove: Vec<_> = self
+    /// Cancel every reference in the exact Multiple context.
+    pub fn unsubscribe_cov_multiple_context(&mut self, context: &MultipleContextKey) {
+        let keys: Vec<_> = self
             .subs
-            .iter()
-            .filter(|(_, sub)| {
-                sub.notification_kind == CovNotificationKind::Multiple
-                    && sub.subscriber_mac == mac
-                    && sub.subscriber_network == network.cloned()
-                    && sub.subscriber_process_identifier == process_id
-                    && sub.issue_confirmed_notifications == confirmed
-            })
-            .map(|(k, _)| k.clone())
+            .keys()
+            .filter(|key| key.multiple_context() == Some(context))
+            .cloned()
             .collect();
-        for key in to_remove {
+        for key in keys {
             self.remove_internal(&key, true);
-        }
-    }
-
-    /// Remove one property from a COV-multiple subscriber context.
-    pub fn unsubscribe_cov_multiple_property_at(
-        &mut self,
-        mac: &[u8],
-        network: Option<&NpduAddress>,
-        process_id: u32,
-        confirmed: bool,
-        monitored_object: ObjectIdentifier,
-        monitored_property: PropertyIdentifier,
-    ) {
-        let mac = MacAddr::from_slice(mac);
-        let to_remove: Vec<_> = self
-            .subs
-            .iter()
-            .filter(|(_, sub)| {
-                sub.notification_kind == CovNotificationKind::Multiple
-                    && sub.subscriber_mac == mac
-                    && sub.subscriber_network == network.cloned()
-                    && sub.subscriber_process_identifier == process_id
-                    && sub.issue_confirmed_notifications == confirmed
-                    && sub.monitored_object_identifier == monitored_object
-                    && sub.monitored_property == Some(monitored_property)
-            })
-            .map(|(k, _)| k.clone())
-            .collect();
-        for key in to_remove {
-            self.remove_internal(&key, true);
-        }
-    }
-
-    /// Refresh the lifetime for an existing COV-multiple subscriber context.
-    pub fn refresh_cov_multiple_context_lifetime(
-        &mut self,
-        mac: &[u8],
-        network: Option<&NpduAddress>,
-        process_id: u32,
-        confirmed: bool,
-        expires_at: Option<Instant>,
-    ) {
-        let mac = MacAddr::from_slice(mac);
-        for sub in self.subs.values_mut() {
-            if sub.notification_kind == CovNotificationKind::Multiple
-                && sub.subscriber_mac == mac
-                && sub.subscriber_network == network.cloned()
-                && sub.subscriber_process_identifier == process_id
-                && sub.issue_confirmed_notifications == confirmed
-            {
-                sub.expires_at = expires_at;
-            }
         }
     }
 
@@ -390,7 +208,7 @@ impl CovSubscriptionTable {
         let to_remove: Vec<_> = self
             .subs
             .iter()
-            .filter(|(k, _)| k.3 == oid)
+            .filter(|(k, _)| k.object() == oid)
             .map(|(k, _)| k.clone())
             .collect();
         for key in to_remove {
@@ -398,17 +216,17 @@ impl CovSubscriptionTable {
         }
     }
 
-    /// Purge all subscriptions for a peer and deterministically release its quota.
+    /// Remove one exact endpoint and release its contribution to shared peer quotas.
     pub fn remove_peer_subscriptions(
         &mut self,
         mac: &[u8],
         network: Option<&NpduAddress>,
     ) -> usize {
-        let target = CovPeerKey::from_endpoint(&MacAddr::from_slice(mac), network);
+        let target = SubscriberEndpoint::new(mac, network);
         let to_remove: Vec<_> = self
             .subs
             .iter()
-            .filter(|(_, sub)| sub.peer_key() == target)
+            .filter(|(key, _)| key.endpoint() == &target)
             .map(|(k, _)| k.clone())
             .collect();
         let count = to_remove.len();
@@ -429,16 +247,7 @@ impl CovSubscriptionTable {
             }
         }
         for key in to_remove {
-            if let Some(sub) = self.subs.remove(&key) {
-                let peer = sub.peer_key();
-                if let Some(count) = self.peer_counts.get_mut(&peer) {
-                    *count = count.saturating_sub(1);
-                    if *count == 0 {
-                        self.peer_counts.remove(&peer);
-                    }
-                }
-                purged_count += 1;
-            }
+            purged_count += usize::from(self.remove_internal(&key, false));
         }
         if purged_count > 0 {
             self.counters
@@ -452,7 +261,7 @@ impl CovSubscriptionTable {
     }
 
     /// Get all active (non-expired) subscriptions for a given object.
-    pub fn subscriptions_for(&mut self, oid: &ObjectIdentifier) -> Vec<&CovSubscription> {
+    pub fn subscriptions_for(&mut self, oid: &ObjectIdentifier) -> Vec<&CovSubscriptionSnapshot> {
         self.purge_expired();
         self.subs
             .values()
@@ -460,136 +269,32 @@ impl CovSubscriptionTable {
             .collect()
     }
 
-    /// Check admission for a single subscription request against policy quotas.
-    pub fn check_admission(
-        &mut self,
-        peer: &CovPeerKey,
-        is_indefinite: bool,
-        existing: Option<&CovSubscription>,
-    ) -> Result<(), Error> {
-        self.purge_expired();
-
-        if is_indefinite && !self.policy.allow_indefinite_subscriptions {
-            self.counters
-                .subscriptions_rejected_indefinite
-                .fetch_add(1, Ordering::Relaxed);
-            return Err(Error::Protocol {
-                class: ErrorClass::SERVICES.to_raw() as u32,
-                code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
-            });
-        }
-
-        let (new_count, new_indefinite) = match existing {
-            Some(sub) => {
-                let was_indefinite = sub.expires_at.is_none();
-                let add_indefinite = if is_indefinite && !was_indefinite {
-                    1
-                } else {
-                    0
-                };
-                (0, add_indefinite)
-            }
-            None => {
-                let add_indefinite = if is_indefinite { 1 } else { 0 };
-                (1, add_indefinite)
-            }
-        };
-
-        self.check_admission_multiple(peer, new_count, new_indefinite)
+    /// Whether a snapshot still owns a live entry in this table.
+    pub fn is_current(&self, snapshot: &CovSubscriptionSnapshot) -> bool {
+        Arc::ptr_eq(&self.owner, &snapshot.owner)
+            && self.subs.get(snapshot.key()).is_some_and(|entry| {
+                entry.generation == snapshot.generation
+                    && entry
+                        .expires_at
+                        .is_none_or(|expiry| expiry > Instant::now())
+            })
     }
 
-    /// Check admission for a batch of subscriptions against policy quotas.
-    pub fn check_admission_multiple(
-        &mut self,
-        peer: &CovPeerKey,
-        new_count: usize,
-        new_indefinite: usize,
-    ) -> Result<(), Error> {
-        self.purge_expired();
-
-        if new_indefinite > 0 {
-            if !self.policy.allow_indefinite_subscriptions {
-                self.counters
-                    .subscriptions_rejected_indefinite
-                    .fetch_add(1, Ordering::Relaxed);
-                return Err(Error::Protocol {
-                    class: ErrorClass::SERVICES.to_raw() as u32,
-                    code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
-                });
-            }
-            let current_indefinite = self.peer_indefinite_counts.get(peer).copied().unwrap_or(0);
-            if current_indefinite + new_indefinite > self.policy.max_indefinite_per_peer {
-                self.counters
-                    .subscriptions_rejected_indefinite
-                    .fetch_add(1, Ordering::Relaxed);
-                return Err(Error::Protocol {
-                    class: ErrorClass::RESOURCES.to_raw() as u32,
-                    code: ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT.to_raw() as u32,
-                });
-            }
-        }
-
-        if new_count == 0 {
-            return Ok(());
-        }
-
-        let current_peer = self.peer_counts.get(peer).copied().unwrap_or(0);
-        if current_peer + new_count > self.policy.max_subscriptions_per_peer {
-            self.counters
-                .subscriptions_rejected_quota
-                .fetch_add(1, Ordering::Relaxed);
-            return Err(Error::Protocol {
-                class: ErrorClass::RESOURCES.to_raw() as u32,
-                code: ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT.to_raw() as u32,
-            });
-        }
-
-        if self.subs.len() + new_count > self.policy.max_subscriptions_global {
-            self.counters
-                .subscriptions_rejected_capacity
-                .fetch_add(1, Ordering::Relaxed);
-            return Err(Error::Protocol {
-                class: ErrorClass::RESOURCES.to_raw() as u32,
-                code: ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT.to_raw() as u32,
-            });
-        }
-
-        if !self.policy.is_peer_reserved(peer) {
-            let unreserved_capacity = self.policy.effective_unreserved_capacity();
-            if self.subs.len() + new_count > unreserved_capacity {
-                self.counters
-                    .subscriptions_rejected_capacity
-                    .fetch_add(1, Ordering::Relaxed);
-                return Err(Error::Protocol {
-                    class: ErrorClass::RESOURCES.to_raw() as u32,
-                    code: ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT.to_raw() as u32,
-                });
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Update the last-notified value for a subscription.
+    /// Complete only the captured generation, never a renewal or recreated entry.
     pub fn set_last_notified_value(
         &mut self,
-        mac: &[u8],
-        network: Option<&NpduAddress>,
-        process_id: u32,
-        monitored_object: ObjectIdentifier,
-        monitored_property: Option<PropertyIdentifier>,
+        snapshot: &CovSubscriptionSnapshot,
         value: f32,
-    ) {
-        let key = (
-            MacAddr::from_slice(mac),
-            network.cloned(),
-            process_id,
-            monitored_object,
-            monitored_property,
-        );
-        if let Some(sub) = self.subs.get_mut(&key) {
-            sub.last_notified_value = Some(value);
+    ) -> bool {
+        if !self.is_current(snapshot) {
+            return false;
         }
+        self.subs
+            .get_mut(snapshot.key())
+            .unwrap()
+            .subscription
+            .last_notified_value = Some(value);
+        true
     }
 
     /// Check if a COV notification should fire for a subscription given

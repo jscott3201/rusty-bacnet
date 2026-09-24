@@ -241,7 +241,7 @@ pub(super) fn single_property_values(
 
 pub(super) fn append_status_flags(
     db: &ObjectDatabase,
-    subscriptions: &[CovSubscription],
+    subscriptions: &[CovSubscriptionSnapshot],
     timestamp: Option<(
         bacnet_types::primitives::Date,
         bacnet_types::primitives::Time,
