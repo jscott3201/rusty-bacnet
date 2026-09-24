@@ -2,7 +2,7 @@
 use std::net::Ipv4Addr;
 use std::sync::{Arc, Weak};
 
-use bacnet_client::EndpointRequester;
+use bacnet_client::{EndpointReadAck, EndpointReadRequest, EndpointRequester};
 use bacnet_endpoint_core::coordinator::CanonicalPeer;
 use bacnet_endpoint_core::endpoint_ingress::{EndpointApduDestination, EndpointEgress};
 use bacnet_objects::audit::AuditReporterStatus;
@@ -14,7 +14,6 @@ use bacnet_server::server::{
     __endpoint_AuditFailureTicket as AuditFailureTicket,
     __endpoint_NotificationTransactions as NotificationTransactions,
 };
-use bacnet_services::read_property::ReadPropertyACK;
 use bacnet_transport::bvll::decode_bip_mac;
 use bacnet_transport::port::DataAttribute;
 use bacnet_types::bitstring::AuditOperationFlags;
@@ -133,10 +132,9 @@ impl SourceRead {
         requester: &EndpointRequester,
         destination: EndpointApduDestination,
         attributes: Vec<DataAttribute>,
-        object: ObjectIdentifier,
-        property: PropertyIdentifier,
-        index: Option<u32>,
-    ) -> Result<ReadPropertyACK, Error> {
+        request: EndpointReadRequest,
+    ) -> Result<EndpointReadAck, Error> {
+        let (object, property, index) = request.identity();
         // Bound every retained operation, including time before lease acquisition
         // and after dispatch releases the request lease. Never spawn permit waiters.
         let permit = Arc::clone(&self.operations)
@@ -183,8 +181,10 @@ impl SourceRead {
             drop(runtime);
             drop(permit);
             return requester
-                .read_property_with_destination(destination, attributes, object, property, index)
-                .await;
+                .prepare_read(destination, attributes, request)?
+                .execute()
+                .await
+                .result;
         }
         let status = reporter.status_internal();
         let confirmed = reporter.confirmed_internal();
@@ -210,8 +210,10 @@ impl SourceRead {
             drop(runtime);
             drop(permit);
             return requester
-                .read_property_with_destination(destination, attributes, object, property, index)
-                .await;
+                .prepare_read(destination, attributes, request)?
+                .execute()
+                .await
+                .result;
         };
         let EndpointApduDestination::Direct { destination_mac } = &destination else {
             return Err(Error::Encoding(
@@ -235,13 +237,7 @@ impl SourceRead {
             status.set_configured(false);
             return Err(Error::Encoding("source Device is unavailable".into()));
         }
-        let operation = requester.prepare_read_property(
-            destination.clone(),
-            attributes,
-            object,
-            property,
-            index,
-        )?;
+        let operation = requester.prepare_read(destination.clone(), attributes, request)?;
         let timestamp = match db
             .clock_frame()
             .filter(|frame| frame.is_valid_actual_datetime())

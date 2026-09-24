@@ -1,6 +1,6 @@
 //! Session-bound role handles above the sibling client/server roles.
 //!
-//! [`ClientRoleHandle`] exposes the proven `read_property*` trio only;
+//! [`ClientRoleHandle`] exposes unsegmented ReadProperty and ReadRange initiation;
 //! [`ServerRoleHandle`] exposes inbound handling, session liveness, the
 //! one-shot deferred-reply arm, and notification admit-complete. Neither
 //! handle exposes lifecycle: `start`/`stop` exist only on
@@ -99,7 +99,7 @@ impl SessionToken {
     }
 }
 
-/// Client role: the proven `ReadProperty` trio over shared egress/coordinator.
+/// Client role: ReadProperty and ReadRange over shared egress/coordinator.
 ///
 /// Borrowed from a running [`EndpointSession`](crate::session::EndpointSession)
 /// via `client()` / `cloned_client_handle()`. No lifecycle methods: after the
@@ -108,8 +108,8 @@ impl SessionToken {
 /// shutdown"`). `Send + Sync`, so clones may outlive the session borrow and
 /// move across tasks.
 ///
-/// Service scope is deliberately narrow: `ReadProperty` only. All three
-/// variants preserve data attributes and RB-07 provenance. When source READ
+/// Service scope is deliberately narrow: unsegmented ReadProperty and ReadRange.
+/// Explicit destinations preserve data attributes and ingress provenance. When source READ
 /// reporting is selected, only direct B/IP IPv4 unicast targets are admitted.
 /// Audited calls are session-owned before egress: dropping their caller does not
 /// cancel an admitted request or its terminal observation. Other calls retain
@@ -223,11 +223,16 @@ impl ClientRoleHandle {
                     &self.requester,
                     destination,
                     data_attributes,
-                    object_identifier,
-                    property_identifier,
-                    property_array_index,
+                    bacnet_client::EndpointReadRequest::Property(
+                        bacnet_services::read_property::ReadPropertyRequest {
+                            object_identifier,
+                            property_identifier,
+                            property_array_index,
+                        },
+                    ),
                 )
-                .await;
+                .await?
+                .into_property();
         }
         self.requester
             .read_property_with_destination(
@@ -236,6 +241,76 @@ impl ClientRoleHandle {
                 object_identifier,
                 property_identifier,
                 property_array_index,
+            )
+            .await
+    }
+
+    /// Read a list/log range through the shared unsegmented requester.
+    ///
+    /// An active source Reporter emits one value-free READ record per attempted
+    /// operation. Audited destinations must be direct B/IP unicast. Invalid
+    /// selectors, array index zero, counts and ByTime components fail prewire.
+    pub async fn read_range(
+        &self,
+        destination_mac: &[u8],
+        object_identifier: ObjectIdentifier,
+        property_identifier: PropertyIdentifier,
+        property_array_index: Option<u32>,
+        range: Option<bacnet_services::read_range::RangeSpec>,
+    ) -> Result<bacnet_services::read_range::ReadRangeAck, Error> {
+        self.read_range_with_destination(
+            EndpointApduDestination::Direct {
+                destination_mac: bacnet_types::MacAddr::from_slice(destination_mac),
+            },
+            Vec::new(),
+            object_identifier,
+            property_identifier,
+            property_array_index,
+            range,
+        )
+        .await
+    }
+
+    /// Explicit destination and pass-through attributes for ReadRange.
+    /// Routed destinations are available when source reporting is not selected
+    /// for the operation. Responses remain unsegmented.
+    pub async fn read_range_with_destination(
+        &self,
+        destination: EndpointApduDestination,
+        data_attributes: Vec<DataAttribute>,
+        object_identifier: ObjectIdentifier,
+        property_identifier: PropertyIdentifier,
+        property_array_index: Option<u32>,
+        range: Option<bacnet_services::read_range::RangeSpec>,
+    ) -> Result<bacnet_services::read_range::ReadRangeAck, Error> {
+        self.check_open()?;
+        if let Some(source) = &self.source_read {
+            let source = source.upgrade().ok_or_else(shutdown_error)?;
+            return source
+                .read(
+                    &self.requester,
+                    destination,
+                    data_attributes,
+                    bacnet_client::EndpointReadRequest::Range(
+                        bacnet_services::read_range::ReadRangeRequest {
+                            object_identifier,
+                            property_identifier,
+                            property_array_index,
+                            range,
+                        },
+                    ),
+                )
+                .await?
+                .into_range();
+        }
+        self.requester
+            .read_range_with_destination(
+                destination,
+                data_attributes,
+                object_identifier,
+                property_identifier,
+                property_array_index,
+                range,
             )
             .await
     }

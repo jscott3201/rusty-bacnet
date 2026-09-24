@@ -61,7 +61,8 @@ async fn read_range_unsegmented_direct_and_routed_fit_actual_peer_local_envelope
                             property_array_index: None,
                             range: None,
                         }
-                        .encode(&mut service);
+                        .encode(&mut service)
+                        .unwrap();
                         let request = Apdu::ConfirmedRequest(ConfirmedRequest {
                             segmented: false,
                             more_follows: false,

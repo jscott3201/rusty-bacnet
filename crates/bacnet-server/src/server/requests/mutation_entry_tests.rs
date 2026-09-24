@@ -412,7 +412,8 @@ async fn read_only_controls_unaffected_under_deny_all() {
         property_array_index: None,
         range: None,
     }
-    .encode(&mut range);
+    .encode(&mut range)
+    .unwrap();
     let response = fixture
         .dispatch(ConfirmedServiceChoice::READ_RANGE, range.freeze(), 32)
         .await

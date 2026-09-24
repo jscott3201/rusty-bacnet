@@ -33,7 +33,7 @@ async fn audit_reporter_read_range_pages_identity_value_free_and_response_parity
             }),
         );
         let mut data = BytesMut::new();
-        request.encode(&mut data);
+        request.encode(&mut data).unwrap();
         if case == "item cap" {
             fixture.server.config.read_range_budget.max_returned_items = 1;
         } else if case == "byte cap" {
@@ -330,7 +330,8 @@ async fn audit_reporter_range_file_service_validation_errors_preserve_identity()
                     count: 1,
                 }),
             )
-            .encode(&mut data);
+            .encode(&mut data)
+            .unwrap();
         } else {
             AtomicReadFileRequest {
                 file_identifier: target,
@@ -428,7 +429,8 @@ async fn audit_reporter_range_file_read_bit_level_and_monitored_objects() {
             if kind == Kind::Range {
                 let mut data = BytesMut::new();
                 range_request(kind.target(), PropertyIdentifier::PRESENT_VALUE, None, None)
-                    .encode(&mut data);
+                    .encode(&mut data)
+                    .unwrap();
                 assert!(matches!(
                     dispatch(&fixture.server, kind.service(), data.freeze()).await,
                     Apdu::ComplexAck(_)

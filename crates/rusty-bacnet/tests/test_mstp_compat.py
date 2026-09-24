@@ -62,7 +62,7 @@ MSTP_KEYWORD_ONLY = [
     "mstp_max_info_frames",
 ]
 CLIENT_KEYWORD_ONLY = MSTP_KEYWORD_ONLY + ["sc_device_uuid"]
-SERVER_KEYWORD_ONLY = ["dcc_policy", "dcc_source_restriction", "dcc_disable_rate_limit"] + MSTP_KEYWORD_ONLY + [
+SERVER_KEYWORD_ONLY = ["mutation_policy", "dcc_policy", "dcc_source_restriction", "dcc_disable_rate_limit"] + MSTP_KEYWORD_ONLY + [
     "max_confirmed_in_flight", "max_unconfirmed_in_flight",
     "max_confirmed_in_flight_per_peer", "max_unconfirmed_in_flight_per_peer",
     "confirmed_recovery_reserve", "max_recovery_in_flight_per_peer",

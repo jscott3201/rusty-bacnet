@@ -313,25 +313,15 @@ impl BACnetClient {
         count: Option<i32>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        let oid = object_id.to_rust();
-        let pid = property_id.to_rust();
-
-        let range = match range_type.as_deref() {
-            Some("position") => Some(RangeSpec::ByPosition {
-                reference_index: reference_index.unwrap_or(0),
-                count: count.unwrap_or(0),
-            }),
-            Some("sequence") => Some(RangeSpec::BySequenceNumber {
-                reference_seq: reference_seq.unwrap_or(0),
-                count: count.unwrap_or(0),
-            }),
-            Some(other) => {
-                return Err(PyValueError::new_err(format!(
-                    "range_type must be 'position', 'sequence', or None, got '{other}'"
-                )));
-            }
-            None => None,
-        };
+        let request = crate::read_range::request(
+            &object_id,
+            &property_id,
+            array_index,
+            range_type.as_deref(),
+            reference_index,
+            reference_seq,
+            count,
+        )?;
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let mac = parse_address(&address)?;
@@ -342,28 +332,16 @@ impl BACnetClient {
                 })?)
             };
             let ack = c
-                .read_range(&mac, oid, pid, array_index, range)
+                .read_range(
+                    &mac,
+                    request.object_identifier,
+                    request.property_identifier,
+                    request.property_array_index,
+                    request.range,
+                )
                 .await
                 .map_err(to_py_err)?;
-            Python::attach(|py| {
-                let dict = PyDict::new(py);
-                dict.set_item(
-                    "object_id",
-                    PyObjectIdentifier::from_rust(ack.object_identifier),
-                )?;
-                dict.set_item(
-                    "property_id",
-                    PyPropertyIdentifier {
-                        inner: ack.property_identifier,
-                    },
-                )?;
-                dict.set_item("array_index", ack.property_array_index)?;
-                dict.set_item("result_flags", ack.result_flags)?;
-                dict.set_item("item_count", ack.item_count)?;
-                dict.set_item("item_data", PyBytes::new(py, &ack.item_data))?;
-                dict.set_item("first_sequence_number", ack.first_sequence_number)?;
-                Ok(dict.into_any().unbind())
-            })
+            Python::attach(|py| crate::read_range::ack_to_dict(py, ack))
         })
     }
 }

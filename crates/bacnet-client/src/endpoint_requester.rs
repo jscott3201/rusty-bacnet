@@ -12,6 +12,7 @@ use bacnet_endpoint_core::coordinator::{
 use bacnet_endpoint_core::endpoint_ingress::{EndpointApduDestination, EndpointEgress};
 use bacnet_network::layer::ReceivedApdu;
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
+use bacnet_services::read_range::{RangeSpec, ReadRangeAck, ReadRangeRequest};
 use bacnet_transport::port::{DataAttribute, TransportProvenance};
 use bacnet_types::enums::{
     AbortReason, ConfirmedServiceChoice, NetworkPriority, PropertyIdentifier,
@@ -25,6 +26,9 @@ use crate::client::{confirmed_response_result, new_coordinated_tsm, ClientConfig
 #[path = "endpoint_read_operation.rs"]
 mod operation;
 pub use operation::{EndpointReadOutcome, PreparedEndpointRead};
+#[path = "endpoint_read_request.rs"]
+mod read_request;
+pub use read_request::{EndpointReadAck, EndpointReadRequest};
 
 use crate::tsm::{CompletionOutcome, CoordinatedCompletion, TransactionOwner, Tsm, TsmResponse};
 
@@ -78,7 +82,7 @@ fn routed_tsm_mac(network: u16, mac: &[u8]) -> MacAddr {
 
 /// Derives the inbound TSM key + canonical peer for an admitted response.
 ///
-/// RB-07 compat mode: provenance is preserved structurally by the caller
+/// Provenance is preserved structurally by the caller
 /// (threaded through `ReceivedApdu`) and never gates admission here.
 fn inbound_tsm_peer(received: &ReceivedApdu) -> (MacAddr, CanonicalPeer) {
     match received.source_network.as_ref() {
@@ -145,7 +149,7 @@ impl Drop for EndpointRequesterInner {
     }
 }
 
-/// Direct, unsegmented ReadProperty requester attached to a shared endpoint.
+/// Unsegmented ReadProperty/ReadRange requester attached to a shared endpoint.
 #[doc(hidden)]
 #[derive(Clone)]
 pub struct EndpointRequester {
@@ -179,7 +183,7 @@ impl EndpointRequester {
 
     /// Performs one direct ReadProperty transaction.
     ///
-    /// Compat entry: direct unicast with no data attributes. Routed and
+    /// Direct unicast with no data attributes. Routed and
     /// attribute-preserving sends use
     /// [`Self::read_property_with_destination`].
     #[doc(hidden)]
@@ -204,7 +208,7 @@ impl EndpointRequester {
 
     /// Performs one ReadProperty transaction to an explicit endpoint destination.
     ///
-    /// RB-07 compat mode: `data_attributes` are passed through to
+    /// `data_attributes` are passed through to
     /// [`EndpointEgress`] unchanged; no new policy decisions are made.
     #[doc(hidden)]
     pub async fn read_property_with_destination(
@@ -224,7 +228,8 @@ impl EndpointRequester {
         )?
         .execute()
         .await
-        .result
+        .result?
+        .into_property()
     }
 
     /// Validate and reserve the exact transaction before transferring ownership.
@@ -237,6 +242,25 @@ impl EndpointRequester {
         object_identifier: ObjectIdentifier,
         property_identifier: PropertyIdentifier,
         property_array_index: Option<u32>,
+    ) -> Result<PreparedEndpointRead, Error> {
+        self.prepare_read(
+            destination,
+            data_attributes,
+            EndpointReadRequest::Property(ReadPropertyRequest {
+                object_identifier,
+                property_identifier,
+                property_array_index,
+            }),
+        )
+    }
+
+    /// Validate/encode before reserving a lease for either supported read service.
+    #[doc(hidden)]
+    pub fn prepare_read(
+        &self,
+        destination: EndpointApduDestination,
+        data_attributes: Vec<DataAttribute>,
+        request: EndpointReadRequest,
     ) -> Result<PreparedEndpointRead, Error> {
         if !self.inner.open.load(Ordering::Acquire) {
             return Err(shutdown_error());
@@ -255,16 +279,12 @@ impl EndpointRequester {
             ));
         }
 
-        let request = ReadPropertyRequest {
-            object_identifier,
-            property_identifier,
-            property_array_index,
-        };
         let mut service_data = BytesMut::new();
-        request.encode(&mut service_data);
+        request.encode(&mut service_data)?;
+        let service = request.service();
         if 4 + service_data.len() > usize::from(self.inner.max_apdu_length) {
             return Err(Error::Segmentation(
-                "endpoint requester supports only unsegmented ReadProperty".into(),
+                "endpoint requester supports only unsegmented read requests".into(),
             ));
         }
 
@@ -281,7 +301,7 @@ impl EndpointRequester {
             tsm.register_coordinated_transaction_with_policy(
                 tsm_mac.clone(),
                 peer,
-                ConfirmedServiceChoice::READ_PROPERTY,
+                service,
                 false,
                 TerminalPolicy::ComplexAck,
             )
@@ -305,7 +325,7 @@ impl EndpointRequester {
             invoke_id,
             sequence_number: None,
             proposed_window_size: None,
-            service_choice: ConfirmedServiceChoice::READ_PROPERTY,
+            service_choice: service,
             service_request: service_data.freeze(),
         });
         let mut encoded = BytesMut::new();
@@ -321,9 +341,36 @@ impl EndpointRequester {
         })
     }
 
+    /// Perform an unsegmented ReadRange to an explicit destination.
+    #[doc(hidden)]
+    pub async fn read_range_with_destination(
+        &self,
+        destination: EndpointApduDestination,
+        data_attributes: Vec<DataAttribute>,
+        object_identifier: ObjectIdentifier,
+        property_identifier: PropertyIdentifier,
+        property_array_index: Option<u32>,
+        range: Option<RangeSpec>,
+    ) -> Result<ReadRangeAck, Error> {
+        self.prepare_read(
+            destination,
+            data_attributes,
+            EndpointReadRequest::Range(ReadRangeRequest {
+                object_identifier,
+                property_identifier,
+                property_array_index,
+                range,
+            }),
+        )?
+        .execute()
+        .await
+        .result?
+        .into_range()
+    }
+
     /// Performs one routed ReadProperty transaction via a known router.
     ///
-    /// RB-07 compat mode: `data_attributes` pass through unchanged.
+    /// `data_attributes` pass through unchanged.
     #[doc(hidden)]
     pub async fn read_property_routed(
         &self,
@@ -355,7 +402,7 @@ impl EndpointRequester {
     /// canonical peer are derived from the received envelope
     /// (`source_mac` + `source_network`), so equal inbound/outbound numeric
     /// invoke IDs stay unambiguous via the classifier + coordinator admission.
-    /// RB-07 compat mode: link-group, attributes, ingress-network and
+    /// Link-group, attributes, ingress-network and
     /// provenance are preserved structurally (threaded, never used for a new
     /// decision).
     #[doc(hidden)]

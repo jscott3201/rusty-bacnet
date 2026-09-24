@@ -463,3 +463,6 @@ mod failures;
 
 #[path = "source_recipient_tests.rs"]
 mod recipient_changes;
+
+#[path = "source_range_tests.rs"]
+mod range;

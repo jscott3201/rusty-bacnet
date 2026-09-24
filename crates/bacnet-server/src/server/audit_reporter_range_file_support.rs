@@ -42,7 +42,8 @@ impl Kind {
                     count: count as i32,
                 }),
             )
-            .encode(&mut out);
+            .encode(&mut out)
+            .unwrap();
         } else {
             AtomicReadFileRequest {
                 file_identifier: self.target(),

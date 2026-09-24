@@ -6,7 +6,7 @@ use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
 use bacnet_objects::event_log::EventLogObject;
 use bacnet_objects::log_buffer::LogRecordIdentity;
 use bacnet_objects::trend::{TrendLogMultipleObject, TrendLogObject};
-use bacnet_services::read_range::{RangeSpec, ReadRangeRequest};
+use bacnet_services::read_range::RangeSpec;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::constructed::{BACnetLogRecord, LogDatum};
@@ -356,14 +356,9 @@ fn indexed_log_buffer_is_rejected_for_every_log_family() {
 #[test]
 fn zero_array_index_is_rejected_by_request_decoder() {
     let (db, oid) = list_db(PropertyIdentifier::LOG_BUFFER, Vec::new(), Some(Vec::new()));
-    let request = ReadRangeRequest {
-        object_identifier: oid,
-        property_identifier: PropertyIdentifier::LOG_BUFFER,
-        property_array_index: Some(0),
-        range: None,
-    };
     let mut service_data = BytesMut::new();
-    request.encode(&mut service_data);
+    bacnet_encoding::primitives::encode_ctx_object_id(&mut service_data, 0, &oid);
+    service_data.extend_from_slice(&[0x19, 131, 0x29, 0]);
     let error = handle_read_range(&db, &service_data, &mut BytesMut::new()).unwrap_err();
     assert!(matches!(error, Error::Decoding { .. }));
 }

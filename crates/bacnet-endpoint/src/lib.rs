@@ -34,6 +34,10 @@
 //!
 //! # What is proven
 //!
+//! - The client role initiates unsegmented ReadProperty and ReadRange. Direct
+//!   B/IP source reporting emits one value-free READ record per attempted
+//!   operation, sharing request cancellation/retry and notification ownership.
+//!
 //! - One socket / one serial owner per session (RB-16 B/IP + SC-hub proofs,
 //!   RB-17 MS/TP simulator proof). No second hidden socket or serial owner is
 //!   created by the builders or the session.
@@ -80,7 +84,7 @@
 //! - `start(&mut self)` / `stop(&mut self)` take `&mut` so only the owner can
 //!   drive lifecycle; `&self` borrows (`client`, `server`, counters,
 //!   `broadcast_i_am`) stay usable while running. Cancellation is
-//!   await-boundary only: aborting a pending `read_property*` future releases
+//!   await-boundary only: aborting a pending read future releases
 //!   its exact coordinator lease via RAII for ordinary reads. Admitted audited
 //!   reads are session-owned through their terminal outcome. `stop()` seals admission, cancels
 //!   waiters, and joins dispatch exactly once.
