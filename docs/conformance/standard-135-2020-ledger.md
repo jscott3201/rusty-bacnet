@@ -13,6 +13,20 @@
 - Addenda/errata status: ASHRAE 135-2020 Errata Summary 2024-04-29 (v1) reviewed for the supported subset. Item 7 (Clause 21.6, p. 886): successful-actions-only corrected from BOOLEAN (struck through, removed) to BACnetSuccessFilter (italic, added), tags [7]/[4]. Item 8 (Clause 21.2.3, p. 865): start-at-sequence-number corrected from Unsigned32 (struck through, removed) to Unsigned64 (italic, added), tag [2] OPTIONAL. Both items visually verified from the rendered errata p. 3 (strikeout = removed, italics = added per the p. 1 convention); not inferred from concatenated text extraction. The implementation encodes the corrected BACnetSuccessFilter/u64 contract after the RB-02 codec and RB-20 runtime/Python migrations; `BACNET-13-AUDIT-WIRE-MODELS` remains `implementation-present-needs-source-review` pending broader Audit review.
 - PR-0808 evidence row: `BACNET-12-ALERT-ENROLLMENT-TABLE-12-61` is `supported-with-clause-evidence` for the served object model only; it is not an Alert evaluator or notification-generation claim.
 
+## Python standalone mutation policy
+
+`BACNET-LOCAL-MUTATION-POLICY` records the bounded #768 binding evidence, with
+`in-progress` status and no global pin or broader conformance promotion.
+The constructor selects the native `Permissive`/`DenyAll` authority before I/O;
+[installed B/IP tests](../../crates/rusty-bacnet/tests/test_mutation_policy.py)
+cover representative property/object/list/file/COV decisions, exact denials,
+state preservation, permissive controls, reads and trusted local writes.
+The [native matrix](../../crates/bacnet-server/src/server/requests/mutation_policy_tests.rs)
+owns exhaustive ten-service/authorizer/counter coverage. This is local operator
+policy, not certificate-principal authorization; DCC, ReinitializeDevice,
+LifeSafety, Audit and endpoint Device writes remain separate. See
+[the policy contract](../mutation-policy.md); #524 remains open.
+
 ## Hub transit relay budget
 
 Scoped `BACNET-AB-SC-CONNECTION-STATE` evidence, Refs #774 under #476.

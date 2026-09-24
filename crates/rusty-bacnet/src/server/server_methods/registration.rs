@@ -21,6 +21,7 @@ impl BACnetServer {
         dcc_password=None,
         reinit_password=None,
         *,
+        mutation_policy="permissive",
         dcc_policy="deny_all",
         dcc_source_restriction=None,
         dcc_disable_rate_limit=None,
@@ -72,6 +73,7 @@ impl BACnetServer {
         ipv6_interface: Option<String>,
         dcc_password: Option<String>,
         reinit_password: Option<String>,
+        mutation_policy: &str,
         dcc_policy: &str,
         dcc_source_restriction: Option<Vec<(Option<u16>, Vec<u8>)>>,
         dcc_disable_rate_limit: Option<(u32, u64)>,
@@ -105,6 +107,15 @@ impl BACnetServer {
         event_information_max_service_ack_bytes: usize,
         sc_device_uuid: Option<Vec<u8>>,
     ) -> PyResult<Self> {
+        let mutation_policy = match mutation_policy {
+            "permissive" => bacnet_server::mutation::MutationPolicy::Permissive,
+            "deny_all" => bacnet_server::mutation::MutationPolicy::DenyAll,
+            _ => {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "mutation_policy must be 'permissive' or 'deny_all'",
+                ))
+            }
+        };
         let dcc_policy = match dcc_policy {
             "deny_all" => server::DccPolicy::DenyAll,
             "require_password" => server::DccPolicy::RequirePassword,
@@ -240,6 +251,7 @@ impl BACnetServer {
             mstp_max_master,
             mstp_max_info_frames,
             dcc_password,
+            mutation_policy,
             dcc_policy,
             dcc_source_restriction,
             dcc_disable_rate_limit,

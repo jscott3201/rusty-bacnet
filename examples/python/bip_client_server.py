@@ -26,6 +26,7 @@ async def main():
         device_instance=1234,
         device_name="Example HVAC Controller",
         port=0,  # auto-assign port
+        mutation_policy="permissive",  # native default; use "deny_all" to refuse remote mutations
     )
 
     # Add various object types

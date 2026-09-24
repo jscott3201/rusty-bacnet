@@ -22,6 +22,35 @@
  ],
  "rows": [
   {
+   "id": "BACNET-LOCAL-MUTATION-POLICY",
+   "standard_anchor": "Local operator authorization policy; Clauses 14, 15 and 13 COV service execution boundaries; not a normative authentication claim",
+   "priority": "P1",
+   "requirement_summary": "Python constructor configuration selects the existing standalone native mutation policy before startup, with denied mutations preserving state and reads/trusted local writes remaining available.",
+   "status": "in-progress",
+   "code_anchors": [
+    "crates/bacnet-server/src/mutation.rs::MutationPolicy",
+    "crates/bacnet-server/src/server/requests/mutations.rs",
+    "crates/rusty-bacnet/src/server/server_methods/registration.rs",
+    "crates/rusty-bacnet/src/server/server_methods/lifecycle.rs"
+   ],
+   "positive_tests": [
+    "crates/bacnet-server/src/server/requests/mutation_policy_tests.rs::mutation_policy_matrix_all_ten_decisions_tracking_and_retention",
+    "crates/rusty-bacnet/tests/test_mutation_policy.py::MutationPolicyWireTests::test_default_and_explicit_permissive_write_controls"
+   ],
+   "negative_tests": [
+    "crates/rusty-bacnet/tests/test_mutation_policy.py::MutationPolicyWireTests::test_deny_all_preserves_service_families_and_local_control",
+    "crates/rusty-bacnet/tests/test_mutation_policy.py::MutationPolicyConfigurationTests"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/mutation-policy.md",
+    "docs/python-api.md",
+    "docs/rust-api.md",
+    "README.md Python mutation policy"
+   ],
+   "notes": "Refs #768. Keyword-only mutation_policy accepts permissive (native default) or deny_all and stores the native enum. Invalid strings/type fail synchronously before transport preparation or startup drain. The generic builder owns one gate across transports; installed B/IP tests cover exact denial and unchanged property/object/list/file state, denied COV, default/explicit permissive writes, remote reads and trusted local writes. Native tests retain exhaustive ten-service policy/authorizer/counter coverage. No Python callbacks, duplicate gate, certificate principal or broader clause qualification. DCC, ReinitializeDevice, LifeSafety, Audit and endpoint Device-write authorization remain separate; #524 remains open. Global evidence pins and existing row statuses are unchanged."
+  },
+  {
    "id": "BACNET-15-ENDPOINT-DEVICE-WRITE",
    "standard_anchor": "Clause 15.9; Clause 12.11 Protocol_Services_Supported",
    "priority": "P1",

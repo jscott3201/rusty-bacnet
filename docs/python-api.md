@@ -1154,6 +1154,7 @@ server = BACnetServer(
     broadcast_address="255.255.255.255",
     transport="bip",             # "bip", "ipv6", or "sc"
     # SC options same as BACnetClient
+    mutation_policy="permissive", # keyword-only; "deny_all" denies covered network mutations
     dcc_password=None,           # password alone does not enable DCC
     dcc_policy="deny_all",       # keyword-only; explicit require_password or INSECURE legacy_permissive
     dcc_source_restriction=None, # optional list[(network_or_None, bytes)]; [] denies all; requires require_password
@@ -1705,13 +1706,21 @@ await server.write_property_local(
 )
 ```
 
-Local writes are trusted-local by design, the same contract as the Rust
-`write_local`: they bypass network mutation authorization. The Python surface
-exposes no mutation policy knobs (`mutation_policy` / `mutation_authorizer`
-exist only on the Rust server builders), so a Python-hosted server runs the
-default permissive behavior for inbound network mutations. See
-[Local mutation authorization](mutation-policy.md) for the Rust-side gate,
-its baseline-only provenance profile, and its exclusions.
+Local writes are trusted-local by design: `write_property_local` bypasses network
+mutation authorization. The constructor's keyword-only
+`mutation_policy="permissive"` selects the native default; `"deny_all"` denies
+valid inbound property writes (WP/WPM), object creation/deletion, list additions/
+removals, file writes, and the three COV subscription services through the same
+Rust gate. Denials return SERVICES / SERVICE_REQUEST_DENIED, preserving WPM's
+failed-reference error shape. Remote reads and trusted local writes still work.
+No Python callback or duplicate gate is involved.
+
+Invalid mode strings raise `ValueError`; non-strings raise `TypeError` during
+construction, before startup drains registrations or performs I/O. DCC,
+ReinitializeDevice, LifeSafety and Audit keep separate policies; this option
+neither configures endpoint Device-write authorization nor identifies certificate
+principals. See [Local mutation authorization](mutation-policy.md) for exact
+service coverage, validation precedence and exclusions.
 
 #### `comm_state() -> int`
 
