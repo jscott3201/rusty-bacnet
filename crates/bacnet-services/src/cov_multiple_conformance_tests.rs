@@ -75,7 +75,7 @@ fn raw_subscription(property_identifier: PropertyIdentifier) -> BytesMut {
 fn subscribe_encodes_false_timestamped_and_rejects_missing_required_booleans() {
     let request = subscription_with(PropertyIdentifier::PRESENT_VALUE);
     let mut encoded = BytesMut::new();
-    request.encode(&mut encoded);
+    request.encode(&mut encoded).unwrap();
     assert_eq!(
         encoded.as_ref(),
         &[
@@ -89,7 +89,7 @@ fn subscribe_encodes_false_timestamped_and_rejects_missing_required_booleans() {
     true_request.list_of_cov_subscription_specifications[0].list_of_cov_references[0].timestamped =
         true;
     encoded.clear();
-    true_request.encode(&mut encoded);
+    true_request.encode(&mut encoded).unwrap();
     assert_eq!(
         encoded.as_ref(),
         &[
@@ -153,7 +153,7 @@ fn subscribe_rejects_empty_reference_lists_and_special_property_identifiers() {
         }],
     };
     let mut encoded = BytesMut::new();
-    assert!(empty.try_encode(&mut encoded).is_err());
+    assert!(empty.encode(&mut encoded).is_err());
 
     for property_identifier in [
         PropertyIdentifier::ALL,
@@ -162,7 +162,7 @@ fn subscribe_rejects_empty_reference_lists_and_special_property_identifiers() {
     ] {
         let request = subscription_with(property_identifier);
         let mut encoded = BytesMut::new();
-        assert!(request.try_encode(&mut encoded).is_err());
+        assert!(request.encode(&mut encoded).is_err());
         assert!(
             SubscribeCOVPropertyMultipleRequest::decode(&raw_subscription(property_identifier))
                 .is_err()
@@ -172,7 +172,7 @@ fn subscribe_rejects_empty_reference_lists_and_special_property_identifiers() {
     let proprietary = PropertyIdentifier::from_raw(512);
     let request = subscription_with(proprietary);
     encoded.clear();
-    request.try_encode(&mut encoded).unwrap();
+    request.encode(&mut encoded).unwrap();
     assert_eq!(
         SubscribeCOVPropertyMultipleRequest::decode(&encoded)
             .unwrap()
@@ -366,22 +366,22 @@ fn notification_requires_specific_actual_date_and_time_values() {
 fn encoder_validation_is_atomic_and_caps_total_nested_items() {
     let mut invalid_subscription = subscription_with(PropertyIdentifier::ALL);
     let mut output = BytesMut::from(&b"prefix"[..]);
-    assert!(invalid_subscription.try_encode(&mut output).is_err());
+    assert!(invalid_subscription.encode(&mut output).is_err());
     assert_eq!(output.as_ref(), b"prefix");
 
     let mut inconsistent_timing = subscription_with(PropertyIdentifier::PRESENT_VALUE);
     inconsistent_timing.max_notification_delay = None;
-    assert!(inconsistent_timing.try_encode(&mut output).is_err());
+    assert!(inconsistent_timing.encode(&mut output).is_err());
     assert_eq!(output.as_ref(), b"prefix");
 
     let mut out_of_range_timing = subscription_with(PropertyIdentifier::PRESENT_VALUE);
     out_of_range_timing.lifetime = Some(0);
-    assert!(out_of_range_timing.try_encode(&mut output).is_err());
+    assert!(out_of_range_timing.encode(&mut output).is_err());
     assert_eq!(output.as_ref(), b"prefix");
 
     invalid_subscription.list_of_cov_subscription_specifications[0].list_of_cov_references =
         vec![property_ref(PropertyIdentifier::PRESENT_VALUE); MAX_DECODED_ITEMS + 1];
-    assert!(invalid_subscription.try_encode(&mut output).is_err());
+    assert!(invalid_subscription.encode(&mut output).is_err());
     assert_eq!(output.as_ref(), b"prefix");
 
     let mut exact = subscription_with(PropertyIdentifier::PRESENT_VALUE);
@@ -395,7 +395,7 @@ fn encoder_validation_is_atomic_and_caps_total_nested_items() {
         .list_of_cov_subscription_specifications
         .push(second_specification);
     let mut encoded = BytesMut::new();
-    exact.try_encode(&mut encoded).unwrap();
+    exact.encode(&mut encoded).unwrap();
     let decoded = SubscribeCOVPropertyMultipleRequest::decode(&encoded).unwrap();
     assert_eq!(
         decoded.list_of_cov_subscription_specifications[0]
@@ -595,5 +595,59 @@ fn notification_rejects_empty_lists_and_special_property_identifiers() {
             .unwrap();
         encoded[property_tag + 1] = property_identifier.to_raw() as u8;
         assert!(COVNotificationMultipleRequest::decode(&encoded).is_err());
+    }
+}
+
+#[test]
+fn cov_multiple_public_encode_late_invalid_never_panics_or_appends() {
+    for late in [
+        vec![],
+        vec![
+            property_ref(PropertyIdentifier::PRESENT_VALUE),
+            property_ref(PropertyIdentifier::ALL),
+        ],
+        vec![property_ref(PropertyIdentifier::REQUIRED)],
+        vec![property_ref(PropertyIdentifier::OPTIONAL)],
+    ] {
+        let mut request = subscription_with(PropertyIdentifier::PRESENT_VALUE);
+        request
+            .list_of_cov_subscription_specifications
+            .push(COVSubscriptionSpecification {
+                monitored_object_identifier: oid(ObjectType::ANALOG_INPUT, 2),
+                list_of_cov_references: late,
+            });
+        let mut bytes = BytesMut::from(&b"sentinel"[..]);
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| request.encode(&mut bytes)));
+        assert!(
+            result.is_ok(),
+            "public request encoding must report errors instead of panicking"
+        );
+        assert!(matches!(result.unwrap(), Err(Error::Encoding(_))));
+        assert_eq!(bytes.as_ref(), b"sentinel");
+    }
+}
+
+#[test]
+fn cov_multiple_empty_cancel_and_finite_empty_are_codec_shapes() {
+    let mut request = subscription_with(PropertyIdentifier::PRESENT_VALUE);
+    request.list_of_cov_subscription_specifications.clear();
+    for (lifetime, delay, expected) in [
+        (None, None, &b"\x09\x01\x19\x00\x4e\x4f"[..]),
+        (
+            Some(60),
+            Some(5),
+            &b"\x09\x01\x19\x00\x29\x3c\x39\x05\x4e\x4f"[..],
+        ),
+    ] {
+        request.lifetime = lifetime;
+        request.max_notification_delay = delay;
+        let mut output = BytesMut::new();
+        request.encode(&mut output).unwrap();
+        assert_eq!(output.as_ref(), expected);
+        assert_eq!(
+            SubscribeCOVPropertyMultipleRequest::decode(expected).unwrap(),
+            request
+        );
     }
 }

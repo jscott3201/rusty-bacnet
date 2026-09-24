@@ -1279,7 +1279,7 @@ let request = SubscribeCOVPropertyMultipleRequest {
     list_of_cov_subscription_specifications: cov_specs,
 };
 let mut service_data = bytes::BytesMut::new();
-request.try_encode(&mut service_data)?;
+request.encode(&mut service_data)?;
 client
     .confirmed_request(
         &mac,
@@ -1295,6 +1295,14 @@ let notification: COVNotificationRequest = rx.recv().await?;
 // Unsubscribe
 client.unsubscribe_cov(&mac, process_id, oid).await?;
 ```
+
+`SubscribeCOVPropertyMultipleRequest::encode` is fallible and validates the entire
+request before appending bytes. Invalid timing pairs, empty nested reference lists,
+prohibited property selectors and the cumulative reference limit return
+`Error::Encoding` without changing the destination buffer. The former `try_encode`
+and panicking `encode` split has been removed. An empty outer list remains encodable
+with omitted or valid finite timing; finite empty encoding does not establish that
+the bundled server materializes an empty subscription context.
 
 ### Discovery
 

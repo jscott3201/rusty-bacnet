@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- `SubscribeCOVPropertyMultipleRequest::encode` now returns `Result` and validates
+  the whole request before appending bytes (#808). The `try_encode`/panicking
+  encoder split is removed. Python validates every nested specification and timing
+  synchronously before returning an awaitable or accessing the client; an invalid
+  later entry cannot dispatch a valid prefix. Existing finite and cancellation
+  wire shapes remain available, without expanding server context behavior.
+
 - Target Audit Reporters now support an optional object-owned
   Maximum_Send_Delay/Send_Now pair (#783). `None` keeps both absent; 0–3600 seconds
   exposes the pair, with zero immediate. The Rust aggregate configuration gains

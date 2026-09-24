@@ -70,7 +70,7 @@ fn multiple_request(lifetime: Option<u32>, max_notification_delay: Option<u32>) 
         }],
     };
     let mut encoded = BytesMut::new();
-    request.encode(&mut encoded);
+    request.encode(&mut encoded).unwrap();
     encoded.freeze()
 }
 

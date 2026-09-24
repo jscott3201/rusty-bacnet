@@ -387,7 +387,7 @@ async fn expired_subscription_purged_before_cov_property_multiple_admission() {
         }],
     };
     let mut buf = bytes::BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
     let mut table = server.cov_table.write().await;
     let db = server.db.read().await;

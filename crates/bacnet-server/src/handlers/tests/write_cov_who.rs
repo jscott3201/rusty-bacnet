@@ -191,7 +191,7 @@ fn subscribe_cov_property_multiple_handler_returns_initial_subscriptions() {
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
     let subscriptions =
         handle_subscribe_cov_property_multiple_with_initial(&mut table, &db, &mac, &buf).unwrap();
@@ -246,7 +246,7 @@ fn subscribe_cov_property_multiple_deduplicates_initial_subscriptions() {
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
     let subscriptions =
         handle_subscribe_cov_property_multiple_with_initial(&mut table, &db, &mac, &buf).unwrap();
@@ -296,7 +296,7 @@ fn subscribe_cov_property_multiple_cancellation_removes_context_or_specs() {
         }],
     };
     let mut buf = BytesMut::new();
-    subscription_request.encode(&mut buf);
+    subscription_request.encode(&mut buf).unwrap();
     handle_subscribe_cov_property_multiple_with_initial(&mut table, &db, &mac, &buf).unwrap();
     assert_eq!(table.len(), 2);
 
@@ -318,7 +318,7 @@ fn subscribe_cov_property_multiple_cancellation_removes_context_or_specs() {
         }],
     };
     let mut buf = BytesMut::new();
-    cancel_present_value.encode(&mut buf);
+    cancel_present_value.encode(&mut buf).unwrap();
     let initial =
         handle_subscribe_cov_property_multiple_with_initial(&mut table, &db, &mac, &buf).unwrap();
     assert!(initial.is_empty());
@@ -337,7 +337,7 @@ fn subscribe_cov_property_multiple_cancellation_removes_context_or_specs() {
         list_of_cov_subscription_specifications: Vec::new(),
     };
     let mut buf = BytesMut::new();
-    cancel_context.encode(&mut buf);
+    cancel_context.encode(&mut buf).unwrap();
     let initial =
         handle_subscribe_cov_property_multiple_with_initial(&mut table, &db, &mac, &buf).unwrap();
     assert!(initial.is_empty());
@@ -384,7 +384,7 @@ fn subscribe_cov_property_multiple_invalid_property_is_atomic() {
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
     let err = handle_subscribe_cov_property_multiple_with_initial(&mut table, &db, &mac, &buf)
         .unwrap_err();
@@ -457,7 +457,7 @@ fn subscribe_cov_property_multiple_capacity_failure_is_atomic() {
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
     let err = handle_subscribe_cov_property_multiple_with_initial(&mut table, &db, &mac, &buf)
         .unwrap_err();

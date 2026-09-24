@@ -724,7 +724,7 @@ async fn subscribe_cov_property_multiple_atomic_rejection() {
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
     let mut table = server.cov_table.write().await;
     let db = server.db.read().await;

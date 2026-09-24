@@ -115,7 +115,7 @@ fn clockless_timestamped_cov_multiple_rejects_atomically_but_can_cancel() {
         list_of_cov_subscription_specifications: specifications.clone(),
     };
     let mut buf = BytesMut::new();
-    subscribe.encode(&mut buf);
+    subscribe.encode(&mut buf).unwrap();
 
     let err = handle_subscribe_cov_property_multiple_with_initial(&mut table, &db, &mac, &buf)
         .unwrap_err();
@@ -150,7 +150,7 @@ fn clockless_timestamped_cov_multiple_rejects_atomically_but_can_cancel() {
         list_of_cov_subscription_specifications: specifications,
     };
     let mut buf = BytesMut::new();
-    cancel.encode(&mut buf);
+    cancel.encode(&mut buf).unwrap();
     let initial =
         handle_subscribe_cov_property_multiple_with_initial(&mut table, &db, &mac, &buf).unwrap();
     assert!(initial.is_empty());

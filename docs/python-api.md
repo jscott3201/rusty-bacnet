@@ -920,7 +920,15 @@ the peer omits that optional ACK member; an explicit class zero remains `0`.
 
 Subscribe to COV on multiple properties across multiple objects. `issue_confirmed_notifications` is now a required `bool`, including for cancellation requests. This is a breaking Python call-signature change; callers should pass it by keyword as shown below. For subscriptions and re-subscriptions, pass both `lifetime` and `max_notification_delay`. For whole-context cancellations, pass `specs=[]` and omit both timing fields.
 
-Each object specification supplied for a subscription must contain at least one property reference. `PropertyIdentifier.ALL`, `PropertyIdentifier.OPTIONAL`, and `PropertyIdentifier.REQUIRED` are not valid COV references; invalid specifications raise an exception before a request is sent.
+Each supplied object specification must contain at least one property reference.
+`PropertyIdentifier.ALL`, `PropertyIdentifier.OPTIONAL`, and
+`PropertyIdentifier.REQUIRED` are not valid COV references. Complete request
+validation, including timing and the cumulative 10,000-reference limit, raises
+`ValueError` synchronously before an awaitable is returned, address parsing,
+client-state access or I/O. An invalid later specification cannot dispatch a
+valid prefix. Valid calls return an awaitable and retain normal remote protocol
+errors. Empty outer lists remain encodable with omitted or valid finite timing;
+this does not claim bundled-server materialization of a finite empty context.
 
 ```python
 await client.subscribe_cov_property_multiple(
