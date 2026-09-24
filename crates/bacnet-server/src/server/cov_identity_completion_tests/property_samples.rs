@@ -19,7 +19,7 @@ async fn selected_change(kind: CovNotificationKind, property: PropertyIdentifier
             )
             .unwrap();
         let mut sub = proposal(kind, false, property);
-        sub.last_notified_sample = None;
+        sub.last_notified_observation = None;
         sub.cov_increment = increment;
         let accepted = fixture.table.write().await.subscribe(sub).unwrap();
         fixture.fire(true, &[accepted]).await;
@@ -57,7 +57,14 @@ async fn selected_change(kind: CovNotificationKind, property: PropertyIdentifier
         let (actual_property, value) = match kind {
             CovNotificationKind::Single => {
                 let n = COVNotificationRequest::decode(&request.service_request).unwrap();
-                assert_eq!(n.list_of_values.len(), 1);
+                assert_eq!(
+                    n.list_of_values.len(),
+                    if property == PropertyIdentifier::STATUS_FLAGS {
+                        1
+                    } else {
+                        2
+                    }
+                );
                 (
                     n.list_of_values[0].property_identifier,
                     n.list_of_values[0].value.clone(),
@@ -67,7 +74,14 @@ async fn selected_change(kind: CovNotificationKind, property: PropertyIdentifier
                 let n = COVNotificationMultipleRequest::decode(&request.service_request).unwrap();
                 assert_eq!(n.list_of_cov_notifications.len(), 1);
                 let values = &n.list_of_cov_notifications[0].list_of_values;
-                assert_eq!(values.len(), 1);
+                assert_eq!(
+                    values.len(),
+                    if property == PropertyIdentifier::STATUS_FLAGS {
+                        1
+                    } else {
+                        2
+                    }
+                );
                 (values[0].property_identifier, values[0].value.clone())
             }
         };

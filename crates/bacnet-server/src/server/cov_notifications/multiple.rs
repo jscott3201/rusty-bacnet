@@ -146,6 +146,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 None
             };
             let mut candidates = Vec::new();
+            // One capture per object in this context; all selected values and
+            // companions share this DB/snapshot borrow, never a cross-context cache.
+            let mut flags_by_object = HashMap::new();
             for sub in subscriptions {
                 let Some(property_identifier) = sub.monitored_property else {
                     continue;
@@ -156,21 +159,35 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 else {
                     continue;
                 };
-                let Ok(property_value) =
-                    object.read_property(property_identifier, sub.monitored_property_array_index)
-                else {
+                let flags = flags_by_object
+                    .entry(sub.monitored_object_identifier)
+                    .or_insert_with(|| crate::cov::flags::PreparedFlags::read(object));
+                let Ok(flags) = flags else {
                     continue;
                 };
-                let Ok(prepared) = crate::cov::prepare::prepare_value(
-                    object,
-                    property_identifier,
-                    sub.monitored_property_array_index,
-                    sub.cov_increment,
-                    &property_value,
-                ) else {
+                let prepared = if property_identifier == PropertyIdentifier::STATUS_FLAGS {
+                    flags.selected(object, sub.monitored_property_array_index)
+                } else {
+                    object
+                        .read_property(property_identifier, sub.monitored_property_array_index)
+                        .and_then(|value| {
+                            crate::cov::prepare::prepare_value(
+                                object,
+                                property_identifier,
+                                sub.monitored_property_array_index,
+                                sub.cov_increment,
+                                &value,
+                            )
+                        })
+                };
+                let Ok(prepared) = prepared else {
                     continue;
                 };
-                if !force && !prepared.reports(sub.last_notified_sample.as_ref()) {
+                let observation = flags.observation(prepared.sample.clone());
+                if !force
+                    && !prepared.reports(sub.last_notified_observation.as_ref().map(|o| o.sample()))
+                    && !observation.flags_changed(sub.last_notified_observation.as_ref())
+                {
                     continue;
                 }
                 candidates.push((
@@ -181,7 +198,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         value: prepared.encoded,
                         time_of_change: None,
                     },
-                    prepared.sample,
+                    observation,
                 ));
             }
 
@@ -240,13 +257,31 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     });
                 }
             }
-            if let Some(db) = db.as_deref() {
-                life_safety::append_status_flags(
-                    db,
-                    &retained_subscriptions,
-                    timestamp,
-                    &mut items,
-                );
+            for item in &mut items {
+                if item
+                    .list_of_values
+                    .iter()
+                    .any(|v| v.property_identifier == PropertyIdentifier::STATUS_FLAGS)
+                {
+                    continue;
+                }
+                let Some(Ok(flags)) = flags_by_object.get(&item.monitored_object_identifier) else {
+                    continue;
+                };
+                if let Some(encoded) = &flags.encoded {
+                    let timestamped = retained_subscriptions.iter().any(|sub| {
+                        sub.monitored_object_identifier == item.monitored_object_identifier
+                            && sub.timestamped
+                    });
+                    item.list_of_values.push(COVNotificationValue {
+                        property_identifier: PropertyIdentifier::STATUS_FLAGS,
+                        property_array_index: None,
+                        value: encoded.clone(),
+                        time_of_change: timestamped
+                            .then(|| timestamp.map(|(_, time)| time))
+                            .flatten(),
+                    });
+                }
             }
             (
                 items,
@@ -334,7 +369,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             {
                 let mut table = cov_table.write().await;
                 for (snapshot, pv) in &last_notified {
-                    table.set_last_notified_sample(snapshot, pv.clone());
+                    table.set_last_notified_observation(snapshot, pv.clone());
                 }
             }
 
@@ -414,7 +449,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             } else {
                 let mut table = cov_table.write().await;
                 for (snapshot, pv) in &last_notified {
-                    table.set_last_notified_sample(snapshot, pv.clone());
+                    table.set_last_notified_observation(snapshot, pv.clone());
                 }
             }
         }

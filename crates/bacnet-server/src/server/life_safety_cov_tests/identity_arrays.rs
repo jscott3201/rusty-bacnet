@@ -70,6 +70,7 @@ async fn cov_identity_multiple_array_coordinates_duplicates_and_late_invalid_are
     assert_eq!(
         values
             .iter()
+            .filter(|v| v.property_identifier == PropertyIdentifier::PRIORITY_ARRAY)
             .map(|v| v.property_array_index)
             .collect::<Vec<_>>(),
         vec![None, Some(0), Some(2), Some(1)]

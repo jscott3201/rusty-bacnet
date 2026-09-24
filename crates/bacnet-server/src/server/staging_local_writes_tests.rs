@@ -141,7 +141,7 @@ async fn staging_writes_bo_bv_blo_at_priority_skips_wildcard_and_notifies_target
             monitored_object_identifier: targets[1],
             issue_confirmed_notifications: false,
             expires_at: None,
-            last_notified_sample: None,
+            last_notified_observation: None,
             monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
             monitored_property_array_index: None,
             cov_increment: None,

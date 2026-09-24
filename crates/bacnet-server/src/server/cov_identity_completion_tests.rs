@@ -10,6 +10,7 @@ struct HeldTransport {
     entered: Arc<Notify>,
     release: Arc<Semaphore>,
     hold: bool,
+    fail: Arc<std::sync::atomic::AtomicBool>,
 }
 impl TransportPort for HeldTransport {
     async fn start(
@@ -25,6 +26,9 @@ impl TransportPort for HeldTransport {
         self.entered.notify_one();
         if self.hold {
             self.release.acquire().await.unwrap().forget();
+        }
+        if self.fail.load(Ordering::Relaxed) {
+            return Err(Error::Encoding("injected unconfirmed send failure".into()));
         }
         Ok(())
     }
@@ -51,9 +55,13 @@ fn proposal(
         monitored_object_identifier: object(),
         issue_confirmed_notifications: confirmed,
         expires_at: None,
-        last_notified_sample: Some(
-            crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(1.0))
-                .unwrap(),
+        last_notified_observation: Some(
+            crate::cov::CovObservation::new(
+                crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(1.0))
+                    .unwrap(),
+                None,
+            )
+            .unwrap(),
         ),
         monitored_property: Some(property),
         monitored_property_array_index: None,
@@ -71,6 +79,7 @@ struct Fixture {
     transactions: Arc<NotificationTransactions>,
     comm: Arc<AtomicU8>,
     config: ServerConfig,
+    fail: Arc<std::sync::atomic::AtomicBool>,
     sent: Arc<StdMutex<Vec<Bytes>>>,
     entered: Arc<Notify>,
     release: Arc<Semaphore>,
@@ -84,6 +93,7 @@ impl Fixture {
         let sent = Arc::new(StdMutex::new(Vec::new()));
         let entered = Arc::new(Notify::new());
         let release = Arc::new(Semaphore::new(0));
+        let fail = Arc::new(std::sync::atomic::AtomicBool::new(false));
         Self {
             db: Arc::new(RwLock::new(db)),
             network: Arc::new(NetworkLayer::new(HeldTransport {
@@ -91,12 +101,14 @@ impl Fixture {
                 entered: entered.clone(),
                 release: release.clone(),
                 hold,
+                fail: fail.clone(),
             })),
             table: Arc::new(RwLock::new(CovSubscriptionTable::new())),
             permits: Arc::new(Semaphore::new(8)),
             transactions: NotificationTransactions::new(),
             comm: Arc::new(AtomicU8::new(0)),
             config: ServerConfig::default(),
+            fail,
             sent,
             entered,
             release,
@@ -218,9 +230,15 @@ async fn stale_completion(
         }
         if !matches!(change, Change::Remove) {
             let mut renewed = original;
-            renewed.last_notified_sample = Some(
-                crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(99.0))
+            renewed.last_notified_observation = Some(
+                crate::cov::CovObservation::new(
+                    crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(
+                        99.0,
+                    ))
                     .unwrap(),
+                    None,
+                )
+                .unwrap(),
             );
             table.subscribe(renewed).unwrap();
         }
@@ -235,17 +253,26 @@ async fn stale_completion(
         if matches!(change, Change::Remove) {
             assert!(table.get_subscription(snapshots[0].key()).is_none());
         } else {
-            assert_eq!(table.get_subscription(snapshots[0].key()).unwrap().last_notified_sample,Some(crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(99.0)).unwrap()),"stale completion initial={initial} kind={kind:?} confirmed={confirmed} change={change:?}");
+            assert_eq!(table.get_subscription(snapshots[0].key()).unwrap().last_notified_observation,Some(crate::cov::CovObservation::new(crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(99.0)).unwrap(), None).unwrap()),"stale completion initial={initial} kind={kind:?} confirmed={confirmed} change={change:?}");
         }
         if kind == CovNotificationKind::Multiple {
             assert_eq!(
                 table
                     .get_subscription(snapshots[1].key())
                     .unwrap()
-                    .last_notified_sample,
+                    .last_notified_observation,
                 Some(
-                    crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(0.0))
-                        .unwrap()
+                    crate::cov::CovObservation::new(
+                        crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(
+                            0.0
+                        ))
+                        .unwrap(),
+                        Some(&PropertyValue::BitString {
+                            unused_bits: 4,
+                            data: vec![0]
+                        })
+                    )
+                    .unwrap()
                 ),
                 "each reference retains its own generation"
             );
@@ -289,3 +316,7 @@ mod lifetime;
 mod property_samples;
 
 mod sample_contract;
+
+mod status_flags;
+
+mod status_contract;

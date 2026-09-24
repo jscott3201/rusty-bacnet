@@ -62,11 +62,15 @@ async fn cov_lifetime_held_initial_and_fanout_expiry_admit_nothing() {
                     table
                         .get_subscription(snapshots[0].key())
                         .unwrap()
-                        .last_notified_sample,
+                        .last_notified_observation,
                     Some(
-                        crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(
-                            1.0
-                        ))
+                        crate::cov::CovObservation::new(
+                            crate::cov::CovSample::new(
+                                &bacnet_types::primitives::PropertyValue::Real(1.0)
+                            )
+                            .unwrap(),
+                            None
+                        )
                         .unwrap()
                     )
                 );
@@ -166,9 +170,13 @@ async fn cov_lifetime_admitted_confirmed_retry_survives_expiry_and_ack_drains() 
             assert_eq!(remaining(frames[0].clone(), kind), 1);
         }
         sub.expires_at = None;
-        sub.last_notified_sample = Some(
-            crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(99.0))
-                .unwrap(),
+        sub.last_notified_observation = Some(
+            crate::cov::CovObservation::new(
+                crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(99.0))
+                    .unwrap(),
+                None,
+            )
+            .unwrap(),
         );
         let replacement = fixture.table.write().await.subscribe(sub).unwrap();
         fixture.finish(true).await;
@@ -180,10 +188,16 @@ async fn cov_lifetime_admitted_confirmed_retry_survives_expiry_and_ack_drains() 
                 .await
                 .get_subscription(replacement.key())
                 .unwrap()
-                .last_notified_sample,
+                .last_notified_observation,
             Some(
-                crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(99.0))
-                    .unwrap()
+                crate::cov::CovObservation::new(
+                    crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(
+                        99.0
+                    ))
+                    .unwrap(),
+                    None
+                )
+                .unwrap()
             )
         );
     }

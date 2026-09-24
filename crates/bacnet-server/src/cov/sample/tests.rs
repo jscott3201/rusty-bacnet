@@ -134,7 +134,7 @@ fn cov_sample_normalizes_capacity_and_shares_accepted_storage() {
         .unwrap(),
         issue_confirmed_notifications: false,
         expires_at: None,
-        last_notified_sample: Some(a.clone()),
+        last_notified_observation: Some(crate::cov::CovObservation::new(a.clone(), None).unwrap()),
         monitored_property: Some(bacnet_types::enums::PropertyIdentifier::PRIORITY_ARRAY),
         monitored_property_array_index: None,
         cov_increment: None,
@@ -149,18 +149,28 @@ fn cov_sample_normalizes_capacity_and_shares_accepted_storage() {
     for _ in 0..10 {
         assert!(Arc::ptr_eq(
             &a.0,
-            &accepted.clone().last_notified_sample.as_ref().unwrap().0
+            &accepted
+                .clone()
+                .last_notified_observation
+                .as_ref()
+                .unwrap()
+                .sample()
+                .0
         ));
     }
-    assert!(table.set_last_notified_sample(&accepted, b));
+    assert!(table.set_last_notified_observation(
+        &accepted,
+        crate::cov::CovObservation::new(b, None).unwrap()
+    ));
     assert!(Arc::ptr_eq(
         &a.0,
         &table
             .get_subscription(accepted.key())
             .unwrap()
-            .last_notified_sample
+            .last_notified_observation
             .as_ref()
             .unwrap()
+            .sample()
             .0
     ));
 }

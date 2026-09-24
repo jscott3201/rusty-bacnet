@@ -94,6 +94,9 @@ async fn subscribe_cov_property_invalid_resubscription_keeps_state_and_emits_onl
             after.monitored_property_array_index,
             before.monitored_property_array_index
         );
-        assert_eq!(after.last_notified_sample, before.last_notified_sample);
+        assert_eq!(
+            after.last_notified_observation,
+            before.last_notified_observation
+        );
     }
 }

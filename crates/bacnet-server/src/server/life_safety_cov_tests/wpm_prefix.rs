@@ -282,7 +282,7 @@ async fn failed_wpm_sends_generic_cov_for_non_life_safety_prefix_only() {
             monitored_object_identifier: oid,
             issue_confirmed_notifications: false,
             expires_at: None,
-            last_notified_sample: None,
+            last_notified_observation: None,
             monitored_property: None,
             monitored_property_array_index: None,
             cov_increment: None,

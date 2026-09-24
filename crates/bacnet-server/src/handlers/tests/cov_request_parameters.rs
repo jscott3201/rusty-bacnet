@@ -63,7 +63,10 @@ fn subscribe_cov_lifetime_only_preserves_whole_table_and_quota_before_lookup_or_
                     after.issue_confirmed_notifications,
                     before.issue_confirmed_notifications
                 );
-                assert_eq!(after.last_notified_sample, before.last_notified_sample);
+                assert_eq!(
+                    after.last_notified_observation,
+                    before.last_notified_observation
+                );
                 assert_eq!(after.cov_increment, before.cov_increment);
                 assert_eq!(table.peer_subscription_count(&before.peer_key()), 1);
                 assert_eq!(table.peer_indefinite_count(&before.peer_key()), 0);

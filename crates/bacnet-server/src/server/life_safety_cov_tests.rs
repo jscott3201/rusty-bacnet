@@ -28,7 +28,7 @@ fn subscription(
         monitored_object_identifier: point_oid(),
         issue_confirmed_notifications: false,
         expires_at: None,
-        last_notified_sample: None,
+        last_notified_observation: None,
         monitored_property: property,
         monitored_property_array_index: None,
         cov_increment: None,

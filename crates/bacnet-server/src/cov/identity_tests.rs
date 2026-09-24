@@ -10,9 +10,13 @@ fn proposal(index: Option<u32>, confirmed: bool) -> CovSubscription {
         monitored_object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 1).unwrap(),
         issue_confirmed_notifications: confirmed,
         expires_at: Some(Instant::now() + Duration::from_secs(60)),
-        last_notified_sample: Some(
-            crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(1.0))
-                .unwrap(),
+        last_notified_observation: Some(
+            crate::cov::CovObservation::new(
+                crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(1.0))
+                    .unwrap(),
+                None,
+            )
+            .unwrap(),
         ),
         monitored_property: Some(PropertyIdentifier::PRIORITY_ARRAY),
         monitored_property_array_index: index,
@@ -38,38 +42,67 @@ fn cov_identity_generations_never_reuse_across_renew_cancel_or_foreign_table() {
     let sub = proposal(None, false);
     let first = table.subscribe(sub.clone()).unwrap();
     let second = table.subscribe(sub.clone()).unwrap();
-    assert!(!table.set_last_notified_sample(
+    assert!(!table.set_last_notified_observation(
         &first,
-        crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(7.0)).unwrap()
+        crate::cov::CovObservation::new(
+            crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(7.0))
+                .unwrap(),
+            None
+        )
+        .unwrap()
     ));
-    assert!(table.set_last_notified_sample(
+    assert!(table.set_last_notified_observation(
         &second,
-        crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(8.0)).unwrap()
+        crate::cov::CovObservation::new(
+            crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(8.0))
+                .unwrap(),
+            None
+        )
+        .unwrap()
     ));
     assert!(table.unsubscribe(second.key()));
-    assert!(!table.set_last_notified_sample(
+    assert!(!table.set_last_notified_observation(
         &second,
-        crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(9.0)).unwrap()
+        crate::cov::CovObservation::new(
+            crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(9.0))
+                .unwrap(),
+            None
+        )
+        .unwrap()
     ));
     let third = table.subscribe(sub.clone()).unwrap();
-    assert!(!table.set_last_notified_sample(
+    assert!(!table.set_last_notified_observation(
         &second,
-        crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(9.0)).unwrap()
+        crate::cov::CovObservation::new(
+            crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(9.0))
+                .unwrap(),
+            None
+        )
+        .unwrap()
     ));
     assert_eq!(
         table
             .get_subscription(third.key())
             .unwrap()
-            .last_notified_sample,
+            .last_notified_observation,
         Some(
-            crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(1.0))
-                .unwrap()
+            crate::cov::CovObservation::new(
+                crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(1.0))
+                    .unwrap(),
+                None
+            )
+            .unwrap()
         )
     );
     let foreign = CovSubscriptionTable::new().subscribe(sub).unwrap();
-    assert!(!table.set_last_notified_sample(
+    assert!(!table.set_last_notified_observation(
         &foreign,
-        crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(99.0)).unwrap()
+        crate::cov::CovObservation::new(
+            crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(99.0))
+                .unwrap(),
+            None
+        )
+        .unwrap()
     ));
     assert!(first.generation < second.generation && second.generation < third.generation);
 }
@@ -129,9 +162,14 @@ fn cov_identity_batch_reserves_only_final_duplicates_and_exhaustion_is_atomic() 
     assert_eq!(accepted.len(), 1);
     assert_eq!(accepted[0].generation, u64::MAX);
     assert_eq!(accepted[0].cov_increment, Some(3.0));
-    assert!(!table.set_last_notified_sample(
+    assert!(!table.set_last_notified_observation(
         &before,
-        crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(100.0)).unwrap()
+        crate::cov::CovObservation::new(
+            crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(100.0))
+                .unwrap(),
+            None
+        )
+        .unwrap()
     ));
     resource_error(table.subscribe(existing).unwrap_err());
     assert_eq!(

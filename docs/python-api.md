@@ -408,6 +408,15 @@ arrays are refused regardless of increment presence. Retained samples have local
 admission overflow preserves existing subscriptions, and later overflow skips the
 sample. See the [Rust selected-property profile](rust-api.md#cov-subscriptions)
 for exact type, exceptional-number and shape policies.
+Applicable Status_Flags changes also trigger reports independently of numeric
+increments. Property notifications include declared-present flags once per object,
+including non-Life-Safety objects. Selected values and flags advance one delivered
+observation together. Read/encoding/size failure, or malformed declared-present
+flags, skips the whole report without advancing either part; ordinary failed
+Present_Value no longer produces a flags-only partial report. Declared absence
+omits the companion. Disappearance alone does not trigger; a later present value
+can trigger after a delivered absent observation. Multiple samples each context
+separately under one DB/snapshot borrow and retains existing lifetime fences.
 These server guarantees do not add a Python Single-property API, empty finite
 Multiple contexts, delayed Multiple notifications or general numeric-array reduction.
 See the [COV subscription ledger](conformance/support-summary.md).
