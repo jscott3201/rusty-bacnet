@@ -720,34 +720,46 @@
    "id": "BACNET-12-DEVICE-ACTIVE-COV-SUBSCRIPTIONS",
    "standard_anchor": "Clause 12.11, Table 12-13 and 12.11.31; Clause 12.1.5.2; Clauses 20 and 21 BACnetCOVSubscription, BACnetRecipientProcess, BACnetRecipient, BACnetObjectPropertyReference, ReadProperty-ACK, and ReadAccessResult productions",
    "priority": "P1",
-   "requirement_summary": "Device Active_COV_Subscriptions reads encode every field of each subscription already stored in the object as an ordered BACnetLIST of complete BACnetCOVSubscription sequences.",
+   "requirement_summary": "On a running server, Device Active_COV_Subscriptions reads list every live ordinary and single-property COV subscription from the server COV table as an ordered BACnetLIST of complete BACnetCOVSubscription sequences; the property is read-only and not array-indexable.",
    "status": "in-progress",
    "code_anchors": [
     "crates/bacnet-encoding/src/constructed/cov_subscription.rs::encode_cov_subscription",
     "crates/bacnet-encoding/src/constructed/cov_subscription.rs::encode_cov_subscription_list",
-    "crates/bacnet-objects/src/device/mod.rs::DeviceObject::read_property",
-    "crates/bacnet-server/src/handlers/read_property.rs::handle_read_property",
-    "crates/bacnet-server/src/handlers/read_property.rs::handle_read_property_multiple"
+    "crates/bacnet-server/src/cov/active.rs::CovSubscriptionTable::active_cov_entries",
+    "crates/bacnet-server/src/cov/active.rs::ActiveCovSubscriptions::project",
+    "crates/bacnet-server/src/cov/prepare.rs::effective_increment",
+    "crates/bacnet-server/src/server/requests/confirmed_response.rs::active_cov_snapshot",
+    "crates/bacnet-server/src/handlers/read_property.rs::read_property_value",
+    "crates/bacnet-server/src/handlers/rpm_budget.rs::rpm_budgeted_request_observed",
+    "crates/bacnet-server/src/server/handles.rs::BACnetServer::read_local",
+    "crates/bacnet-objects/src/device/mod.rs::DeviceObject::read_property"
    ],
    "positive_tests": [
     "crates/bacnet-encoding/src/constructed/tests/cov_subscription.rs::cov_subscription_device_recipient_golden",
     "crates/bacnet-encoding/src/constructed/tests/cov_subscription.rs::cov_subscription_address_recipient_golden",
     "crates/bacnet-encoding/src/constructed/tests/cov_subscription.rs::cov_subscription_list_is_bare_concatenation",
     "crates/bacnet-encoding/src/constructed/tests/cov_subscription.rs::cov_subscription_list_empty_encodes_to_nothing",
-    "crates/bacnet-objects/src/device/tests.rs::active_cov_subscriptions_after_add",
-    "crates/bacnet-objects/src/device/tests.rs::active_cov_subscriptions_without_increment",
-    "crates/bacnet-server/src/handlers/tests/read_rpm.rs::active_cov_subscriptions_read_property_preserves_constructed_bytes",
-    "crates/bacnet-server/src/handlers/tests/read_rpm.rs::active_cov_subscriptions_read_property_multiple_preserves_constructed_bytes"
+    "crates/bacnet-server/src/cov/active.rs::tests::active_cov_entries_read_one_instant_without_purging_or_multiple",
+    "crates/bacnet-server/src/cov/active.rs::tests::active_cov_projection_maps_identity_increment_and_scope",
+    "crates/bacnet-server/src/cov/active.rs::tests::active_cov_access_point_whole_object_names_access_event",
+    "crates/bacnet-server/src/server/active_cov_subscriptions_tests.rs::active_cov_wire_lists_accepted_ordinary_and_single_subscriptions",
+    "crates/bacnet-server/src/server/active_cov_subscriptions_tests.rs::active_cov_wire_renewal_cancellation_and_indefinite_lifetime",
+    "crates/bacnet-server/src/server/active_cov_subscriptions_tests.rs::active_cov_wire_expiry_delete_object_and_peer_cleanup_remove_entries",
+    "crates/bacnet-server/src/server/active_cov_subscriptions_tests.rs::active_cov_wire_rpm_rows_share_one_request_snapshot_and_agree_with_rp",
+    "crates/bacnet-objects/src/device/tests.rs::active_cov_subscriptions_default_empty",
+    "crates/bacnet-server/src/handlers/tests/read_rpm.rs::active_cov_subscriptions_low_level_handlers_read_standalone_empty_list"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/device/tests.rs::active_cov_subscriptions_write_denied",
+    "crates/bacnet-server/src/server/active_cov_subscriptions_tests.rs::active_cov_wire_rejected_requests_leave_the_list_unchanged",
+    "crates/bacnet-server/src/server/active_cov_subscriptions_tests.rs::active_cov_read_only_list_scope_local_read_and_stop",
     "crates/bacnet-server/src/handlers/tests/array_index_gating.rs::list_properties_reject_indexed_read_property",
     "crates/bacnet-server/src/handlers/tests/array_index_gating.rs::list_properties_reject_indexed_read_property_multiple_inline",
     "crates/bacnet-server/src/handlers/tests/array_index_gating.rs::list_properties_reject_indexed_write_property_and_write_property_multiple"
    ],
    "benchmarks": [],
    "public_claims": [],
-   "notes": "Split child of BACNET-12-OBJECT-MODEL (#183). The encode-only codec emits each untagged subscription sequence in model order and concatenates list entries without list or per-entry wrappers. Device and address recipients, optional array index, confirmed and unconfirmed forms, multi-octet and zero time values, optional increment, list order, and the empty list are covered by independent golden vectors. DeviceObject reads return one ApplicationData payload, and ReadProperty plus ReadPropertyMultiple preserve those bytes without additional framing. This row covers only lossless projection of subscriptions already stored in DeviceObject. The server runtime COV table is not synchronized with that storage, so this is not complete Active_COV_Subscriptions runtime conformance. The property remains read-only and non-array-indexable."
+   "notes": "Split child of BACNET-12-OBJECT-MODEL (#183, #813). The server-owned CovSubscriptionTable is the sole live authority for SubscribeCOV and SubscribeCOVProperty entries; DeviceObject no longer holds a competing manual list. Network ReadProperty, budgeted ReadPropertyMultiple (explicit, repeated, wildcard-Device, ALL and OPTIONAL rows) and BACnetServer::read_local resolve the selected local Device's value through one request-local projection: under the database read guard, the COV table read guard samples one monotonic instant and copies non-expired entries without purging, then is released before object reads or encoding. Direct subscribers encode as network 0 plus source MAC; routed subscribers encode the remote NPDU source, not the router MAC. Whole-object entries name Present_Value (Access_Event for Access Point, Table 13-1 footnote 1); single-property entries keep the property and the absent, zero or element index. Indefinite lifetimes report zero, finite lifetimes report rounded-up seconds, and reached deadlines are omitted before the periodic purge. cov-increment appears only for a numeric monitored value, using the notification rule (explicit override, else the object's current COV_Increment for numeric Present_Value); entries whose object was deleted are omitted. Wire tests decode each entry and cover initial empty, direct and routed acceptance, renewal, exact cancellation, expiry, DeleteObject, exact peer cleanup, rejected requests, repeated-reference and selector agreement under a concurrent renew/cancel race, read-only and non-array rejection, selected-Device scope and stopped-server reporting; codec golden vectors remain in bacnet-encoding. Limits: raw ObjectDatabase/DeviceObject reads and the low-level handle_read_property/handle_read_property_multiple helpers return the standalone empty list, the composition EndpointResponder has no COV table, and SubscribeCOVPropertyMultiple contexts belong to Active_COV_Multiple_Subscriptions (#814) and are not listed. This is not a full COV or BTL claim."
   },
   {
    "id": "BACNET-12-NOTIFICATION-FORWARDER-WITHDRAWAL",

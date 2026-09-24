@@ -1,37 +1,47 @@
 use super::*;
 
-/// Handle a ReadProperty request.
+/// Handle a ReadProperty request against standalone object data.
 ///
 /// Looks up the object and property in the database, encodes the value,
-/// and returns the ReadPropertyACK service bytes.
+/// and returns the ReadPropertyACK service bytes. This low-level helper has
+/// no server context: the Device's `Active_COV_Subscriptions` reads as the
+/// object's standalone empty list. A running `BACnetServer` projects that
+/// property live from its COV subscription table instead.
 pub fn handle_read_property(
     db: &ObjectDatabase,
     service_data: &[u8],
     buf: &mut BytesMut,
 ) -> Result<(), Error> {
-    handle_read_property_observed(db, service_data, buf, |_, _, _| {})
+    let request = ReadPropertyRequest::decode(service_data)?;
+    read_property_request_observed(db, None, &request, buf, |_, _, _| {})
 }
 
-/// Observe only decoded execution outcomes, without retaining the read value.
-pub(crate) fn handle_read_property_observed(
+/// Server ReadProperty evaluator over one decoded request. `live` carries the
+/// request-local Device `Active_COV_Subscriptions`; observations carry only
+/// execution outcomes, never the read value.
+pub(crate) fn read_property_request_observed(
     db: &ObjectDatabase,
-    service_data: &[u8],
+    live: Option<&ActiveCovSubscriptions>,
+    request: &ReadPropertyRequest,
     buf: &mut BytesMut,
     mut completed: impl FnMut(ObjectIdentifier, &ReadPropertyRequest, &Result<(), Error>),
 ) -> Result<(), Error> {
-    let request = ReadPropertyRequest::decode(service_data)?;
     let lookup_oid = resolve_device_wildcard(db, &request.object_identifier);
-    let result = read_property_decoded(db, &request, lookup_oid, buf);
-    completed(lookup_oid, &request, &result);
+    let result = read_property_decoded(db, live, request, lookup_oid, buf);
+    completed(lookup_oid, request, &result);
     result
 }
 
-fn read_property_decoded(
+/// Evaluate one property read with ReadProperty error precedence: unknown
+/// object, then non-array index, then the live Device projection or the
+/// object's own reader.
+pub(crate) fn read_property_value(
     db: &ObjectDatabase,
-    request: &ReadPropertyRequest,
+    live: Option<&ActiveCovSubscriptions>,
     lookup_oid: ObjectIdentifier,
-    buf: &mut BytesMut,
-) -> Result<(), Error> {
+    property: PropertyIdentifier,
+    array_index: Option<u32>,
+) -> Result<PropertyValue, Error> {
     let object = db.get(&lookup_oid).ok_or(Error::Protocol {
         class: ErrorClass::OBJECT.to_raw() as u32,
         code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
@@ -42,16 +52,33 @@ fn read_property_decoded(
     // belongs to the object (identifier-static whitelists cannot express the
     // type-dependent identifiers, e.g. ALARM_VALUES), so the handler defers
     // to the trait query.
-    if request.property_array_index.is_some()
-        && !object.is_array_property(request.property_identifier)
-    {
+    if array_index.is_some() && !object.is_array_property(property) {
         return Err(Error::Protocol {
             class: ErrorClass::PROPERTY.to_raw() as u32,
             code: ErrorCode::PROPERTY_IS_NOT_AN_ARRAY.to_raw() as u32,
         });
     }
 
-    let value = object.read_property(request.property_identifier, request.property_array_index)?;
+    match live.and_then(|live| live.resolve(lookup_oid, property)) {
+        Some(value) => Ok(value),
+        None => object.read_property(property, array_index),
+    }
+}
+
+fn read_property_decoded(
+    db: &ObjectDatabase,
+    live: Option<&ActiveCovSubscriptions>,
+    request: &ReadPropertyRequest,
+    lookup_oid: ObjectIdentifier,
+    buf: &mut BytesMut,
+) -> Result<(), Error> {
+    let value = read_property_value(
+        db,
+        live,
+        lookup_oid,
+        request.property_identifier,
+        request.property_array_index,
+    )?;
 
     let mut value_buf = BytesMut::new();
     encode_property_value(&mut value_buf, &value)?;
@@ -67,19 +94,71 @@ fn read_property_decoded(
     Ok(())
 }
 
+/// The local Device that wildcard instance 4194303 names. Ordinary and live
+/// Device reads share this one selection.
+fn selected_device(db: &ObjectDatabase) -> Option<ObjectIdentifier> {
+    db.list_objects()
+        .into_iter()
+        .find(|candidate| candidate.object_type() == ObjectType::DEVICE)
+}
+
+fn is_device_wildcard(oid: &ObjectIdentifier) -> bool {
+    oid.object_type() == ObjectType::DEVICE && oid.instance_number() == 4194303
+}
+
 /// Resolve Device wildcard instance 4194303 to the actual Device object.
-pub(super) fn resolve_device_wildcard(
+pub(crate) fn resolve_device_wildcard(
     db: &ObjectDatabase,
     oid: &ObjectIdentifier,
 ) -> ObjectIdentifier {
-    if oid.object_type() == ObjectType::DEVICE && oid.instance_number() == 4194303 {
-        for candidate in db.list_objects() {
-            if candidate.object_type() == ObjectType::DEVICE {
-                return candidate;
-            }
+    if is_device_wildcard(oid) {
+        if let Some(device) = selected_device(db) {
+            return device;
         }
     }
     *oid
+}
+
+/// The selected Device when `(lookup_oid, property)` is its server-owned
+/// `Active_COV_Subscriptions`; any other read needs no COV table snapshot.
+pub(crate) fn active_cov_device(
+    db: &ObjectDatabase,
+    lookup_oid: ObjectIdentifier,
+    property: PropertyIdentifier,
+) -> Option<ObjectIdentifier> {
+    if property != PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS {
+        return None;
+    }
+    selected_device(db).filter(|device| *device == lookup_oid)
+}
+
+/// The selected Device when any ReadPropertyMultiple reference to it may
+/// select `Active_COV_Subscriptions`, explicitly or through ALL, REQUIRED or
+/// OPTIONAL expansion. One snapshot then serves every such row.
+pub(crate) fn active_cov_device_for_rpm(
+    db: &ObjectDatabase,
+    request: &ReadPropertyMultipleRequest,
+) -> Option<ObjectIdentifier> {
+    let may_select = |reference: &bacnet_services::common::PropertyReference| {
+        matches!(
+            reference.property_identifier,
+            PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS
+                | PropertyIdentifier::ALL
+                | PropertyIdentifier::REQUIRED
+                | PropertyIdentifier::OPTIONAL
+        )
+    };
+    // Only a request that may select the property pays the Device scan.
+    let mut specs = request
+        .list_of_read_access_specs
+        .iter()
+        .filter(|spec| spec.list_of_property_references.iter().any(may_select))
+        .peekable();
+    specs.peek()?;
+    let device = selected_device(db)?;
+    specs
+        .any(|spec| spec.object_identifier == device || is_device_wildcard(&spec.object_identifier))
+        .then_some(device)
 }
 
 fn expand_property_reference(

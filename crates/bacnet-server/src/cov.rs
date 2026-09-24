@@ -13,6 +13,7 @@ use bacnet_types::MacAddr;
 
 mod identity;
 pub use identity::*;
+pub(crate) mod active;
 mod admission;
 mod sample;
 pub use sample::CovSample;

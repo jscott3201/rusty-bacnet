@@ -118,7 +118,13 @@ fn plan(
     Ok(plan)
 }
 
-fn element(object: Option<&dyn BACnetObject>, reference: &PropertyReference) -> ReadResultElement {
+/// `live` is the request-local Device projection for this row, if it applies;
+/// lookup and array-index precedence stay ahead of it, as in ReadProperty.
+fn element(
+    object: Option<&dyn BACnetObject>,
+    reference: &PropertyReference,
+    live: Option<PropertyValue>,
+) -> ReadResultElement {
     let id = reference.property_identifier;
     let index = reference.property_array_index;
     let response_index = super::read_property::rpm_response_index(object, id, index);
@@ -127,7 +133,7 @@ fn element(object: Option<&dyn BACnetObject>, reference: &PropertyReference) -> 
         Some(object) if index.is_some() && !object.is_array_property(id) => {
             Err((ErrorClass::PROPERTY, ErrorCode::PROPERTY_IS_NOT_AN_ARRAY))
         }
-        Some(object) => match object.read_property(id, index) {
+        Some(object) => match live.map_or_else(|| object.read_property(id, index), Ok) {
             Ok(value) => {
                 // One property may return/encode an arbitrarily large owned
                 // value. Only accumulated service bytes are bounded here.
@@ -184,13 +190,33 @@ pub(crate) fn handle_rpm_budgeted(
     handle_rpm_budgeted_observed(db, data, buf, budget, |_, _, _, _| {})
 }
 
-/// Atomic with respect to the caller's buffer, not object read side effects.
-/// Observations are provisional until this entire call succeeds. The caller
-/// must discard them on failure; callbacks carry the requested index (which may
-/// differ from the response index) and no property values.
+/// Decode, then evaluate without a server COV context.
+#[cfg(test)]
 pub(crate) fn handle_rpm_budgeted_observed(
     db: &ObjectDatabase,
     data: &[u8],
+    buf: &mut BytesMut,
+    budget: ReadPropertyMultipleBudget,
+    completed: impl FnMut(
+        ObjectIdentifier,
+        PropertyIdentifier,
+        Option<u32>,
+        Option<(ErrorClass, ErrorCode)>,
+    ),
+) -> Result<(), RpmFailure> {
+    let request = ReadPropertyMultipleRequest::decode(data).map_err(RpmFailure::Service)?;
+    rpm_budgeted_request_observed(db, None, &request, buf, budget, completed)
+}
+
+/// Atomic with respect to the caller's buffer, not object read side effects.
+/// Observations are provisional until this entire call succeeds. The caller
+/// must discard them on failure; callbacks carry the requested index (which may
+/// differ from the response index) and no property values. `live` is the one
+/// request-local Device `Active_COV_Subscriptions` value reused by every row.
+pub(crate) fn rpm_budgeted_request_observed(
+    db: &ObjectDatabase,
+    live: Option<&ActiveCovSubscriptions>,
+    request: &ReadPropertyMultipleRequest,
     buf: &mut BytesMut,
     budget: ReadPropertyMultipleBudget,
     mut completed: impl FnMut(
@@ -200,8 +226,7 @@ pub(crate) fn handle_rpm_budgeted_observed(
         Option<(ErrorClass, ErrorCode)>,
     ),
 ) -> Result<(), RpmFailure> {
-    let request = ReadPropertyMultipleRequest::decode(data).map_err(RpmFailure::Service)?;
-    let plan = plan(db, &request, budget.max_result_elements)?;
+    let plan = plan(db, request, budget.max_result_elements)?;
     let mut scratch = Scratch {
         bytes: BytesMut::new(),
         limit: budget.max_service_ack_bytes,
@@ -213,7 +238,9 @@ pub(crate) fn handle_rpm_budgeted_observed(
         ReadAccessResult::encode_header(&mut header, &spec.response_oid);
         scratch.append(&header, footer.len())?;
         for reference in spec.properties {
-            let result = element(db.get(&spec.lookup_oid), &reference);
+            let row_live =
+                live.and_then(|live| live.resolve(spec.lookup_oid, reference.property_identifier));
+            let result = element(db.get(&spec.lookup_oid), &reference, row_live);
             let mut encoded = BytesMut::new();
             result.encode(&mut encoded);
             scratch.append(&encoded, footer.len())?;
