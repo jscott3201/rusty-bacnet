@@ -290,8 +290,8 @@ fn list_properties_reject_indexed_read_property_multiple_inline() {
             Some((ErrorClass::PROPERTY, ErrorCode::PROPERTY_IS_NOT_AN_ARRAY)),
             "{object_type:?}.{property:?}: indexed list read must fail inline"
         );
-        // The index is echoed back in the error element (Clause 15.8.1.2).
-        assert_eq!(results[1].property_array_index, Some(1));
+        // Clause 15.7.3.2.2.2 omits the index for a non-array property.
+        assert_eq!(results[1].property_array_index, None);
     }
 }
 

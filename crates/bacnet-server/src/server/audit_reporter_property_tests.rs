@@ -122,7 +122,10 @@ async fn audit_reporter_monitored_objects_rp_rpm_property_list_and_pics_agree() 
             let results = rpm_wire(&fixture.server, P::MONITORED_OBJECTS, index).await;
             assert_eq!(results.len(), 1);
             assert_eq!(results[0].property_identifier, P::MONITORED_OBJECTS);
-            assert_eq!(results[0].property_array_index, index);
+            assert_eq!(
+                results[0].property_array_index,
+                if configured { index } else { None }
+            );
             assert_eq!(results[0].property_value, expected.clone().ok());
             assert_eq!(results[0].error, expected.err());
         }

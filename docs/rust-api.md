@@ -136,6 +136,14 @@ remote commandability rules.
 
 ### ReadPropertyMultiple / WritePropertyMultiple
 
+ReadPropertyMultiple response indexes follow the effective object declaration:
+requested indexes remain on known arrays, including index zero and inline array
+errors; scalar results omit them. Unknown objects/properties or unavailable
+legacy declarations conservatively omit the response index. This does not alter
+read error precedence or add a property read. Target Audit records retain the
+requested index independently. See the
+[scoped conformance evidence](conformance/support-summary.md).
+
 ```rust
 use bacnet_services::rpm::{ReadAccessSpecification, ReadPropertyMultipleACK, ReadAccessResult};
 use bacnet_services::wpm::WriteAccessSpecification;

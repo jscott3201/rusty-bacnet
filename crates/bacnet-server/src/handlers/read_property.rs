@@ -129,6 +129,27 @@ fn expand_property_reference(
     }
 }
 
+/// Clause 15.7.3.2.2.2 includes an index only for a declared array property.
+/// An unknown object/property or unavailable declaration conservatively omits
+/// it. Classification must not probe `read_property` or change error precedence.
+pub(super) fn rpm_response_index(
+    object: Option<&dyn bacnet_objects::traits::BACnetObject>,
+    property: PropertyIdentifier,
+    requested: Option<u32>,
+) -> Option<u32> {
+    let index = requested?;
+    let object = object?;
+    let metadata = object.property_metadata();
+    let present = if metadata.is_empty() {
+        object.property_list().contains(&property)
+    } else {
+        metadata
+            .iter()
+            .any(|row| row.property_identifier == property)
+    };
+    (present && object.is_array_property(property)).then_some(index)
+}
+
 /// Handle a ReadPropertyMultiple request.
 ///
 /// Per-property errors are returned inline rather than failing the entire request.
@@ -157,6 +178,7 @@ pub fn handle_read_property_multiple(
                         } else {
                             None
                         };
+                        let response_index = rpm_response_index(Some(object), prop_id, array_index);
                         // Same gate as ReadProperty (Clause 15.5.1.3): an
                         // array index on a non-array property fails this
                         // reference inline; sibling references still run.
@@ -165,7 +187,7 @@ pub fn handle_read_property_multiple(
                         if array_index.is_some() && !object.is_array_property(prop_id) {
                             elements.push(ReadResultElement {
                                 property_identifier: prop_id,
-                                property_array_index: array_index,
+                                property_array_index: response_index,
                                 property_value: None,
                                 error: Some((
                                     ErrorClass::PROPERTY,
@@ -181,7 +203,7 @@ pub fn handle_read_property_multiple(
                                     Ok(()) => {
                                         elements.push(ReadResultElement {
                                             property_identifier: prop_id,
-                                            property_array_index: array_index,
+                                            property_array_index: response_index,
                                             property_value: Some(value_buf.to_vec()),
                                             error: None,
                                         });
@@ -189,7 +211,7 @@ pub fn handle_read_property_multiple(
                                     Err(_) => {
                                         elements.push(ReadResultElement {
                                             property_identifier: prop_id,
-                                            property_array_index: array_index,
+                                            property_array_index: response_index,
                                             property_value: None,
                                             error: Some((ErrorClass::PROPERTY, ErrorCode::OTHER)),
                                         });
@@ -206,7 +228,7 @@ pub fn handle_read_property_multiple(
                                 };
                                 elements.push(ReadResultElement {
                                     property_identifier: prop_id,
-                                    property_array_index: array_index,
+                                    property_array_index: response_index,
                                     property_value: None,
                                     error: Some((err_class, err_code)),
                                 });
@@ -219,7 +241,11 @@ pub fn handle_read_property_multiple(
                 for prop_ref in &spec.list_of_property_references {
                     elements.push(ReadResultElement {
                         property_identifier: prop_ref.property_identifier,
-                        property_array_index: prop_ref.property_array_index,
+                        property_array_index: rpm_response_index(
+                            None,
+                            prop_ref.property_identifier,
+                            prop_ref.property_array_index,
+                        ),
                         property_value: None,
                         error: Some((ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT)),
                     });
@@ -239,3 +265,7 @@ pub fn handle_read_property_multiple(
     ack.encode(buf);
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "tests/rpm_result_index.rs"]
+mod rpm_result_index_tests;

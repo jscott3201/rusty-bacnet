@@ -664,7 +664,10 @@ fn rpm_multistate_indexed_state_text_and_list_gating_preserve_bytes() {
         assert_eq!(results.len(), references.len());
         for (result, (p, i)) in results.iter().zip(references) {
             assert_eq!(result.property_identifier, p);
-            assert_eq!(result.property_array_index, Some(i));
+            assert_eq!(
+                result.property_array_index,
+                (p == P::STATE_TEXT).then_some(i)
+            );
             if p == P::STATE_TEXT && i <= 3 {
                 assert!(result.error.is_none());
                 let value_bytes = result.property_value.as_ref().unwrap();
