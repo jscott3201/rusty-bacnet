@@ -205,7 +205,7 @@ fn rpm_preserves_event_timestamp_choices_count_and_inline_array_error() {
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
     let mut ack_buf = BytesMut::new();
     handle_read_property_multiple(&db, &buf, &mut ack_buf).unwrap();
     let ack = ReadPropertyMultipleACK::decode(&ack_buf).unwrap();

@@ -57,7 +57,8 @@ fn rpm(specs: Vec<ReadAccessSpecification>) -> Bytes {
     ReadPropertyMultipleRequest {
         list_of_read_access_specs: specs,
     }
-    .encode(&mut bytes);
+    .encode(&mut bytes)
+    .unwrap();
     bytes.freeze()
 }
 

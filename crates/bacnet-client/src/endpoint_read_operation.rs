@@ -1,4 +1,4 @@
-//! Prepared read ownership and terminal observation shared by both paths.
+//! Prepared read ownership and terminal observation shared by the closed RP/RR/RPM paths.
 use super::*;
 
 /// A reserved, encoded operation that has not submitted any traffic.
@@ -33,10 +33,14 @@ impl PreparedEndpointRead {
     #[doc(hidden)]
     pub async fn execute(mut self) -> EndpointReadOutcome {
         let mut attempted = false;
-        let result = self
-            .execute_inner(&mut attempted)
-            .await
-            .and_then(|bytes| self.request.decode(&bytes));
+        let result = self.execute_inner(&mut attempted).await.and_then(|bytes| {
+            if bytes.len() + 3 > usize::from(self.guard.inner.max_apdu_length) {
+                return Err(Error::Segmentation(
+                    "endpoint read ACK exceeds configured max APDU".into(),
+                ));
+            }
+            self.request.decode(&bytes)
+        });
         EndpointReadOutcome { result, attempted }
     }
 
@@ -69,7 +73,7 @@ impl PreparedEndpointRead {
                     *attempted |= outcome.attempted;
                     outcome.result
                 }
-                Err(error) => Err(error),
+                Err(error) => Err(error.into()),
             };
             // A peer terminal already delivered during egress is stronger evidence
             // than a contradictory local send failure. Never parse error strings.

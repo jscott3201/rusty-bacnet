@@ -13,3 +13,5 @@ pub use endpoint_requester::{
 };
 mod read_property;
 mod read_range;
+
+mod endpoint_rpm;

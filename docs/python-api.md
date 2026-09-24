@@ -1890,11 +1890,31 @@ async with endpoint:
 `device_instance`, `vendor_id`, `max_apdu`, `transport`, `local_address`,
 `active_leases`, plus policy counters). `local_address()` is `"ip:port"`
 (BIP), VMAC hex (SC), or station string (MS/TP). Roles expose no callbacks;
-the client initiates `read_property` and `read_range`; concurrent use is
+the client initiates `read_property`, `read_range` and `read_property_multiple`; concurrent use is
 `asyncio.gather` over these reads plus
 `is_session_alive()` polling — never Rust-calls-Python. Interpreter
 finalization only seals forcefully; always await `close()` or context exit.
 BIPv6/Ethernet have no endpoint owner; use the standalone path there.
+
+### Endpoint ReadPropertyMultiple
+
+`await client.read_property_multiple(address, specs)` shares standalone RPM's
+ordered list of object dictionaries (`object_id`, `results`). Each result has
+`property_id`, `array_index`, `value` (`PropertyValue`, raw `bytes`, or `None`) and
+`error` (an `ErrorClass`/`ErrorCode` tuple or `None`). Duplicate occurrences remain
+separate. Successful values echo the requested index; an inline error may omit
+it. Entire ACK identity/order/count correlation precedes returning results.
+
+The endpoint accepts 1–64 explicit references across nonempty object lists and
+concrete identifiers. Empty lists, ALL/REQUIRED/OPTIONAL and wildcard object
+instances raise `ValueError` before address parsing/I/O. Index zero is valid;
+indexes outside native unsigned32 raise `OverflowError` during conversion.
+Requests and raw ACKs must fit the configured unsegmented max APDU. Protocol,
+size, malformed/mismatched ACK and closed-owner failures raise `BacnetError`.
+Standalone RPM retains its broader selector profile but now rejects empty lists
+through the shared fallible encoder. Endpoint source Reporter configuration is
+still Rust-only; this method does not expose it in Python. The bundled server's
+known-scalar error-index producer correction remains separate (#789).
 
 ### Migration: separately-constructed client/server to endpoint
 

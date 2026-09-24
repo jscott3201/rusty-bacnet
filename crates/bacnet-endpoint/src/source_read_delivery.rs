@@ -2,6 +2,7 @@
 use super::*;
 use bacnet_encoding::apdu::{encode_apdu, Apdu, ConfirmedRequest, UnconfirmedRequest};
 use bacnet_endpoint_core::coordinator::CanonicalPeer;
+use bacnet_endpoint_core::endpoint_ingress::EndpointEgressAdmissionError;
 use bacnet_server::server::{
     __endpoint_NotificationWorkerResult as NotificationWorkerResult,
     __endpoint_run_notification_worker as run_notification_worker,
@@ -108,9 +109,16 @@ pub(super) fn admit(
     }
     let deadline = Instant::now() + DEADLINE;
     let egress = source.egress.clone();
+    let weak_owner = source.notifications.clone();
+    let source = Arc::downgrade(source);
     owner.spawn(async move {
         let _permit = permit;
         let sent = admit_encoded(&egress, mac, encoded, confirmed, deadline);
+        if matches!(sent, Err(EndpointEgressAdmissionError::QueueFull)) {
+            if let (Some(source), Some(owner)) = (source.upgrade(), weak_owner.upgrade()) {
+                failures::record_drop(&source, &owner, failure, timestamp);
+            }
+        }
         completion.finish(finish_send(sent, reserved, deadline).await);
     });
 }
@@ -157,7 +165,7 @@ pub(super) fn admit_encoded(
     encoded: Vec<u8>,
     confirmed: bool,
     deadline: Instant,
-) -> Result<bacnet_endpoint_core::endpoint_ingress::EndpointSend, Error> {
+) -> Result<bacnet_endpoint_core::endpoint_ingress::EndpointSend, EndpointEgressAdmissionError> {
     egress.admit_apdu(
         encoded,
         EndpointApduDestination::Direct {
@@ -176,7 +184,10 @@ type Reservation = (
 );
 
 pub(super) async fn finish_send(
-    sent: Result<bacnet_endpoint_core::endpoint_ingress::EndpointSend, Error>,
+    sent: Result<
+        bacnet_endpoint_core::endpoint_ingress::EndpointSend,
+        EndpointEgressAdmissionError,
+    >,
     reserved: Option<Reservation>,
     deadline: Instant,
 ) -> bool {

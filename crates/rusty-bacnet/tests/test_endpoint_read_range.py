@@ -23,7 +23,7 @@ class EndpointReadRangeTests(unittest.IsolatedAsyncioTestCase):
         await endpoint.start()
         try:
             role = await endpoint.client()
-            self.assertEqual(role.service_scope(), {"initiates": ["read_property", "read_range"], "executes": []})
+            self.assertEqual(role.service_scope(), {"initiates": ["read_property", "read_range", "read_property_multiple"], "executes": []})
             address = await target.local_address()
             oid = ObjectIdentifier(ObjectType.DEVICE, 9123)
             pid = PropertyIdentifier.OBJECT_LIST

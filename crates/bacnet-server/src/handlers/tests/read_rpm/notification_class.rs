@@ -91,7 +91,8 @@ fn rpm_notification_class_indexed_reads_and_constructed_bytes_are_unchanged() {
                 .collect(),
         }],
     }
-    .encode(&mut request_bytes);
+    .encode(&mut request_bytes)
+    .unwrap();
     let mut legacy = BytesMut::new();
     handle_read_property_multiple(&db, &request_bytes, &mut legacy).unwrap();
     let ack = ReadPropertyMultipleACK::decode(&legacy).unwrap();

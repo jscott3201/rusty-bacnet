@@ -48,6 +48,8 @@ pub(crate) struct SourceRead {
     operations: Arc<Semaphore>,
     max_apdu: u16,
     failures: Arc<AuditFailureQueue<MacAddr>>,
+    #[cfg(test)]
+    pub(crate) summary_queue_full: tokio::sync::Notify,
 }
 
 impl SourceRead {
@@ -97,6 +99,8 @@ impl SourceRead {
             operations: Arc::new(Semaphore::new(64)),
             max_apdu,
             failures,
+            #[cfg(test)]
+            summary_queue_full: tokio::sync::Notify::new(),
         });
         database
             .with_object_adapter(&selected, |slot| {
@@ -134,7 +138,8 @@ impl SourceRead {
         attributes: Vec<DataAttribute>,
         request: EndpointReadRequest,
     ) -> Result<EndpointReadAck, Error> {
-        let (object, property, index) = request.identity();
+        request.validate()?;
+        let identities = request.identities();
         // Bound every retained operation, including time before lease acquisition
         // and after dispatch releases the request lease. Never spawn permit waiters.
         let permit = Arc::clone(&self.operations)
@@ -173,10 +178,17 @@ impl SourceRead {
                 }
                 _ => return Err(Error::Encoding("invalid source operation flags".into())),
             };
-        if level == AuditLevel::NONE
-            || !operations.contains(AuditOperation::READ)
-            || (level == AuditLevel::AUDIT_CONFIG && property == PropertyIdentifier::PRESENT_VALUE)
-        {
+        let eligible: Vec<_> = identities
+            .into_iter()
+            .enumerate()
+            .filter(|(_, (_, property, _))| {
+                level != AuditLevel::NONE
+                    && operations.contains(AuditOperation::READ)
+                    && !(level == AuditLevel::AUDIT_CONFIG
+                        && *property == PropertyIdentifier::PRESENT_VALUE)
+            })
+            .collect();
+        if eligible.is_empty() {
             drop(db);
             drop(runtime);
             drop(permit);
@@ -260,7 +272,7 @@ impl SourceRead {
             })
         });
         let completion = status.begin_delivery();
-        let mut notification = BACnetAuditNotification {
+        let notification = BACnetAuditNotification {
             source_timestamp: Some(timestamp),
             target_timestamp: None,
             source_device: BACnetRecipient::Device(devices[0]),
@@ -275,11 +287,8 @@ impl SourceRead {
                 network_number: 0,
                 mac_address: destination_mac.clone(),
             }),
-            target_object: Some(object),
-            target_property: Some(AuditPropertyReference {
-                property_identifier: property,
-                property_array_index: index.map(u64::from),
-            }),
+            target_object: None,
+            target_property: None,
             target_priority: None,
             target_value: None,
             current_value: None,
@@ -301,30 +310,45 @@ impl SourceRead {
             let _permit = permit;
             let outcome = operation.execute().await;
             if outcome.attempted {
-                // Only validated peer success resolves a request alias. Errors,
-                // timeout and malformed ACKs retain the attempted request target.
-                if let Ok(ack) = &outcome.result {
-                    let object = ack.object_identifier();
-                    notification.target_object = Some(object);
-                    // Table 19-4: this successful Device-object read establishes
-                    // its Device identity for this operation, without a cache.
-                    if object.object_type() == ObjectType::DEVICE
-                        && object.instance_number() != ObjectIdentifier::WILDCARD_INSTANCE
-                    {
-                        notification.target_device = BACnetRecipient::Device(object);
-                    }
-                }
-                notification.result = delivery::result(&outcome.result);
+                // Correlation of the complete ACK precedes every occurrence's
+                // projection. Whole-operation failure fans out the same failure.
+                let results = outcome
+                    .result
+                    .as_ref()
+                    .ok()
+                    .map(EndpointReadAck::audit_results);
+                let device = outcome
+                    .result
+                    .as_ref()
+                    .ok()
+                    .and_then(EndpointReadAck::target_device);
                 if let Some(owner) = weak_owner.upgrade() {
-                    delivery::admit(
-                        &source,
-                        &owner,
-                        confirmed,
-                        route,
-                        notification,
-                        delivery::Completion::new(status, completion),
-                        failure,
-                    );
+                    for (position, (object, property, index)) in eligible {
+                        let mut record = notification.clone();
+                        record.target_object = Some(object);
+                        record.target_property = Some(AuditPropertyReference {
+                            property_identifier: property,
+                            property_array_index: index.map(u64::from),
+                        });
+                        if let Some(results) = &results {
+                            record.target_object = Some(results[position].0);
+                            record.result = results[position].1;
+                        } else {
+                            record.result = delivery::result(&outcome.result);
+                        }
+                        if let Some(device) = device {
+                            record.target_device = BACnetRecipient::Device(device);
+                        }
+                        delivery::admit(
+                            &source,
+                            &owner,
+                            confirmed,
+                            route.clone(),
+                            record,
+                            delivery::Completion::new(Arc::clone(&status), completion),
+                            failure.clone(),
+                        );
+                    }
                 }
             }
             let _ = reply.send(outcome.result);

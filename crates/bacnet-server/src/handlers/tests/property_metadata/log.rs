@@ -188,7 +188,7 @@ fn request(oid: ObjectIdentifier, references: &[(P, Option<u32>)]) -> BytesMut {
         }],
     };
     let mut bytes = BytesMut::new();
-    request.encode(&mut bytes);
+    request.encode(&mut bytes).unwrap();
     bytes
 }
 

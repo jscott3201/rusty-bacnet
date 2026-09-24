@@ -249,6 +249,59 @@ impl ClientRoleHandle {
             .await
     }
 
+    /// Read 1–64 explicit property references across nonempty concrete objects.
+    ///
+    /// ALL/REQUIRED/OPTIONAL and wildcard objects are excluded from this endpoint
+    /// profile. Index zero is valid. Responses must match complete ordered
+    /// occurrences; inline errors may omit a requested index. An active source
+    /// Reporter emits one value-free record per eligible occurrence, sharing one
+    /// operation, timestamp, invoke ID and recipient snapshot.
+    pub async fn read_property_multiple(
+        &self,
+        destination_mac: &[u8],
+        specs: Vec<bacnet_services::rpm::ReadAccessSpecification>,
+    ) -> Result<bacnet_services::rpm::ReadPropertyMultipleACK, Error> {
+        self.read_property_multiple_with_destination(
+            EndpointApduDestination::Direct {
+                destination_mac: bacnet_types::MacAddr::from_slice(destination_mac),
+            },
+            Vec::new(),
+            specs,
+        )
+        .await
+    }
+
+    /// Explicit RPM destination and pass-through attributes. Audited operations
+    /// require direct B/IP IPv4 unicast; all responses remain unsegmented.
+    pub async fn read_property_multiple_with_destination(
+        &self,
+        destination: EndpointApduDestination,
+        data_attributes: Vec<DataAttribute>,
+        specs: Vec<bacnet_services::rpm::ReadAccessSpecification>,
+    ) -> Result<bacnet_services::rpm::ReadPropertyMultipleACK, Error> {
+        self.check_open()?;
+        let request = bacnet_client::EndpointReadRequest::Multiple(
+            bacnet_services::rpm::ReadPropertyMultipleRequest {
+                list_of_read_access_specs: specs,
+            },
+        );
+        if let Some(source) = &self.source_read {
+            source
+                .upgrade()
+                .ok_or_else(shutdown_error)?
+                .read(&self.requester, destination, data_attributes, request)
+                .await?
+                .into_multiple()
+        } else {
+            self.requester
+                .prepare_read(destination, data_attributes, request)?
+                .execute()
+                .await
+                .result?
+                .into_multiple()
+        }
+    }
+
     /// Read a list/log range through the shared unsegmented requester.
     ///
     /// An active source Reporter emits one value-free READ record per attempted

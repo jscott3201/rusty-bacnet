@@ -128,7 +128,7 @@ fn active_cov_subscriptions_read_property_multiple_preserves_constructed_bytes()
         }],
     };
     let mut request_buf = BytesMut::new();
-    request.encode(&mut request_buf);
+    request.encode(&mut request_buf).unwrap();
 
     let mut response_buf = BytesMut::new();
     handle_read_property_multiple(&db, &request_buf, &mut response_buf).unwrap();
@@ -275,7 +275,7 @@ fn rpm_handler_success() {
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
     let mut ack_buf = BytesMut::new();
     handle_read_property_multiple(&db, &buf, &mut ack_buf).unwrap();
@@ -324,7 +324,7 @@ fn rpm_handler_unknown_property_returns_inline_error() {
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
     let mut ack_buf = BytesMut::new();
     handle_read_property_multiple(&db, &buf, &mut ack_buf).unwrap();
@@ -354,7 +354,7 @@ fn rpm_handler_unknown_object_returns_inline_error() {
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
     let mut ack_buf = BytesMut::new();
     handle_read_property_multiple(&db, &buf, &mut ack_buf).unwrap();
@@ -383,7 +383,7 @@ fn rpm_handler_all_properties_expanded() {
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
     let mut ack_buf = BytesMut::new();
     handle_read_property_multiple(&db, &buf, &mut ack_buf).unwrap();
@@ -434,7 +434,7 @@ fn rpm_all_includes_multistate_event_history() {
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
     let mut ack_buf = BytesMut::new();
     handle_read_property_multiple(&db, &buf, &mut ack_buf).unwrap();
     let ack = bacnet_services::rpm::ReadPropertyMultipleACK::decode(&ack_buf.to_vec()).unwrap();
@@ -493,7 +493,7 @@ fn rpm_explicit_index_returns_one_multistate_event_message() {
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
     let mut ack_buf = BytesMut::new();
     handle_read_property_multiple(&db, &buf, &mut ack_buf).unwrap();
     let ack = bacnet_services::rpm::ReadPropertyMultipleACK::decode(&ack_buf.to_vec()).unwrap();
@@ -656,7 +656,7 @@ fn rpm_multistate_indexed_state_text_and_list_gating_preserve_bytes() {
             }],
         };
         let mut bytes = BytesMut::new();
-        request.encode(&mut bytes);
+        request.encode(&mut bytes).unwrap();
         let mut legacy = BytesMut::new();
         handle_read_property_multiple(&db, &bytes, &mut legacy).unwrap();
         let ack = ReadPropertyMultipleACK::decode(&legacy).unwrap();

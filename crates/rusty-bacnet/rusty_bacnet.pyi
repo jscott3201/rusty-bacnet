@@ -1468,11 +1468,12 @@ class BACnetClient:
         specs: list[
             tuple[ObjectIdentifier, list[tuple[PropertyIdentifier, Optional[int]]]]
         ],
-    ) -> Any:
+    ) -> list[ReadAccessResult]:
         """Read multiple properties from a remote device (ReadPropertyMultiple).
 
         ``specs`` is a list of ``(object_id, [(property_id, array_index), ...])`` tuples.
-        Returns a nested dict structure of results.
+        Returns ordered object/result dictionaries. Empty request/property lists
+        are rejected; this standalone profile still permits property selectors.
         """
         ...
 
@@ -2687,10 +2688,20 @@ class ReadRangeResult(TypedDict):
     item_data: bytes
     first_sequence_number: int | None
 
+class ReadPropertyResult(TypedDict):
+    property_id: PropertyIdentifier
+    array_index: int | None
+    value: PropertyValue | bytes | None
+    error: tuple[ErrorClass, ErrorCode] | None
+
+class ReadAccessResult(TypedDict):
+    object_id: ObjectIdentifier
+    results: list[ReadPropertyResult]
+
 class EndpointClient:
     """Client role cloned from a running endpoint (no lifecycle).
 
-    Initiates ``read_property`` and ``read_range`` through the owner's single transport.
+    Initiates ``read_property``, ``read_range`` and ``read_property_multiple`` through the owner's single transport.
     After the owner closes, calls fail closed with ``BacnetError``.
     """
 
@@ -2706,6 +2717,21 @@ class EndpointClient:
         ACK object/property/index must match. Device/Network Port instance 4194303
         requests accept a same-type concrete ACK. Malformed/mismatched ACKs raise
         BacnetError; this method returns the property value, not ACK metadata.
+        """
+        ...
+
+    async def read_property_multiple(
+        self,
+        address: str,
+        specs: list[tuple[ObjectIdentifier, list[tuple[PropertyIdentifier, Optional[int]]]]],
+    ) -> list[ReadAccessResult]:
+        """Read 1–64 explicit property occurrences on concrete objects.
+
+        Empty lists, ALL/REQUIRED/OPTIONAL and wildcard instances raise ValueError
+        before address parsing or I/O. Index zero is valid. Complete ordered ACK
+        correlation permits an inline error to omit its requested index; successful
+        values must echo it. Byte limits and malformed/mismatched ACKs raise
+        BacnetError. Returned dictionaries share standalone RPM conversion.
         """
         ...
 
@@ -2735,7 +2761,7 @@ class EndpointClient:
         ...
 
     def service_scope(self) -> dict[str, Any]:
-        """Narrow scope: initiates ``read_property`` and ``read_range``."""
+        """Narrow scope: initiates ``read_property``, ``read_range`` and ``read_property_multiple``."""
         ...
 
 class EndpointServer:

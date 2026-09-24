@@ -34,9 +34,11 @@
 //!
 //! # What is proven
 //!
-//! - The client role initiates unsegmented ReadProperty and ReadRange. Direct
-//!   B/IP source reporting emits one value-free READ record per attempted
-//!   operation, sharing request cancellation/retry and notification ownership.
+//! - The client role initiates unsegmented ReadProperty, ReadRange and bounded
+//!   explicit ReadPropertyMultiple (1–64 concrete-object references). Direct
+//!   B/IP source reporting emits one value-free READ record per eligible RP/RR
+//!   operation or RPM occurrence, sharing request cancellation/retry and notification
+//!   ownership. Source filters may suppress records.
 //!
 //! - One socket / one serial owner per session (RB-16 B/IP + SC-hub proofs,
 //!   RB-17 MS/TP simulator proof). No second hidden socket or serial owner is

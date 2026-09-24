@@ -86,6 +86,27 @@ impl EndpointSend {
     }
 }
 
+/// Known local outcome before any endpoint transport execution.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EndpointEgressAdmissionError {
+    /// The bounded command queue has no free slot.
+    QueueFull,
+    /// The endpoint has sealed or its command receiver has closed.
+    Closed,
+}
+
+impl From<EndpointEgressAdmissionError> for Error {
+    fn from(error: EndpointEgressAdmissionError) -> Self {
+        match error {
+            EndpointEgressAdmissionError::QueueFull => {
+                Error::Encoding("endpoint egress queue is full".into())
+            }
+            EndpointEgressAdmissionError::Closed => shutdown_error(),
+        }
+    }
+}
+
 /// Bounded APDU network-service sender for roles attached to an endpoint session.
 #[doc(hidden)]
 #[derive(Clone)]
@@ -130,9 +151,9 @@ impl EndpointEgress {
         priority: NetworkPriority,
         data_attributes: Vec<DataAttribute>,
         deadline: Option<tokio::time::Instant>,
-    ) -> Result<EndpointSend, Error> {
+    ) -> Result<EndpointSend, EndpointEgressAdmissionError> {
         if !self.open.load(Ordering::Acquire) {
-            return Err(shutdown_error());
+            return Err(EndpointEgressAdmissionError::Closed);
         }
         let (completion, result) = oneshot::channel();
         let command = NetworkServiceCommand {
@@ -146,10 +167,28 @@ impl EndpointEgress {
         };
         match self.commands.try_send(command) {
             Ok(()) => Ok(EndpointSend(result)),
-            Err(mpsc::error::TrySendError::Closed(_)) => Err(shutdown_error()),
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                Err(Error::Encoding("endpoint egress queue is full".into()))
-            }
+            Err(mpsc::error::TrySendError::Closed(_)) => Err(EndpointEgressAdmissionError::Closed),
+            Err(mpsc::error::TrySendError::Full(_)) => Err(EndpointEgressAdmissionError::QueueFull),
+        }
+    }
+
+    /// Wait for queue capacity without retaining an ordinary notification.
+    /// This is a wake hint, not a reserved slot; callers retry synchronous admission.
+    #[doc(hidden)]
+    pub async fn wait_for_capacity(&self) -> Result<(), EndpointEgressAdmissionError> {
+        if !self.open.load(Ordering::Acquire) {
+            return Err(EndpointEgressAdmissionError::Closed);
+        }
+        let permit = self
+            .commands
+            .reserve()
+            .await
+            .map_err(|_| EndpointEgressAdmissionError::Closed)?;
+        drop(permit);
+        if self.open.load(Ordering::Acquire) {
+            Ok(())
+        } else {
+            Err(EndpointEgressAdmissionError::Closed)
         }
     }
 

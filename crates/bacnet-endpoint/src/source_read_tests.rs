@@ -469,3 +469,6 @@ mod range;
 
 #[path = "source_property_identity_tests.rs"]
 mod property_identity;
+
+#[path = "source_rpm_tests.rs"]
+mod rpm;

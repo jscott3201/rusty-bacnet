@@ -19,7 +19,7 @@ use bacnet_encoding::primitives::decode_application_value;
 use crate::errors::to_py_err;
 use crate::types::{parse_address, PyObjectIdentifier, PyPropertyIdentifier, PyPropertyValue};
 
-/// Client role: initiates ReadProperty/ReadRange over the owner's single transport.
+/// Client role: initiates ReadProperty/ReadRange/ReadPropertyMultiple over the owner's single transport.
 ///
 /// Cloned out of a running endpoint via `await endpoint.client()`. No
 /// lifecycle methods; survives the owner as a value but fails closed after
@@ -72,6 +72,40 @@ impl PyEndpointClient {
         })
     }
 
+    /// Read 1–64 explicit references on concrete objects, preserving ordered
+    /// values and inline errors. Uses the standalone RPM dictionary conversion.
+    #[pyo3(signature = (address, specs))]
+    #[allow(clippy::type_complexity)]
+    fn read_property_multiple<'py>(
+        &self,
+        py: Python<'py>,
+        address: String,
+        specs: Vec<(PyObjectIdentifier, Vec<(PyPropertyIdentifier, Option<u32>)>)>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let specs = crate::types::py_to_rpm_specs(specs);
+        let request = bacnet_client::EndpointReadRequest::Multiple(
+            bacnet_services::rpm::ReadPropertyMultipleRequest {
+                list_of_read_access_specs: specs,
+            },
+        );
+        request
+            .validate()
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        let bacnet_client::EndpointReadRequest::Multiple(request) = request else {
+            unreachable!()
+        };
+        let specs = request.list_of_read_access_specs;
+        let handle = self.inner.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let mac = parse_address(&address)?;
+            let ack = handle
+                .read_property_multiple(&mac, specs)
+                .await
+                .map_err(to_py_err)?;
+            Python::attach(|py| crate::types::rpm_ack_to_py(py, ack))
+        })
+    }
+
     /// Read a list/log range; supports all-items, position and sequence forms.
     /// Returns raw item_data bytes and a three-boolean result_flags tuple.
     #[pyo3(signature = (address, object_id, property_id, array_index=None, range_type=None, reference_index=None, reference_seq=None, count=None))]
@@ -114,19 +148,23 @@ impl PyEndpointClient {
         })
     }
 
-    /// Narrow service scope: the endpoint client initiates ReadProperty and ReadRange.
+    /// Narrow service scope: the endpoint client initiates ReadProperty, ReadRange and ReadPropertyMultiple.
     ///
     /// Snapshot accessor with no I/O; documents the proven subset
     /// (direct read here; routed variants stay on the Rust handle).
     fn service_scope<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let dict = PyDict::new(py);
-        dict.set_item("initiates", vec!["read_property", "read_range"])?;
+        dict.set_item(
+            "initiates",
+            vec!["read_property", "read_range", "read_property_multiple"],
+        )?;
         dict.set_item("executes", Vec::<String>::new())?;
         Ok(dict.into_any())
     }
 
     fn __repr__(&self) -> String {
-        "EndpointClient(shared-transport read_property read_range)".to_string()
+        "EndpointClient(shared-transport read_property read_range read_property_multiple)"
+            .to_string()
     }
 }
 

@@ -42,7 +42,8 @@ async fn rpm_whole_abort_direct_routed_reply_and_segmentation_matrix() {
                             ],
                         }],
                     }
-                    .encode(&mut service);
+                    .encode(&mut service)
+                    .unwrap();
                     let mut payload = BytesMut::new();
                     encode_apdu(
                         &mut payload,
