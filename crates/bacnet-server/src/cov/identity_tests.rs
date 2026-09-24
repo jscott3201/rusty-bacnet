@@ -40,8 +40,8 @@ fn resource_error(error: Error) {
 fn cov_identity_generations_never_reuse_across_renew_cancel_or_foreign_table() {
     let mut table = CovSubscriptionTable::new();
     let sub = proposal(None, false);
-    let first = table.subscribe(sub.clone()).unwrap();
-    let second = table.subscribe(sub.clone()).unwrap();
+    let first = table.admit_for_test(sub.clone(), 0).unwrap();
+    let second = table.admit_for_test(sub.clone(), 0).unwrap();
     assert!(!table.set_last_notified_observation(
         &first,
         crate::cov::CovObservation::new(
@@ -70,7 +70,7 @@ fn cov_identity_generations_never_reuse_across_renew_cancel_or_foreign_table() {
         )
         .unwrap()
     ));
-    let third = table.subscribe(sub.clone()).unwrap();
+    let third = table.admit_for_test(sub.clone(), 0).unwrap();
     assert!(!table.set_last_notified_observation(
         &second,
         crate::cov::CovObservation::new(
@@ -94,7 +94,7 @@ fn cov_identity_generations_never_reuse_across_renew_cancel_or_foreign_table() {
             .unwrap()
         )
     );
-    let foreign = CovSubscriptionTable::new().subscribe(sub).unwrap();
+    let foreign = CovSubscriptionTable::new().admit_for_test(sub, 0).unwrap();
     assert!(!table.set_last_notified_observation(
         &foreign,
         crate::cov::CovObservation::new(
@@ -111,7 +111,7 @@ fn cov_identity_generations_never_reuse_across_renew_cancel_or_foreign_table() {
 fn cov_identity_batch_reserves_only_final_duplicates_and_exhaustion_is_atomic() {
     let mut table = CovSubscriptionTable::new();
     let existing = proposal(None, false);
-    let before = table.subscribe(existing.clone()).unwrap();
+    let before = table.admit_for_test(existing.clone(), 0).unwrap();
     let peer = existing.peer_key();
     let context = context(&existing);
     let expiry = Instant::now() + Duration::from_secs(600);
@@ -124,7 +124,7 @@ fn cov_identity_batch_reserves_only_final_duplicates_and_exhaustion_is_atomic() 
     let counters = table.counters.snapshot();
     resource_error(
         table
-            .subscribe_multiple(&context, expiry, vec![replacement.clone(), added])
+            .subscribe_multiple(&context, expiry, 4, vec![replacement.clone(), added])
             .unwrap_err(),
     );
     assert_eq!(table.generation, u64::MAX - 1);
@@ -136,6 +136,14 @@ fn cov_identity_batch_reserves_only_final_duplicates_and_exhaustion_is_atomic() 
     assert_eq!(
         table.get_subscription(before.key()).unwrap().cov_increment,
         before.cov_increment
+    );
+    // Rejected late input leaves the reported delay unchanged as well.
+    assert_eq!(
+        table
+            .get_subscription(before.key())
+            .unwrap()
+            .max_notification_delay(),
+        Some(0)
     );
     assert_eq!(table.peer_subscription_count(&peer), 1);
     assert_eq!(
@@ -153,6 +161,7 @@ fn cov_identity_batch_reserves_only_final_duplicates_and_exhaustion_is_atomic() 
         .subscribe_multiple(
             &context,
             expiry,
+            4,
             vec![replacement; 64]
                 .into_iter()
                 .chain([final_options])
@@ -171,13 +180,11 @@ fn cov_identity_batch_reserves_only_final_duplicates_and_exhaustion_is_atomic() 
         )
         .unwrap()
     ));
-    resource_error(table.subscribe(existing).unwrap_err());
+    resource_error(table.admit_for_test(existing, 9).unwrap_err());
+    let entry = table.get_subscription(accepted[0].key()).unwrap();
     assert_eq!(
-        table
-            .get_subscription(accepted[0].key())
-            .unwrap()
-            .generation,
-        u64::MAX
+        (entry.generation, entry.max_notification_delay()),
+        (u64::MAX, Some(4))
     );
     assert!(table.unsubscribe(accepted[0].key()));
     assert!(!table.unsubscribe(accepted[0].key()));
@@ -205,17 +212,17 @@ fn cov_identity_indexes_forms_quota_and_exact_router_cleanup() {
             let mut sub = proposal(index, false);
             sub.subscriber_mac = MacAddr::from_slice(&[router]);
             sub.subscriber_network = Some(remote.clone());
-            table.subscribe(sub).unwrap();
+            table.admit_for_test(sub, 0).unwrap();
         }
     }
     let quota = CovPeerKey::from_endpoint(&MacAddr::from_slice(&[1]), Some(&remote));
     assert_eq!(table.peer_subscription_count(&quota), 8);
     let mut opposite = proposal(None, true);
     opposite.subscriber_network = Some(remote.clone());
-    resource_error(table.subscribe(opposite.clone()).unwrap_err());
+    resource_error(table.admit_for_test(opposite.clone(), 0).unwrap_err());
     assert_eq!(table.remove_peer_subscriptions(&[1], Some(&remote)), 4);
     assert_eq!(table.peer_subscription_count(&quota), 4);
-    table.subscribe(opposite).unwrap();
+    table.admit_for_test(opposite, 0).unwrap();
     assert_eq!(table.peer_subscription_count(&quota), 5);
     assert_eq!(table.remove_peer_subscriptions(&[9], Some(&remote)), 0);
 }

@@ -258,13 +258,13 @@ fn cov_multiple_context_lifetime_refreshes_and_expires() {
     present_value.notification_kind = CovNotificationKind::Multiple;
     present_value.monitored_property = Some(PropertyIdentifier::PRESENT_VALUE);
     present_value.expires_at = Some(original_expiry);
-    table.subscribe(present_value).unwrap();
+    table.admit_for_test(present_value, 5).unwrap();
 
     let mut status_flags = make_sub(&[1, 2, 3], 1, ai1());
     status_flags.notification_kind = CovNotificationKind::Multiple;
     status_flags.monitored_property = Some(PropertyIdentifier::STATUS_FLAGS);
     status_flags.expires_at = Some(original_expiry);
-    table.subscribe(status_flags).unwrap();
+    table.admit_for_test(status_flags, 5).unwrap();
 
     let mut single = make_sub(&[1, 2, 3], 1, ai1());
     single.expires_at = Some(original_expiry);
@@ -276,27 +276,27 @@ fn cov_multiple_context_lifetime_refreshes_and_expires() {
         confirmed: false,
     };
     table
-        .subscribe_multiple(&context, refreshed_expiry, vec![])
+        .subscribe_multiple(&context, refreshed_expiry, 9, vec![])
         .unwrap();
 
-    let multiple_expiries: Vec<_> = table
+    // The refresh point updates the whole context's expiry and reported
+    // delay together; the Single entry has neither refreshed.
+    let multiple_terms: Vec<_> = table
         .subs
         .values()
         .filter(|sub| sub.notification_kind == CovNotificationKind::Multiple)
-        .map(|sub| sub.expires_at)
+        .map(|sub| (sub.expires_at, sub.max_notification_delay()))
         .collect();
-    assert_eq!(
-        multiple_expiries,
-        vec![Some(refreshed_expiry), Some(refreshed_expiry)]
-    );
+    assert_eq!(multiple_terms, vec![(Some(refreshed_expiry), Some(9)); 2]);
     assert!(table
         .subs
         .values()
         .any(|sub| sub.notification_kind == CovNotificationKind::Single
-            && sub.expires_at == Some(original_expiry)));
+            && sub.expires_at == Some(original_expiry)
+            && sub.max_notification_delay().is_none()));
 
     table
-        .subscribe_multiple(&context, Instant::now() - Duration::from_secs(1), vec![])
+        .subscribe_multiple(&context, Instant::now() - Duration::from_secs(1), 9, vec![])
         .unwrap();
 
     assert_eq!(table.purge_expired(), 2);

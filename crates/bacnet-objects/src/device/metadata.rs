@@ -51,6 +51,14 @@ const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::MAX_SEGMENTS_ACCEPTED, Optional, None, ReadOnly),
     PropertyMetadata::new(P::LAST_RESTART_REASON, Optional, None, ReadOnly),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
+    // Table 12-13 footnote 18: present because the bundled server executes
+    // SubscribeCOVPropertyMultiple; its live value is the server COV table's.
+    PropertyMetadata::new(
+        P::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS,
+        Optional,
+        None,
+        ReadOnly,
+    ),
     PropertyMetadata::new(P::DEVICE_UUID, Optional, None, ReadOnly),
 ];
 
@@ -77,9 +85,9 @@ const fn effective<const N: usize>(clock: bool, segments: bool) -> [PropertyMeta
     rows
 }
 
-const CLOCKLESS: &[PropertyMetadata] = &effective::<25>(false, false);
-const CLOCKLESS_SEGMENTED: &[PropertyMetadata] = &effective::<26>(false, true);
-const CLOCKED: &[PropertyMetadata] = &effective::<29>(true, false);
+const CLOCKLESS: &[PropertyMetadata] = &effective::<26>(false, false);
+const CLOCKLESS_SEGMENTED: &[PropertyMetadata] = &effective::<27>(false, true);
+const CLOCKED: &[PropertyMetadata] = &effective::<30>(true, false);
 
 pub(super) fn for_object(object: &DeviceObject) -> Cow<'_, [PropertyMetadata]> {
     let clock = object.clock_frame().is_some();

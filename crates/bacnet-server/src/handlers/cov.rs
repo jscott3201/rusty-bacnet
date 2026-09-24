@@ -378,5 +378,5 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
         }
     }
 
-    table.subscribe_multiple(&context, expires_at, subscriptions)
+    table.subscribe_multiple(&context, expires_at, max_notification_delay, subscriptions)
 }

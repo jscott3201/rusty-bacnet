@@ -251,20 +251,32 @@ async fn terminal_cov_snapshot_survives_a_later_command_before_delivery() {
                 ),
             ] {
                 table
-                    .subscribe(CovSubscription {
-                        subscriber_mac: MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, process as u8]),
-                        subscriber_network: None,
-                        subscriber_process_identifier: process,
-                        monitored_object_identifier: oid,
-                        issue_confirmed_notifications: false,
-                        expires_at: None,
-                        last_notified_observation: None,
-                        monitored_property: property,
-                        monitored_property_array_index: None,
-                        cov_increment: None,
-                        notification_kind: kind,
-                        timestamped: false,
-                    })
+                    .admit_for_test(
+                        CovSubscription {
+                            subscriber_mac: MacAddr::from_slice(&[
+                                127,
+                                0,
+                                0,
+                                1,
+                                0xBA,
+                                process as u8,
+                            ]),
+                            subscriber_network: None,
+                            subscriber_process_identifier: process,
+                            monitored_object_identifier: oid,
+                            issue_confirmed_notifications: false,
+                            // A Multiple context always has a finite lifetime.
+                            expires_at: (kind == CovNotificationKind::Multiple)
+                                .then(|| std::time::Instant::now() + Duration::from_secs(3600)),
+                            last_notified_observation: None,
+                            monitored_property: property,
+                            monitored_property_array_index: None,
+                            cov_increment: None,
+                            notification_kind: kind,
+                            timestamped: false,
+                        },
+                        0,
+                    )
                     .unwrap();
             }
         }

@@ -82,7 +82,7 @@ async fn fixture(
     let mut sub = proposal(kind, false, SELECTED);
     sub.last_notified_observation = None;
     sub.cov_increment = None;
-    let accepted = fixture.table.write().await.subscribe(sub).unwrap();
+    let accepted = fixture.table.write().await.admit_for_test(sub, 0).unwrap();
     (fixture, state, accepted)
 }
 fn payload(f: &Fixture, kind: CovNotificationKind) -> Vec<u8> {
@@ -202,7 +202,7 @@ async fn cov_sample_multiple_mixed_eligibility_has_independent_payload_and_basel
     );
     pv.last_notified_observation = None;
     pv.cov_increment = Some(100.0);
-    let second = f.table.write().await.subscribe(pv).unwrap();
+    let second = f.table.write().await.admit_for_test(pv, 0).unwrap();
     f.fire(true, &[first.clone(), second.clone()]).await;
     f.sent.lock().unwrap().clear();
     s.lock().unwrap().value = PropertyValue::Unsigned(6);

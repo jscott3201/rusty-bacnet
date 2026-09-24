@@ -37,7 +37,7 @@ async fn status_change(kind: CovNotificationKind, ordinary: bool, initial_compan
     if ordinary {
         sub.monitored_property = None;
     }
-    let accepted = fixture.table.write().await.subscribe(sub).unwrap();
+    let accepted = fixture.table.write().await.admit_for_test(sub, 0).unwrap();
     fixture.fire(true, &[accepted]).await;
     let initial = values(fixture.sent.lock().unwrap().pop().unwrap(), kind);
     if initial_companion {

@@ -465,6 +465,38 @@ fn active_cov_subscriptions_write_denied() {
     assert!(result.is_err());
 }
 
+/// Table 12-13 footnote 18: the bundled Device executes
+/// SubscribeCOVPropertyMultiple, so its standalone object lists
+/// Active_COV_Multiple_Subscriptions as an optional, read-only, non-array
+/// list that is empty without the server's live COV table.
+#[test]
+fn active_cov_multiple_subscriptions_standalone_optional_read_only_list() {
+    let property = PropertyIdentifier::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS;
+    let mut dev = make_device();
+    assert_eq!(
+        dev.read_property(property, None).unwrap(),
+        PropertyValue::ApplicationData(Vec::new())
+    );
+    assert!(dev.property_list().contains(&property));
+    let metadata = dev.property_metadata();
+    let row = metadata
+        .iter()
+        .find(|row| row.property_identifier == property)
+        .unwrap();
+    assert!(!row.is_required());
+    assert!(!row.write_capability.is_writable());
+    assert!(!dev.is_array_property(property));
+    let denied = dev.write_property(
+        property,
+        None,
+        PropertyValue::ApplicationData(Vec::new()),
+        None,
+    );
+    assert!(matches!(denied, Err(Error::Protocol { class, code })
+        if class == ErrorClass::PROPERTY.to_raw() as u32
+            && code == ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32));
+}
+
 #[test]
 fn compute_object_types_supported_known_inputs() {
     assert_eq!(compute_object_types_supported(&[0]), vec![0x80]);
@@ -542,6 +574,7 @@ fn device_property_metadata_preserves_dynamic_list_and_write_dispatch() {
                 P::PROTOCOL_OBJECT_TYPES_SUPPORTED,
                 P::PROTOCOL_SERVICES_SUPPORTED,
                 P::ACTIVE_COV_SUBSCRIPTIONS,
+                P::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS,
             ]);
             if state == 1 {
                 expected.extend([

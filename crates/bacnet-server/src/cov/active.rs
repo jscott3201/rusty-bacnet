@@ -1,10 +1,12 @@
-//! Live Device `Active_COV_Subscriptions` projection (Clause 12.11).
+//! Live Device `Active_COV_Subscriptions` and
+//! `Active_COV_Multiple_Subscriptions` projections (Clause 12.11).
 //!
 //! The server-owned [`CovSubscriptionTable`] is the sole live authority for
-//! ordinary and Single subscriptions. A read copies the entries live at one
-//! sampled instant under the table read guard, releases that guard, then
-//! projects the copy against the caller's database guard. Multiple references
-//! belong to `Active_COV_Multiple_Subscriptions` and are never listed here.
+//! both lists. A read copies the entries live at one sampled instant under the
+//! table read guard, releases that guard, then projects the copy against the
+//! caller's database guard. Ordinary and Single entries form
+//! `Active_COV_Subscriptions`; Multiple references are never listed there and
+//! form `Active_COV_Multiple_Subscriptions` (see [`multiple`]).
 use super::*;
 use bacnet_encoding::constructed::encode_cov_subscription_list;
 use bacnet_objects::database::ObjectDatabase;
@@ -17,6 +19,9 @@ use bacnet_types::enums::ObjectType;
 use bacnet_types::primitives::PropertyValue;
 use bytes::BytesMut;
 use std::cmp::Ordering as CmpOrdering;
+
+mod multiple;
+pub(crate) use multiple::{ActiveCovMultipleEntry, ActiveCovMultipleSubscriptions};
 
 /// One ordinary or Single entry copied from the table at a sampled instant.
 #[derive(Debug, Clone, PartialEq)]
@@ -148,6 +153,97 @@ impl ActiveCovSubscriptions {
     }
 }
 
+/// Which server-owned Device COV lists one request may select.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LiveCovSelection {
+    /// The selected local Device.
+    pub(crate) device: ObjectIdentifier,
+    /// `Active_COV_Subscriptions` may be read.
+    pub(crate) active: bool,
+    /// `Active_COV_Multiple_Subscriptions` may be read.
+    pub(crate) multiple: bool,
+}
+
+/// Selected entries copied under one table read guard at one sampled instant.
+#[derive(Debug)]
+pub(crate) struct LiveCovEntries {
+    active: Option<Vec<ActiveCovEntry>>,
+    multiple: Option<Vec<ActiveCovMultipleEntry>>,
+}
+
+impl CovSubscriptionTable {
+    /// Copy only the selected lists' entries live at the one instant `now`.
+    pub(crate) fn live_cov_entries(
+        &self,
+        selection: LiveCovSelection,
+        now: Instant,
+    ) -> LiveCovEntries {
+        LiveCovEntries {
+            active: selection.active.then(|| self.active_cov_entries(now)),
+            multiple: selection
+                .multiple
+                .then(|| self.active_cov_multiple_entries(now)),
+        }
+    }
+}
+
+/// Request-local values of the selected Device's server-owned COV lists.
+///
+/// Built once per request and reused by every reference to either property in
+/// that request, including ReadPropertyMultiple `ALL`/`OPTIONAL` expansion.
+#[derive(Debug, Clone)]
+pub(crate) struct LiveDeviceCov {
+    active: Option<ActiveCovSubscriptions>,
+    multiple: Option<ActiveCovMultipleSubscriptions>,
+}
+
+impl LiveDeviceCov {
+    /// A stopped server services no subscription: every selected list is empty.
+    pub(crate) fn stopped(selection: LiveCovSelection) -> Self {
+        Self {
+            active: selection
+                .active
+                .then(|| ActiveCovSubscriptions::stopped(selection.device)),
+            multiple: selection
+                .multiple
+                .then(|| ActiveCovMultipleSubscriptions::stopped(selection.device)),
+        }
+    }
+
+    /// Project copied entries while the caller holds the database guard.
+    pub(crate) fn project(
+        db: &ObjectDatabase,
+        selection: LiveCovSelection,
+        entries: LiveCovEntries,
+    ) -> Self {
+        Self {
+            active: entries
+                .active
+                .map(|entries| ActiveCovSubscriptions::project(db, selection.device, entries)),
+            multiple: entries.multiple.map(|entries| {
+                ActiveCovMultipleSubscriptions::project(db, selection.device, entries)
+            }),
+        }
+    }
+
+    /// The live value for exactly the selected Device and a selected list.
+    /// `None` leaves every other read to the object.
+    pub(crate) fn resolve(
+        &self,
+        oid: ObjectIdentifier,
+        property: PropertyIdentifier,
+    ) -> Option<PropertyValue> {
+        self.active
+            .as_ref()
+            .and_then(|live| live.resolve(oid, property))
+            .or_else(|| {
+                self.multiple
+                    .as_ref()
+                    .and_then(|live| live.resolve(oid, property))
+            })
+    }
+}
+
 /// The table identity is unique, so this is a total, deterministic list order.
 fn order(a: &ActiveCovEntry, b: &ActiveCovEntry) -> CmpOrdering {
     let coordinates = |entry: &ActiveCovEntry| {
@@ -159,18 +255,22 @@ fn order(a: &ActiveCovEntry, b: &ActiveCovEntry) -> CmpOrdering {
                 .map(|(property, index)| (property.to_raw(), index)),
         )
     };
-    let routed = |entry: &ActiveCovEntry| {
-        entry
-            .endpoint
+    coordinates(a)
+        .cmp(&coordinates(b))
+        .then_with(|| endpoint_order(&a.endpoint, &b.endpoint))
+        .then_with(|| a.process_id.cmp(&b.process_id))
+}
+
+/// Recipient endpoint order shared by both Device COV lists: routed source
+/// first, then the immediate link MAC.
+fn endpoint_order(a: &SubscriberEndpoint, b: &SubscriberEndpoint) -> CmpOrdering {
+    let routed = |endpoint: &SubscriberEndpoint| {
+        endpoint
             .network
             .as_ref()
             .map(|source| (source.network, source.mac_address.clone()))
     };
-    coordinates(a)
-        .cmp(&coordinates(b))
-        .then_with(|| routed(a).cmp(&routed(b)))
-        .then_with(|| a.endpoint.mac.cmp(&b.endpoint.mac))
-        .then_with(|| a.process_id.cmp(&b.process_id))
+    routed(a).cmp(&routed(b)).then_with(|| a.mac.cmp(&b.mac))
 }
 
 /// Whole-object subscriptions report the Clause 13.1 monitored value:
@@ -281,7 +381,7 @@ mod tests {
             Some(now + Duration::from_secs(60)),
         );
         multiple.notification_kind = CovNotificationKind::Multiple;
-        table.subscribe(multiple).unwrap();
+        table.admit_for_test(multiple, 0).unwrap();
 
         let mut listed = table.active_cov_entries(now);
         listed.sort_by_key(|entry| entry.process_id);

@@ -615,6 +615,50 @@ pub struct BACnetCOVSubscription {
 }
 
 // ---------------------------------------------------------------------------
+// BACnetCOVMultipleSubscription (Clause 21)
+// ---------------------------------------------------------------------------
+
+/// One COV-multiple context of Device `Active_COV_Multiple_Subscriptions`:
+/// a recipient and notification form with one remaining lifetime and maximum
+/// notification delay shared by every nested COV reference.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BACnetCOVMultipleSubscription {
+    /// COV-client address and subscriber process identifier (`[0]`).
+    pub recipient: BACnetRecipientProcess,
+    /// Notification form of this context (`[1]`).
+    pub issue_confirmed_notifications: bool,
+    /// Remaining context lifetime in seconds (`[2]`).
+    pub time_remaining: u32,
+    /// Maximum notification delay in seconds (`[3]`).
+    pub max_notification_delay: u32,
+    /// Monitored objects and their COV references (`[4]`).
+    pub list_of_cov_subscription_specifications: Vec<BACnetCOVSubscriptionSpecification>,
+}
+
+/// The COV references a COV-multiple context holds for one monitored object.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BACnetCOVSubscriptionSpecification {
+    /// Monitored object (`[0]`).
+    pub monitored_object_identifier: ObjectIdentifier,
+    /// COV references on that object (`[1]`).
+    pub list_of_cov_references: Vec<BACnetCOVReference>,
+}
+
+/// One monitored property (a `BACnetPropertyReference`) of a COV-multiple
+/// subscription specification.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BACnetCOVReference {
+    /// Monitored property (`[0]` property identifier).
+    pub property_identifier: crate::enums::PropertyIdentifier,
+    /// Optional array index; absence and zero are distinct.
+    pub property_array_index: Option<u32>,
+    /// COV increment in use (`[1]`), present for numeric monitored values.
+    pub cov_increment: Option<f32>,
+    /// Whether notifications carry the time of change (`[2]`).
+    pub timestamped: bool,
+}
+
+// ---------------------------------------------------------------------------
 // BACnetValueSource (Clause 21)
 // ---------------------------------------------------------------------------
 

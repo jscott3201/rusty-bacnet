@@ -4,9 +4,10 @@ use super::*;
 ///
 /// Looks up the object and property in the database, encodes the value,
 /// and returns the ReadPropertyACK service bytes. This low-level helper has
-/// no server context: the Device's `Active_COV_Subscriptions` reads as the
-/// object's standalone empty list. A running `BACnetServer` projects that
-/// property live from its COV subscription table instead.
+/// no server context: the Device's `Active_COV_Subscriptions` and
+/// `Active_COV_Multiple_Subscriptions` read as the object's standalone empty
+/// lists. A running `BACnetServer` projects those properties live from its COV
+/// subscription table instead.
 pub fn handle_read_property(
     db: &ObjectDatabase,
     service_data: &[u8],
@@ -17,11 +18,11 @@ pub fn handle_read_property(
 }
 
 /// Server ReadProperty evaluator over one decoded request. `live` carries the
-/// request-local Device `Active_COV_Subscriptions`; observations carry only
-/// execution outcomes, never the read value.
+/// request-local Device COV lists; observations carry only execution
+/// outcomes, never the read value.
 pub(crate) fn read_property_request_observed(
     db: &ObjectDatabase,
-    live: Option<&ActiveCovSubscriptions>,
+    live: Option<&LiveDeviceCov>,
     request: &ReadPropertyRequest,
     buf: &mut BytesMut,
     mut completed: impl FnMut(ObjectIdentifier, &ReadPropertyRequest, &Result<(), Error>),
@@ -37,7 +38,7 @@ pub(crate) fn read_property_request_observed(
 /// object's own reader.
 pub(crate) fn read_property_value(
     db: &ObjectDatabase,
-    live: Option<&ActiveCovSubscriptions>,
+    live: Option<&LiveDeviceCov>,
     lookup_oid: ObjectIdentifier,
     property: PropertyIdentifier,
     array_index: Option<u32>,
@@ -67,7 +68,7 @@ pub(crate) fn read_property_value(
 
 fn read_property_decoded(
     db: &ObjectDatabase,
-    live: Option<&ActiveCovSubscriptions>,
+    live: Option<&LiveDeviceCov>,
     request: &ReadPropertyRequest,
     lookup_oid: ObjectIdentifier,
     buf: &mut BytesMut,
@@ -119,46 +120,77 @@ pub(crate) fn resolve_device_wildcard(
     *oid
 }
 
-/// The selected Device when `(lookup_oid, property)` is its server-owned
-/// `Active_COV_Subscriptions`; any other read needs no COV table snapshot.
+/// `(Active_COV_Subscriptions, Active_COV_Multiple_Subscriptions)` that one
+/// property reference may select, explicitly or through ALL, REQUIRED or
+/// OPTIONAL expansion.
+fn live_cov_lists(property: PropertyIdentifier) -> (bool, bool) {
+    match property {
+        PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS => (true, false),
+        PropertyIdentifier::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS => (false, true),
+        PropertyIdentifier::ALL | PropertyIdentifier::REQUIRED | PropertyIdentifier::OPTIONAL => {
+            (true, true)
+        }
+        _ => (false, false),
+    }
+}
+
+fn either(a: (bool, bool), b: (bool, bool)) -> (bool, bool) {
+    (a.0 || b.0, a.1 || b.1)
+}
+
+/// The selected Device's server-owned COV list when `(lookup_oid, property)`
+/// names one; any other read needs no COV table snapshot.
 pub(crate) fn active_cov_device(
     db: &ObjectDatabase,
     lookup_oid: ObjectIdentifier,
     property: PropertyIdentifier,
-) -> Option<ObjectIdentifier> {
-    if property != PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS {
-        return None;
-    }
-    selected_device(db).filter(|device| *device == lookup_oid)
+) -> Option<LiveCovSelection> {
+    let (active, multiple) = match property {
+        PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS
+        | PropertyIdentifier::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS => live_cov_lists(property),
+        _ => return None,
+    };
+    let device = selected_device(db).filter(|device| *device == lookup_oid)?;
+    Some(LiveCovSelection {
+        device,
+        active,
+        multiple,
+    })
 }
 
-/// The selected Device when any ReadPropertyMultiple reference to it may
-/// select `Active_COV_Subscriptions`, explicitly or through ALL, REQUIRED or
-/// OPTIONAL expansion. One snapshot then serves every such row.
+/// The selected Device's COV lists that any ReadPropertyMultiple reference to
+/// it may select, explicitly or through ALL, REQUIRED or OPTIONAL expansion.
+/// One snapshot then serves every such row.
 pub(crate) fn active_cov_device_for_rpm(
     db: &ObjectDatabase,
     request: &ReadPropertyMultipleRequest,
-) -> Option<ObjectIdentifier> {
-    let may_select = |reference: &bacnet_services::common::PropertyReference| {
-        matches!(
-            reference.property_identifier,
-            PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS
-                | PropertyIdentifier::ALL
-                | PropertyIdentifier::REQUIRED
-                | PropertyIdentifier::OPTIONAL
-        )
+) -> Option<LiveCovSelection> {
+    let spec_lists = |spec: &bacnet_services::rpm::ReadAccessSpecification| {
+        spec.list_of_property_references
+            .iter()
+            .map(|reference| live_cov_lists(reference.property_identifier))
+            .fold((false, false), either)
     };
-    // Only a request that may select the property pays the Device scan.
+    // Only a request that may select either property pays the Device scan.
     let mut specs = request
         .list_of_read_access_specs
         .iter()
-        .filter(|spec| spec.list_of_property_references.iter().any(may_select))
+        .map(|spec| (spec, spec_lists(spec)))
+        .filter(|(_, (active, multiple))| *active || *multiple)
         .peekable();
     specs.peek()?;
     let device = selected_device(db)?;
-    specs
-        .any(|spec| spec.object_identifier == device || is_device_wildcard(&spec.object_identifier))
-        .then_some(device)
+    let (active, multiple) = specs
+        .filter(|(spec, _)| {
+            spec.object_identifier == device || is_device_wildcard(&spec.object_identifier)
+        })
+        .map(|(_, lists)| lists)
+        .fold((false, false), either);
+    (active || multiple).then_some(LiveCovSelection {
+        device,
+        active,
+        multiple,
+    })
 }
 
 fn expand_property_reference(

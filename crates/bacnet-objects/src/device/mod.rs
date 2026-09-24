@@ -516,10 +516,15 @@ impl BACnetObject for DeviceObject {
             });
         }
 
-        if property == PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS {
+        if matches!(
+            property,
+            PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS
+                | PropertyIdentifier::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS
+        ) {
             // Standalone default: the object holds no subscription state. A
-            // running `BACnetServer` owns the live list in its COV subscription
-            // table and projects it for network reads and `read_local`.
+            // running `BACnetServer` owns both live lists in its COV
+            // subscription table and projects them for network reads and
+            // `read_local`.
             return Ok(PropertyValue::ApplicationData(Vec::new()));
         }
 

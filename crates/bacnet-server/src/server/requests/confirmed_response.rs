@@ -1,9 +1,10 @@
 use super::*;
-use crate::cov::active::ActiveCovSubscriptions;
+use crate::cov::active::{LiveCovSelection, LiveDeviceCov};
 use bacnet_services::read_property::ReadPropertyRequest;
 
 /// ReadProperty for a responder without COV service execution: the Device's
-/// `Active_COV_Subscriptions` reads as its standalone empty list.
+/// `Active_COV_Subscriptions` and `Active_COV_Multiple_Subscriptions` read as
+/// their standalone empty lists.
 pub(super) async fn read_property_response(
     db: &RwLock<ObjectDatabase>,
     request: &ConfirmedRequestPdu,
@@ -11,21 +12,22 @@ pub(super) async fn read_property_response(
     read_property_response_observed(db, None, request, |_, _, _, _| {}).await
 }
 
-/// Request-local live Device `Active_COV_Subscriptions` (Clause 12.11).
+/// Request-local live Device `Active_COV_Subscriptions` and
+/// `Active_COV_Multiple_Subscriptions` (Clause 12.11), as selected.
 ///
 /// Lock order is database, then COV table: the caller holds the database read
 /// guard; the table read guard is held only to sample one instant and copy the
-/// live entries, and is released before any object read or encoding.
+/// selected live entries, and is released before any object read or encoding.
 pub(in crate::server) async fn active_cov_snapshot(
     db: &ObjectDatabase,
     cov_table: &RwLock<CovSubscriptionTable>,
-    device: ObjectIdentifier,
-) -> ActiveCovSubscriptions {
+    selection: LiveCovSelection,
+) -> LiveDeviceCov {
     let entries = {
         let table = cov_table.read().await;
-        table.active_cov_entries(Instant::now())
+        table.live_cov_entries(selection, Instant::now())
     };
-    ActiveCovSubscriptions::project(db, device, entries)
+    LiveDeviceCov::project(db, selection, entries)
 }
 
 /// Budgeted ReadPropertyMultiple under one database read guard. A single
@@ -48,7 +50,7 @@ pub(super) async fn read_property_multiple_observed(
     let request = bacnet_services::rpm::ReadPropertyMultipleRequest::decode(service_request)
         .map_err(handlers::RpmFailure::Service)?;
     let live = match handlers::active_cov_device_for_rpm(&db, &request) {
-        Some(device) => Some(active_cov_snapshot(&db, cov_table, device).await),
+        Some(selection) => Some(active_cov_snapshot(&db, cov_table, selection).await),
         None => None,
     };
     handlers::rpm_budgeted_request_observed(
@@ -81,8 +83,8 @@ pub(super) async fn read_property_response_observed(
                 cov_table,
                 handlers::active_cov_device(&db, lookup_oid, decoded.property_identifier),
             ) {
-                (Some(cov_table), Some(device)) => {
-                    Some(active_cov_snapshot(&db, cov_table, device).await)
+                (Some(cov_table), Some(selection)) => {
+                    Some(active_cov_snapshot(&db, cov_table, selection).await)
                 }
                 _ => None,
             };

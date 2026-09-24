@@ -95,7 +95,7 @@ async fn fixture(
     if ordinary {
         sub.monitored_property = None;
     }
-    let accepted = f.table.write().await.subscribe(sub).unwrap();
+    let accepted = f.table.write().await.admit_for_test(sub, 0).unwrap();
     (f, s, accepted)
 }
 async fn baseline(
@@ -186,7 +186,7 @@ async fn cov_status_declared_presence_transitions_are_delivery_based() {
         // An undeclared explicit selection is not converted to an absent companion.
         let mut explicit = proposal(kind, false, PropertyIdentifier::STATUS_FLAGS);
         explicit.last_notified_observation = None;
-        let explicit = f.table.write().await.subscribe(explicit).unwrap();
+        let explicit = f.table.write().await.admit_for_test(explicit, 0).unwrap();
         f.fire(true, std::slice::from_ref(&explicit)).await;
         assert!(f.sent.lock().unwrap().is_empty());
         assert!(baseline(&f, &explicit).await.is_none());
@@ -202,7 +202,12 @@ async fn cov_status_multiple_one_read_per_context_and_independent_baselines() {
         PropertyIdentifier::STATUS_FLAGS,
     );
     explicit.last_notified_observation = None;
-    let second = f.table.write().await.subscribe(explicit.clone()).unwrap();
+    let second = f
+        .table
+        .write()
+        .await
+        .admit_for_test(explicit.clone(), 0)
+        .unwrap();
     s.lock().unwrap().changing = true;
     f.fire(true, &[first.clone(), second.clone()]).await;
     assert_eq!(s.lock().unwrap().reads, 1);
@@ -226,7 +231,7 @@ async fn cov_status_multiple_one_read_per_context_and_independent_baselines() {
     // Separate contexts sample successively, each pair is internally consistent.
     explicit.subscriber_process_identifier = 2;
     explicit.monitored_property = Some(PropertyIdentifier::RELINQUISH_DEFAULT);
-    let third = f.table.write().await.subscribe(explicit).unwrap();
+    let third = f.table.write().await.admit_for_test(explicit, 0).unwrap();
     s.lock().unwrap().reads = 0;
     f.fire(true, &[first.clone(), second.clone(), third.clone()])
         .await;
@@ -259,7 +264,7 @@ async fn cov_status_multiple_one_read_per_context_and_independent_baselines() {
     );
     sibling.last_notified_observation =
         Some(crate::cov::CovObservation::new(o.sample().clone(), Some(&flags(2))).unwrap());
-    let sibling = f.table.write().await.subscribe(sibling).unwrap();
+    let sibling = f.table.write().await.admit_for_test(sibling, 0).unwrap();
     f.fire(false, &[]).await;
     let payload = values(
         f.sent.lock().unwrap().pop().unwrap(),
@@ -293,7 +298,7 @@ async fn cov_status_delivery_failures_and_denied_admission_preserve_pair() {
         f.table.write().await.unsubscribe(sub.key());
         let mut confirmed = proposal(kind, true, PropertyIdentifier::RELINQUISH_DEFAULT);
         confirmed.last_notified_observation = before.clone();
-        let confirmed = f.table.write().await.subscribe(confirmed).unwrap();
+        let confirmed = f.table.write().await.admit_for_test(confirmed, 0).unwrap();
         f.sent.lock().unwrap().clear();
         let permits = f.permits.acquire_many(8).await.unwrap();
         f.fire(true, std::slice::from_ref(&confirmed)).await;

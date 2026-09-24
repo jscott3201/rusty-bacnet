@@ -146,20 +146,25 @@ async fn fire_cov(server: &BACnetServer<HeldTransport>, kind: CovNotificationKin
         .cov_table
         .write()
         .await
-        .subscribe(CovSubscription {
-            subscriber_mac: MacAddr::from_slice(&[1]),
-            subscriber_network: None,
-            subscriber_process_identifier: 7,
-            monitored_object_identifier: oid,
-            issue_confirmed_notifications: true,
-            expires_at: None,
-            last_notified_observation: None,
-            monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
-            monitored_property_array_index: None,
-            cov_increment: None,
-            notification_kind: kind,
-            timestamped: false,
-        })
+        .admit_for_test(
+            CovSubscription {
+                subscriber_mac: MacAddr::from_slice(&[1]),
+                subscriber_network: None,
+                subscriber_process_identifier: 7,
+                monitored_object_identifier: oid,
+                issue_confirmed_notifications: true,
+                // A Multiple context always has a finite lifetime.
+                expires_at: (kind == CovNotificationKind::Multiple)
+                    .then(|| std::time::Instant::now() + std::time::Duration::from_secs(3600)),
+                last_notified_observation: None,
+                monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
+                monitored_property_array_index: None,
+                cov_increment: None,
+                notification_kind: kind,
+                timestamped: false,
+            },
+            0,
+        )
         .unwrap();
     BACnetServer::<HeldTransport>::fire_cov_notifications(
         &server.db,

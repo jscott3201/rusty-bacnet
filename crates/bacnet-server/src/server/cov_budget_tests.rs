@@ -188,20 +188,23 @@ async fn fair_distribution_between_single_and_multiple_notifications() {
         // 2 Multiple subscriptions for different peers (2 groups)
         for i in 3..=4 {
             table
-                .subscribe(CovSubscription {
-                    subscriber_mac: MacAddr::from_slice(&[10, 0, 0, i]),
-                    subscriber_network: None,
-                    subscriber_process_identifier: i as u32,
-                    monitored_object_identifier: ao_oid,
-                    issue_confirmed_notifications: false,
-                    expires_at: None,
-                    last_notified_observation: None,
-                    monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
-                    monitored_property_array_index: None,
-                    cov_increment: None,
-                    notification_kind: CovNotificationKind::Multiple,
-                    timestamped: false,
-                })
+                .admit_for_test(
+                    CovSubscription {
+                        subscriber_mac: MacAddr::from_slice(&[10, 0, 0, i]),
+                        subscriber_network: None,
+                        subscriber_process_identifier: i as u32,
+                        monitored_object_identifier: ao_oid,
+                        issue_confirmed_notifications: false,
+                        expires_at: Some(Instant::now() + Duration::from_secs(3600)),
+                        last_notified_observation: None,
+                        monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
+                        monitored_property_array_index: None,
+                        cov_increment: None,
+                        notification_kind: CovNotificationKind::Multiple,
+                        timestamped: false,
+                    },
+                    0,
+                )
                 .unwrap();
         }
     }
@@ -348,20 +351,23 @@ async fn expired_subscription_purged_before_cov_property_multiple_admission() {
     {
         let mut table = server.cov_table.write().await;
         table
-            .subscribe(CovSubscription {
-                subscriber_mac: MacAddr::from_slice(&peer),
-                subscriber_network: None,
-                subscriber_process_identifier: 1,
-                monitored_object_identifier: ao_oid,
-                issue_confirmed_notifications: false,
-                expires_at: Some(Instant::now() - Duration::from_secs(1)),
-                last_notified_observation: None,
-                monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
-                monitored_property_array_index: None,
-                cov_increment: None,
-                notification_kind: CovNotificationKind::Multiple,
-                timestamped: false,
-            })
+            .admit_for_test(
+                CovSubscription {
+                    subscriber_mac: MacAddr::from_slice(&peer),
+                    subscriber_network: None,
+                    subscriber_process_identifier: 1,
+                    monitored_object_identifier: ao_oid,
+                    issue_confirmed_notifications: false,
+                    expires_at: Some(Instant::now() - Duration::from_secs(1)),
+                    last_notified_observation: None,
+                    monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
+                    monitored_property_array_index: None,
+                    cov_increment: None,
+                    notification_kind: CovNotificationKind::Multiple,
+                    timestamped: false,
+                },
+                0,
+            )
             .unwrap();
     }
 
@@ -446,20 +452,23 @@ async fn unlimited_policy_half_cap_computation_does_not_overflow() {
             })
             .unwrap();
         table
-            .subscribe(CovSubscription {
-                subscriber_mac: MacAddr::from_slice(&[10, 0, 0, 2]),
-                subscriber_network: None,
-                subscriber_process_identifier: 2,
-                monitored_object_identifier: ao_oid,
-                issue_confirmed_notifications: false,
-                expires_at: None,
-                last_notified_observation: None,
-                monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
-                monitored_property_array_index: None,
-                cov_increment: None,
-                notification_kind: CovNotificationKind::Multiple,
-                timestamped: false,
-            })
+            .admit_for_test(
+                CovSubscription {
+                    subscriber_mac: MacAddr::from_slice(&[10, 0, 0, 2]),
+                    subscriber_network: None,
+                    subscriber_process_identifier: 2,
+                    monitored_object_identifier: ao_oid,
+                    issue_confirmed_notifications: false,
+                    expires_at: Some(Instant::now() + Duration::from_secs(3600)),
+                    last_notified_observation: None,
+                    monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
+                    monitored_property_array_index: None,
+                    cov_increment: None,
+                    notification_kind: CovNotificationKind::Multiple,
+                    timestamped: false,
+                },
+                0,
+            )
             .unwrap();
     }
 
@@ -556,20 +565,23 @@ async fn life_safety_fair_budget_partitioning_between_single_and_multiple() {
         // 2 Multiple subscriptions for different peers
         for i in 3..=4 {
             table
-                .subscribe(CovSubscription {
-                    subscriber_mac: MacAddr::from_slice(&[10, 0, 0, i]),
-                    subscriber_network: None,
-                    subscriber_process_identifier: i as u32,
-                    monitored_object_identifier: point_oid,
-                    issue_confirmed_notifications: false,
-                    expires_at: None,
-                    last_notified_observation: None,
-                    monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
-                    monitored_property_array_index: None,
-                    cov_increment: None,
-                    notification_kind: CovNotificationKind::Multiple,
-                    timestamped: false,
-                })
+                .admit_for_test(
+                    CovSubscription {
+                        subscriber_mac: MacAddr::from_slice(&[10, 0, 0, i]),
+                        subscriber_network: None,
+                        subscriber_process_identifier: i as u32,
+                        monitored_object_identifier: point_oid,
+                        issue_confirmed_notifications: false,
+                        expires_at: Some(Instant::now() + Duration::from_secs(3600)),
+                        last_notified_observation: None,
+                        monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
+                        monitored_property_array_index: None,
+                        cov_increment: None,
+                        notification_kind: CovNotificationKind::Multiple,
+                        timestamped: false,
+                    },
+                    0,
+                )
                 .unwrap();
         }
     }

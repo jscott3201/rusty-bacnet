@@ -124,12 +124,22 @@ pub struct CovSubscriptionSnapshot {
     pub(super) generation: u64,
     pub(super) owner: Arc<()>,
     pub(super) subscription: CovSubscription,
+    /// Reported maximum notification delay of a Multiple reference; `None`
+    /// for ordinary and Single entries. Never acted on.
+    pub(super) max_notification_delay: Option<u32>,
 }
 
 impl CovSubscriptionSnapshot {
     /// Canonical identity captured at acceptance.
     pub fn key(&self) -> &CovSubscriptionKey {
         &self.key
+    }
+
+    /// Maximum notification delay reported for a Multiple reference (`None`
+    /// for ordinary and Single entries). A table-held entry follows every
+    /// refresh of its context; a captured snapshot keeps its acceptance value.
+    pub fn max_notification_delay(&self) -> Option<u32> {
+        self.max_notification_delay
     }
 }
 
