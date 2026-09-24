@@ -955,14 +955,18 @@ is recorded in `BACNET-12-LOG-STATUS-LIFECYCLE`; complete log-family conformance
 is not claimed.
 
 Trusted local configuration through `dyn BACnetObject` uses one atomic
-`configure_audit_reporter_internal(level, operations, confirmed, selectors, priorities)`
-contract. It replaces all five settings once; invalid or resource-denied changes
-leave every field unchanged. Built-in live setters and Description writes share
-that boundary and return Result. `None` selectors remove Monitored_Objects and
+`configure_audit_reporter_internal(level, operations, confirmed, selectors, priorities, maximum_send_delay)`
+contract. It replaces all six settings once; invalid or resource-denied changes
+leave every field unchanged. The final argument is `Option<AuditSendDelay>`:
+`None` omits both delay/control properties, while `Some(AuditSendDelay::new(0)?)`
+exposes the pair with immediate delivery. Positive values enable bounded target
+batching; see [delay controls and limits](delayed-target-audit.md). Built-in live
+setters and Description writes share that boundary and return Result. `None` selectors remove Monitored_Objects and
 select all nominal targets; `Some(vec![])` retains an empty property and selects
 none. Runtime ownership prepares mandatory change notifications before committing.
-The private endpoint source adapter forwards the contract without changing its
-exactly-one source-role ownership. See [target Reporter ownership and live changes](target-audit-reporters.md).
+The private endpoint source adapter forwards the contract while rejecting a present
+delay capability and preserving exactly-one source-role ownership. See
+[target Reporter ownership and live changes](target-audit-reporters.md).
 
 #### Building Control (7)
 

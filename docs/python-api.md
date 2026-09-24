@@ -1477,8 +1477,10 @@ or issue #345 closure.
 selects one through 64 pending Reporters through the shared Rust target owner. It
 is synchronous, opt-in and pre-start only; `add_audit_reporter(instance, name)`
 registers objects without selecting them. Every dict supplies the required fields
-shown below; the two filter fields are optional. A valid call replaces the complete
-selected set and the supplied settings. All validation precedes any object mutation.
+shown below; `monitored_objects`, `audit_priority_filter`, and `maximum_send_delay`
+are optional. Omitted or `None` delay leaves both delay/control properties absent;
+zero exposes them with immediate delivery. A valid call replaces the complete
+selected set and settings. All validation precedes any object mutation.
 See [election, overlap health and live Rust mutation](target-audit-reporters.md).
 
 ```python
@@ -1493,6 +1495,7 @@ child.configure_audit_reporters([{
     "issue_confirmed_notifications": True,
     "monitored_objects": [ObjectIdentifier(ObjectType.ANALOG_VALUE, 1)],
     "audit_priority_filter": 1 << 7,  # priority 8 only; omit for all priorities
+    "maximum_send_delay": 0,  # paired controls, immediate; omit/None for absence
 }])
 child.add_device_binding(9, await parent.local_address())
 # After child.start(), a public BACnetClient.write_property() to the child's
@@ -1519,8 +1522,8 @@ child.add_device_binding(9, await parent.local_address())
   Reserved bits 16–31, negatives and u64 overflow raise `ValueError`; wrong types,
   including bool, raise `TypeError`. Accepting a bit does not implement its source.
 - `issue_confirmed_notifications` requires actual `True` or `False`; integers
-  and truthy objects raise `TypeError`. Only `monitored_objects` and
-  `audit_priority_filter` are optional dict fields.
+  and truthy objects raise `TypeError`. The three optional dict fields are
+  `monitored_objects`, `audit_priority_filter`, and `maximum_send_delay`.
   Validation finishes before object settings or selection change.
 - `monitored_objects=None` (or omission) removes the optional `Monitored_Objects`
   property (`UNKNOWN_PROPERTY` on read) and selects all ordinary targets. An exact
@@ -1538,8 +1541,14 @@ child.add_device_binding(9, await parent.local_address())
   with omitted priority. Filtering applies to commandable-property writes, not
   non-commandable writes or non-write operations. Existing list/file/lifecycle
   behavior is unchanged; enabled Reporter-target writes retain their bypass.
+- `maximum_send_delay=None` (or omission) leaves Maximum_Send_Delay and Send_Now
+  absent. A non-Boolean integer in `0..=3600` exposes the pair: zero sends
+  immediately, while positive values enable bounded ordinary target batching.
+  Wrong types/bool raise `TypeError`; out-of-range integers raise `ValueError`.
+  See [delayed target controls and limits](delayed-target-audit.md).
 - Every valid call replaces the complete selected set. Omitted options reset to
-  catch-all/all priorities. Failed calls preserve all settings and registrations.
+  catch-all selectors, all priorities, and absent delay/control properties.
+  Failed calls preserve all settings and registrations.
   Input dictionaries, selector lists and values are copied. Enabled nominal overlaps
   expose CONFIGURATION_ERROR on every affected Reporter; only the lowest instance
   emits, before operation/value filters. Mandatory fallback does not add overlap.
