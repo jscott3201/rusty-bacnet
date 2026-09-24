@@ -2,6 +2,10 @@ use super::*;
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Read a property from a remote device.
+    ///
+    /// The ACK must match the requested object, property and array index.
+    /// Device/Network Port wildcard requests accept only a same-type concrete
+    /// peer-reported object; malformed or mismatched ACKs return a decoding error.
     pub async fn read_property(
         &self,
         destination_mac: &[u8],
@@ -23,7 +27,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .confirmed_request(destination_mac, ConfirmedServiceChoice::READ_PROPERTY, &buf)
             .await?;
 
-        bacnet_services::read_property::ReadPropertyACK::decode(&response_data)
+        crate::read_property::decode_ack(&request, &response_data)
     }
 
     /// Read a property from a discovered device, auto-routing if needed.
@@ -97,7 +101,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             )
             .await?;
 
-        bacnet_services::read_property::ReadPropertyACK::decode(&response_data)
+        crate::read_property::decode_ack(&request, &response_data)
     }
 
     /// Read multiple properties from one or more objects on a remote device.

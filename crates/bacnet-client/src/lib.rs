@@ -11,4 +11,5 @@ pub use endpoint_requester::{
     EndpointReadAck, EndpointReadOutcome, EndpointReadRequest, EndpointRequester,
     PreparedEndpointRead,
 };
+mod read_property;
 mod read_range;

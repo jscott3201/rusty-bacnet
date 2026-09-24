@@ -1442,7 +1442,12 @@ class BACnetClient:
         property_id: PropertyIdentifier,
         array_index: Optional[int] = None,
     ) -> PropertyValue:
-        """Read a single property from a remote device."""
+        """Read a single property from a remote device.
+
+        ACK object/property/index must match. Device/Network Port instance 4194303
+        requests accept a same-type concrete ACK. Malformed/mismatched ACKs raise
+        BacnetError; this method returns the property value, not ACK metadata.
+        """
         ...
 
     async def write_property(
@@ -2696,7 +2701,12 @@ class EndpointClient:
         property_id: PropertyIdentifier,
         array_index: Optional[int] = None,
     ) -> PropertyValue:
-        """Read a property through the shared transport."""
+        """Read a property through the shared transport.
+
+        ACK object/property/index must match. Device/Network Port instance 4194303
+        requests accept a same-type concrete ACK. Malformed/mismatched ACKs raise
+        BacnetError; this method returns the property value, not ACK metadata.
+        """
         ...
 
     async def read_range(

@@ -150,6 +150,10 @@ impl ClientRoleHandle {
 
     /// Direct ReadProperty (no routing attributes).
     ///
+    /// ACK object/property/index correlation matches the standalone client.
+    /// Device/Network Port wildcard requests accept a same-type concrete ACK;
+    /// other mismatches return a decoding error.
+    ///
     /// Fails closed with `"endpoint shutdown"` once the owning session stops
     /// or drops. Timeouts/retries come from the session config (or the
     /// composed identity's max-APDU override for the length clamp).

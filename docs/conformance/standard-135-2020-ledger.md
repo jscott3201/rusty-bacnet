@@ -13,6 +13,27 @@
 - Addenda/errata status: ASHRAE 135-2020 Errata Summary 2024-04-29 (v1) reviewed for the supported subset. Item 7 (Clause 21.6, p. 886): successful-actions-only corrected from BOOLEAN (struck through, removed) to BACnetSuccessFilter (italic, added), tags [7]/[4]. Item 8 (Clause 21.2.3, p. 865): start-at-sequence-number corrected from Unsigned32 (struck through, removed) to Unsigned64 (italic, added), tag [2] OPTIONAL. Both items visually verified from the rendered errata p. 3 (strikeout = removed, italics = added per the p. 1 convention); not inferred from concatenated text extraction. The implementation encodes the corrected BACnetSuccessFilter/u64 contract after the RB-02 codec and RB-20 runtime/Python migrations; `BACNET-13-AUDIT-WIRE-MODELS` remains `implementation-present-needs-source-review` pending broader Audit review.
 - PR-0808 evidence row: `BACNET-12-ALERT-ENROLLMENT-TABLE-12-61` is `supported-with-clause-evidence` for the served object model only; it is not an Alert evaluator or notification-generation claim.
 
+## ReadProperty ACK identity and source attribution
+
+Refs #784 extends the in-progress `BACNET-19-SOURCE-READ-PROPERTY` evidence.
+Clause 15.5.1.2 (printed739/PDF741) and 15.5.2 (printed740/PDF742) ground one
+shared standalone direct/routed and endpoint ACK correlation rule. Property and
+array index match exactly; Device/Network Port instance4194303 aliases accept a
+same-type concrete peer-reported object. [Client wire tests](../../crates/bacnet-endpoint/tests/read_property_correlation.rs)
+include the bundled server's Device alias and controlled Network Port replies.
+Its receiving-port server mapping remains separate (#785).
+
+[Source wire tests](../../crates/bacnet-endpoint/src/source_property_identity_tests.rs)
+prove concrete successful Target Object attribution. A validated concrete Device
+ACK also establishes Target Device for that operation (RP or RR), per Table 19-4
+(printed822/PDF824). Other object successes and failures retain the direct
+address. Without a valid ACK, preserving the requested object/alias is the local
+representation of attempted identity; no remote instance is inferred. Records
+stay value-free, with one record across canceled retries and the original
+recipient snapshot. No discovery cache or broader Audit support is added.
+[Installed Python coverage](../../crates/rusty-bacnet/tests/test_read_property_correlation.py)
+checks both client surfaces. Row status and global evidence pins are unchanged.
+
 ## Endpoint ReadRange source READ
 
 Refs #771 extends `BACNET-19-SOURCE-READ-PROPERTY` without changing its in-progress

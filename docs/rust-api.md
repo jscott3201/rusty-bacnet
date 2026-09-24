@@ -1882,6 +1882,12 @@ is described below and in the [Device recipient contract](device-audit-recipient
 
 ### Bounded endpoint source READ reporting
 
+Standalone direct/routed and endpoint ReadProperty share ACK object/property/index
+validation (Clause 15.5). Device/Network Port instance 4194303 requests accept only
+same-type concrete peer-reported identifiers; other mismatches return decoding
+errors. This client contract does not implement the bundled server's Network
+Port ingress-port alias mapping (#785).
+
 The initiating role supports `read_property` and `read_range`, plus explicit
 endpoint destinations. ReadRange returns a correlated `ReadRangeAck` with raw
 item bytes; empty and multiple-item ACKs each produce one value-free source READ
@@ -1948,13 +1954,21 @@ properties. Priority filters do not filter READ. Requests selected for source
 reporting reject routed, broadcast, or non-IPv4 destinations before traffic.
 
 A record contains the local source Device, one request-time timestamp, the actual
-ReadProperty or ReadRange invoke ID shared across retries, and the requested object/property/
-array index. With no remote Device cache, its target is the exact direct BACnet
-address, including the UDP port. The selected Device recipient or Address identifies the logger
-sink; it is never substituted for the operation target. Unknown user, source
+ReadProperty or ReadRange invoke ID shared across retries, and the requested
+property/array index. Successful ReadProperty records use the validated ACK's
+object identifier, including concrete Device/Network Port replies to wildcard
+requests. On failure or without a valid ACK, the record retains the requested
+object (including its wildcard alias) as the attempted identity; it does not
+infer a concrete remote object from a malformed or mismatched ACK. A validated
+successful concrete Device ACK also establishes Target Device for that record,
+for either ReadProperty or ReadRange, as required by Table 19-4.
+Network Port and other object ACKs, failures and missing valid ACKs retain the
+exact direct BACnet address, including the UDP port. No cross-operation remote
+Device cache is created. The selected Device recipient or Address identifies the
+logger sink; it is never substituted for the operation target. Unknown user, source
 object, remote timestamp, priority and property values are omitted. Independent
-source and target reports may both arrive; address-based source target identity
-need not correlate with a target record that knows its own Device.
+source and target reports may both arrive; when the source record retains an
+address target, it need not correlate with a target record that knows its own Device.
 
 A valid matching ACK has no Result. Peer Error class/code is preserved when
 representable. Local records use Clause 18.7 COMMUNICATION codes for timeout and

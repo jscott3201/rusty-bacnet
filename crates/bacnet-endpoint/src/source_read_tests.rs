@@ -466,3 +466,6 @@ mod recipient_changes;
 
 #[path = "source_range_tests.rs"]
 mod range;
+
+#[path = "source_property_identity_tests.rs"]
+mod property_identity;

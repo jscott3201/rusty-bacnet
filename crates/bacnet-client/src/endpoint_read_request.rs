@@ -55,16 +55,7 @@ impl EndpointReadRequest {
     pub(super) fn decode(&self, bytes: &[u8]) -> Result<EndpointReadAck, Error> {
         match self {
             Self::Property(request) => {
-                let ack = ReadPropertyACK::decode(bytes)?;
-                if ack.object_identifier != request.object_identifier
-                    || ack.property_identifier != request.property_identifier
-                    || ack.property_array_index != request.property_array_index
-                {
-                    return Err(Error::Encoding(
-                        "ReadProperty ACK does not match request identity".into(),
-                    ));
-                }
-                Ok(EndpointReadAck::Property(ack))
+                crate::read_property::decode_ack(request, bytes).map(EndpointReadAck::Property)
             }
             Self::Range(request) => {
                 let ack = ReadRangeAck::decode(bytes)?;
@@ -76,6 +67,15 @@ impl EndpointReadRequest {
 }
 
 impl EndpointReadAck {
+    /// Object identified by a successfully correlated peer ACK.
+    #[doc(hidden)]
+    pub fn object_identifier(&self) -> ObjectIdentifier {
+        match self {
+            Self::Property(ack) => ack.object_identifier,
+            Self::Range(ack) => ack.object_identifier,
+        }
+    }
+
     #[doc(hidden)]
     pub fn into_property(self) -> Result<ReadPropertyACK, Error> {
         match self {
