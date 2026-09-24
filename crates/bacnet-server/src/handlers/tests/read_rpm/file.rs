@@ -44,7 +44,10 @@ fn rpm_file_indexed_property_list_and_scalar_gates_preserve_bytes() {
         assert_eq!(results.len(), references.len());
         for (result, (p, index)) in results.iter().zip(references) {
             assert_eq!(result.property_identifier, p);
-            assert_eq!(result.property_array_index, index);
+            assert_eq!(
+                result.property_array_index,
+                if p == P::PROPERTY_LIST { index } else { None }
+            );
             let expected = match (p, index) {
                 (P::PROPERTY_LIST, Some(0)) => {
                     Ok(PropertyValue::Unsigned(if method == 0 { 11 } else { 10 }))

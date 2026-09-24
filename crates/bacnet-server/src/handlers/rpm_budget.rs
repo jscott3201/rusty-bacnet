@@ -121,6 +121,7 @@ fn plan(
 fn element(object: Option<&dyn BACnetObject>, reference: &PropertyReference) -> ReadResultElement {
     let id = reference.property_identifier;
     let index = reference.property_array_index;
+    let response_index = super::read_property::rpm_response_index(object, id, index);
     let result = match object {
         None => Err((ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT)),
         Some(object) if index.is_some() && !object.is_array_property(id) => {
@@ -148,7 +149,7 @@ fn element(object: Option<&dyn BACnetObject>, reference: &PropertyReference) -> 
     };
     ReadResultElement {
         property_identifier: id,
-        property_array_index: index,
+        property_array_index: response_index,
         property_value,
         error,
     }
@@ -185,7 +186,8 @@ pub(crate) fn handle_rpm_budgeted(
 
 /// Atomic with respect to the caller's buffer, not object read side effects.
 /// Observations are provisional until this entire call succeeds. The caller
-/// must discard them on failure; callbacks carry no property values.
+/// must discard them on failure; callbacks carry the requested index (which may
+/// differ from the response index) and no property values.
 pub(crate) fn handle_rpm_budgeted_observed(
     db: &ObjectDatabase,
     data: &[u8],
@@ -218,7 +220,7 @@ pub(crate) fn handle_rpm_budgeted_observed(
             completed(
                 spec.lookup_oid,
                 result.property_identifier,
-                result.property_array_index,
+                reference.property_array_index,
                 result.error,
             );
         }

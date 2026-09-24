@@ -330,6 +330,7 @@ async fn audit_reporter_rpm_expanded_order_inline_errors_and_response_parity() {
     add_probe(&plain, || Error::Encoding("mapped inline".into())).await;
     let missing = oid(ObjectType::BINARY_VALUE, 99);
     let input = oid(ObjectType::ANALOG_INPUT, 1);
+    let requested_scalar_index = Some(3);
     let data = rpm(vec![
         spec(
             probe_oid(),
@@ -338,7 +339,10 @@ async fn audit_reporter_rpm_expanded_order_inline_errors_and_response_parity() {
                 (PropertyIdentifier::PRESENT_VALUE, None),
             ],
         ),
-        spec(input, &[(PropertyIdentifier::PRESENT_VALUE, Some(3))]),
+        spec(
+            input,
+            &[(PropertyIdentifier::PRESENT_VALUE, requested_scalar_index)],
+        ),
         spec(missing, &[(PropertyIdentifier::OBJECT_NAME, None)]),
         spec(
             oid(ObjectType::DEVICE, 4194303),
@@ -388,7 +392,7 @@ async fn audit_reporter_rpm_expanded_order_inline_errors_and_response_parity() {
         (
             input,
             PropertyIdentifier::PRESENT_VALUE,
-            Some(3),
+            None,
             Some((ErrorClass::PROPERTY, ErrorCode::PROPERTY_IS_NOT_AN_ARRAY)),
         ),
         (
@@ -414,6 +418,12 @@ async fn audit_reporter_rpm_expanded_order_inline_errors_and_response_parity() {
             expected(target, property, index, 77, i as u16, error)
         })
         .collect();
+    // Audit preserves the attempted request index even though the scalar ACK omits it.
+    expected_records[3]
+        .target_property
+        .as_mut()
+        .unwrap()
+        .property_array_index = requested_scalar_index.map(u64::from);
     expected_records[5].target_object = Some(oid(ObjectType::DEVICE, 10));
     assert_eq!(records(&fixture), expected_records);
     assert!(records(&plain).is_empty());

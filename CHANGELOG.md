@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- RPM response indexes now appear only for effectively declared arrays, including
+  inline array errors. Unknown declarations conservatively omit the index;
+  target Audit retains the attempted request index independently (#789).
+
 - Pre-1.0 WP encoding now returns `Result` and rejects priorities outside 1–16
   transactionally. Direct/routed clients reject before lookup/admission/traffic;
   Python direct, device-based, and multi-device WP validate synchronously, with

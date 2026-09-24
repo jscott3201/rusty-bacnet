@@ -116,3 +116,94 @@ async fn rpm_whole_abort_direct_routed_reply_and_segmentation_matrix() {
         }
     }
 }
+
+#[tokio::test]
+async fn rpm_result_index_bip_wire_scalar_errors_and_array_count() {
+    use bacnet_client::client::BACnetClient;
+    use bacnet_objects::traits::BACnetObject;
+    use bacnet_services::rpm::ReadPropertyMultipleACK;
+    use std::net::Ipv4Addr;
+    let mut database = ObjectDatabase::new();
+    let device = DeviceObject::new(bacnet_objects::device::DeviceConfig::default()).unwrap();
+    let oid = device.object_identifier();
+    database.add(Box::new(device)).unwrap();
+    let references = [
+        (PropertyIdentifier::OBJECT_NAME, Some(7)),
+        (PropertyIdentifier::OBJECT_LIST, Some(0)),
+        (PropertyIdentifier::OBJECT_NAME, None),
+        (PropertyIdentifier::OBJECT_LIST, Some(u32::MAX)),
+        (PropertyIdentifier::OBJECT_NAME, Some(7)),
+    ];
+    let mut request = BytesMut::new();
+    ReadPropertyMultipleRequest {
+        list_of_read_access_specs: vec![ReadAccessSpecification {
+            object_identifier: oid,
+            list_of_property_references: references
+                .iter()
+                .map(
+                    |&(property_identifier, property_array_index)| PropertyReference {
+                        property_identifier,
+                        property_array_index,
+                    },
+                )
+                .collect(),
+        }],
+    }
+    .encode(&mut request)
+    .unwrap();
+    let mut expected = BytesMut::new();
+    handlers::handle_read_property_multiple(&database, &request, &mut expected).unwrap();
+    let mut server = BACnetServer::bip_builder()
+        .interface(Ipv4Addr::LOCALHOST)
+        .port(0)
+        .database(database)
+        .read_property_multiple_budget(ReadPropertyMultipleBudget {
+            max_result_elements: references.len(),
+            max_service_ack_bytes: expected.len(),
+        })
+        .build()
+        .await
+        .unwrap();
+    let mut client = BACnetClient::bip_builder()
+        .interface(Ipv4Addr::LOCALHOST)
+        .port(0)
+        .build()
+        .await
+        .unwrap();
+    let response = client
+        .confirmed_request(
+            server.local_mac(),
+            ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+            &request,
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.as_ref(), &expected[..]);
+    let ack = ReadPropertyMultipleACK::decode(&response).unwrap();
+    let results = &ack.list_of_read_access_results[0].list_of_results;
+    assert_eq!(
+        results
+            .iter()
+            .map(|r| (r.property_identifier, r.property_array_index))
+            .collect::<Vec<_>>(),
+        vec![
+            (PropertyIdentifier::OBJECT_NAME, None),
+            (PropertyIdentifier::OBJECT_LIST, Some(0)),
+            (PropertyIdentifier::OBJECT_NAME, None),
+            (PropertyIdentifier::OBJECT_LIST, Some(u32::MAX)),
+            (PropertyIdentifier::OBJECT_NAME, None)
+        ]
+    );
+    assert_eq!(
+        results[0].error,
+        Some((ErrorClass::PROPERTY, ErrorCode::PROPERTY_IS_NOT_AN_ARRAY))
+    );
+    assert_eq!(
+        results[3].error,
+        Some((ErrorClass::PROPERTY, ErrorCode::INVALID_ARRAY_INDEX))
+    );
+    assert_eq!(results[0], results[4]);
+    assert!(results[1].property_value.is_some());
+    client.stop().await.unwrap();
+    server.stop().await.unwrap();
+}

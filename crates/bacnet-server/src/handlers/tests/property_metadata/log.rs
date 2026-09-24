@@ -264,7 +264,10 @@ fn rpm_log_indexed_property_list_and_list_gates_preserve_bytes() {
         assert_eq!(results.len(), references.len());
         for (result, &(p, index)) in results.iter().zip(&references) {
             assert_eq!(result.property_identifier, p);
-            assert_eq!(result.property_array_index, index);
+            assert_eq!(
+                result.property_array_index,
+                if p == P::PROPERTY_LIST { index } else { None }
+            );
             let expected = match (p, index) {
                 (P::PROPERTY_LIST, None) => Ok(PropertyValue::List(wire.clone())),
                 (P::PROPERTY_LIST, Some(0)) => Ok(PropertyValue::Unsigned(wire.len() as u64)),

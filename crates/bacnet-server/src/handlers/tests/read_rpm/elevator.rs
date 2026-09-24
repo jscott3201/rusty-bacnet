@@ -42,7 +42,16 @@ fn assert_cases(
     assert_eq!(access.list_of_results.len(), cases.len());
     for (result, &(p, i, expected)) in access.list_of_results.iter().zip(cases) {
         assert_eq!(result.property_identifier, p);
-        assert_eq!(result.property_array_index, i);
+        // These table errors identify non-arrays or absent optional rows.
+        let response_index = if matches!(
+            expected,
+            Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY | ErrorCode::UNKNOWN_PROPERTY)
+        ) {
+            None
+        } else {
+            i
+        };
+        assert_eq!(result.property_array_index, response_index);
         let mut rp_request = BytesMut::new();
         ReadPropertyRequest {
             object_identifier: oid,
