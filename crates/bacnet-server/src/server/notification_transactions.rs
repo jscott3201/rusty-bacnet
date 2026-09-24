@@ -61,6 +61,9 @@ struct NotificationState {
 
 #[doc(hidden)]
 pub struct NotificationTransactions {
+    pub(super) audit_batch:
+        std::sync::OnceLock<std::sync::Weak<super::audit_batch_queue::AuditBatchQueue>>,
+    pub(super) application_sealed: std::sync::atomic::AtomicBool,
     pub(super) audit_routes: std::sync::OnceLock<Arc<super::audit_recipient_routes::AuditRoutes>>,
     core: Arc<NotificationCore>,
     workers: Mutex<NotificationWorkers>,
@@ -83,6 +86,15 @@ struct NotificationWorkers {
     waiter: Option<Waker>,
 }
 
+struct AuditWorkerWake(Option<std::sync::Weak<super::audit_batch_queue::AuditBatchQueue>>);
+impl Drop for AuditWorkerWake {
+    fn drop(&mut self) {
+        if let Some(queue) = self.0.as_ref().and_then(std::sync::Weak::upgrade) {
+            queue.changed.notify_one();
+        }
+    }
+}
+
 // Operations retain transaction state, never the owner of their JoinSet.
 struct NotificationCore {
     coordinator: Arc<OutboundTransactionCoordinator>,
@@ -100,10 +112,20 @@ impl NotificationTransactions {
         &self,
         association: Arc<bacnet_objects::audit::TargetAuditAssociation>,
     ) {
+        let budget = Arc::new(tokio::sync::Semaphore::new(256));
         let queues = association
             .reporters()
             .iter()
-            .map(|(_, status)| (Arc::clone(status), AuditFailureQueue::default()))
+            .map(|(_, status)| {
+                (
+                    Arc::clone(status),
+                    AuditFailureQueue::target(
+                        Arc::clone(&budget),
+                        status.configuration_epoch(),
+                        status.auditing_failure_epoch().is_some(),
+                    ),
+                )
+            })
             .collect();
         assert!(self.audit_failures.set(queues).is_ok());
         assert!(self.audit_association.set(association).is_ok());
@@ -126,6 +148,15 @@ impl NotificationTransactions {
         }
     }
 
+    pub(super) fn audit_idle(&self) -> bool {
+        self.audit_permits.available_permits() == 64
+            && self
+                .audit_failures
+                .get()
+                .into_iter()
+                .flatten()
+                .all(|(_, q)| !q.has_pending())
+    }
     #[doc(hidden)]
     pub fn try_admit_audit(
         &self,
@@ -141,6 +172,8 @@ impl NotificationTransactions {
     #[doc(hidden)]
     pub fn with_coordinator(coordinator: Arc<OutboundTransactionCoordinator>) -> Arc<Self> {
         Arc::new(Self {
+            audit_batch: std::sync::OnceLock::new(),
+            application_sealed: std::sync::atomic::AtomicBool::new(false),
             audit_routes: std::sync::OnceLock::new(),
             core: Arc::new(NotificationCore {
                 coordinator,
@@ -204,8 +237,10 @@ impl NotificationTransactions {
             .audit_owner
             .as_ref()
             .and_then(std::sync::Weak::upgrade);
+        let wake = AuditWorkerWake(self.audit_batch.get().cloned());
         workers.tasks.spawn_on(
             async move {
+                let _wake = wake;
                 let _owner = owner;
                 task.await;
             },
@@ -232,7 +267,9 @@ impl NotificationTransactions {
             .audit_owner
             .as_ref()
             .and_then(std::sync::Weak::upgrade);
+        let wake = AuditWorkerWake(self.audit_batch.get().cloned());
         workers.tasks.spawn(async move {
+            let _wake = wake;
             let _owner = owner;
             task.await;
         });
@@ -246,6 +283,9 @@ impl NotificationTransactions {
     #[doc(hidden)]
     pub fn close(&self) {
         self.audit_permits.close();
+        if let Some(queue) = self.audit_batch.get().and_then(std::sync::Weak::upgrade) {
+            drop(queue.close());
+        }
         let mut workers = self.workers.lock().unwrap();
         // Serialize worker registration with transaction sealing. Reservation
         // uses only the core; no future can bypass closed worker admission.
@@ -316,6 +356,15 @@ impl NotificationTransactions {
         self.core.complete_pre_admitted(admission, apdu)
     }
 
+    /// Per-delivery tasks are idle; the one supervised target scheduler may remain.
+    #[cfg(test)]
+    pub(super) fn delivery_workers_idle(&self) -> bool {
+        let queue = self.audit_batch.get().and_then(std::sync::Weak::upgrade);
+        let scheduler = usize::from(queue.as_ref().is_some_and(|queue| !queue.stopped()));
+        self.workers.lock().unwrap().tasks.len() == scheduler
+            && self.audit_idle()
+            && queue.is_none_or(|queue| queue.empty())
+    }
     #[cfg(test)]
     pub(super) fn workers_empty(&self) -> bool {
         self.workers.lock().unwrap().tasks.is_empty()

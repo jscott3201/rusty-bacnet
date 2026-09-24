@@ -66,6 +66,7 @@ async fn built_in_configuration_identity_metadata_and_writes_survive_wrapping() 
             true,
             selectors.clone(),
             priorities,
+            None,
         )
         .unwrap();
     let metadata = original.property_metadata().into_owned();
@@ -156,6 +157,7 @@ async fn built_in_configuration_identity_metadata_and_writes_survive_wrapping() 
                 false,
                 None,
                 BACnetPriorityFilter::all(),
+                None,
             )
             .is_err());
         for (property, expected) in before {
@@ -168,6 +170,7 @@ async fn built_in_configuration_identity_metadata_and_writes_survive_wrapping() 
                 false,
                 None,
                 BACnetPriorityFilter::all(),
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -184,6 +187,7 @@ async fn built_in_configuration_identity_metadata_and_writes_survive_wrapping() 
                 true,
                 None,
                 BACnetPriorityFilter::empty(),
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -245,9 +249,15 @@ impl BACnetObject for ExtendedReporter {
         confirmed: bool,
         selectors: Option<Vec<BACnetObjectSelector>>,
         priorities: BACnetPriorityFilter,
+        maximum_send_delay: Option<bacnet_objects::audit::AuditSendDelay>,
     ) -> Result<(), Error> {
         self.reporter.configure_audit_reporter_internal(
-            level, operations, confirmed, selectors, priorities,
+            level,
+            operations,
+            confirmed,
+            selectors,
+            priorities,
+            maximum_send_delay,
         )?;
         self.calls.configurations.fetch_add(1, Ordering::SeqCst);
         Ok(())
@@ -522,6 +532,7 @@ async fn custom_capabilities_clocks_indexes_and_private_state_are_retained() {
                 true,
                 None,
                 priorities,
+                None,
             )
             .unwrap();
         assert_eq!(calls.configurations.load(Ordering::SeqCst), 1);
@@ -549,6 +560,7 @@ async fn custom_capabilities_clocks_indexes_and_private_state_are_retained() {
                 false,
                 None,
                 BACnetPriorityFilter::all(),
+                None,
             )
             .is_err());
         assert_eq!(calls.configurations.load(Ordering::SeqCst), 1);
@@ -562,6 +574,7 @@ async fn custom_capabilities_clocks_indexes_and_private_state_are_retained() {
                 false,
                 None,
                 BACnetPriorityFilter::all(),
+                None,
             )
             .unwrap();
         assert_eq!(calls.configurations.load(Ordering::SeqCst), 2);

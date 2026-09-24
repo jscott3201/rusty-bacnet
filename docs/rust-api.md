@@ -955,14 +955,18 @@ is recorded in `BACNET-12-LOG-STATUS-LIFECYCLE`; complete log-family conformance
 is not claimed.
 
 Trusted local configuration through `dyn BACnetObject` uses one atomic
-`configure_audit_reporter_internal(level, operations, confirmed, selectors, priorities)`
-contract. It replaces all five settings once; invalid or resource-denied changes
-leave every field unchanged. Built-in live setters and Description writes share
-that boundary and return Result. `None` selectors remove Monitored_Objects and
+`configure_audit_reporter_internal(level, operations, confirmed, selectors, priorities, maximum_send_delay)`
+contract. It replaces all six settings once; invalid or resource-denied changes
+leave every field unchanged. The final argument is `Option<AuditSendDelay>`:
+`None` omits both delay/control properties, while `Some(AuditSendDelay::new(0)?)`
+exposes the pair with immediate delivery. Positive values enable bounded target
+batching; see [delay controls and limits](delayed-target-audit.md). Built-in live
+setters and Description writes share that boundary and return Result. `None` selectors remove Monitored_Objects and
 select all nominal targets; `Some(vec![])` retains an empty property and selects
 none. Runtime ownership prepares mandatory change notifications before committing.
-The private endpoint source adapter forwards the contract without changing its
-exactly-one source-role ownership. See [target Reporter ownership and live changes](target-audit-reporters.md).
+The private endpoint source adapter forwards the contract while rejecting a present
+delay capability and preserving exactly-one source-role ownership. See
+[target Reporter ownership and live changes](target-audit-reporters.md).
 
 #### Building Control (7)
 
@@ -2115,8 +2119,8 @@ mode and destination. Changes discard incompatible pending counts, including
 A-to-B-to-A changes without another READ. Active Device/Reporter removal and
 replacement are denied. A new context
 can supersede the single pending slot; stale completions cannot transfer their
-counts into it. This bounded discard policy also applies to target resource-loss
-summaries. Admitted notifications retain the three-second total deadline and
+counts into it. Target reporting instead retains bounded captured historical
+contexts, as described in [delayed target Audit reporting](delayed-target-audit.md). Admitted notifications retain the three-second total deadline and
 no retries.
 
 `stop()` seals admission, cancels operations and notifications, and joins owned
@@ -2160,8 +2164,8 @@ field, consuming a clockless sequence or retaining a worker/lease. WPM keeps its
 successful prefix and stops at the denied element. This stronger admission rule
 is a local policy, not a Standard-mandated write rejection. A successful admission
 owns one bounded delivery attempt; later send/ACK failure cannot undo the write.
-Ordinary, equal and NULL writes keep their existing best-effort behavior. No
-delayed queue or Send_Now support is implied.
+Ordinary, equal and NULL writes keep their existing best-effort behavior. These
+mandatory records bypass the separately configured [delayed target queue](delayed-target-audit.md).
 
 `BACnetServer::write_local` uses the same target observer, with local Device
 provenance and no invoke ID. Device recipient changes still emit only their

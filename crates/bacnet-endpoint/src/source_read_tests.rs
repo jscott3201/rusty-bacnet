@@ -44,6 +44,7 @@ fn database(confirmed: bool) -> ObjectDatabase {
             confirmed,
             None,
             BACnetPriorityFilter::empty(),
+            None,
         )
         .unwrap();
     db.add(Box::new(reporter)).unwrap();
@@ -400,6 +401,7 @@ async fn source_read_selector_preflight_is_atomic_and_adapter_rejects_mutation()
                 false,
                 Some(selectors),
                 BACnetPriorityFilter::all(),
+                None,
             )
             .unwrap();
         let mut session = session(db, SessionRole::ClientOnly, &sink);
@@ -425,6 +427,7 @@ async fn source_read_selector_preflight_is_atomic_and_adapter_rejects_mutation()
                 false,
                 None,
                 BACnetPriorityFilter::all(),
+                None,
             )
             .unwrap();
         session.start().await.unwrap();
@@ -437,7 +440,8 @@ async fn source_read_selector_preflight_is_atomic_and_adapter_rejects_mutation()
                     AuditOperationFlags::empty(),
                     true,
                     Some(vec![]),
-                    BACnetPriorityFilter::empty()
+                    BACnetPriorityFilter::empty(),
+                    None
                 )
                 .is_err());
             assert_eq!(
@@ -529,3 +533,6 @@ async fn source_read_ignores_remote_and_same_oid_local_value_object_policy() {
     remote_server.stop().await.unwrap();
     sink.stop().await.unwrap();
 }
+
+#[path = "source_delay_rejection_tests.rs"]
+mod delay_rejection;

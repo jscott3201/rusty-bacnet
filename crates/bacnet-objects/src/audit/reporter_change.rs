@@ -12,6 +12,7 @@ pub struct AuditReporterConfiguration {
     pub confirmed: bool,
     pub monitored_objects: Option<Vec<BACnetObjectSelector>>,
     pub audit_priority_filter: BACnetPriorityFilter,
+    pub maximum_send_delay: Option<AuditSendDelay>,
 }
 impl Default for AuditReporterConfiguration {
     fn default() -> Self {
@@ -22,6 +23,7 @@ impl Default for AuditReporterConfiguration {
             confirmed: false,
             monitored_objects: None,
             audit_priority_filter: BACnetPriorityFilter::all(),
+            maximum_send_delay: None,
         }
     }
 }
@@ -64,6 +66,9 @@ impl AuditReporterConfiguration {
             PropertyIdentifier::AUDIT_PRIORITY_FILTER => {
                 Some(bits(self.audit_priority_filter.to_bacnet()))
             }
+            PropertyIdentifier::MAXIMUM_SEND_DELAY => self
+                .maximum_send_delay
+                .map(|delay| PropertyValue::Unsigned(u64::from(delay.seconds()))),
             PropertyIdentifier::MONITORED_OBJECTS => self.monitored_objects.as_ref().map(|v| {
                 PropertyValue::List(
                     v.iter()
@@ -81,6 +86,14 @@ impl AuditReporterConfiguration {
 #[doc(hidden)]
 pub trait AuditReporterChangeSink: Send + Sync {
     fn is_active(&self) -> bool;
+    fn send_now(
+        &self,
+        reporter: ObjectIdentifier,
+        status: &Arc<AuditReporterStatus>,
+        value: bool,
+        source: Option<&AuditWriteSource>,
+        clock: Option<ClockFrame>,
+    ) -> Result<(), Error>;
     fn change(
         &self,
         reporter: ObjectIdentifier,
@@ -167,6 +180,11 @@ impl AuditReporterObject {
         }
         if let Some(sink) = self.change_sink.as_ref().and_then(std::sync::Weak::upgrade) {
             if !sink.is_active() {
+                return Err(crate::common::write_access_denied_error());
+            }
+            if self.configuration_internal().maximum_send_delay.is_some()
+                != next.maximum_send_delay.is_some()
+            {
                 return Err(crate::common::write_access_denied_error());
             }
             if self.configuration_internal() == next {

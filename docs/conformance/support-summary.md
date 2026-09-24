@@ -13,7 +13,7 @@
 | Dimension | Value | Count |
 |---|---|---|
 | Priority | P0 | 16 |
-| Priority | P1 | 50 |
+| Priority | P1 | 51 |
 | Priority | P2 | 5 |
 | Priority | P3 | 4 |
 | Status | deferred-pending-owner-decision | 2 |
@@ -25,7 +25,7 @@
 | Status | implementation-present-needs-state-machine-audit | 4 |
 | Status | implementation-present-needs-timeout-tests | 1 |
 | Status | implementation-present-needs-window-tests | 1 |
-| Status | in-progress | 14 |
+| Status | in-progress | 15 |
 | Status | supported-with-clause-evidence | 21 |
 | Status | unknown-pending-source-review | 4 |
 | Status | unsupported-by-design | 3 |
@@ -34,6 +34,7 @@
 
 | ID | Anchor | Priority | Status | Public Claims |
 |---|---|---|---|---|
+| `BACNET-12-AUDIT-REPORTER-DELAY` | Clause 12.63 / Table 12-82, printed page 619 / PDF page 621; Maximum_Send_Delay and Send_Now printed pages 621-622 / PDF pages 623-624; Clause 19.6.6 and Table 19-5 (partial-profile loss filtering remains unresolved) | P1 | in-progress | 6 |
 | `BACNET-15-WP-OUTBOUND-PRIORITY` | Clause 15.9.1.1 Priority, printed page 752 / PDF page 754; inbound error and noncommandable rules printed page 753 / PDF page 755 | P1 | in-progress | 2 |
 | `BACNET-LOCAL-MUTATION-POLICY` | Local operator authorization policy; Clauses 14, 15 and 13 COV service execution boundaries; not a normative authentication claim | P1 | in-progress | 4 |
 | `BACNET-15-ENDPOINT-DEVICE-WRITE` | Clause 15.9; Clause 12.11 Protocol_Services_Supported | P1 | in-progress | 3 |

@@ -104,7 +104,17 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         apdu: Apdu,
         mut received: bacnet_network::layer::ReceivedApdu,
     ) {
-        // RB-07 compat mode: provenance threaded via `received` to all
+        if notification_transactions
+            .application_sealed
+            .load(Ordering::Acquire)
+            && matches!(
+                apdu,
+                Apdu::ConfirmedRequest(_) | Apdu::UnconfirmedRequest(_)
+            )
+        {
+            return;
+        }
+        // Ingress provenance: provenance threaded via `received` to all
         // diagnostic views (SourceKey, DiscoveryLimiter, TimeSyncSource,
         // DccSource, MutationDecisions, NotificationTransactions/ServerTsm,
         // DccOutcomes, audit contexts); decisions unchanged, RB-09 consumes.

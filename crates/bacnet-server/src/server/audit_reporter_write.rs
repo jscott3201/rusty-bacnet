@@ -3,7 +3,7 @@ use super::*;
 
 pub(super) struct WriteSelection {
     ordinary: bool,
-    captured_description: Option<(ObjectIdentifier, PropertyValue)>,
+    captured_revision: Option<(Arc<AuditReporterStatus>, u64)>,
     pub(super) change: Option<(
         ObjectIdentifier,
         PropertyIdentifier,
@@ -14,17 +14,9 @@ impl WriteSelection {
     pub(super) fn selected(&self, db: &ObjectDatabase, success: bool) -> bool {
         if success
             && self
-                .captured_description
+                .captured_revision
                 .as_ref()
-                .is_some_and(|(oid, before)| {
-                    db.get(oid)
-                        .and_then(|object| {
-                            object
-                                .read_property(PropertyIdentifier::DESCRIPTION, None)
-                                .ok()
-                        })
-                        .is_some_and(|after| after != *before)
-                })
+                .is_some_and(|(status, before)| status.capture_revision() != *before)
         {
             return false;
         }
@@ -94,17 +86,14 @@ impl<T: TransportPort + 'static> WriteCommitObserver for WriteAudit<'_, T> {
         }
         let selection = WriteSelection {
             ordinary,
-            captured_description: (write.property == PropertyIdentifier::DESCRIPTION
-                && object
-                    .audit_reporter_internal()
-                    .is_some_and(|r| r.captures_changes_internal()))
-            .then(|| {
-                object
-                    .read_property(PropertyIdentifier::DESCRIPTION, None)
-                    .ok()
-                    .map(|value| (write.oid, value))
-            })
-            .flatten(),
+            captured_revision: object
+                .audit_reporter_internal()
+                .filter(|r| r.captures_changes_internal())
+                .map(|r| {
+                    let status = r.status_internal();
+                    let revision = status.capture_revision();
+                    (status, revision)
+                }),
             change: mandatory.then_some((write.oid, write.property, object_policy)),
         };
         let current_value = object
@@ -112,6 +101,9 @@ impl<T: TransportPort + 'static> WriteCommitObserver for WriteAudit<'_, T> {
             .ok()
             .and_then(|value| small_value(&value));
         self.pending = Some(PendingWrite {
+            delay: (!reporter_attempt)
+                .then_some(reporter.maximum_send_delay)
+                .flatten(),
             selection: Some(selection),
             failure: self.failure_ticket(&status, reporter.confirmed, device, route.clone()),
             route,

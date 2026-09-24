@@ -186,6 +186,7 @@ impl BACnetServer {
                         config.confirmed,
                         config.selectors,
                         config.priorities,
+                        config.maximum_send_delay,
                     )
                     .map_err(to_py_err)?;
             }
@@ -342,6 +343,7 @@ struct ReporterConfiguration {
     confirmed: bool,
     selectors: Option<Vec<BACnetObjectSelector>>,
     priorities: BACnetPriorityFilter,
+    maximum_send_delay: Option<bacnet_objects::audit::AuditSendDelay>,
 }
 
 fn parse_reporters(value: &Bound<'_, PyAny>) -> PyResult<Vec<ReporterConfiguration>> {
@@ -367,6 +369,7 @@ fn parse_reporters(value: &Bound<'_, PyAny>) -> PyResult<Vec<ReporterConfigurati
                     | "issue_confirmed_notifications"
                     | "monitored_objects"
                     | "audit_priority_filter"
+                    | "maximum_send_delay"
             ) {
                 return Err(PyValueError::new_err(
                     "unknown Reporter configuration field",
@@ -421,6 +424,22 @@ fn parse_reporters(value: &Bound<'_, PyAny>) -> PyResult<Vec<ReporterConfigurati
         let priorities = config
             .get_item("audit_priority_filter")?
             .filter(|value| !value.is_none());
+        let maximum_send_delay = config
+            .get_item("maximum_send_delay")?
+            .filter(|v| !v.is_none())
+            .map(|v| {
+                if v.is_instance_of::<PyBool>() || !v.is_instance_of::<PyInt>() {
+                    return Err(PyTypeError::new_err(
+                        "maximum_send_delay must be an integer (not bool) or None",
+                    ));
+                }
+                let seconds = v
+                    .extract::<u32>()
+                    .map_err(|_| PyValueError::new_err("maximum_send_delay must be in 0..=3600"))?;
+                bacnet_objects::audit::AuditSendDelay::new(seconds)
+                    .map_err(|_| PyValueError::new_err("maximum_send_delay must be in 0..=3600"))
+            })
+            .transpose()?;
         result.push(ReporterConfiguration {
             identifier,
             level,
@@ -428,6 +447,7 @@ fn parse_reporters(value: &Bound<'_, PyAny>) -> PyResult<Vec<ReporterConfigurati
             confirmed: confirmed.extract()?,
             selectors: monitored_object_selectors(selectors.as_ref())?,
             priorities: priority_filter(priorities.as_ref())?,
+            maximum_send_delay,
         });
     }
     result.sort_by_key(|value| value.identifier.instance_number());

@@ -2,6 +2,12 @@
 
 > DRAFT internal support evidence. This ledger is not a BTL certification claim, a formal PICS, or a formal BIBB declaration.
 
+Optional target Maximum_Send_Delay/Send_Now, bounded batching, captured historical
+loss contexts and the cancellation-safe three-second drain are tracked by the
+in-progress `BACNET-12-AUDIT-REPORTER-DELAY` row (#783). See
+[the selected runtime contract](../delayed-target-audit.md). Captured failure-bit
+filtering remains a qualified partial-profile policy; broader #345 stays open.
+
 AV/BV object-owned policy (#781) extends the existing Audit row with independently
 optional live properties and effective target filtering. Supported server
 `write_local` shares the observer; physical Input sampling/raw DB authoring remain

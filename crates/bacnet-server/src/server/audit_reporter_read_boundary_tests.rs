@@ -452,6 +452,9 @@ async fn audit_reporter_rpm_256_results_reuse_64_permits_summary_deadline_and_no
             (false, 0, 64)
         );
         fixture.server.stop().await.unwrap();
-        assert!(fixture.server.notification_transactions.workers_empty());
+        assert!(fixture
+            .server
+            .notification_transactions
+            .delivery_workers_idle());
     }
 }

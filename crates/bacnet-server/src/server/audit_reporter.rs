@@ -29,7 +29,7 @@ mod policy_precommit;
 /// AtomicWriteFile, CreateObject/DeleteObject operations, and authorized execution errors.
 /// Policy denials and undecoded/unattempted elements remain silent. Successes
 /// omit Result; execution failures include the mapped BACnet Error. There is no
-/// source-side reporting, batching, forwarding, or durable outbox.
+/// source-side reporting, forwarding, or durable outbox.
 /// Provision the typed recipient on the built-in Device before startup; configure
 /// Device routes with `device_binding`. Startup requires exactly one concrete
 /// built-in Device, a provision, and the selected Reporter capability. Unresolved
@@ -39,23 +39,17 @@ mod policy_precommit;
 /// old/new attempts before commit, independently of ordinary reporting filters.
 /// Both routes must be usable; an unavailable old route requires reconfiguration
 /// and restart. Active Device/Reporter membership is protected until quiescence.
-/// At most 64 deliveries are active per server, with no ordinary-record queue. Each
-/// send/ACK has one total three-second deadline and no retries. Overflow or
-/// delivery failure sets COMMUNICATION_FAILURE, never changes the write result,
-/// and retains no ordinary record. Resource-admission drops can be summarized
-/// by one memory-only, saturating AUDITING_FAILURE count per Reporter when its operation bit
-/// and Audit_Level are enabled. One owned worker waits for capacity and coalesces
-/// further drops; summary failure never counts itself. Values over 32 octets are omitted.
-/// The complete APDU must fit the server's limit; outbound segmentation is not
-/// implemented by this profile. Encoding/size failures are delivery failures.
-/// A subsequent successful delivery clears communication failure unless a newer
-/// failure occurred after that delivery began. Unconfirmed success proves only
-/// transport acceptance, not storage by the recipient.
+/// At most 64 deliveries are active per server. Optional object-owned
+/// Maximum_Send_Delay/Send_Now retains ordinary records in a bounded target queue:
+/// 256 records/256 KiB globally and 64 records/64 KiB per Reporter. Mandatory
+/// records remain immediate. Each send/ACK has one total three-second deadline
+/// and no retry. Known local losses use captured, bounded historical contexts;
+/// summary filtering remains the documented partial-profile policy. Unconfirmed
+/// success proves only transport acceptance. See docs/delayed-target-audit.md.
 ///
 /// Audit_Source_Reporter remains false. AV/BV instance-owned overrides apply to
 /// target observations. Supported `write_local` operations share this observer;
-/// raw database authoring remains a bypass. Source reporting and ordinary batching
-/// remain outside this target profile.
+/// raw database authoring remains a bypass. Source reporting is a separate profile.
 /// Ordinary sensor samples and internal reliability updates never enter this
 /// producer. An enabled external write to a Reporter produces one record.
 /// Locally configured Monitored_Objects selects ordinary targets by exact object
@@ -94,7 +88,7 @@ mod policy_precommit;
 /// operation bit; AUDIT_CONFIG excludes Present_Value. RPM's existing result
 /// budget bounds provisional intents, which are discarded on whole-request
 /// failure. Admission follows release of the read guard and uses the same
-/// immediate drop/summary policy, without an additional cap or queue.
+/// captured delivery, optional delay and bounded resource-loss policy.
 ///
 /// ```no_run
 /// use bacnet_objects::{audit::AuditReporterObject, database::ObjectDatabase,
@@ -221,6 +215,7 @@ pub(super) struct WriteAudit<'a, T: TransportPort> {
 }
 
 struct PendingWrite {
+    delay: Option<bacnet_objects::audit::AuditSendDelay>,
     selection: Option<WriteSelection>,
     route: Option<Arc<ConfirmedRecipientRoute>>,
     failure: Option<AuditFailureTicket<Arc<ConfirmedRecipientRoute>>>,
@@ -370,6 +365,9 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
             return;
         }
         self.pending = Some(PendingWrite {
+            delay: (!mandatory)
+                .then_some(reporter.maximum_send_delay)
+                .flatten(),
             selection: None,
             failure: self.failure_ticket(&status, reporter.confirmed, device, route.clone()),
             route,
@@ -442,6 +440,9 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
             return;
         }
         self.pending = Some(PendingWrite {
+            delay: (!mandatory)
+                .then_some(reporter.maximum_send_delay)
+                .flatten(),
             selection: None,
             failure: self.failure_ticket(&status, reporter.confirmed, device, route.clone()),
             route,
@@ -519,6 +520,7 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
             return;
         }
         self.pending = Some(PendingWrite {
+            delay: reporter.maximum_send_delay,
             selection: None,
             failure: self.failure_ticket(&status, reporter.confirmed, device, route.clone()),
             route,
@@ -569,7 +571,7 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         {
             return;
         }
-        if pending.route.is_none() {
+        if pending.route.is_none() || pending.failure.is_none() {
             return;
         }
         // No await separates execution completion from notification admission.
@@ -581,6 +583,47 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
     }
 
     fn admit(&self, pending: PendingWrite) {
+        if let Some(delay) = pending.delay.filter(|delay| delay.seconds() != 0) {
+            let completion = DeliveryCompletion {
+                status: Arc::clone(&pending.status),
+                epoch: pending.completion,
+                finished: false,
+            };
+            if self.comm_state.load(Ordering::Acquire) != 0 {
+                return;
+            }
+            if let Some(queue) = self
+                .transactions
+                .audit_batch
+                .get()
+                .and_then(std::sync::Weak::upgrade)
+            {
+                let mut record = BytesMut::new();
+                if bacnet_encoding::constructed::encode_audit_notification(
+                    &pending.notification,
+                    &mut record,
+                )
+                .is_err()
+                {
+                    return;
+                }
+                let queued = super::audit_batch_queue::QueuedAudit::new(
+                    completion,
+                    record,
+                    pending
+                        .notification
+                        .target_timestamp
+                        .clone()
+                        .expect("completed record"),
+                    pending.failure.clone().expect("captured ordinary record"),
+                    delay,
+                );
+                if queue.enqueue(queued).is_err() {
+                    self.resource_drop(&pending);
+                }
+                return;
+            }
+        }
         let Some(route) = pending.route.clone() else {
             return;
         };
@@ -643,8 +686,10 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         let comm_state = Arc::clone(self.comm_state);
         // The absolute deadline includes scheduling and transport send, not only ACK wait.
         let deadline = tokio::time::Instant::now() + DELIVERY_TIMEOUT;
+        let context_pin = pending.failure;
         self.transactions.spawn(async move {
             let _permit = permit;
+            let _context_pin = context_pin;
             let delivered =
                 deliver(&network, &comm_state, &route, &bytes, reserved, deadline).await;
             completion.finish(delivered);
@@ -652,110 +697,9 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
     }
 }
 
-pub(super) fn encode_notification(
-    notification: &BACnetAuditNotification,
-    confirmed: bool,
-    max_apdu: u32,
-    invoke_id: u8,
-) -> Option<BytesMut> {
-    let mut service = BytesMut::new();
-    AuditNotificationRequest {
-        notifications: vec![notification.clone()],
-    }
-    .try_encode(&mut service)
-    .ok()?;
-    let pdu = if confirmed {
-        Apdu::ConfirmedRequest(ConfirmedRequestPdu {
-            segmented: false,
-            more_follows: false,
-            segmented_response_accepted: false,
-            max_segments: None,
-            max_apdu_length: max_apdu as u16,
-            invoke_id,
-            sequence_number: None,
-            proposed_window_size: None,
-            service_choice: ConfirmedServiceChoice::CONFIRMED_AUDIT_NOTIFICATION,
-            service_request: service.freeze(),
-        })
-    } else {
-        Apdu::UnconfirmedRequest(UnconfirmedRequestPdu {
-            service_choice: UnconfirmedServiceChoice::UNCONFIRMED_AUDIT_NOTIFICATION,
-            service_request: service.freeze(),
-        })
-    };
-    let mut bytes = BytesMut::new();
-    encode_apdu(&mut bytes, &pdu).ok()?;
-    (bytes.len() <= max_apdu as usize).then_some(bytes)
-}
-
-pub(super) async fn deliver<T: TransportPort + 'static>(
-    network: &NetworkLayer<T>,
-    comm_state: &AtomicU8,
-    route: &ConfirmedRecipientRoute,
-    bytes: &[u8],
-    reserved: Option<NotificationReservation>,
-    deadline: tokio::time::Instant,
-) -> bool {
-    let confirmed = reserved.is_some();
-    let send = || async {
-        if comm_state.load(Ordering::Acquire) != 0 {
-            return Err(Error::Encoding("audit initiation disabled".into()));
-        }
-        match (&route.local_target, &route.remote) {
-            (Some(mac), None) => {
-                network
-                    .send_apdu(bytes, mac, confirmed, NetworkPriority::NORMAL)
-                    .await
-            }
-            (None, Some((net, mac, Some(router)))) => {
-                network
-                    .send_apdu_routed(bytes, *net, mac, router, confirmed, NetworkPriority::NORMAL)
-                    .await
-            }
-            _ => Err(Error::Encoding("audit destination is unavailable".into())),
-        }
-    };
-    tokio::time::timeout_at(deadline, async {
-        if let Some((operation, receiver)) = reserved {
-            run_notification_worker(operation, receiver, DELIVERY_TIMEOUT, 0, |_| send()).await
-                == NotificationWorkerResult::Ack
-        } else {
-            send().await.is_ok()
-        }
-    })
-    .await
-    .unwrap_or(false)
-}
-
-/// Cancellation, rejected worker admission and panic also leave visible failure.
-pub(super) struct DeliveryCompletion {
-    pub(super) status: Arc<AuditReporterStatus>,
-    pub(super) epoch: bacnet_objects::audit::AuditDeliveryToken,
-    pub(super) finished: bool,
-}
-
-impl DeliveryCompletion {
-    fn auditing_failure(status: Arc<AuditReporterStatus>, expected: u64) -> Option<Self> {
-        let epoch = status.begin_auditing_failure_delivery(expected)?;
-        Some(Self {
-            status,
-            epoch,
-            finished: false,
-        })
-    }
-    pub(super) fn finish(mut self, delivered: bool) {
-        self.status.complete_delivery(self.epoch, delivered);
-        self.finished = true;
-    }
-}
-
-impl Drop for DeliveryCompletion {
-    fn drop(&mut self) {
-        if !self.finished {
-            self.status.complete_delivery(self.epoch, false);
-        }
-    }
-}
+#[path = "audit_delivery.rs"]
+mod delivery;
+pub(super) use delivery::{deliver, deliver_observed, encode_notification, DeliveryCompletion};
 
 /// Table 19-4 permits omission above 32 encoded octets. Bound encoding work,
 /// including nested lists, before handing a value to the ordinary encoder.
@@ -792,3 +736,4 @@ pub(super) fn small_value(value: &PropertyValue) -> Option<Vec<u8>> {
 
 #[path = "audit_reporter_failure.rs"]
 mod failure;
+pub(super) use failure::record_resource_drop;

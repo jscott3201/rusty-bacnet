@@ -33,7 +33,7 @@ fn audit_reporter_configuration_hook_is_opt_in_and_atomic() {
     assert!(matches!(
         other.configure_audit_reporter_internal(
             AuditLevel::AUDIT_ALL, operations, true, None, BACnetPriorityFilter::all(),
-        ),
+         None,),
         Err(Error::Protocol { class, code })
             if class == ErrorClass::OBJECT.to_raw() as u32
                 && code == ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32
@@ -63,6 +63,7 @@ fn audit_reporter_configuration_hook_is_opt_in_and_atomic() {
             true,
             Some(selectors.clone()),
             priorities,
+            None,
         )
         .unwrap();
     let properties = [
@@ -84,6 +85,7 @@ fn audit_reporter_configuration_hook_is_opt_in_and_atomic() {
             false,
             None,
             BACnetPriorityFilter::empty(),
+            None,
         )
         .is_err());
     for (&property, expected) in properties.iter().zip(before) {
@@ -113,6 +115,7 @@ fn audit_reporter_configuration_hook_is_opt_in_and_atomic() {
             false,
             None,
             BACnetPriorityFilter::all(),
+            None,
         )
         .unwrap();
     let reporter = object.audit_reporter_internal().unwrap();

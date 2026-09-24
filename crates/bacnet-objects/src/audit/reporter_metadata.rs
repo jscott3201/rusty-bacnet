@@ -83,20 +83,36 @@ pub(super) static AUDIT_REPORTER_PROPERTIES: &[PropertyMetadata] = &[
     ),
 ];
 
-pub(super) fn effective_properties(monitored_objects: bool) -> Cow<'static, [PropertyMetadata]> {
-    if !monitored_objects {
+pub(super) fn effective_properties(
+    monitored_objects: bool,
+    delay: bool,
+) -> Cow<'static, [PropertyMetadata]> {
+    if !monitored_objects && !delay {
         return Cow::Borrowed(AUDIT_REPORTER_PROPERTIES);
     }
     let mut rows = AUDIT_REPORTER_PROPERTIES.to_vec();
     // Only effective rows belong in metadata: absent is not an empty array.
-    rows.insert(
-        rows.len() - 1,
-        PropertyMetadata::new(
-            PropertyIdentifier::MONITORED_OBJECTS,
-            Optional,
-            None,
-            ReadOnly,
-        ),
-    );
+    if monitored_objects {
+        rows.insert(
+            rows.len() - 1,
+            PropertyMetadata::new(
+                PropertyIdentifier::MONITORED_OBJECTS,
+                Optional,
+                None,
+                ReadOnly,
+            ),
+        );
+    }
+    if delay {
+        for property in [
+            PropertyIdentifier::MAXIMUM_SEND_DELAY,
+            PropertyIdentifier::SEND_NOW,
+        ] {
+            rows.insert(
+                rows.len() - 1,
+                PropertyMetadata::new(property, Optional, None, Always),
+            );
+        }
+    }
     Cow::Owned(rows)
 }

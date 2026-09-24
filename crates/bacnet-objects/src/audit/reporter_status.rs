@@ -6,7 +6,7 @@ use bacnet_types::enums::Reliability;
 /// Internal, object-instance-owned delivery health, independent of BACnet writes.
 #[doc(hidden)]
 #[derive(Default)]
-pub struct AuditReporterStatus(Mutex<State>);
+pub struct AuditReporterStatus(pub(super) Mutex<State>);
 
 /// Internal completion authority for one Reporter configuration and health epoch.
 #[doc(hidden)]
@@ -17,13 +17,17 @@ pub struct AuditDeliveryToken {
 }
 
 #[derive(Default)]
-struct State {
+pub(super) struct State {
     configuration: AuditReporterConfiguration,
     overlap: bool,
     configured: bool,
     communication_failure: bool,
     failure_epoch: u64,
-    configuration_epoch: u64,
+    pub(super) configuration_epoch: u64,
+    pub(super) capture_revision: u64,
+    pub(super) command_revision: u64,
+    pub(super) command_fence: u64,
+    pub(super) send_now: bool,
 }
 
 impl AuditReporterStatus {
@@ -54,10 +58,14 @@ impl AuditReporterStatus {
             .ok_or_else(|| {
                 bacnet_types::error::Error::Encoding("audit generation exhausted".into())
             })?;
+        let capture = state.capture_revision.checked_add(1).ok_or_else(|| {
+            bacnet_types::error::Error::Encoding("audit capture revision exhausted".into())
+        })?;
         let result = prepare(AuditDeliveryToken {
             configuration,
             failure: state.failure_epoch,
         })?;
+        state.capture_revision = capture;
         state.configuration = next;
         state.configuration_epoch = configuration;
         Ok(result)
@@ -114,11 +122,25 @@ impl AuditReporterStatus {
             .then_some(state.configuration_epoch)
     }
 
-    /// Fence all previous recipient snapshots and restore route availability.
+    /// Validate a whole-owner recipient rotation before any Reporter is changed.
     #[doc(hidden)]
-    pub fn recipient_changed_internal(&self) {
+    pub fn next_configuration_epoch(&self) -> Result<u64, bacnet_types::error::Error> {
+        self.0
+            .lock()
+            .unwrap()
+            .configuration_epoch
+            .checked_add(1)
+            .filter(|v| *v != u64::MAX)
+            .ok_or_else(|| {
+                bacnet_types::error::Error::Encoding("audit generation exhausted".into())
+            })
+    }
+    /// Publish a previously checked rotation under the owning commit lock.
+    #[doc(hidden)]
+    pub fn commit_recipient_epoch(&self, next: u64) {
         let mut state = self.0.lock().unwrap();
-        state.configuration_epoch = state.configuration_epoch.saturating_add(1);
+        assert_eq!(state.configuration_epoch.checked_add(1), Some(next));
+        state.configuration_epoch = next;
         state.configured = true;
         state.communication_failure = false;
     }

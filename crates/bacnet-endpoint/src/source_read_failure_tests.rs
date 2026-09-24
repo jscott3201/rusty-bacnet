@@ -16,6 +16,7 @@ pub(super) fn failure_database(confirmed: bool) -> ObjectDatabase {
             confirmed,
             None,
             BACnetPriorityFilter::empty(),
+            None,
         )
         .unwrap();
     db.set_clock_reader(None);
@@ -171,6 +172,7 @@ async fn source_failure_pending_context_invalidates_without_another_read() {
                     confirmed,
                     None,
                     BACnetPriorityFilter::empty(),
+                    None,
                 )
                 .unwrap();
             object
@@ -180,6 +182,7 @@ async fn source_failure_pending_context_invalidates_without_another_read() {
                     true,
                     None,
                     BACnetPriorityFilter::empty(),
+                    None,
                 )
                 .unwrap();
         }

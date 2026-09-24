@@ -65,8 +65,14 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
             return None;
         }
         Some(ReadAuditIntent(PendingWrite {
+            delay: reporter.maximum_send_delay,
             selection: None,
-            failure: self.failure_ticket(&status, reporter.confirmed, device, route.clone()),
+            failure: Some(self.failure_ticket(
+                &status,
+                reporter.confirmed,
+                device,
+                route.clone(),
+            )?),
             route,
             completion: status.begin_delivery(),
             status,

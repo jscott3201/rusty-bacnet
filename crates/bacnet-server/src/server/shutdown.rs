@@ -21,13 +21,45 @@ async fn stop_producer(slot: &mut Option<JoinHandle<()>>) {
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Stop the server.
     pub async fn stop(&mut self) -> Result<(), Error> {
-        if let Some(runtime) = &self.target_audit {
-            runtime.seal();
-        }
         self.request_tasks.close();
-        // Seal both reservations and worker admission before quiescing any
-        // producer; abort also interrupts workers suspended in async send.
-        self.notification_transactions.close();
+        if let Some(runtime) = &self.target_audit {
+            // Only the target drain retains ingress for ACK/control progress.
+            self.notification_transactions
+                .application_sealed
+                .store(true, Ordering::Release);
+            runtime.seal();
+            runtime.batches.begin_stop();
+            for task in [
+                &self.fault_detection_task,
+                &self.event_enrollment_task,
+                &self.trend_log_task,
+                &self.schedule_tick_task,
+                &self.intrinsic_reporting_task,
+                &self.binary_lighting_operation_task,
+                &self.cov_purge_task,
+            ]
+            .into_iter()
+            .flatten()
+            {
+                task.abort();
+            }
+            {
+                let mut timer = self.dcc_timer.lock().await;
+                super::dcc_timer::cancel(&mut timer).await;
+            }
+            loop {
+                let finished = runtime.batches.finished.notified();
+                tokio::pin!(finished);
+                finished.as_mut().enable();
+                if runtime.batches.stopped() {
+                    break;
+                }
+                finished.await;
+            }
+        } else {
+            // Other profiles retain their sequential, cancellation-safe shutdown.
+            self.notification_transactions.close();
+        }
         // Keep the handle in self until joined: cancellation must not detach
         // dispatch and allow a later stop to race its join consumer.
         if let Some(task) = self.dispatch_task.as_mut() {
@@ -64,8 +96,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
 impl<T: TransportPort> Drop for BACnetServer<T> {
     fn drop(&mut self) {
+        self.notification_transactions
+            .application_sealed
+            .store(true, Ordering::Release);
         if let Some(runtime) = &self.target_audit {
             runtime.seal();
+            drop(runtime.batches.close());
         }
         self.request_tasks.close();
         self.notification_transactions.close();

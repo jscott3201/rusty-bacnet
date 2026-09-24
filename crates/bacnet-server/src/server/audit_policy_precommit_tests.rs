@@ -575,6 +575,11 @@ async fn mandatory_policy_admitted_worker_is_joined_after_cancelled_stop() {
         Some(AuditLevel::AUDIT_CONFIG)
     );
     assert_eq!(db.reserve_event_sequence_number().number(), 1);
+    assert_eq!(f.server.notification_transactions.active_count(), 1);
+    assert_eq!(f.server.notification_transactions.audit_resources().2, 63);
+    // Cancellation retains the active attempt until the original drain deadline.
+    tokio::time::advance(Duration::from_secs(3)).await;
+    settle().await;
     assert_eq!(f.server.notification_transactions.active_count(), 0);
     assert_eq!(
         f.server.notification_transactions.audit_resources(),

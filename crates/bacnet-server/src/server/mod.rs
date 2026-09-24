@@ -279,6 +279,9 @@ pub struct TimeSyncData {
 
 mod config;
 pub use config::ServerConfig;
+mod audit_batch_queue;
+mod audit_batch_runtime;
+mod audit_context_preparation;
 mod audit_forwarder;
 #[cfg(test)]
 mod audit_forwarder_tests;
@@ -286,6 +289,7 @@ mod audit_recipient;
 mod audit_recipient_routes;
 mod audit_reporter;
 mod audit_reporter_changes;
+mod audit_send_now;
 pub use audit_reporter::{valid_bip_audit_address, AuditReportersConfig};
 #[cfg(test)]
 mod audit_reporter_tests;

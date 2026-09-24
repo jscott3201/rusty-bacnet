@@ -25,6 +25,16 @@ impl<T: TransportPort + 'static> AuditReporterChangeSink
     fn is_active(&self) -> bool {
         self.owner.is_active()
     }
+    fn send_now(
+        &self,
+        reporter: ObjectIdentifier,
+        status: &Arc<AuditReporterStatus>,
+        value: bool,
+        source: Option<&AuditWriteSource>,
+        clock: Option<ClockFrame>,
+    ) -> Result<(), Error> {
+        self.command_send_now(reporter, status, value, source, clock)
+    }
     fn change(
         &self,
         reporter: ObjectIdentifier,
@@ -42,6 +52,7 @@ impl<T: TransportPort + 'static> AuditReporterChangeSink
         if elected.is_some() {
             for property in [
                 PropertyIdentifier::DESCRIPTION,
+                PropertyIdentifier::MAXIMUM_SEND_DELAY,
                 PropertyIdentifier::AUDIT_LEVEL,
                 PropertyIdentifier::AUDITABLE_OPERATIONS,
                 PropertyIdentifier::ISSUE_CONFIRMED_NOTIFICATIONS,
@@ -69,7 +80,21 @@ impl<T: TransportPort + 'static> AuditReporterChangeSink
                 if !self.owner.is_active() {
                     return Err(denied());
                 }
-                status.commit_configuration(next, |_| Ok(()))
+                super::audit_context_preparation::validate_summary(
+                    status,
+                    &next,
+                    self.device,
+                    self.current_route.lock().unwrap().as_ref(),
+                    self.max_apdu,
+                )?;
+                let context = self
+                    .transactions
+                    .audit_failure_queue(status)
+                    .expect("target context owner")
+                    .prepare_context(status.next_configuration_epoch()?, failure_enabled(&next))?;
+                status.commit_configuration(next, |_| Ok(()))?;
+                context.publish();
+                Ok(())
             })?;
         } else {
             let route = self.current_route.lock().unwrap().clone();
@@ -81,7 +106,22 @@ impl<T: TransportPort + 'static> AuditReporterChangeSink
                     if self.comm_state.load(Ordering::Acquire) != 0 {
                         return Err(denied());
                     }
-                    status.commit_configuration(next, |new_token| {
+                    super::audit_context_preparation::validate_summary(
+                        status,
+                        &next,
+                        self.device,
+                        route.as_ref(),
+                        self.max_apdu,
+                    )?;
+                    let context = self
+                        .transactions
+                        .audit_failure_queue(status)
+                        .expect("target context owner")
+                        .prepare_context(
+                            status.next_configuration_epoch()?,
+                            failure_enabled(&next),
+                        )?;
+                    let task = status.commit_configuration(next, |new_token| {
                         let mut attempts = Vec::with_capacity(changes.len());
                         for (offset, (property, old, new)) in changes.into_iter().enumerate() {
                             let elected = elected.as_ref().expect("eligible change");
@@ -201,7 +241,9 @@ impl<T: TransportPort + 'static> AuditReporterChangeSink
                             ))
                             .await;
                         })
-                    })
+                    })?;
+                    context.publish();
+                    Ok(task)
                 })
             };
             if clock.is_some_and(|frame| frame.is_valid_actual_datetime()) {
@@ -210,10 +252,20 @@ impl<T: TransportPort + 'static> AuditReporterChangeSink
                 self.sequence.transaction_many(count, apply)?;
             }
         }
+        if let Some(delay) = status.configuration().maximum_send_delay {
+            self.batches.delay_changed(status, delay);
+        }
         self.association.refresh_overlap();
         if let Some(queue) = self.transactions.audit_failure_queue(status) {
             queue.recipient_changed();
         }
         Ok(())
     }
+}
+
+fn failure_enabled(configuration: &AuditReporterConfiguration) -> bool {
+    configuration.enabled()
+        && configuration
+            .auditable_operations
+            .contains(AuditOperation::AUDITING_FAILURE)
 }

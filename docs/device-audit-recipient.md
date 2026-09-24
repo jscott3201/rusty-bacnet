@@ -63,8 +63,9 @@ means startup rejection. Endpoint WPM remains unsupported. Successful delivery i
 separate from write acceptance: after commit, each destination has an independent
 attempt within one three-second deadline, with no retry or durable outbox. A send
 or ACK failure does not roll back the recipient. Either attempt's failure survives
-a sibling success. Old-generation completions cannot change current health, and
-recipient changes retire and wake pending old resource-loss summaries.
+a sibling success. Old-generation completions cannot change current health.
+Target recipient changes retain bounded historical resource-loss contexts and
+captured routes; source mode retires incompatible pending summaries.
 
 A valid Device-local clock supplies the target commit timestamp; unavailable or
 invalid clocks use the database's shared sequence, consumed once only after
@@ -108,5 +109,9 @@ full/closed queue is an independent delivery failure and cannot roll back the
 value or cancel the sibling. There is no durable queue or notification retry.
 
 Other address/link choices, ordinary source operations beyond READ, per-object
-policy, batching/send delay, durable delivery and broader Audit/BIBB conformance
+policy, source batching/send delay, durable delivery and broader Audit/BIBB conformance
 remain incomplete; #345 remains open.
+
+Target ordinary batching and retained historical loss contexts are described in
+[delayed target Audit reporting](delayed-target-audit.md); recipient old/new
+records remain immediate and reserve all affected contexts before commit.

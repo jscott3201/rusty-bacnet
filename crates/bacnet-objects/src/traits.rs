@@ -117,9 +117,9 @@ pub trait BACnetObject: Send + Sync {
     /// (catch-all); `Some(vec![])` retains the property and selects no ordinary
     /// targets. An installed target owner prepares required records and lifecycle admission.
     ///
-    /// Pre-1.0 API change: this full configuration contract replaces both the
-    /// three-argument hook and `configure_audit_reporter_with_filters_internal`.
-    /// Overrides and callers must supply all five settings on every call.
+    /// Supply every field together, including the optional paired delay capability.
+    /// Active target ownership fixes pair presence; source ownership rejects it.
+    /// `None` omits both delay/control properties; a present zero is immediate.
     #[doc(hidden)]
     fn configure_audit_reporter_internal(
         &mut self,
@@ -128,6 +128,7 @@ pub trait BACnetObject: Send + Sync {
         _confirmed: bool,
         _selectors: Option<Vec<bacnet_types::constructed::BACnetObjectSelector>>,
         _priorities: bacnet_types::bitstring::BACnetPriorityFilter,
+        _maximum_send_delay: Option<crate::audit::AuditSendDelay>,
     ) -> Result<(), Error> {
         Err(Error::Protocol {
             class: ErrorClass::OBJECT.to_raw() as u32,

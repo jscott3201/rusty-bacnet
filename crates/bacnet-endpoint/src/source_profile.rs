@@ -112,9 +112,13 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             reporter
                 .property_list()
                 .contains(&PropertyIdentifier::MONITORED_OBJECTS)
+                || reporter
+                    .configuration_internal()
+                    .maximum_send_delay
+                    .is_some()
         }) {
             return Err(Error::Encoding(
-                "source READ does not support Monitored_Objects".into(),
+                "source READ does not support Monitored_Objects or delayed notifications".into(),
             ));
         }
         for (oid, object) in db.iter_objects() {

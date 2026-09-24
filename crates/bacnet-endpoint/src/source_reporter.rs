@@ -98,14 +98,21 @@ impl BACnetObject for SourceReporter {
         confirmed: bool,
         selectors: Option<Vec<BACnetObjectSelector>>,
         priorities: BACnetPriorityFilter,
+        maximum_send_delay: Option<bacnet_objects::audit::AuditSendDelay>,
     ) -> Result<(), Error> {
-        if self.active() && selectors.is_some() {
+        if self.active() && (selectors.is_some() || maximum_send_delay.is_some()) {
             return Err(Error::Encoding(
-                "source READ does not support Monitored_Objects".into(),
+                "source READ does not support Monitored_Objects or delayed notifications".into(),
             ));
         }
-        self.wrapped
-            .configure_audit_reporter_internal(level, operations, confirmed, selectors, priorities)
+        self.wrapped.configure_audit_reporter_internal(
+            level,
+            operations,
+            confirmed,
+            selectors,
+            priorities,
+            maximum_send_delay,
+        )
     }
 
     fn object_identifier(&self) -> ObjectIdentifier {

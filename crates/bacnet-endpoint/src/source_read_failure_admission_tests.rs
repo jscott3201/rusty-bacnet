@@ -55,6 +55,7 @@ impl Fixture {
                 confirmed,
                 None,
                 BACnetPriorityFilter::empty(),
+                None,
             )
             .unwrap();
         let status = reporter.status_internal();

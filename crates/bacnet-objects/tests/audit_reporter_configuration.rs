@@ -28,9 +28,15 @@ impl BACnetObject for CustomReporter {
         confirmed: bool,
         selectors: Option<Vec<BACnetObjectSelector>>,
         priorities: BACnetPriorityFilter,
+        maximum_send_delay: Option<bacnet_objects::audit::AuditSendDelay>,
     ) -> Result<(), Error> {
         self.inner.configure_audit_reporter_internal(
-            level, operations, confirmed, selectors, priorities,
+            level,
+            operations,
+            confirmed,
+            selectors,
+            priorities,
+            maximum_send_delay,
         )?;
         self.configurations += 1;
         Ok(())
@@ -97,6 +103,7 @@ fn custom_reporter_configuration_replaces_every_setting_through_trait_object() {
             true,
             Some(vec![BACnetObjectSelector::Object(target)]),
             priorities,
+            None,
         )
         .unwrap();
     assert_eq!(
@@ -137,6 +144,7 @@ fn custom_reporter_configuration_replaces_every_setting_through_trait_object() {
             false,
             Some(vec![]),
             BACnetPriorityFilter::empty(),
+            None,
         )
         .unwrap();
     assert_eq!(
@@ -174,6 +182,7 @@ fn custom_reporter_configuration_replaces_every_setting_through_trait_object() {
             true,
             None,
             BACnetPriorityFilter::all(),
+            None,
         )
         .unwrap();
     assert!(!object
@@ -207,6 +216,7 @@ fn custom_reporter_invalid_configuration_preserves_all_settings_and_property_pre
                 true,
                 selectors.clone(),
                 BACnetPriorityFilter::from_bits(1 << 7),
+                None,
             )
             .unwrap();
         let before = snapshot(object);
@@ -221,6 +231,7 @@ fn custom_reporter_invalid_configuration_preserves_all_settings_and_property_pre
                     None
                 },
                 BACnetPriorityFilter::all(),
+                None,
             ),
             Err(Error::OutOfRange(_))
         ));
@@ -244,7 +255,7 @@ fn non_reporter_rejects_complete_configuration_without_mutation() {
         assert!(matches!(object.configure_audit_reporter_internal(
             AuditLevel::AUDIT_ALL, AuditOperationFlags::from_bits(2).unwrap(), true,
             selectors, priorities,
-        ), Err(Error::Protocol { class, code })
+         None,), Err(Error::Protocol { class, code })
             if class == ErrorClass::OBJECT.to_raw() as u32
                 && code == ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32));
         assert_eq!(snapshot(object), before);
