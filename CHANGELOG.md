@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Require positive `NonZeroU32` lifetimes in Rust single-property COV subscribe
+  methods; explicit cancellation remains separate. The request encoder is now
+  fallible and transactional. Invalid incoming field pairs reject before state
+  changes; paired zero lifetime returns SERVICES/VALUE_OUT_OF_RANGE (#802).
+  Ordinary COV indefinite lifetimes and existing Python APIs are unchanged.
+
 - Target Audit now supports 1–64 configured Reporters with lowest-instance nominal
   election, overlap health, independent loss contexts and one global admission budget.
   Live Rust Reporter configuration and Description changes share atomic capture.

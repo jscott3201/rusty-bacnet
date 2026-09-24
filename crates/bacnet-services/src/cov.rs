@@ -123,7 +123,23 @@ impl SubscribeCOVPropertyRequest {
         self.issue_confirmed_notifications.is_none() && self.lifetime.is_none()
     }
 
-    pub fn encode(&self, buf: &mut BytesMut) {
+    /// Validate the subscribe/cancel field pairing before any outbound mutation.
+    pub fn validate(&self) -> Result<(), Error> {
+        match (self.issue_confirmed_notifications, self.lifetime) {
+            (None, None) => Ok(()),
+            (Some(_), Some(lifetime)) if lifetime != 0 => Ok(()),
+            (Some(_), Some(0)) => Err(Error::Encoding(
+                "SubscribeCOVProperty requires a positive lifetime".into(),
+            )),
+            _ => Err(Error::Encoding(
+                "SubscribeCOVProperty confirmed mode and lifetime must appear together".into(),
+            )),
+        }
+    }
+
+    /// Encode a validated request, leaving the buffer unchanged on failure.
+    pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
+        self.validate()?;
         // [0] subscriberProcessIdentifier
         primitives::encode_ctx_unsigned(buf, 0, self.subscriber_process_identifier as u64);
         // [1] monitoredObjectIdentifier
@@ -147,6 +163,7 @@ impl SubscribeCOVPropertyRequest {
         if let Some(v) = self.cov_increment {
             primitives::encode_ctx_real(buf, 5, v);
         }
+        Ok(())
     }
 
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
@@ -635,41 +652,8 @@ mod tests {
     fn test_decode_cov_notification_invalid_tag() {
         assert!(COVNotificationRequest::decode(&[0xFF, 0xFF, 0xFF]).is_err());
     }
-
-    #[test]
-    fn subscribe_cov_property_round_trip() {
-        let req = SubscribeCOVPropertyRequest {
-            subscriber_process_identifier: 7,
-            monitored_object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 3)
-                .unwrap(),
-            issue_confirmed_notifications: Some(true),
-            lifetime: Some(600),
-            monitored_property_identifier: PropertyIdentifier::PRESENT_VALUE,
-            monitored_property_array_index: None,
-            cov_increment: Some(1.5),
-        };
-        let mut buf = BytesMut::new();
-        req.encode(&mut buf);
-        let decoded = SubscribeCOVPropertyRequest::decode(&buf).unwrap();
-        assert_eq!(req, decoded);
-    }
-
-    #[test]
-    fn subscribe_cov_property_round_trip_with_array_index() {
-        let req = SubscribeCOVPropertyRequest {
-            subscriber_process_identifier: 2,
-            monitored_object_identifier: ObjectIdentifier::new(ObjectType::BINARY_VALUE, 10)
-                .unwrap(),
-            issue_confirmed_notifications: None,
-            lifetime: None,
-            monitored_property_identifier: PropertyIdentifier::PRESENT_VALUE,
-            monitored_property_array_index: Some(3),
-            cov_increment: None,
-        };
-        let mut buf = BytesMut::new();
-        req.encode(&mut buf);
-        let decoded = SubscribeCOVPropertyRequest::decode(&buf).unwrap();
-        assert_eq!(req, decoded);
-        assert!(decoded.is_cancellation());
-    }
 }
+
+#[cfg(test)]
+#[path = "cov_property_validation_tests.rs"]
+mod property_validation_tests;

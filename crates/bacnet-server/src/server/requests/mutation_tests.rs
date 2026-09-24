@@ -327,19 +327,22 @@ pub(super) fn cases() -> Vec<(ConfirmedServiceChoice, Bytes, MutationTarget)> {
             lifetime: Some(600),
         }
     );
-    case!(
-        SUBSCRIBE_COV_PROPERTY,
-        SubscribeCovProperty,
-        SubscribeCOVPropertyRequest {
-            subscriber_process_identifier: 41,
-            monitored_object_identifier: object,
-            issue_confirmed_notifications: Some(false),
-            lifetime: Some(600),
-            monitored_property_identifier: PropertyIdentifier::PRESENT_VALUE,
-            monitored_property_array_index: None,
-            cov_increment: None,
-        }
-    );
+    let request = SubscribeCOVPropertyRequest {
+        subscriber_process_identifier: 41,
+        monitored_object_identifier: object,
+        issue_confirmed_notifications: Some(false),
+        lifetime: Some(600),
+        monitored_property_identifier: PropertyIdentifier::PRESENT_VALUE,
+        monitored_property_array_index: None,
+        cov_increment: None,
+    };
+    let mut bytes = BytesMut::new();
+    request.encode(&mut bytes).unwrap();
+    cases.push((
+        ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY,
+        bytes.freeze(),
+        MutationTarget::SubscribeCovProperty(request),
+    ));
     case!(
         SUBSCRIBE_COV_PROPERTY_MULTIPLE,
         SubscribeCovPropertyMultiple,

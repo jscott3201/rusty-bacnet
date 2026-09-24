@@ -35,7 +35,7 @@ fn property_request(oid: ObjectIdentifier, property: PropertyIdentifier) -> Byte
         cov_increment: None,
     };
     let mut encoded = BytesMut::new();
-    request.encode(&mut encoded);
+    request.encode(&mut encoded).unwrap();
     encoded
 }
 
@@ -170,7 +170,7 @@ fn life_safety_property_cancellation_bypasses_current_capability_checks() {
         cov_increment: None,
     };
     let mut encoded = BytesMut::new();
-    request.encode(&mut encoded);
+    request.encode(&mut encoded).unwrap();
 
     let initial =
         handle_subscribe_cov_property_with_initial(&mut table, &db, &[1], &encoded).unwrap();

@@ -77,7 +77,7 @@ fn subscribe_cov_property_handler_returns_initial_subscription() {
         cov_increment: Some(0.5),
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
     let subscriptions =
         handle_subscribe_cov_property_with_initial(&mut table, &db, &mac, &buf).unwrap();

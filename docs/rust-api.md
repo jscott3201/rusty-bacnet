@@ -1223,7 +1223,29 @@ client.write_property_multiple(&mac, specs).await?;
 
 ### COV Subscriptions
 
+Single-property `subscribe_cov_property` and `subscribe_cov_property_to_device`
+require a `std::num::NonZeroU32` lifetime in seconds; 28,800 seconds and the full
+positive `u32` range are accepted. Use their explicit `unsubscribe_...` methods
+for cancellation. The typed `SubscribeCOVPropertyRequest::encode` returns `Result`
+and validates the entire subscribe/cancel field pairing before appending bytes.
+The server rejects a missing member of the confirmed/lifetime pair as
+INCONSISTENT_PARAMETERS (the selected syntax interpretation), and paired zero
+lifetime as SERVICES/VALUE_OUT_OF_RANGE, before lookup or subscription mutation.
+Structural decoding preserves these values so the formal responses remain distinct.
+Ordinary `subscribe_cov` retains `None`/zero indefinite lifetime behavior. Python
+currently exposes ordinary COV and PropertyMultiple, not this single-property API.
+These boundaries are tracked in the [COV subscription ledger](conformance/support-summary.md).
+
 ```rust
+// Subscribe to one property with an explicit finite lifetime.
+client.subscribe_cov_property(&mac, process_id, oid,
+    PropertyIdentifier::PRESENT_VALUE, None, false,
+    std::num::NonZeroU32::new(28_800).unwrap(), Some(0.5)).await?;
+client.unsubscribe_cov_property(&mac, process_id, oid,
+    PropertyIdentifier::PRESENT_VALUE, None).await?;
+
+// Ordinary object subscription follows its separate lifetime rules.
+
 // Subscribe
 client.subscribe_cov(&mac, process_id, oid, true, Some(300)).await?;
 

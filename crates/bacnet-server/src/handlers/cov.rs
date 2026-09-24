@@ -159,6 +159,24 @@ pub(crate) fn handle_subscribe_cov_property_with_initial_endpoint(
 
     let request = SubscribeCOVPropertyRequest::decode(service_data)?;
 
+    // Keep service validity separate from structural decoding so malformed
+    // pairing and zero lifetime retain their distinct formal responses.
+    let lifetime = match (request.issue_confirmed_notifications, request.lifetime) {
+        (None, None) => None,
+        (Some(_), Some(0)) => {
+            return Err(Error::Protocol {
+                class: ErrorClass::SERVICES.to_raw() as u32,
+                code: ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32,
+            })
+        }
+        (Some(_), Some(lifetime)) => Some(lifetime),
+        _ => {
+            return Err(Error::Reject {
+                reason: RejectReason::INCONSISTENT_PARAMETERS.to_raw(),
+            })
+        }
+    };
+
     if request.is_cancellation() {
         table.unsubscribe_property_at(
             source_mac,
@@ -190,13 +208,7 @@ pub(crate) fn handle_subscribe_cov_property_with_initial_endpoint(
         request.monitored_property_array_index,
     )?;
 
-    let expires_at = request.lifetime.and_then(|secs| {
-        if secs == 0 {
-            None
-        } else {
-            Some(Instant::now() + Duration::from_secs(secs as u64))
-        }
-    });
+    let expires_at = lifetime.map(|secs| Instant::now() + Duration::from_secs(u64::from(secs)));
 
     table.purge_expired();
 
