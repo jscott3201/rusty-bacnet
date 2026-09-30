@@ -4,19 +4,23 @@ use crate::device_view::{DeviceExecution, DeviceReadContext};
 use bacnet_services::read_property::ReadPropertyRequest;
 use bacnet_types::error::ErrorDetail;
 
-/// ReadProperty under the narrow responder's actual RP[/WP] execution profile,
-/// within the responder's configured read work limit.
+/// ReadProperty under the narrow responder's actual RP[/WP][/ReinitializeDevice] execution
+/// profile, within the responder's configured read work limit.
 pub(super) async fn read_property_response(
     db: &RwLock<ObjectDatabase>,
     request: &ConfirmedRequestPdu,
     writes: bool,
+    reinitialize: bool,
     registered_port: Option<ObjectIdentifier>,
     work_limit: usize,
 ) -> Apdu {
     read_property_response_observed(
         db,
         None,
-        DeviceExecution::Endpoint { writes },
+        DeviceExecution::Endpoint {
+            writes,
+            reinitialize,
+        },
         registered_port,
         work_limit,
         request,
@@ -193,6 +197,34 @@ pub(super) async fn read_property_response_observed(
             invoke_id: request.invoke_id,
             abort_reason: AbortReason::OUT_OF_RESOURCES,
         }),
+    }
+}
+
+/// ReinitializeDevice: the password checked, then `handler` run with the database write-locked.
+/// With no handler every request is refused with SERVICES / SERVICE_REQUEST_DENIED.
+pub(super) async fn reinitialize_response(
+    db: &RwLock<ObjectDatabase>,
+    request: &ConfirmedRequestPdu,
+    password: &Option<String>,
+    handler: Option<&ReinitializeHandler>,
+) -> Apdu {
+    let outcome = match handlers::handle_reinitialize_device(&request.service_request, password) {
+        Ok(state) => match handler {
+            Some(handler) => handler(state, &mut *db.write().await),
+            None => Err(Error::Protocol {
+                class: ErrorClass::SERVICES.to_raw() as u32,
+                code: ErrorCode::SERVICE_REQUEST_DENIED.to_raw() as u32,
+            }),
+        },
+        Err(error) => Err(error),
+    };
+
+    match outcome {
+        Ok(()) => Apdu::SimpleAck(SimpleAck {
+            invoke_id: request.invoke_id,
+            service_choice: request.service_choice,
+        }),
+        Err(error) => error_apdu_from_error(request.invoke_id, request.service_choice, &error),
     }
 }
 

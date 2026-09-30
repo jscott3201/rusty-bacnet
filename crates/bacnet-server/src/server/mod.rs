@@ -44,8 +44,8 @@ use bacnet_transport::bip::BipTransport;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{
     AbortReason, ConfirmedServiceChoice, ErrorClass, ErrorCode, LifeSafetyOperation,
-    NetworkPriority, NotifyType, ObjectType, PropertyIdentifier, RejectReason, Segmentation,
-    UnconfirmedServiceChoice,
+    NetworkPriority, NotifyType, ObjectType, PropertyIdentifier, ReinitializedState, RejectReason,
+    Segmentation, UnconfirmedServiceChoice,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
@@ -134,7 +134,7 @@ pub struct TimeSyncData {
 }
 
 mod config;
-pub use config::ServerConfig;
+pub use config::{ReinitializeHandler, ServerConfig};
 mod audit_batch_queue;
 mod audit_batch_runtime;
 mod audit_context_preparation;
@@ -181,6 +181,15 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
     /// Set the password required for ReinitializeDevice requests.
     pub fn reinit_password(mut self, password: impl Into<String>) -> Self {
         self.config.reinit_password = Some(password.into());
+        self
+    }
+
+    /// Set the ReinitializeDevice handler. See [`ServerConfig::on_reinitialize`].
+    pub fn on_reinitialize<F>(mut self, handler: F) -> Self
+    where
+        F: Fn(ReinitializedState, &mut ObjectDatabase) -> Result<(), Error> + Send + Sync + 'static,
+    {
+        self.config.on_reinitialize = Some(Arc::new(handler));
         self
     }
 
@@ -329,6 +338,15 @@ impl BipServerBuilder {
     /// Set the password required for ReinitializeDevice requests.
     pub fn reinit_password(mut self, password: impl Into<String>) -> Self {
         self.config.reinit_password = Some(password.into());
+        self
+    }
+
+    /// Set the ReinitializeDevice handler. See [`ServerConfig::on_reinitialize`].
+    pub fn on_reinitialize<F>(mut self, handler: F) -> Self
+    where
+        F: Fn(ReinitializedState, &mut ObjectDatabase) -> Result<(), Error> + Send + Sync + 'static,
+    {
+        self.config.on_reinitialize = Some(Arc::new(handler));
         self
     }
 

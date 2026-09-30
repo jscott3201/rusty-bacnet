@@ -62,8 +62,8 @@ fn device_write_target<'a>(
 
 /// Composition-visible inbound responder (narrow service scope).
 ///
-/// Handles `ReadProperty` and optionally authorized local Device Description/active recipient
-/// `WriteProperty`, plus `Reject`/`Abort`. Full service parity is a later
+/// Handles `ReadProperty`, optionally authorized local Device Description/active recipient
+/// `WriteProperty` and optionally `ReinitializeDevice`, plus `Reject`/`Abort`. Full service parity is a later
 /// packet. Inbound transactions reuse the
 /// wire invoke ID directly and NEVER allocate from the shared outbound
 /// client ID pool, so equal inbound/outbound numeric IDs stay unambiguous
@@ -74,6 +74,7 @@ pub struct EndpointResponder {
     egress: EndpointEgress,
     open: AtomicBool,
     device_writes: Option<(ObjectIdentifier, MutationAuthorizer)>,
+    reinitialize: Option<(ReinitializeHandler, Option<String>)>,
     registered_port: Option<(ObjectIdentifier, std::sync::Weak<()>)>,
     read_work_limit: usize,
 }
@@ -86,6 +87,7 @@ impl EndpointResponder {
             egress,
             open: AtomicBool::new(true),
             device_writes: None,
+            reinitialize: None,
             registered_port: None,
             read_work_limit: crate::server::ReadPropertyMultipleBudget::default()
                 .max_result_elements,
@@ -120,6 +122,17 @@ impl EndpointResponder {
         authorizer: MutationAuthorizer,
     ) -> Self {
         self.device_writes = Some((device, authorizer));
+        self
+    }
+
+    /// Install the ReinitializeDevice handler and the password a request must carry.
+    #[doc(hidden)]
+    pub fn with_reinitialize(
+        mut self,
+        handler: ReinitializeHandler,
+        password: Option<String>,
+    ) -> Self {
+        self.reinitialize = Some((handler, password));
         self
     }
 
@@ -248,6 +261,10 @@ impl EndpointResponder {
         let checked_response =
             received.provenance.is_direct_peer() || received.direct_response.is_some();
         let invoke_id = request.invoke_id;
+        let reinitialize = self
+            .reinitialize
+            .as_ref()
+            .filter(|_| request.service_choice == ConfirmedServiceChoice::REINITIALIZE_DEVICE);
         let mut response = if request.segmented {
             Apdu::Abort(AbortPdu {
                 sent_by_server: true,
@@ -259,10 +276,14 @@ impl EndpointResponder {
                 &self.db,
                 &request,
                 self.device_writes.is_some(),
+                self.reinitialize.is_some(),
                 self.registered_port.as_ref().map(|(oid, _)| *oid),
                 self.read_work_limit,
             )
             .await
+        } else if let Some((handler, password)) = reinitialize {
+            confirmed_response::reinitialize_response(&self.db, &request, password, Some(handler))
+                .await
         } else if request.service_choice == ConfirmedServiceChoice::WRITE_PROPERTY
             && self.device_writes.is_some()
         {

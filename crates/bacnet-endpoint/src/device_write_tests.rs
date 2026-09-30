@@ -533,3 +533,6 @@ async fn bip_device_writes_reach_the_lowest_of_several_devices() {
 
 #[path = "device_execution_tests.rs"]
 mod execution;
+
+#[path = "reinitialize_tests.rs"]
+mod reinitialize;

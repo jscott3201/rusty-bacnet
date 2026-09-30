@@ -4,7 +4,7 @@ use bacnet_encoding::{apdu::decode_apdu, npdu::decode_npdu};
 use bacnet_services::device_mgmt::ReinitializeDeviceRequest;
 use bacnet_types::enums::ReinitializedState;
 
-const STATES: [ReinitializedState; 10] = [
+const DEFINED_STATES: [ReinitializedState; 8] = [
     ReinitializedState::COLDSTART,
     ReinitializedState::WARMSTART,
     ReinitializedState::START_BACKUP,
@@ -13,10 +13,17 @@ const STATES: [ReinitializedState; 10] = [
     ReinitializedState::END_RESTORE,
     ReinitializedState::ABORT_RESTORE,
     ReinitializedState::ACTIVATE_CHANGES,
-    // The decoder preserves unknown values; they must not bypass refusal either.
+];
+
+/// States Clause 16.4 does not define, which the decoder keeps.
+const UNDEFINED_STATES: [ReinitializedState; 2] = [
     ReinitializedState::from_raw(8),
     ReinitializedState::from_raw(u32::MAX),
 ];
+
+fn every_state() -> impl Iterator<Item = ReinitializedState> {
+    DEFINED_STATES.into_iter().chain(UNDEFINED_STATES)
+}
 
 fn request_data(state: ReinitializedState, password: Option<&str>) -> Bytes {
     let mut data = BytesMut::new();
@@ -30,6 +37,14 @@ fn request_data(state: ReinitializedState, password: Option<&str>) -> Bytes {
 }
 
 async fn dispatch(service_request: Bytes, password: Option<&str>, initial: DccState) -> Apdu {
+    let config = ServerConfig {
+        reinit_password: password.map(str::to_owned),
+        ..Default::default()
+    };
+    dispatch_with(service_request, config, initial).await
+}
+
+async fn dispatch_with(service_request: Bytes, config: ServerConfig, initial: DccState) -> Apdu {
     let network = Arc::new(NetworkLayer::new(BipTransport::new(
         Ipv4Addr::LOCALHOST,
         0,
@@ -38,10 +53,6 @@ async fn dispatch(service_request: Bytes, password: Option<&str>, initial: DccSt
     let comm_state = Arc::new(CommState::default());
     comm_state.set_for_test(initial);
     let dcc_timer = Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default()));
-    let config = ServerConfig {
-        reinit_password: password.map(str::to_owned),
-        ..Default::default()
-    };
     let request = ConfirmedRequestPdu {
         segmented: false,
         more_follows: false,
@@ -91,7 +102,7 @@ fn assert_error(apdu: Apdu, class: ErrorClass, code: ErrorCode) {
 
 #[tokio::test(start_paused = true)]
 async fn reinitialize_device_refuses_all_states_after_password_validation() {
-    for state in STATES {
+    for state in every_state() {
         for (configured, supplied) in [
             (Some("reinit-pw"), Some("reinit-pw")),
             (None, None),
@@ -110,7 +121,7 @@ async fn reinitialize_device_refuses_all_states_after_password_validation() {
 
 #[tokio::test(start_paused = true)]
 async fn reinitialize_device_password_failure_precedes_refusal() {
-    for state in STATES {
+    for state in every_state() {
         for supplied in [None, Some("wrong")] {
             for initial in [DccState::Enable, DccState::DisableInitiation] {
                 assert_error(
@@ -121,6 +132,107 @@ async fn reinitialize_device_password_failure_precedes_refusal() {
             }
         }
     }
+}
+
+/// A handler that records each state it is asked for, and refuses with `refusal` if given.
+fn recording_config(
+    password: Option<&str>,
+    refusal: Option<(ErrorClass, ErrorCode)>,
+) -> (ServerConfig, Arc<std::sync::Mutex<Vec<ReinitializedState>>>) {
+    let received = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&received);
+    let handler: ReinitializeHandler = Arc::new(move |state, _database: &mut ObjectDatabase| {
+        recorded.lock().unwrap().push(state);
+        match refusal {
+            None => Ok(()),
+            Some((class, code)) => Err(Error::Protocol {
+                class: class.to_raw() as u32,
+                code: code.to_raw() as u32,
+            }),
+        }
+    });
+    let config = ServerConfig {
+        reinit_password: password.map(str::to_owned),
+        on_reinitialize: Some(handler),
+        ..Default::default()
+    };
+    (config, received)
+}
+
+#[tokio::test(start_paused = true)]
+async fn reinitialize_device_passes_every_defined_state_to_the_handler() {
+    for state in DEFINED_STATES {
+        for initial in [DccState::Enable, DccState::DisableInitiation] {
+            let (config, received) = recording_config(Some("reinit-pw"), None);
+
+            let apdu = dispatch_with(request_data(state, Some("reinit-pw")), config, initial).await;
+
+            let Apdu::SimpleAck(ack) = apdu else {
+                panic!("expected SimpleACK, got {apdu:?}")
+            };
+            assert_eq!(ack.invoke_id, 42);
+            assert_eq!(
+                ack.service_choice,
+                ConfirmedServiceChoice::REINITIALIZE_DEVICE
+            );
+            assert_eq!(*received.lock().unwrap(), vec![state]);
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn reinitialize_device_refuses_an_undefined_state_without_the_handler() {
+    for state in UNDEFINED_STATES {
+        let (config, received) = recording_config(Some("reinit-pw"), None);
+
+        assert_error(
+            dispatch_with(
+                request_data(state, Some("reinit-pw")),
+                config,
+                DccState::Enable,
+            )
+            .await,
+            ErrorClass::SERVICES,
+            ErrorCode::SERVICE_REQUEST_DENIED,
+        );
+        assert!(received.lock().unwrap().is_empty());
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn reinitialize_device_sends_the_handlers_error() {
+    let (config, _) = recording_config(
+        None,
+        Some((ErrorClass::DEVICE, ErrorCode::CONFIGURATION_IN_PROGRESS)),
+    );
+
+    assert_error(
+        dispatch_with(
+            request_data(ReinitializedState::START_BACKUP, None),
+            config,
+            DccState::Enable,
+        )
+        .await,
+        ErrorClass::DEVICE,
+        ErrorCode::CONFIGURATION_IN_PROGRESS,
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn reinitialize_device_password_failure_never_reaches_the_handler() {
+    let (config, received) = recording_config(Some("reinit-pw"), None);
+
+    assert_error(
+        dispatch_with(
+            request_data(ReinitializedState::START_BACKUP, Some("wrong")),
+            config,
+            DccState::Enable,
+        )
+        .await,
+        ErrorClass::SECURITY,
+        ErrorCode::PASSWORD_FAILURE,
+    );
+    assert!(received.lock().unwrap().is_empty());
 }
 
 #[tokio::test(start_paused = true)]

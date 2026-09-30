@@ -5806,10 +5806,11 @@ The server automatically dispatches:
 - SubscribeCOV, SubscribeCOVProperty, SubscribeCOVPropertyMultiple (mutation-gated)
 - CreateObject, DeleteObject (mutation-gated)
 - DeviceCommunicationControl
-- ReinitializeDevice (decoded and password-validated, then refused with
-  `SERVICES / SERVICE_REQUEST_DENIED` for every requested state until an action
-  surface exists; no reinitialization or SimpleACK, with password and decode
-  errors retaining their existing precedence)
+- ReinitializeDevice (restart, apply changes, or a Clause 19 backup or restore
+  step): decoded and password-validated, then carried out by the
+  `on_reinitialize` handler; refused with `SERVICES / SERVICE_REQUEST_DENIED`
+  when no handler is set or the state is undefined, with password and decode
+  errors keeping their precedence
 - GetEventInformation, AcknowledgeAlarm
 - GetAlarmSummary, GetEnrollmentSummary
 - ConfirmedTextMessage

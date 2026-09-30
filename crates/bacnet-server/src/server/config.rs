@@ -1,6 +1,11 @@
 use super::*;
 use crate::mutation::{MutationAuthorizationContext, MutationAuthorizer, MutationPolicy};
 
+/// Carries out a ReinitializeDevice request for the requested state, with the object database
+/// write-locked. An `Err` is sent back in place of the SimpleACK.
+pub type ReinitializeHandler =
+    Arc<dyn Fn(ReinitializedState, &mut ObjectDatabase) -> Result<(), Error> + Send + Sync>;
+
 /// Server configuration.
 #[derive(Clone)]
 pub struct ServerConfig {
@@ -67,6 +72,9 @@ pub struct ServerConfig {
     /// A panic is caught (with unwind builds); the change stands and ingress
     /// continues. This callback cannot authorize or roll back synchronization.
     pub on_time_sync: Option<Arc<dyn Fn(TimeSyncData) + Send + Sync>>,
+    /// Optional ReinitializeDevice handler. Without it every request is refused with
+    /// SERVICES / SERVICE_REQUEST_DENIED.
+    pub on_reinitialize: Option<ReinitializeHandler>,
     /// Local mutation authorization mode (default: permissive). SC mTLS channel/peer
     /// authentication is not service authorization; addresses here are claimed,
     /// never certificate principals. See [`MutationPolicy`]. Each decision also
@@ -201,6 +209,10 @@ impl std::fmt::Debug for ServerConfig {
                 &self.on_time_sync.as_ref().map(|_| "<callback>"),
             )
             .field(
+                "on_reinitialize",
+                &self.on_reinitialize.as_ref().map(|_| "<callback>"),
+            )
+            .field(
                 "mutation_authorizer",
                 &self.mutation_authorizer.as_ref().map(|_| "<callback>"),
             )
@@ -269,6 +281,7 @@ impl Default for ServerConfig {
             cov_retry_timeout_ms: 3000,
             time_sync_policy: TimeSyncPolicy::default(),
             on_time_sync: None,
+            on_reinitialize: None,
             mutation_policy: MutationPolicy::default(),
             mutation_authorizer: None,
             life_safety_operation_authorizer: None,

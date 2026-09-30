@@ -265,6 +265,8 @@ pub struct EndpointSession<T: TransportPort + 'static> {
     registered_network_port: Option<ObjectIdentifier>,
     registered_port_lease: std::sync::Weak<()>,
     device_write_authorizer: Option<bacnet_server::mutation::MutationAuthorizer>,
+    pub(crate) reinitialize: Option<bacnet_server::server::ReinitializeHandler>,
+    pub(crate) reinit_password: Option<String>,
     egress: Option<bacnet_endpoint_core::endpoint_ingress::EndpointEgress>,
 }
 
@@ -359,6 +361,8 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             registered_network_port: None,
             registered_port_lease: std::sync::Weak::new(),
             device_write_authorizer: None,
+            reinitialize: None,
+            reinit_password: None,
             egress: None,
         })
     }
