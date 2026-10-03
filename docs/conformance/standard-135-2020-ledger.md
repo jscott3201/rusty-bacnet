@@ -938,27 +938,49 @@ not the current issue disposition.
 
 ## Clause 4 Architecture
 
+<!-- BEGIN ledger-rows: generated from these rows of bacnet-135-2020.json; edit the JSON and regenerate
+BACNET-4-ARCHITECTURE
+-->
 | Row ID | Anchor | Priority | Status | Evidence |
 |---|---|---|---|---|
 | `BACNET-4-ARCHITECTURE` | Clause 4 | P2 | `implementation-present-needs-source-review` | Workspace crates and `docs/architecture.md` establish the current architecture map. |
+<!-- END ledger-rows -->
 
 ## Clause 5 Application Layer
 
+<!-- BEGIN ledger-rows: generated from these rows of bacnet-135-2020.json; edit the JSON and regenerate
+BACNET-5-TSM-CLIENT
+BACNET-5-TSM-SERVER
+BACNET-5-SEGMENTATION-WINDOW
+-->
 | Row ID | Anchor | Priority | Status | Evidence |
 |---|---|---|---|---|
 | `BACNET-5-TSM-CLIENT` | Clause 5.4.4 | P1 | `implementation-present-needs-state-machine-audit` | Issue #379 covers Clause 5.4.4.4, and issue #380 covers Clause 5.4.4.3. Client TSM phase and activity-generation transitions stop RequestTimer after segment zero is saved, serialize segment admission against retry authorization without holding the TSM lock across transport I/O, and reject stale SegmentTimer expiry after qualifying activity. Each registration has an immutable owner identity that qualifies timer expiry, cancellation, receive-state activity/reset/completion, and dispatch-owned cleanup across immediate Invoke ID reuse. Both outgoing request paths enter SEGMENTED_CONF for a segmented response; its receive timer spans four APDU segment timeouts, restarts on segment activity, returns the local `TSM_TIMEOUT` ABORT.indication, promptly reclaims reassembly state without inbound traffic, and sends no peer PDU. Under `crates/bacnet-client/src`, code anchors are `tsm.rs`, `client/lifecycle.rs`, `client/requests.rs`, `client/segmentation.rs`, and `client/transaction_cleanup.rs`. Focused evidence in `client/request_timer_tests.rs`, `client/segmented_receive_lifecycle_tests.rs`, `client/segmented_timeout_tests.rs`, and `tsm/tests.rs` covers retry bounds and races, request-timer handoff, segment activity, receive timeout, cancellation under lock contention, outgoing segmented-request cancellation, stale timer generations, and delayed cleanup after key reuse. The broader Clause 5.4.4 transition matrix still needs audit. |
 | `BACNET-5-TSM-SERVER` | Clause 5.4.5 | P1 | `implementation-present-needs-state-machine-audit` | Server segmented transaction identity follows Clauses 5.3.5.3 and 6.2: valid routed SNET/SADR plus Invoke ID is stable across immediate routers, while local transactions use immediate MAC plus Invoke ID. `crates/bacnet-server/src/server/mod.rs` owns the private key helper; `lifecycle.rs`, `dispatch.rs`, and `segmentation.rs` use it for request reassembly, peer Abort removal, SegmentACK/Abort dispatch, and segmented ComplexACK sender registration. Replies still use the current or captured immediate router MAC with NPDU DNET/DADR, never the canonical empty-MAC sentinel. Focused evidence in `server/tests.rs`, `server/segmentation_tests/request_reassembly.rs`, and `server/segmentation_tests/routing_overlap.rs` covers the identity matrix, request continuation and reply routing across routers, immediate peer-Abort cleanup, routed sender matching/mismatch, and canonical replacement without stale cleanup. Existing send-side evidence remains: SegmentACKs with the server bit set are ignored; either ACK flavor naming the current segment advances; only a negative ACK naming the immediately preceding segment retransmits the current segment; stale and out-of-range ACKs are ignored; timeout retries retransmit before idle cleanup without a final timeout Abort; dispatch stays nonblocking; active senders are capped; and replacement cancels the older sender. Remaining gaps include full server TSM transition audit, configured APDU segment timeout/retry exposure, and broader Reject/Error mapping coverage. |
 | `BACNET-5-SEGMENTATION-WINDOW` | Clauses 5.2-5.4 | P1 | `implementation-present-needs-window-tests` | Client SEGMENTED_CONF and server SEGMENTED_REQUEST now use the Clause 5.4.2.2 `DuplicateInWindow` predicate corrected by Addendum 135-2020ch. Modulo-256 unit vectors and loopback receive tests cover window one, windows greater than one, exactly `ActualWindowSize` silent duplicates before a NAK, immediate out-of-order NAKs, client/server baseline resets, ACK roles and fields, and payload integrity. Remaining gaps include multi-segment send-window behavior, full-transfer modulo-256 wrap evidence, max APDU/max segment boundaries, and broader TSM transition coverage. |
+<!-- END ledger-rows -->
 
 ## Clause 6 Network Layer
 
+<!-- BEGIN ledger-rows: generated from these rows of bacnet-135-2020.json; edit the JSON and regenerate
+BACNET-6-NPDU-CONTROL
+BACNET-6-ROUTER-MESSAGES
+-->
 | Row ID | Anchor | Priority | Status | Evidence |
 |---|---|---|---|---|
 | `BACNET-6-NPDU-CONTROL` | Clause 6.2 | P1 | `implementation-present-needs-negative-tests` | NPDU codec and network layer paths exist. |
 | `BACNET-6-ROUTER-MESSAGES` | Clauses 6.4-6.6 | P1 | `implementation-present-needs-conformance-tests` | Router code and stress benchmark paths exist. |
+<!-- END ledger-rows -->
 
 ## Clauses 7-11 Data Links
 
+<!-- BEGIN ledger-rows: generated from these rows of bacnet-135-2020.json; edit the JSON and regenerate
+BACNET-7-ETHERNET-LLC
+BACNET-8-ARCNET
+BACNET-9-MSTP-FRAMES
+BACNET-10-PTP
+BACNET-11-LONTALK
+-->
 | Row ID | Anchor | Priority | Status | Evidence |
 |---|---|---|---|---|
 | `BACNET-7-ETHERNET-LLC` | Clause 7 | P2 | `implementation-present-needs-platform-tests` | Ethernet transport claim exists; platform tests remain open. |
@@ -966,9 +988,56 @@ not the current issue disposition.
 | `BACNET-9-MSTP-FRAMES` | Clause 9.3 | P2 | `implementation-present-needs-source-review` | MS/TP frame and transport paths exist. |
 | `BACNET-10-PTP` | Clause 10 | P3 | `unknown-pending-source-review` | No public support claim found in the initial scan. |
 | `BACNET-11-LONTALK` | Clause 11 | P3 | `unknown-pending-source-review` | No public support claim found in the initial scan. |
+<!-- END ledger-rows -->
 
 ## Clauses 12-19 Objects, Services, And Procedures
 
+<!-- BEGIN ledger-rows: generated from these rows of bacnet-135-2020.json; edit the JSON and regenerate
+BACNET-13-ACKED-TRANSITIONS-NETWORK-OWNERSHIP
+BACNET-12-OBJECT-MODEL
+BACNET-12-ALERT-ENROLLMENT-TABLE-12-61
+BACNET-12-CALENDAR-PROPERTY-SET
+BACNET-12-SCHEDULE-EVALUATION
+BACNET-12-SCHEDULE-WRITES
+BACNET-12-SCHEDULE-RELIABILITY
+BACNET-12-PROPERTY-METADATA-CORE
+BACNET-12-ESCALATOR-STATUS-WRITABILITY
+BACNET-12-ELEVATOR-GROUP-LANDING-CALLS
+BACNET-12-ELEVATOR-GROUP-PROPERTY-SET
+BACNET-12-LIFT-CAR-MOVING-DIRECTION
+BACNET-12-LIFT-PROPERTY-SET
+BACNET-12-ESCALATOR-PROPERTY-SET
+BACNET-12-ACCESS-DOOR-DOOR-VALUE
+BACNET-12-ACCESS-CREDENTIAL-PROPERTY-SET
+BACNET-12-ACCESS-CREDENTIAL-REQUIRED-ROWS
+BACNET-12-ACCESS-DOOR-PULSE-TIMING
+BACNET-12-UNDEFINED-PROPERTY-ROWS
+BACNET-12-LIFE-SAFETY-GLOBAL-GROUP-REQUIRED-ROWS
+BACNET-12-GLOBAL-GROUP-ARRAY-ENCODINGS
+BACNET-12-COMMAND-STRUCTURED-VIEW-ARRAYS
+BACNET-12-LIFE-SAFETY-OUT-OF-SERVICE-SIMULATION
+BACNET-12-LIFE-SAFETY-APPLICATION-VALUES
+BACNET-12-LOOP-PROPERTY-SET
+BACNET-12-REQUIRED-ROWS-UNITS-PULSE-LIGHTING
+BACNET-12-DEVICE-MAX-SEGMENTS
+BACNET-12-DEVICE-ACTIVE-COV-SUBSCRIPTIONS
+BACNET-12-DEVICE-ACTIVE-COV-MULTIPLE-SUBSCRIPTIONS
+BACNET-12-NOTIFICATION-FORWARDER-WITHDRAWAL
+BACNET-12-CHANNEL-WITHDRAWAL
+BACNET-15-WRITEGROUP-SERVER-WITHDRAWAL
+BACNET-12-RECIPIENT-LIST-FRAMING
+BACNET-12-EVENT-PARAMETERS-FRAMING
+BACNET-12-OOS-RELIABILITY-WRITABILITY
+BACNET-13-COV-OBJECT-CRITERIA
+BACNET-12-RELINQUISH-DEFAULT-WRITABILITY
+BACNET-12-BINARY-LIGHTING-OPERATIONS
+BACNET-12-REFERENCE-PROPERTY-WRITABILITY
+BACNET-12-TIME-DELAY-NORMAL
+BACNET-13-EVENT-ENROLLMENT-EVALUATOR
+BACNET-15-ARRAY-INDEX-GATING
+BACNET-15-WP-EVENT-FIELD-VALIDATION
+BACNET-15-STRUCTURED-WRITE-DECODE
+-->
 | Row ID | Anchor | Priority | Status | Evidence |
 |---|---|---|---|---|
 | `BACNET-13-ACKED-TRANSITIONS-NETWORK-OWNERSHIP` | Clause 12.1.2; Acked_Transitions property paragraphs and Tables 12-2 (Analog Input), 12-3 (Analog Output), 12-4 (Analog Value), 12-6 (Binary Input), 12-8 (Binary Output), 12-10 (Binary Value), 12-14 (Event Enrollment), 12-21 (Multi-state Input), 12-22 (Multi-state Output), 12-23 (Multi-state Value), and 12-61 (Alert Enrollment); Clauses 13.2.3, 13.2.5, and 13.5; Clauses 15.9 and 15.10; Annex K Table K-17 footnote 1 | P1 | `supported-with-clause-evidence` | On the eleven supported Analog Input/Output/Value, Binary Input/Output/Value, Multi-state Input/Output/Value, Event Enrollment, and Alert Enrollment types, `Acked_Transitions` is exposed in `Property_List`, reads as a three-bit BitString, and is network read-only. The property-specific read-only rule controls over Clause 12.1.2's general implementor option; a valid whole-property WriteProperty returns PROPERTY / WRITE_ACCESS_DENIED without mutation, generated PICS remains readable/non-writable, and WPM reports the exact failed reference while retaining its successful prefix. Transition commit, AcknowledgeAlarm or local acknowledgment indications, and detection-disable reset retain internal mutation ownership. Annex K requires presence rather than modification. Evidence: `pics::acked_transitions_policy_tests`, `handlers/tests/wpm_prefix_commit.rs`, `event_enrollment/tests/same_state.rs`, `handlers/tests/acknowledge_alarm_ee.rs`, and object detection-reset tests. This evidence-only row makes no public claim or runtime/API change; it does not complete #123 or #175, expand event notification/BIBBs, or claim AcknowledgeAlarm for Binary, Multi-state, or Alert Enrollment (current overrides are Analog Input/Output/Value and Event Enrollment only). |
@@ -1015,15 +1084,20 @@ not the current issue disposition.
 | `BACNET-15-ARRAY-INDEX-GATING` | Clause 15.5.1.3, Clause 15.9.1.3 (with Clause 12.1.5); Clause 15.7.3.2.2.2 (printed744/PDF746); Clause15.10.1.3 (printed754-755/PDF756-757) | P1 | `supported-with-clause-evidence` | Split child of `BACNET-12-OBJECT-MODEL` (#190, #260, #266). ReadProperty, ReadPropertyMultiple, WriteProperty, and WritePropertyMultiple reject an array index supplied for a property that is not a BACnetARRAY with PROPERTY / PROPERTY_IS_NOT_AN_ARRAY; the classification is one per-object query (`BACnetObject::is_array_property`, default keyed by the Clause 12 object tables), so it cannot drift between services. Identifier-stable BACnetARRAY properties modeled in-tree admit an index (OBJECT_LIST Table 12-13, PROPERTY_LIST, STATE_TEXT Tables 12-21/12-22/12-23, PRIORITY Table 12-24, WEEKLY_SCHEDULE/EXCEPTION_SCHEDULE Table 12-28, EVENT_TIME_STAMPS/EVENT_MESSAGE_TEXTS in the analog/binary/multi-state object tables, PRIORITY_ARRAY, TAGS Annex Y, SUBORDINATE_LIST/SUBORDINATE_ANNOTATIONS Table 12-34, GROUP_MEMBERS/GROUP_MEMBER_NAMES Table 12-57, STAGES/STAGE_NAMES/TARGET_REFERENCES Table 12-80); identifier-stable BACnetLIST properties (DATE_LIST Table 12-11, LIST_OF_GROUP_MEMBERS Table 12-17, RECIPIENT_LIST Table 12-24, LOG_BUFFER Tables 12-29/12-31, DEVICE_ADDRESS_BINDING and ACTIVE_COV_SUBSCRIPTIONS Table 12-13) and all scalars reject it, since Clause 12.1.5.2 makes ReadRange the only positional access to a BACnetLIST; the type-dependent identifiers classify by object type (ACTION array on Command per Table 12-12 but a single BACnetAction on Loop per Table 12-20, #1062; ALARM_VALUES/FAULT_VALUES array on CharacterString/BitString Value per Tables 12-44/12-47, LIST_OF_OBJECT_PROPERTY_REFERENCES array on Channel per Table 12-62 but a list on Schedule/Timer per Tables 12-28/12-75, PRESENT_VALUE BACnetARRAY on Global Group per Table 12-57). `Event_Time_Stamps` and `Event_Message_Texts` now implement the Clause 12.1.5.1 BACnetARRAY[3] read contract across all nine modeled intrinsic-reporting families: omitted index returns the ordered three transition slots, index 0 returns Unsigned(3), indexes 1..3 return one element, and larger indexes return PROPERTY / INVALID_ARRAY_INDEX. `Event_Time_Stamps` preserves the Clause 21 BACnetTimeStamp CHOICE and Clause 20.2 tag identities (Time [0], SequenceNumber [1], DateTime [2]) through object reads and RP/RPM encoding; `Event_Message_Texts` remains application-tagged CharacterString. `EVENT_MESSAGE_TEXTS_CONFIG` remains absent because no object-side model exists. Other array-typed identifiers whose object types are not modeled in-tree (ACTION_TEXT, VALUE_SOURCE_ARRAY, ...) stay rejected until their object-side modeling lands, so coverage is complete for the modeled set rather than for every array in the standard. The RP whitelist that admitted six always-list identifiers is gone; RPM gates per reference with inline error elements while sibling references succeed; WP gates before decode/mutation; WPM applies writes in order and retains the successful prefix before a gated failure. Indexed `Recipient_List` reads and writes fail with the same gate classification, replacing the tranche-J INVALID_DATA_TYPE stopgap; the framed wire form is unchanged. #266: omitted-index (whole-array, Clause 12.1.5.1) `Priority_Array` writes are PROPERTY / WRITE_ACCESS_DENIED — a mappable Result(-) — while indexes 0 and 17 stay INVALID_ARRAY_INDEX, pinned at both macro sites and over the network WP/WPM paths. Evidence: `crates/bacnet-objects/src/event/history.rs`, `crates/bacnet-encoding/src/primitives/mod.rs`, `crates/bacnet-server/src/handlers/{read_property,write_property}.rs`, `crates/bacnet-server/src/handlers/tests/{array_index_gating,read_event_arrays,read_rpm}.rs`, and analog/binary/multi-state event-history tests. Limitations: every array the in-tree objects serve reads one element per index (Global Group since #1107, Structured View and Command since #1135, BACNET-12-COMMAND-STRUCTURED-VIEW-ARRAYS), and Channel has no object in-tree; CharacterString/BitString Value ALARM_VALUES/FAULT_VALUES remain classified as arrays; effective write absence is handled at the indexed gate. #182 review round: the five reference-typed properties (Loop ×3, Pulse Converter Input_Reference, Averaging Object_Property_Reference) are pinned rejecting indexed ReadProperty with the same PROPERTY / PROPERTY_IS_NOT_AN_ARRAY pair (`reference_properties_reject_indexed_read_property`). #881: at the existing indexed WP/WPM service gate only, nonempty effective metadata that omits the property yields PROPERTY/UNKNOWN_PROPERTY before value decode, WPM authorization and write observer/source/Audit hooks. Absence-first is the selected local simultaneous-fault interpretation of Clauses15.9-15.10 (printed752-755/PDF754-757), not an explicit normative precedence rule. Empty optional custom metadata retains classifier/writer delegation; served scalars and BACnetLISTs retain PROPERTY_IS_NOT_AN_ARRAY and served arrays keep object-owned write/count/range rules. Encoded AI and B/IP raw5555 plus unprovisioned Staging names cover valid/malformed values, while present Staging arrays, read-only B/IP DNS and a custom vendor array supply controls. WPM preserves its Description prefix and exact failed object/property/index, with no failing/suffix authorization, observer, source write or Audit record. A running-server fixture retains actual successful Audit delivery and source-aware writing. Unindexed writes, direct object calls, outer WP authorization and read service precedence are unchanged. Evidence: `handlers/tests/{indexed_write_presence,indexed_write_effects}.rs` and `server/audit_reporter_indexed_absence_tests.rs` under `crates/bacnet-server/src`. |
 | `BACNET-15-WP-EVENT-FIELD-VALIDATION` | Clause 15.9.1.3 (WriteProperty error table) with Clause 21 BACnetNotifyType / BACnetEventTransitionBits / BACnetLimitEnable productions | P1 | `supported-with-clause-evidence` | Split child of `BACNET-12-OBJECT-MODEL` (#255; behavior change — previously-accepted invalid writes now fail). WriteProperty validation of the shared intrinsic-reporting event properties matches the Clause 15.9.1.3 error table: `Notify_Type` (BACnetNotifyType, a closed {alarm, event, ack-notification} production, Clause 21) refuses out-of-production values with PROPERTY / VALUE_OUT_OF_RANGE (a value outside the property's permitted range) instead of storing them — an accepted `Enumerated(99)` previously read back as 99 and could reach the wire as the notification's notifyType; membership derives from `NotifyType::ALL_NAMED` so a future addendum constant widens the gate without a second edit. `Event_Enable` / `Limit_Enable` (BACnetEventTransitionBits = 3 bits, BACnetLimitEnable = 2 bits, Clause 21) require the canonical encoding of their fixed-width production — exactly one content octet with 8−N declared unused bits, the form the read path emits — refusing any other declared shape (an 8-bit string where fewer bits are defined, extra or missing content octets, a half-octet string; for Limit_Enable even Event_Enable's valid 3-bit shape) with PROPERTY / INVALID_DATA_ENCODING (an encoding incompatible with the property's datatype) instead of silent mask-and-normalize; an empty content now reports INVALID_DATA_ENCODING rather than INVALID_DATA_TYPE. Applies to the generic macro arms (AI/AO/AV/BI/BO/BV/MSI/MSO/MSV), the analog macro's Limit_Enable, and the own arms on EventEnrollment and AlertEnrollment, via a shared objects-layer helper (`common::check_fixed_width_bit_string`) that reports protocol errors — the decoding-layer sibling in `bacnet-encoding` is intentionally not reused across layers. Evidence: object-level probes across `crates/bacnet-objects/src/{analog/tests/input.rs,binary/tests/generic_event_properties.rs,multistate/tests/generic_event_properties.rs,event_enrollment/tests/enrollment.rs}` and wire-level `crates/bacnet-server/src/handlers/tests/write_validation.rs`. Follow-up family: the Notification Class recipient-list decoder still masks transition/day bit strings without consulting declared counts. |
 | `BACNET-15-STRUCTURED-WRITE-DECODE` | Clause 15.9 WriteProperty (15.9.1.2 Result(+), 15.9.1.3 Result(-)), Clause 15.10 WritePropertyMultiple, Clause 20.2.1 (concatenated elements) | P1 | `supported-with-clause-evidence` | Split child of `BACNET-12-OBJECT-MODEL` (#182; behavior change — previously-dropped trailing bytes now decide the write). The WriteProperty/WritePropertyMultiple value decoder consumed exactly one application-tagged primitive and silently discarded the rest, so no structured or `BACnetLIST` property value could reach an object arm whole. `decode_write_property_value` (`crates/bacnet-server/src/handlers/write_property.rs`) now loop-decodes until the payload is exhausted — the exact mirror of `encode_property_value`'s `List` flattening: one element → scalar `PropertyValue`, more than one → `PropertyValue::List`, and full consumption is REQUIRED — a partial or undecodable trailing element is PROPERTY / INVALID_DATA_ENCODING (Clause 15.9.1.3) and an empty payload is refused, while a well-formed extra element reaches a scalar arm and fails its shape as INVALID_DATA_TYPE; in every case the stored value is proven unchanged. The RECIPIENT_LIST verbatim special-case keeps its precedence (the object layer owns its framed `BACnetLIST` codec), and the context-tagged behavior is preserved: framed CHOICE properties (Event_Parameters/Fault_Parameters) still arrive as a single `ApplicationData`, and context-tagged member productions (the Clause 12.17 references) arrive as one `ApplicationData` element per member — see `BACNET-12-REFERENCE-PROPERTY-WRITABILITY`. A value TLV-truncated so far that framing breaks is refused earlier by the service request's own [3]/[4] walk (a framing error, never silent). Unlocks: MSI `Alarm_Values` whole-list writes (`whole_list_write_property_decodes_all_elements`, was a pinned failure) and the datetime-paired value properties (DateTime Value PV / priority-array entries / Relinquish_Default, completing #270 — see `BACNET-12-RELINQUISH-DEFAULT-WRITABILITY`). WPM ordered-prefix execution covers structured values (`wpm_reference_write_commits_in_order_and_keeps_prefix_on_failure`). Evidence: `crates/bacnet-server/src/handlers/write_property.rs` + `handlers/tests/multi_element_writes.rs` + `handlers/tests/reference_writes.rs`, `handlers/list.rs` tests. Known residues (follow-ups): AddListElement/RemoveListElement still break their `listOfElements` loop on an undecodable element instead of erroring (#182's wider scope); Enumerated contents wider than four octets truncate to u32 (#277, untouched here); and properties declared `SEQUENCE OF` beyond the four reference arms (e.g. `LIST_OF_OBJECT_PROPERTY_REFERENCES`) keep their pre-existing arm-level behavior. |
+<!-- END ledger-rows -->
 
 `BACNET-12-ALERT-ENROLLMENT-TABLE-12-61` supersedes the generic
 `BACNET-15-WP-EVENT-FIELD-VALIDATION` wording for Alert Enrollment's
 `Notify_Type`: that configurable property accepts only `ALARM` and `EVENT`;
 `ACK_NOTIFICATION` remains acknowledgement-flow output vocabulary.
 
+<!-- BEGIN ledger-rows: generated from these rows of bacnet-135-2020.json; edit the JSON and regenerate
+BACNET-15-WPM-ORDERED-PREFIX-ERROR
+-->
 | Row ID | Anchor | Priority | Status | Evidence |
 |---|---|---|---|---|
 | `BACNET-15-WPM-ORDERED-PREFIX-ERROR` | Clause 15.10 and 15.10.1.3 (WritePropertyMultiple service procedure and Result(-)); Clause 18.9 (Reject reasons); Clause 21 (Error and BACnetObjectPropertyReference productions) | P1 | `supported-with-clause-evidence` | Service 16 parses and executes complete write attempts in wire order, retains the successful prefix, stops on the first failure, and emits the formal `[0] Error` plus `[1] BACnetObjectPropertyReference` Result(-) body for semantic or post-prefix syntax failures. Pre-write malformed bodies use the narrow classified Reject reason; post-prefix malformed bodies use SERVICES / INVALID_TAG and an exact completed reference or the documented DEVICE:4194303 / ALL / no-index local sentinel. Response emission precedes committed-prefix generic and exact Life Safety COV. Low-level `ErrorPdu.error_data` retains provenance; legacy generic WPM errors and high-level class/code projections remain compatible. Empty requests/property lists remain no-op. This is a bounded service correction (`Refs #242`), not a broad PICS/BIBB or Acked_Transitions claim. |
+<!-- END ledger-rows -->
 
 This row governs Service 16 references in earlier rows. Retained object
 snapshot hooks are compatibility evidence, not bundled-server behavior;
@@ -1036,28 +1110,54 @@ service decoder delivers as an empty `PropertyValue::List`.
 
 ### C3 Partial Evidence
 
+<!-- BEGIN ledger-rows: generated from these rows of bacnet-135-2020.json; edit the JSON and regenerate
+BACNET-13-EVENT-DISABLE-WPM-PREFIX
+BACNET-13-LIFE-SAFETY-OPERATION
+-->
 | Row ID | Anchor | Priority | Status | Evidence |
 |---|---|---|---|---|
 | `BACNET-13-EVENT-DISABLE-WPM-PREFIX` | Clause 12.52 Table 12-61 (Alert Enrollment Event_State, Acked_Transitions, Event_Detection_Enable); Clause 13.2.2.1 disabled-state initial conditions; Clause 13.3 pTimeDelayNormal fallback; Clause 15.10 ordered WritePropertyMultiple procedure | P1 | `in-progress` | Alert Enrollment applies the modeled disabled-state initial conditions. Object-owned snapshot tokens remain a directly testable compatibility surface, but bundled-server Service 16 does not invoke them: a successful Event_Detection_Enable or Time_Delay_Normal prefix write remains committed when a later write fails, and the currently failing write must be mutation-free. The required Alert property projection is covered separately; no evaluator claim is made. |
 | `BACNET-13-LIFE-SAFETY-OPERATION` | LifeSafetyOperation service procedures and errors; Life Safety COV reporting; Life Safety Point/Zone Present_Value, Status_Flags, Tracking_Value, Silenced, and Operation_Expected property requirements | P0 | `implementation-present-needs-conformance-tests` | Partial operational-state evidence only (Refs #177; remains open). Fail-closed authorization receives immediate and routed requester identity; Requesting Source remains untrusted text. Built-in Point/Zone execute authorized silence/unsilence with exact `Operation_Expected` arming. Reset variants execute only through configured application-owned synchronous executors and commit only supplied modeled values before clearing `Operation_Expected`; no physical state is inferred. The bounded process-local confirmed-request tracker resends the byte-identical recorded response for exact duplicates within 60 seconds / 256 entries before authorization/execution; requests over 64 KiB execute untracked; replay is retained by design and is not durable actuation idempotency. Detailed operation outcomes and WP/WPM/`write_local`/live-Schedule snapshots retain actual deltas. Whole-object Life Safety COV triggers only for `Present_Value`/`Status_Flags` and reports exactly both; property COV reports the supported subscribed property plus one `Status_Flags` and fans out on an actual status change. Point and Zone both support `Present_Value`, `Status_Flags`, `Tracking_Value`, `Silenced`, and `Operation_Expected`; the Zone gained `Tracking_Value` in #1092, and a Zone reset commit may set it as a Point commit can. The built-in Point/Zone `Status_Flags` `IN_ALARM` projection from `event_state` is latent: no `event_state` setter exists, so `IN_ALARM` transitions are unreachable; `Event_State` is purely intrinsic per R1 outcome (b) with no LSO-driven change. Initial/re-subscription notifications use the same payload sets after ACK; cancellation is quiet. Served property model is pinned by executable metadata: Point `POINT_BASE` 18 rows and Zone `ZONE_BASE` 16 rows drive `Property_List`, required sets, and writability with exact PICS projection tests; `Silenced` and `Operation_Expected` are network read-only. `Mode` writes are checked against `Accepted_Modes` (#1092, `BACNET-12-LIFE-SAFETY-GLOBAL-GROUP-REQUIRED-ROWS`). `Tracking_Value` and `Reliability` take writes while Out_Of_Service is TRUE, and a simulated change notifies through the same snapshots (#1108, `BACNET-12-LIFE-SAFETY-OUT-OF-SERVICE-SIMULATION`). The application sets `Present_Value` and `Tracking_Value` at runtime through `set_present_value_local` and `set_tracking_value_local`, which notify through the `write_local` snapshots (#1123, `BACNET-12-LIFE-SAFETY-APPLICATION-VALUES`). Gaps retained: no BIBB, profile, or device-advertisement claim; broad intrinsic `CHANGE_OF_LIFE_SAFETY` event algorithm deferred. |
+<!-- END ledger-rows -->
 
 ## Clauses 20-21 Encoding And Formal APDUs
 
+<!-- BEGIN ledger-rows: generated from these rows of bacnet-135-2020.json; edit the JSON and regenerate
+BACNET-20-ENCODING
+BACNET-21-FORMAL-APDUS
+BACNET-21-TIMESTAMP-CHOICE
+BACNET-21-CALENDAR-ENTRY-CHOICE
+-->
 | Row ID | Anchor | Priority | Status | Evidence |
 |---|---|---|---|---|
 | `BACNET-20-ENCODING` | Clause 20 | P1 | `implementation-present-needs-negative-tests` | Encoding modules and tests exist. |
 | `BACNET-21-FORMAL-APDUS` | Clause 21 | P1 | `implementation-present-needs-conformance-tests` | APDU and service modules exist. |
 | `BACNET-21-TIMESTAMP-CHOICE` | Clause 21 (BACnetTimeStamp), Clause 20.2.1.5 | P1 | `supported-with-clause-evidence` | Split child of `BACNET-21-FORMAL-APDUS`. Resolves the #259 dual-codec defect per the Clause 20.2.1 tag-form rules: `time [0]` tags the primitive base type `Time`, so every producer/consumer now shares one codec — `time [0]` as a primitive context tag 0 of length 4 (raw Time octets), `sequence-number [1]` constrained to Unsigned (0..65535) by its public representation and hostile-wire validation, `datetime [2]` as an opening/closing tag 2 pair around application-tagged Date/Time. The bare CHOICE form serves `SEQUENCE OF` contexts (GetEventInformation-ACK `eventTimeStamps`); the field-wrapped form serves BACnetTimeStamp-tagged fields (audit, alarm acknowledgment, and event notification) byte-identically to before. COVNotificationMultiple instead carries independent request DateTime and per-value Time fields. Golden vectors, 0/65535 boundary acceptance, 65536 and 3-octet overflow rejection, wrong-outer-tag / wrong-class-bit / truncated negatives, and a cross-call-site primitives↔GetEventInformationAck matrix run in-tree. Evidence: `crates/bacnet-encoding/src/primitives/mod.rs` + `primitives/tests.rs`, `crates/bacnet-services/src/alarm_event/get_event_information.rs` + `alarm_event/tests/get_event_information_timestamps.rs`. |
 | `BACNET-21-CALENDAR-ENTRY-CHOICE` | Clause 21 BACnetCalendarEntry, BACnetDateRange, BACnetWeekNDay, BACnetSpecialEvent, BACnetDailySchedule and BACnetTimeValue; Clauses 20.2.1.3.2 and 20.2.1.5; Clause 12.9 Date_List; Clause 12.24 Effective_Period, Weekly_Schedule and Exception_Schedule; Clauses 15.1.1.3, 15.2, 15.8 and 15.9.1.3 | P1 | `supported-with-clause-evidence` | Split child of `BACNET-21-FORMAL-APDUS` (#996). Each `BACnetCalendarEntry` travels under its CHOICE tag: date [0] (four-octet primitive), date-range [1] (frame around two application Dates) or weekNDay [2] (three-octet primitive). Calendar `Date_List` is the concatenation of its entries; Schedule `Exception_Schedule` elements are whole special events (calendar-entry [0] frame or calendar-reference [1], the [2] time-value frame, event-priority [3] decoded as any Unsigned and range-checked 1..16 by the Schedule object, #1087), `Weekly_Schedule` elements are [0] daily-schedule frames, and `Effective_Period` is two application Dates. One codec in `bacnet-encoding::constructed` (`calendar.rs`, `schedule.rs`) serves objects and services; `bacnet-services::schedule` and the raw eight-octet `BACnetDateRange::encode`/`decode` are removed. `Date_List` is network-writable: WP/WPM replace it (empty included), AddListElement/RemoveListElement edit it, and written non-entries are INVALID_DATA_TYPE, undecodable entries INVALID_DATA_ENCODING and more than 1024 entries NO_SPACE_TO_WRITE_PROPERTY (NO_SPACE_TO_ADD_LIST_ELEMENT for AddListElement), atomically. The list services use a calendar-entry element codec, so RemoveListElement matches by value and a malformed element is INVALID_DATA_TYPE on either service. One list element per entry lets ReadRange address entries by position. Breaking on the wire: entries were an application Date or Octet String, `Exception_Schedule` dropped the period and sent the priority as an application Unsigned, `Weekly_Schedule` days were Time/Octet String pairs, and `Effective_Period` was an Octet String, NULL until set (now the range with both dates unspecified). Evidence: `crates/bacnet-encoding/src/constructed/tests/{calendar,schedule}.rs`, `crates/bacnet-objects/src/schedule/{calendar_tests,tests}.rs`, `crates/bacnet-server/src/handlers/tests/calendar_date_list.rs`, `crates/bacnet-server/src/handlers/tests/read_rpm/{calendar,schedule}.rs`. #1029: a well-formed entry with an octet out of its Clause 21 range (month 1-14, day 1-34, weekday 1-7, week-of-month 1-9, date-range ends each a specific date or wholly unspecified) is VALUE_OUT_OF_RANGE on WP and WPM, and on AddListElement a ChangeList-Error naming that entry's position, atomically; RemoveListElement has no such error, and since no stored entry can be out of range it fails LIST_ELEMENT_NOT_FOUND at that position. #1028: time-values are typed `PropertyValue`s; the encoders refuse a constructed value. Present_Value evaluation is `BACNET-12-CALENDAR-PROPERTY-SET` and `BACNET-12-SCHEDULE-EVALUATION`. Network writes of the Schedule properties decode with these codecs (`BACNET-12-SCHEDULE-WRITES`, #1057). The shared list-service element rules are `BACNET-15-LIST-ELEMENT-SEMANTICS` (#1027). |
+<!-- END ledger-rows -->
 
 ## Annex A PICS
 
+<!-- BEGIN ledger-rows: generated from these rows of bacnet-135-2020.json; edit the JSON and regenerate
+BACNET-A-PICS
+-->
 | Row ID | Anchor | Priority | Status | Evidence |
 |---|---|---|---|---|
 | `BACNET-A-PICS` | Annex A | P1 | `in-progress` | `bacnet-server::pics` exists; generated draft summary is not a certification claim. |
+<!-- END ledger-rows -->
 
 ## Annex J BACnet/IP
 
+<!-- BEGIN ledger-rows: generated from these rows of bacnet-135-2020.json; edit the JSON and regenerate
+BACNET-J-BVLC-FUNCTION-CODES
+BACNET-J-ORIGINAL-UNICAST-NPDU
+BACNET-J-ORIGINAL-BROADCAST-NPDU
+BACNET-J-FORWARDED-NPDU
+BACNET-J-BBMD-BDT
+BACNET-J-FOREIGN-DEVICE-FDT
+BACNET-J-NAT-TRAVERSAL
+BACNET-J-IP-MULTICAST
+-->
 | Row ID | Anchor | Priority | Status | Evidence |
 |---|---|---|---|---|
 | `BACNET-J-BVLC-FUNCTION-CODES` | Annex J.2 | P0 | `implementation-present-needs-conformance-tests` | J-01 covers Annex J.2 constants through `0x0B`, representative frames, malformed type/length, unknown function passthrough, deleted-value passthrough, and current decoder policy for extra bytes beyond BVLC Length. J-02 adds exact two-byte BVLC-Result parsing, unknown result-code passthrough, malformed result rejection, and sender/expected-function correlation for pending management responses. J-13 adds reproducible local and base/head benchmark runners for BIP Criterion suites with ignored raw artifacts and a machine-readable result-row schema. |
@@ -1068,27 +1168,49 @@ service decoder delivers as an empty `PropertyValue::List`.
 | `BACNET-J-FOREIGN-DEVICE-FDT` | Annex J.5 | P0 | `implementation-present-needs-conformance-tests` | J-03 covers FDT read/register/delete caller paths, re-registration, zero-TTL and malformed TTL NAKs, exact Delete-FDT payload length, max TTL remaining-time capping, expiry purge, source exclusion, and unregistered DBTN NAK without local delivery. J-04 Original-Broadcast evidence covers one registered FDT target; DBTN evidence covers registered origin plus peer FDT fanout, source preservation, no echo to the originating foreign device, no extra duplicate FDT frames, and `X'0060'` when forwarding cannot be completed. Non-BDT Forwarded-NPDU evidence verifies no FDT fanout. J-06 adds a BBMD-owned timer purge task for Annex J.5.2.3, covers expiration without an inbound BVLC request, and covers re-registration resetting the entry before the purge task removes it. J-07 adds project ACL evidence for Delete-FDT: listed management senders can delete registered entries, and unlisted senders receive the standard Delete-FDT NAK without removing the entry. J-11 adds Read-FDT-Ack payload validation evidence for Annex J.2.8 `N*10` FDT entry sizing. J-12 adds raw BBMD Read-FDT-Ack wire evidence for ACK function code and `N*10` FDT entry fields. J-13 adds reproducible foreign-device/BBMD stress benchmark A/B runner evidence with ignored raw artifacts and a machine-readable result-row schema. |
 | `BACNET-J-NAT-TRAVERSAL` | Annex J.7.5 | P0 | `deferred-pending-owner-decision` | Current IPv4 B/IP surfaces expose interface, port, broadcast address, BDT/FDT management, and foreign-device registration, but no reviewed global B/IP address field, NAT mode flag, BBMD/router logical-port model, or NAT-specific originating-address rewrite. Follow-up work item `019f0ff8-14c0-7013-9721-3bc5fe0356de` tracks the owner decision and implementation plan if support is later claimed. |
 | `BACNET-J-IP-MULTICAST` | Annex J.8 | P0 | `deferred-pending-owner-decision` | Current IPv4 B/IP transport sends local broadcasts to a configured IPv4 broadcast address and has no B/IP-M multicast group membership, multicast send, or B/IP-M BBMD group configuration. BACnet/IPv6 multicast evidence belongs to Annex U, not Annex J. Follow-up work item `019f0ff8-14e7-7681-8738-032683da62df` tracks the owner decision and implementation plan if support is later claimed. |
+<!-- END ledger-rows -->
 
 ## Annex K BIBBs
 
+<!-- BEGIN ledger-rows: generated from these rows of bacnet-135-2020.json; edit the JSON and regenerate
+BACNET-K-BIBBS
+-->
 | Row ID | Anchor | Priority | Status | Evidence |
 |---|---|---|---|---|
 | `BACNET-K-BIBBS` | Annex K | P1 | `in-progress` | Generated draft is a starting point only; detailed service mapping remains open. |
+<!-- END ledger-rows -->
 
 ## Annex L Profiles
 
+<!-- BEGIN ledger-rows: generated from these rows of bacnet-135-2020.json; edit the JSON and regenerate
+BACNET-L-PROFILES
+-->
 | Row ID | Anchor | Priority | Status | Evidence |
 |---|---|---|---|---|
 | `BACNET-L-PROFILES` | Annex L | P2 | `in-progress` | Profile evidence must be derived from ledger/PICS rows later. |
+<!-- END ledger-rows -->
 
 ## Annex U BACnet/IPv6
 
+<!-- BEGIN ledger-rows: generated from these rows of bacnet-135-2020.json; edit the JSON and regenerate
+BACNET-U-IPV6-BVLL
+-->
 | Row ID | Anchor | Priority | Status | Evidence |
 |---|---|---|---|---|
 | `BACNET-U-IPV6-BVLL` | Annex U | P2 | `implementation-present-needs-conformance-tests` | B/IP6 codec and benchmark paths exist. Current selected-link startup and source/destination/interface ownership have isolated Linux ULA wire tests (auto/explicit, three group scopes, two-link rejection, collision/lifecycle and foreign BBMD source/trust) plus fresh installed Python Who-Is/I-Am/client discovery. macOS lo0 qualifies multicast intake and unicast/control source only; Windows is compile-checked, not runtime-qualified. Unique link-local/zone selection has unit evidence only. External fixtures are explicitly opt-in; full Annex U conformance remains unqualified. See `crates/bacnet-transport/tests/ipv6_selected_link/README.md`. |
+<!-- END ledger-rows -->
 
 ## Annex AB BACnet/SC
 
+<!-- BEGIN ledger-rows: generated from these rows of bacnet-135-2020.json; edit the JSON and regenerate
+BACNET-AB-SC-FRAME
+BACNET-AB-SC-BVLC-RESULT
+BACNET-AB-SC-DATA-ATTRIBUTES
+BACNET-AB-SC-CONNECTION-STATE
+BACNET-AB-SC-HUB-CONNECTOR
+BACNET-AB-SC-WEBSOCKET-TLS
+BACNET-AB-SC-HEARTBEAT
+-->
 | Row ID | Anchor | Priority | Status | Evidence |
 |---|---|---|---|---|
 | `BACNET-AB-SC-FRAME` | Annex AB.2 | P0 | `implementation-present-needs-negative-tests` | AB-01 adds transport codec evidence for reserved control bit rejection, Header Option Type `1..31` enforcement, AB.2.17 destination/data option marker decoding, VMAC field ordering, option count cap enforcement, option length/data truncation rejection, and unterminated option-chain rejection. Received Encapsulated-NPDUs enforce Destination Option Must Understand semantics: an unsupported Must Understand option returns BVLC-Result NAK COMMUNICATION/HEADER_NOT_UNDERSTOOD for unicast, echoes the complete offending marker, routes the Result to the source through the hub, and drops broadcast without a result. The hub changes the VMAC fields while copying validated option and payload bytes, so an empty Header Data field is not normalized away before destination processing. Must Understand clear does not block delivery. Addenda 135-2020cf/cp were checked: cf renames Data Options bit 6 to Every Segment without changing the marker bit position, and cp adds standard header option types 2..5 accepted by the generic `1..31` parser. Must Understand processing for other BVLC-SC functions, non-Result function-specific payload semantics, Every Segment segmentation behavior, and direct-connection behavior remain open. |
@@ -1098,12 +1220,17 @@ service decoder delivers as an empty `PropertyValue::List`.
 | `BACNET-AB-SC-HUB-CONNECTOR` | Annex AB.5 | P0 | `supported-with-clause-evidence` | AB-06 adds hub connector/forwarding evidence: hub-bound Encapsulated-NPDU uses Destination VMAC present and Originating VMAC absent; local receive drops hub-relayed non-broadcast Destination VMAC; hub rejects Originating-VMAC-present or missing-Destination forwarding attempts; unicast selects only the matching VMAC and unknown unicast has no recipient; broadcast targets all current hub connections except origin; relay preserves Message ID/payload/destination options/data options, adds sender Originating VMAC, strips Destination VMAC for unicast, and preserves broadcast Destination VMAC. Live three-client WebSocket evidence covers A-to-B unicast, A-to-unknown discard, and A broadcast to B/C but not A. AB-07 adds live WebSocket evidence that known Device UUID replacement moves hub reachability to the replacement VMAC, prevents old-VMAC unicast delivery, requires a Close frame for the superseded connection, prevents marked-superseded source or recipient sinks from relaying after replacement wins, and preserves peer reachability after rejecting a connected client's second Connect-Request. Transport connector evidence covers primary timeout/failover, established primary loss with reconnect exhaustion, active send-path swap to failover, and primary restoration while failover is active. AB.5.1 live generated-certificate WebSocket evidence in `sc_hub::ws_capacity_tests` covers a 1497-octet NPDU plus 4192 octets of encoded Destination Options and Data Options through both unicast (5699-octet relayed BVLC) and broadcast (5705-octet relayed BVLC), preserving options and payload. The hub advertises 5705-octet Max-BVLC and 1497-octet Max-NPDU capacities and drops a 1498-octet NPDU before relay or activity refresh. Recipient-limit decision tests cover independent NPDU and final encoded BVLC bounds; unicast and broadcast relay apply each recipient's negotiated limits, so the node's historical 1476-octet NPDU default (1478 after #893) is not a hub capacity limit. Existing 31 minimum-size Destination Options plus 31 minimum-size Data Options remain covered by relay-helper and live WebSocket unicast tests, with helper broadcast preservation. Direct-connection unsupported-classification evidence covers rejecting `dc.bsc.bacnet.org` at the hub WebSocket subprotocol boundary and returning COMMUNICATION/UNEXPECTED_DATA, not BVLC_FUNCTION_UNKNOWN, for a connected client's Address-Resolution. Configured hub URI evidence covers preserving the configured `wss` authority, port, path, and query at the production `TlsWebSocket::connect` parse boundary; malformed or hostless configured hub URIs are rejected before any WebSocket/TLS dial. Addendum cc affects AB.5.3.1 metadata, not these forwarding, replacement, reconnect-failover, option-preservation, configured/malformed hub URI, or direct-connection unsupported-classification behaviors. No remaining hub connector gaps are tracked in this row. |
 | `BACNET-AB-SC-WEBSOCKET-TLS` | Annex AB.7 | P0 | `implementation-present-needs-security-tests` | AB-04 retains pre-dial `wss`-only checks, `hub.bsc.bacnet.org` negotiation and negative offers, binary BVLC-SC sends, text close `1003` and optional Ping/Pong. AB-05 retains generated-certificate mTLS/TLS 1.3 negotiation and missing/wrong-issuer/expired/not-yet-valid peer, wrong SAN, malformed PEM, mismatched-key and TLS 1.2 denials. PRs #585–#592 (runtime assessed at `982cc9f`) address [#513](https://github.com/jscott3201/rusty-bacnet/issues/513)'s original entry-point configuration acceptance: mandatory `ScHubTlsConfig`/`ScNodeTlsConfig`, explicit nonempty CA and matching operational credentials, Python/CLI/standalone preflight before bind/dial, and strict hub peer verification. File-helper rejection/retry, real ReadProperty, installed native Python and isolated Docker pair evidence are delivered; the credential closeout did not rerun them. Insecure hub/example modes and `sc_latency`/`sc_throughput` were retired, not renamed or retained; historical benchmark numbers are not new mTLS measurements. The broad row remains `implementation-present-needs-security-tests`: TLS application-profile/cipher-suite evidence, revocation when configured and separate PKI/identity-profile work remain. No new addendum 135-2020cd validation, full Annex AB/PICS/BTL promotion, or direct-connection support beyond dial-out is claimed. Refs #615 PR3a adds the dial-out-only direct primitive `TlsWebSocket::connect_direct` (`wss` plus `dc.bsc.bacnet.org` with the same `ScNodeTlsConfig` operational-certificate policy and pre-dial URI validation); accept-side, discovery trigger, and routing over direct connections remain excluded and the row status is unchanged. Node credentials are offered when requested/compatible: a trusted server with no CertificateRequest can complete; normal resumption may omit certificate retransmission. Local configuration is not per-connection presentation proof or remote-verifier attestation; custom `WebSocketPort` implementations are outside the built-in guarantee. CA membership is not BACnet operation authorization or certificate-to-VMAC/UUID binding. The [#517](https://github.com/jscott3201/rusty-bacnet/issues/517) node-first slice requires caller-provisioned nonzero 16-byte UUIDs in `ScServerBuilder` and Python client/server before I/O. Generated-certificate tests cover distinct native Python nodes with ReadProperty, intended same-UUID replacement with the unrelated node still usable, owned wire bytes over Python stop/start/recreation, and Rust server wire bytes over fresh builds and reconnect. The hub-local slice extends explicit nonzero UUID configuration to all four Rust ScHub startup APIs, Python ScHub and the standalone/Docker hub. ScHub::start appends the required UUID argument; one shared Rust check rejects zero UUID or reserved UNKNOWN/BROADCAST local VMAC before bind. Python preserves five positional slots and CA-first diagnostics, copies keyword-only device_uuid, and validates identity before credential-file I/O; the standalone hub requires --device-uuid and retains its default VMAC. Independent Connect-Accept vectors check the hosting port VMAC and hosting device UUID (base 2020 AB.2.11 and AB.6) through all four Rust routes, Python owned-buffer mutation/stop-start/recreation, and actual binary restart/read tests. Compose uses an explicit stable TEST-ONLY hub UUID, not a deployment fallback in the binary. Base 2020 AB.1.5.3 lifetime provisioning/storage remains the caller's responsibility; changed UUIDs cannot be detected without application history. Raw ScTransport::new(ws, vmac) retains its unstarted zero placeholder, but start requires with_device_uuid and rejects all-zero UUID/all-zero or broadcast local VMAC after reconnect and heartbeat validation, before transport-owned I/O or startup state changes. Repeated rejection retains sockets; UUID repair via the existing setter can retry on the same owned WebSocket. This cannot undo caller-owned dials or promise generic endpoint rollback/all-field repair. Independent AB.2.10 byte oracles cover initial start, reconnect, initial/established failover, primary restore and legitimate duplicate-VMAC reselection without UUID changes. This is startup enforcement, not lifetime immutability against later application mutation through public connection(); pure ScConnection/manual WebSocket use and later handshake validation are excluded. Wire admission, peer replacement and UUID version/variant policy are unchanged; no general VMAC bit-shape policy is added. #517 remains open for residual identity work; no lifetime guarantee or row-status promotion. Refs #956: `ScTransport::connection()` is no longer public (test-only), so applications can no longer change the live connection identity through the transport; they read the link state through `connection_state_changes()`. The startup checks above are unchanged and this is still not a lifetime guarantee: internal duplicate-VMAC reselection and pure ScConnection/manual WebSocket use stay outside them. Row status is unchanged. |
 | `BACNET-AB-SC-HEARTBEAT` | Annex AB.6.3 | P0 | `implementation-present-needs-timeout-tests` | AB.6.3 heartbeat evidence covers no-VMAC Heartbeat-Request/Heartbeat-ACK construction, native Heartbeat-ACK message-id/no-VMAC validation, production `ScTransport::start` rejection of configurable heartbeat intervals outside 3..300 seconds, production rejection of disconnect timeouts that are not greater than the heartbeat interval, periodic heartbeat initiation after idle inbound BVLC activity, inbound BVLC activity resetting the liveness timer, native timeout/send-error disconnect behavior, and hub-initiated heartbeat tracking that sends idle Heartbeat-Requests, records the pending Message ID, clears pending state only for a matching Heartbeat-ACK, and removes the hub client when the pending ACK exceeds the hub timeout. Accelerated native heartbeat tests use a private test-only timing override so production builders keep Annex AB.6.3 range enforcement at start. Remaining gap: formal Annex AB.6.3 timeout conformance tests; the native heartbeat timeout evidence relies on a test-only timing override. |
+<!-- END ledger-rows -->
 
 ## Explicit Deferred Or Unsupported Annexes
 
+<!-- BEGIN ledger-rows: generated from these rows of bacnet-135-2020.json; edit the JSON and regenerate
+BACNET-O-ZIGBEE
+-->
 | Row ID | Anchor | Priority | Status | Evidence |
 |---|---|---|---|---|
 | `BACNET-O-ZIGBEE` | Annex O | P3 | `unknown-pending-source-review` | No public support claim found in the initial scan. |
+<!-- END ledger-rows -->
 
 ## Follow-Up Backlog
 
