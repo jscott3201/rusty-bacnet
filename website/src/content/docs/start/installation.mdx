@@ -43,6 +43,10 @@ chmod +x ./bacnet-macos-arm64
 
 The check prints `bacnet-macos-arm64: OK`; stop on anything else. Where `shasum` isn't installed, `sha256sum -c` does the same check.
 
+:::caution[macOS Gatekeeper]
+The macOS executables are not notarized, so macOS may block one downloaded through a browser. Check it against `SHA256SUMS` first. Then clear its quarantine attribute with `xattr -d com.apple.quarantine ./bacnet-macos-arm64`, or allow it under **System Settings → Privacy & Security**. Do not turn Gatekeeper off for the whole system.
+:::
+
 On Intel Macs or Linux, substitute the exact filename you downloaded. Do not run a filename intended for another processor architecture.
 
 :::note[Linux builds]

@@ -13,7 +13,7 @@ test('all install tabs and assets survive the text export', async () => {
   const downloads = JSON.parse(await readFile(new URL('src/data/downloads.json', root), 'utf8'));
   const body = await plainBody(frontmatter(await readFile(file, 'utf8')).body, file, downloads);
   const assets = `${repository}/releases/download/v${release}/`;
-  for (const value of ['**CLI**', '**Python**', '**Rust**', 'only-binary', 'bacnet-macos-arm64', 'glibc 2.17',
+  for (const value of ['**CLI**', '**Python**', '**Rust**', 'only-binary', 'bacnet-macos-arm64', 'glibc 2.17', 'xattr -d com.apple.quarantine',
     `[SHA256SUMS](${assets}SHA256SUMS)`, `(${assets}bacnet-windows-amd64.exe)`, `rusty-bacnet==${release}`,
     String.raw`.\.venv\Scripts\python.exe -m pip install`, `bacnet-client = "=${release}"`, `**${release}**`, `\`${release}\``,
     `[Release workflow](${repository}/blob/v${release}/.forgejo/workflows/release.yml)`]) assert.ok(body.includes(value), value);
