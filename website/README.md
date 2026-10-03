@@ -1,7 +1,9 @@
 # Rusty BACnet documentation site
 
-An Astro/Starlight task guide with two explicit paths: preserved **v0.11.0**
-release installation/lab/tutorials and **current development** source guides.
+An Astro/Starlight task guide with two explicit paths: release
+installation/lab/tutorials (`start/` targets the release named in
+`src/lib/site.mjs`, now **v0.12.0**; `guides/` are preserved **v0.11.0**) and
+**current development** source guides.
 The development section covers shared endpoints, Network Port/Number controls,
 transport evidence and current SC setup. [Engineering docs](../docs/README.md)
 and the canonical conformance ledger remain the contract authorities.
@@ -68,8 +70,9 @@ screen-reader and physical-device checks remain separate lanes.
 
 `examples/python/loopback_lab.py` is the sole tutorial body: MDX imports it and
 `prepare:content` copies it to the public download. Do not edit generated copies.
-Use a fresh Python 3.11–3.13 environment with a provenance-verified **release**
-native package, not a development wheel that happens to share version 0.11.0.
+Use a fresh Python 3.11–3.14 environment with a provenance-verified **release**
+native package, not a development wheel that happens to share the release
+version. The script refuses any `rusty-bacnet` version but its `EXPECTED_VERSION`.
 
 ```sh
 python -m unittest discover -s tests/python -v
@@ -91,6 +94,8 @@ workflow `34003656261`, artifact `9980479931`, tag `v0.11.0` at
 The release `bacnet-macos-arm64` executable also read value 72.5 and units 64
 from a 30-second loopback server that then stopped. This is bounded tutorial
 evidence, not PyPI, general wheel/platform, or physical-network qualification.
+That evidence is for v0.11.0; the lab has not yet run against v0.12.0 release
+wheels.
 
 ## Retained CI and publication reference
 
@@ -199,7 +204,11 @@ artifact or fetch a mutable branch in the deployment job.
 
 ## Content organization
 
-- `start/` and `guides/`: preserved v0.11 release tasks; immutable release sources.
+- `start/`: release tasks for the version in `src/lib/site.mjs`; `guides/`: preserved v0.11 release tasks.
+- `src/lib/site.mjs`: `release`, which MDX pages, the download list, the footer
+  and the llms index read. To move to another release, change it and run
+  `npm test`: `tests/unit/release.test.mjs` names each Markdown page, the lab
+  script and the sidebar label that still carry the old version.
 - `development/`: marked current-source task guides, linked to canonical repository docs.
 - `reference/` and `project/`: cross-version navigation with explicit release/current links.
 - `src/data/navigation.json`: sidebar and test route inventory.

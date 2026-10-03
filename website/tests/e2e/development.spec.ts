@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { release } from '../../src/lib/site.mjs';
 const base = '/rusty-bacnet/';
 
 test('homepage routes release readers and current-source builders separately', async ({ page }) => {
@@ -15,7 +16,7 @@ test('homepage routes release readers and current-source builders separately', a
   await page.goto(base);
   await versions.getByRole('link', { name: /Start with a released tool/ }).click();
   await expect(page).toHaveURL(base + 'start/installation/');
-  await expect(page.locator('main')).toContainText('v0.11.0 release assets');
+  await expect(page.locator('main')).toContainText(`v${release} release assets`);
 });
 
 test('search discovers development Network Port guidance and retains its scope', async ({ page, request }) => {

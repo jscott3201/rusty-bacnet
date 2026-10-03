@@ -3,7 +3,7 @@ title: "Read with Python"
 description: "Use the asynchronous Python client for a small, read-only integration."
 ---
 
-Install `rusty-bacnet==0.11.0` in a virtual environment first. The distribution name uses a hyphen; the import name uses an underscore.
+Install `rusty-bacnet==0.12.0` in a virtual environment first. The distribution name uses a hyphen; the import name uses an underscore.
 
 For a self-contained first run with no external target, use the [local client/server lab](/rusty-bacnet/start/local-lab/). Continue here when you have a known device address and object.
 
@@ -90,6 +90,6 @@ Use [the API entry points](/rusty-bacnet/reference/api/) for complete signatures
 
 ## Sources and release scope
 
-These instructions target **v0.11.0**. Source review is not a claim of hardware qualification.
+These instructions target **v0.12.0**. Source review is not a claim of hardware qualification.
 
-[Python API](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/docs/python-api.md) · [Release client/server example](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/examples/python/bip_client_server.py) · [Type stubs](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/crates/rusty-bacnet/rusty_bacnet.pyi).
+[Python API](https://github.com/jscott3201/rusty-bacnet/blob/v0.12.0/docs/python-api.md) · [Release client/server example](https://github.com/jscott3201/rusty-bacnet/blob/v0.12.0/examples/python/bip_client_server.py) · [Type stubs](https://github.com/jscott3201/rusty-bacnet/blob/v0.12.0/crates/rusty-bacnet/rusty_bacnet.pyi).

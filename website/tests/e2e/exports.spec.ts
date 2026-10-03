@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import navigation from '../../src/data/navigation.json' with { type: 'json' };
+import { release } from '../../src/lib/site.mjs';
 const base = '/rusty-bacnet/';
 const origin = 'https://jscott3201.github.io';
 const routes = ['', ...navigation.flatMap(group => group.items.map(item => `${item.slug}/`))];
@@ -50,7 +51,7 @@ test('download, MDX source view, Markdown exports and llms are source-derived', 
   const llms = await request.get(base + 'llms.txt');
   const index = await llms.text();
   expect(index.match(/^- \[/gm)).toHaveLength(routes.length - 1);
-  expect(index).toContain("v0.11.0 release tutorials");
+  expect(index).toContain(`v${release} release start pages`);
   expect(index).toContain("Use development/ for unreleased source APIs");
   for (const route of routes.filter(Boolean)) {
     const rawPath = `raw/${route.slice(0, -1)}.md`;

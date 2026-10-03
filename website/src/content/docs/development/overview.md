@@ -3,7 +3,7 @@ title: "Build with current development"
 description: "Choose a current-source integration path, build it locally, and find its API and evidence boundaries."
 ---
 
-**Current development · unreleased source.** These guides describe the `dev` checkout. Its version may still read 0.11.0; record the commit as well. For the released package and preserved tutorial, use [v0.11 installation](/rusty-bacnet/start/installation/) or the [local lab](/rusty-bacnet/start/local-lab/).
+**Current development · unreleased source.** These guides describe the `dev` checkout. Its version may still read 0.11.0; record the commit as well. For the released package and preserved tutorial, use [v0.12 installation](/rusty-bacnet/start/installation/) or the [local lab](/rusty-bacnet/start/local-lab/).
 
 ## Choose the owner for your application
 

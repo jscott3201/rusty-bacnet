@@ -3,6 +3,7 @@ import { readdir, readFile, mkdir, writeFile, rm, copyFile } from 'node:fs/promi
 import { join, relative, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { frontmatter, plainBody, isGuideFile } from './content.mjs';
+import { release } from '../src/lib/site.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const docs = join(root, 'src/content/docs');
 const output = join(root, 'public/raw');
@@ -15,7 +16,7 @@ await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });
 await mkdir(join(root, 'public/examples'), { recursive: true });
 await copyFile(join(root, 'examples/python/loopback_lab.py'), join(root, 'public/examples/loopback_lab.py'));
-const links = ['# Rusty BACnet', '', '> v0.11.0 release tutorials and explicitly marked current-development guides; pre-1.0 APIs and partial conformance.', '', 'Use start/ and guides/ for the v0.11.0 release. Use development/ for unreleased source APIs; record the checkout revision. Reference and project pages name their scope. The local lab is loopback-only.', '', '## Guides', ''];
+const links = ['# Rusty BACnet', '', `> v${release} release start pages, v0.11.0 release guides and explicitly marked current-development guides; pre-1.0 APIs and partial conformance.`, '', `Use start/ for the v${release} release and guides/ for v0.11.0. Use development/ for unreleased source APIs; record the checkout revision. Reference and project pages name their scope. The local lab is loopback-only.`, '', '## Guides', ''];
 let count = 0;
 for (const file of await walk(docs)) {
   if (!isGuideFile(file)) continue;

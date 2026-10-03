@@ -7,7 +7,7 @@ Rusty BACnet is pre-1.0, with changing APIs and partial conformance coverage. Ne
 
 ## Choose the version and owner first
 
-The [installation and local tutorials](/rusty-bacnet/start/installation/) describe **v0.11.0**. The [development section](/rusty-bacnet/development/overview/) describes **unreleased source**, including shared endpoints, current SC requirements and local Network Number controls. A checkout may still report version 0.11.0; use its commit to identify behavior.
+The [installation and local tutorials](/rusty-bacnet/start/installation/) describe **v0.12.0**; the operating guides still describe **v0.11.0**. The [development section](/rusty-bacnet/development/overview/) describes **unreleased source**, including shared endpoints, current SC requirements and local Network Number controls. A checkout may still report version 0.11.0; use its commit to identify behavior.
 
 Standalone client, full server, shared endpoint and language binding are different surfaces. The shared endpoint's bounded responder does not acquire the full server's service set. Use the [current transport matrix](/rusty-bacnet/development/transports/) to choose a starting point, then follow its evidence links.
 

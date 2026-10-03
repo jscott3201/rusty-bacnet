@@ -4,34 +4,34 @@
     "architecture": "Apple silicon",
     "file": "bacnet-macos-arm64",
     "features": "BACnet/SC",
-    "url": "https://github.com/jscott3201/rusty-bacnet/releases/download/v0.11.0/bacnet-macos-arm64"
+    "runtime": "Built for macOS 11.0 or later"
   },
   {
     "os": "macOS",
     "architecture": "Intel",
     "file": "bacnet-macos-amd64",
     "features": "BACnet/SC",
-    "url": "https://github.com/jscott3201/rusty-bacnet/releases/download/v0.11.0/bacnet-macos-amd64"
+    "runtime": "Built for macOS 10.12 or later"
   },
   {
     "os": "Linux",
     "architecture": "x86-64",
     "file": "bacnet-linux-amd64",
-    "features": "BACnet/SC \u00b7 packet capture",
-    "url": "https://github.com/jscott3201/rusty-bacnet/releases/download/v0.11.0/bacnet-linux-amd64"
+    "features": "BACnet/SC · packet capture",
+    "runtime": "Built for glibc 2.17 or later, with libpcap linked in"
   },
   {
     "os": "Linux",
     "architecture": "ARM64",
     "file": "bacnet-linux-arm64",
-    "features": "BACnet/SC \u00b7 packet capture",
-    "url": "https://github.com/jscott3201/rusty-bacnet/releases/download/v0.11.0/bacnet-linux-arm64"
+    "features": "BACnet/SC · packet capture",
+    "runtime": "Built for glibc 2.17 or later, with libpcap linked in"
   },
   {
     "os": "Windows",
     "architecture": "x86-64",
     "file": "bacnet-windows-amd64.exe",
     "features": "BACnet/SC",
-    "url": "https://github.com/jscott3201/rusty-bacnet/releases/download/v0.11.0/bacnet-windows-amd64.exe"
+    "runtime": "C runtime linked in; no Visual C++ Redistributable"
   }
 ]

@@ -1,7 +1,10 @@
+---
+import { release } from '../lib/site.mjs';
+---
 <div class="rb-home">
   <aside class="rb-lab-banner" aria-label="Start without a controller"><div><strong>No controller? Start on your own machine.</strong><p>The local lab uses loopback addresses and an example server. No building-network discovery.</p></div><a href="/rusty-bacnet/start/local-lab/">Try the local lab <span aria-hidden="true">→</span></a></aside>
   <section class="rb-bottom-grid" aria-label="Choose your documentation version">
-    <a href="/rusty-bacnet/start/installation/"><p class="rb-eyebrow">RELEASE · v0.11.0</p><h2>Start with a released tool.</h2><p>Install a release binary or package, run the preserved local lab, then read a known device.</p><span class="rb-card-link">Install v0.11 <span aria-hidden="true">→</span></span></a>
+    <a href="/rusty-bacnet/start/installation/"><p class="rb-eyebrow">RELEASE · v{release}</p><h2>Start with a released tool.</h2><p>Install a release binary or package, run the preserved local lab, then read a known device.</p><span class="rb-card-link">Install v{release} <span aria-hidden="true">→</span></span></a>
     <a href="/rusty-bacnet/development/overview/"><p class="rb-eyebrow">CURRENT DEVELOPMENT · SOURCE BUILD</p><h2>Build with the current APIs.</h2><p>Compose shared endpoints, configure SC, and understand Network Port registration, passive Number controls and transport evidence.</p><span class="rb-card-link">Open development guides <span aria-hidden="true">→</span></span></a>
   </section>
   <section aria-labelledby="journeys-title" class="rb-section">

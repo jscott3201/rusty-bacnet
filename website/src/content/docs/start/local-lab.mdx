@@ -8,6 +8,7 @@ import Diagram from '../../../components/Diagram.astro';
 import Checkpoint from '../../../components/Checkpoint.astro';
 import NextStep from '../../../components/NextStep.astro';
 import labSource from '../../../../examples/python/loopback_lab.py?raw';
+import { release } from '../../../lib/site.mjs';
 
 **No controller required.** This lab runs a real Rusty BACnet server and client on your machine. It reads an example analog input, checks the response, and closes both endpoints.
 
@@ -17,7 +18,7 @@ Both endpoints bind to **127.0.0.1**. The script does not perform discovery, req
 
 ## 1. Prepare the Python environment
 
-Complete the **Python** path in [Install the tools](/rusty-bacnet/start/installation/). The script checks for `rusty-bacnet==0.11.0` before it starts. Run it with the interpreter from that environment.
+Complete the **Python** path in [Install the tools](/rusty-bacnet/start/installation/). The script checks for <code>rusty-bacnet=={release}</code> before it starts. Run it with the interpreter from that environment.
 
 ## 2. Save the lab script
 
@@ -92,14 +93,14 @@ The script prints a **complete command containing the actual server port**. Copy
 
 The printed command sets the CLI's interface to `127.0.0.1` and its local port to `0`, while the target uses the server's assigned port. These are **different sockets**. Do not copy port zero into general discovery or persistent COV recipes.
 
-The server stops after the requested duration. Ctrl+C stops it earlier. This is an optional CLI extension of the tutorial; the Python-only round trip above does not require the CLI or libpcap.
+The server stops after the requested duration. Ctrl+C stops it earlier. This is an optional CLI extension of the tutorial; the Python-only round trip above does not require the CLI.
 
 ## When the lab does not pass
 
 | Symptom | Next check |
 |---|---|
 | `ModuleNotFoundError` or version mismatch | Use the environment's interpreter; verify its native import and package version. |
-| A shared-library error before the CLI starts | On the reviewed Linux release, check the libpcap runtime. Use Python-only mode to separate this from BACnet behavior. |
+| A loader or shared-library error before the CLI starts | Check that the executable matches this machine's operating system and processor; the Linux builds need glibc 2.17 or newer. Use Python-only mode to separate this from BACnet behavior. |
 | A bind error after setting `--port` | Return to the default `--port 0` or stop the process using that port. |
 | The client times out | Confirm the server is still running and use the address printed by this run, not an old terminal session. |
 | No `PASS` or no clean exit | Read the error message; do not treat server startup as a successful read. |
@@ -118,6 +119,8 @@ Do not solve a failed local lab by replacing `127.0.0.1` with `0.0.0.0` or a bui
 ## What this demonstrates
 
 This exercises **one directed BACnet/IP property read** through the native extension, with application-owned sample data and bounded lifecycle handling. It does not establish discovery, routed operation, MS/TP timing, BACnet/SC security, or full conformance.
+
+The recorded runs below used **v0.11.0**; they have not been repeated with v{release}.
 
 During site integration, **all eight tutorial tests and the standalone lab passed on macOS 27.0 arm64 with CPython 3.12.13**, using the v0.11.0 cp312 wheel from the release workflow linked below. The optional **v0.11.0 macOS arm64 CLI** also read the loopback server's value (`72.5`) and units (`64`) through a separate ephemeral socket; the server stopped after its 30-second limit. These results cover these local tutorial flows, not PyPI availability, a general wheel/platform matrix, or physical-network interoperability.
 

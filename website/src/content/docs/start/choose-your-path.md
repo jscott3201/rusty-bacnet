@@ -7,7 +7,7 @@ Rusty BACnet is a protocol stack with three user-facing entry points, not a desk
 
 ## Building from current source?
 
-Use the [development overview](/rusty-bacnet/development/overview/) for shared endpoints, current SC setup and passive Number controls. The installation and tutorials below remain scoped to v0.11.0.
+Use the [development overview](/rusty-bacnet/development/overview/) for shared endpoints, current SC setup and passive Number controls. The installation and start pages below target v0.12.0.
 
 ## Start without hardware
 
@@ -45,6 +45,6 @@ Keep writes, alarm acknowledgments, device communication control, time synchroni
 
 ## Sources and release scope
 
-These instructions target **v0.11.0**. Source review is not a claim of hardware qualification.
+These instructions target **v0.12.0**. Source review is not a claim of hardware qualification.
 
-[Release](https://github.com/jscott3201/rusty-bacnet/releases/tag/v0.11.0) · [Workspace manifest](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/Cargo.toml) · [Python packaging](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/crates/rusty-bacnet/pyproject.toml).
+[Release](https://github.com/jscott3201/rusty-bacnet/releases/tag/v0.12.0) · [Workspace manifest](https://github.com/jscott3201/rusty-bacnet/blob/v0.12.0/Cargo.toml) · [Python packaging](https://github.com/jscott3201/rusty-bacnet/blob/v0.12.0/crates/rusty-bacnet/pyproject.toml).

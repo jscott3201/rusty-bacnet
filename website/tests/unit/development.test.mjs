@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import navigation from '../../src/data/navigation.json' with { type: 'json' };
 import { frontmatter, plainBody } from '../../scripts/content.mjs';
 import { fileURLToPath } from 'node:url';
+import { release } from '../../src/lib/site.mjs';
 
 const root = new URL('../../', import.meta.url);
 test('development navigation resolves marked task guides with canonical source links', async () => {
@@ -27,11 +28,13 @@ test('development navigation resolves marked task guides with canonical source l
 });
 
 test('release CLI source path is pinned while the lab remains release-scoped', async () => {
-  const install = await readFile(new URL('src/content/docs/start/installation.mdx', root), 'utf8');
-  assert.match(install, /git clone --branch v0\.11\.0/);
+  const path = fileURLToPath(new URL('src/content/docs/start/installation.mdx', root));
+  const install = await plainBody(frontmatter(await readFile(path, 'utf8')).body, path, []);
+  assert.ok(install.includes(`git clone --branch v${release} `));
   assert.match(install, /cargo install --path crates\/bacnet-cli --locked/);
-  assert.doesNotMatch(install, /cargo install bacnet-cli --version/);
+  // bacnet-cli is on crates.io from 0.12.0; any crates.io install names the release.
+  for (const match of install.matchAll(/cargo install bacnet-cli --version (\S+)/g)) assert.equal(match[1], release);
   const lab = await readFile(new URL('src/content/docs/start/local-lab.mdx', root), 'utf8');
-  assert.match(lab, /v0\.11\.0/);
+  assert.match(lab, /rusty-bacnet==\{release\}/);
   assert.match(lab, /loopback_lab\.py\?raw/);
 });

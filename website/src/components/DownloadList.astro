@@ -1,11 +1,13 @@
 ---
 import downloads from '../data/downloads.json';
+import { releaseAsset } from '../lib/site.mjs';
 ---
 <div class="rb-download-grid">
-  {downloads.map((item) => <a class="rb-download" href={item.url}>
+  {downloads.map((item) => <a class="rb-download" href={releaseAsset(item.file)}>
     <span class="rb-download-os">{item.os} <span aria-hidden="true">↓</span></span>
     <strong>{item.architecture}</strong>
     <code>{item.file}</code>
     <small>Release build: {item.features}</small>
+    <small>{item.runtime}</small>
   </a>)}
 </div>
