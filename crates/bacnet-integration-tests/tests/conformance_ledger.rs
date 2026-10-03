@@ -16,6 +16,8 @@ const STANDARD_LEDGER: &str = include_str!("../../../docs/conformance/standard-1
 
 #[path = "conformance_ledger/endpoint_device_write.rs"]
 mod endpoint_device_write;
+#[path = "conformance_ledger/evidence.rs"]
+mod evidence;
 #[path = "conformance_ledger/notes.rs"]
 mod notes;
 #[path = "conformance_ledger/published_doc.rs"]

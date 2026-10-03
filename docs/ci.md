@@ -410,6 +410,7 @@ python3 scripts/ci/test-check-msrv.py
 python3 -m unittest discover -s scripts/release
 python3 -m unittest discover -s scripts -p 'test_changelog.py'
 python3 scripts/changelog.py check
+python3 -m unittest discover -s scripts -p 'test_ledger_*.py'
 ```
 
 `changelog.py check` validates the [changelog fragments](../changelog.d/README.md)

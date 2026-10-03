@@ -4,7 +4,9 @@
 With --check this also verifies that every test anchor in the ledger resolves
 (see check_ledger_anchors.py). A row's notes may be one string or an array of
 entries, which the docs print joined with single spaces (see
-ledger_notes_split.py)."""
+ledger_notes_split.py). The row tables of standard-135-2020-ledger.md are
+rewritten between their markers from each listed row's evidence, and the rest
+of that page is kept as written (see ledger_tables.py)."""
 
 from __future__ import annotations
 
@@ -14,6 +16,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 import check_ledger_anchors
+import ledger_tables
 from ledger_notes_split import notes_text
 
 
@@ -24,6 +27,7 @@ OUTPUTS = {
     "pics": ROOT / "docs" / "conformance" / "pics-draft.md",
     "bibbs": ROOT / "docs" / "conformance" / "bibbs-draft.md",
 }
+LEDGER_PAGE = ROOT / "docs" / "conformance" / "standard-135-2020-ledger.md"
 
 
 def load_ledger() -> dict:
@@ -147,6 +151,15 @@ def generated(data: dict) -> dict[Path, str]:
     }
 
 
+def outputs(data: dict) -> dict[Path, str]:
+    """Every file the generator writes, as it should read. The ledger page is
+    not in generated(), which builds whole files: only its marked tables come
+    from the JSON."""
+    views = {path: content.rstrip() + "\n" for path, content in generated(data).items()}
+    views[LEDGER_PAGE] = ledger_tables.render(LEDGER_PAGE.read_text(encoding="utf-8"), data)
+    return views
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true", help="fail if generated docs are stale")
@@ -154,8 +167,13 @@ def main() -> int:
 
     data = load_ledger()
     stale: list[Path] = []
-    for path, content in generated(data).items():
-        content = content.rstrip() + "\n"
+    try:
+        views = outputs(data)
+    except ledger_tables.LedgerTableError as err:
+        for problem in err.problems:
+            print(f"{LEDGER_PAGE.relative_to(ROOT)}: {problem}")
+        return 1
+    for path, content in views.items():
         if args.check:
             if not path.exists() or path.read_text(encoding="utf-8") != content:
                 stale.append(path)
