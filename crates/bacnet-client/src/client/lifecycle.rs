@@ -249,8 +249,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             }
         });
 
-        // Boxed: the client is moved around by value, and most never pace.
-        let pacer = Box::new(pacing::RequestPacer::new(Duration::from_millis(
+        // Shared: each paced request's guard keeps the pacer it reports to.
+        let pacer = Arc::new(pacing::RequestPacer::new(Duration::from_millis(
             config.min_request_interval_ms,
         )));
         Ok(Self {

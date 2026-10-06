@@ -60,12 +60,7 @@ impl BACnetClient {
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         }
         let sc_device_uuid = crate::sc_identity::device_uuid(transport, sc_device_uuid)?;
-        if min_request_interval_ms > client::MAX_MIN_REQUEST_INTERVAL_MS {
-            return Err(PyValueError::new_err(format!(
-                "min_request_interval_ms must be 0..={}, got {min_request_interval_ms}",
-                client::MAX_MIN_REQUEST_INTERVAL_MS
-            )));
-        }
+        let min_request_interval_ms = parse_min_request_interval_ms(min_request_interval_ms)?;
         Ok(Self {
             inner: Arc::new(Mutex::new(None)),
             transport_type: transport.to_string(),

@@ -22,6 +22,14 @@
 //! the session drops, [`Weak`](std::sync::Weak) upgrade fails and every role
 //! call reports shutdown.
 //!
+//! The session keeps its object database through `stop()` and lets go of it
+//! when it drops. Every endpoint holder of the database (the session, the
+//! server role's responder, a cloned server role handle, the source Audit
+//! runtime and the session's tasks) lets go through
+//! [`drop_database_off_runtime`], so whichever goes last, in async code the
+//! objects and any durable saves they wait for drop on Tokio's blocking pool,
+//! not on a runtime worker (#1561).
+//!
 //! ```compile_fail,E0596
 //! // Lifecycle is owner-exclusive: `stop` takes `&mut self`, so a shared
 //! // borrow cannot drive shutdown.
@@ -81,7 +89,7 @@ use crate::roles::{
 };
 use bacnet_server::server::{
     __endpoint_EndpointResponder as EndpointResponder,
-    __endpoint_NotificationTransactions as NotificationTransactions,
+    __endpoint_NotificationTransactions as NotificationTransactions, drop_database_off_runtime,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -120,9 +128,9 @@ pub enum SessionRole {
 /// limit).
 ///
 /// Typed at the public boundary: every field is validated where it matters
-/// (`queue_capacity == 0` or `read_work_limit == 0` fails
-/// [`EndpointSession::new`]; APDU/timer values flow into the client role
-/// config unchanged).
+/// (`queue_capacity == 0`, `read_work_limit == 0` or a
+/// `min_request_interval_ms` past an hour fails [`EndpointSession::new`];
+/// APDU/timer values flow into the client role config unchanged).
 ///
 /// ```
 /// use bacnet_endpoint::session::SessionConfig;
@@ -131,6 +139,7 @@ pub enum SessionRole {
 /// assert!(config.queue_capacity > 0);
 /// assert_eq!(config.max_apdu_length, 480);
 /// assert_eq!(config.read_work_limit, 256);
+/// assert_eq!(config.min_request_interval_ms, 0);
 /// ```
 #[derive(Clone, Debug)]
 pub struct SessionConfig {
@@ -164,6 +173,18 @@ pub struct SessionConfig {
     /// Must be greater than zero; [`EndpointSession::new`] returns
     /// [`Error::Encoding`] otherwise.
     pub read_work_limit: usize,
+    /// Least time, in milliseconds, between the client role's confirmed
+    /// requests to one destination (default 0: no pacing), measured as
+    /// [`ClientConfig::min_request_interval_ms`] says for `BACnetClient`
+    /// (#1542).
+    ///
+    /// Only new confirmed requests wait: a retry keeps its request's turn,
+    /// and replies, notifications and unconfirmed requests go at once.
+    /// Stopping or dropping the session ends a wait at once with the
+    /// shutdown error. At
+    /// most [`MAX_MIN_REQUEST_INTERVAL_MS`](bacnet_client::client::MAX_MIN_REQUEST_INTERVAL_MS),
+    /// an hour; [`EndpointSession::new`] returns [`Error::Encoding`] past it.
+    pub min_request_interval_ms: u64,
 }
 
 impl Default for SessionConfig {
@@ -175,6 +196,7 @@ impl Default for SessionConfig {
             max_apdu_length: 480,
             read_work_limit: bacnet_server::server::ReadPropertyMultipleBudget::default()
                 .max_result_elements,
+            min_request_interval_ms: 0,
         }
     }
 }
@@ -288,7 +310,8 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// Creates a session owning `transport` (not yet started).
     ///
     /// Returns [`Error::Encoding`] when `config.queue_capacity` or
-    /// `config.read_work_limit` is zero. Normally built via
+    /// `config.read_work_limit` is zero, or `config.min_request_interval_ms`
+    /// is more than an hour. Normally built via
     /// [`BipEndpointBuilder`](crate::bip::BipEndpointBuilder),
     /// [`ScEndpointBuilder`](crate::sc::ScEndpointBuilder), or
     /// [`MstpEndpointBuilder`](crate::mstp::MstpEndpointBuilder) instead of
@@ -316,12 +339,20 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                 "endpoint session read work limit must be greater than zero".into(),
             ));
         }
+        let interval = config.min_request_interval_ms;
+        if interval > bacnet_client::client::MAX_MIN_REQUEST_INTERVAL_MS {
+            return Err(Error::Encoding(format!(
+                "endpoint session min-request-interval {interval} ms is more than {} ms",
+                bacnet_client::client::MAX_MIN_REQUEST_INTERVAL_MS
+            )));
+        }
         let coordinator = Arc::new(OutboundTransactionCoordinator::new());
         let token = SessionToken::new(Arc::clone(&coordinator));
         let client_config = ClientConfig {
             apdu_timeout_ms: config.apdu_timeout_ms,
             apdu_retries: config.apdu_retries,
             max_apdu_length: config.max_apdu_length,
+            min_request_interval_ms: interval,
             ..ClientConfig::default()
         };
         Ok(Self {
@@ -777,6 +808,13 @@ impl<T: TransportPort + 'static> Drop for EndpointSession<T> {
         if let Some(task) = self.dispatch_task.take() {
             task.abort();
         }
+        // The session's own handle, kept through stop(), goes off the
+        // runtime if it is the last (#1561). Every other endpoint holder
+        // (responder, source Audit, the aborted tasks' handles) lets go the
+        // same way when it drops, whichever goes last.
+        if let Some(db) = self.database.take() {
+            drop(drop_database_off_runtime(db));
+        }
     }
 }
 
@@ -990,3 +1028,7 @@ mod local_network_tests;
 #[cfg(test)]
 #[path = "read_work_limit_tests.rs"]
 mod read_work_limit_tests;
+
+#[cfg(test)]
+#[path = "client_pacing_tests.rs"]
+mod client_pacing_tests;

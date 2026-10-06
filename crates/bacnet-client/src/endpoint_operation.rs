@@ -1,6 +1,96 @@
 //! Prepared operation ownership and terminal observation shared by the closed RP/RR/RPM/WP paths.
 use super::*;
 
+/// A checked, encoded operation whose destination's minimum interval has
+/// let it go (#1542). It holds its turn but no transaction: dropping it
+/// before [`prepare`](Self::prepare) starts the next request's interval,
+/// as a request given up does.
+#[doc(hidden)]
+pub struct PacedEndpointOperation {
+    pub(super) inner: Arc<EndpointRequesterInner>,
+    pub(super) destination: EndpointApduDestination,
+    pub(super) data_attributes: Vec<DataAttribute>,
+    pub(super) request: EndpointOperationRequest,
+    pub(super) service_data: BytesMut,
+    pub(super) pace: PaceGuard,
+}
+
+impl PacedEndpointOperation {
+    /// Where the request goes: the destination as checked, with one routed
+    /// on this endpoint's own network localized to its MAC (#1403).
+    #[doc(hidden)]
+    pub fn destination(&self) -> &EndpointApduDestination {
+        &self.destination
+    }
+
+    /// Reserve the transaction: an invoke ID from the shared pool and the
+    /// requester's TSM entry. The operation keeps its turn until it ends.
+    #[doc(hidden)]
+    pub fn prepare(self) -> Result<PreparedEndpointOperation, Error> {
+        let Self {
+            inner,
+            destination,
+            data_attributes,
+            request,
+            service_data,
+            pace,
+        } = self;
+        let service = request.service();
+        let TransactionPeer {
+            tsm_mac,
+            canonical: peer,
+        } = outbound_tsm_peer(&destination);
+        let (invoke_id, registration) = {
+            let mut tsm = inner
+                .tsm
+                .lock()
+                .map_err(|_| Error::Encoding("endpoint requester state is poisoned".into()))?;
+            if !inner.open.load(Ordering::Acquire) {
+                return Err(shutdown_error());
+            }
+            tsm.register_coordinated_transaction_with_policy(
+                tsm_mac.clone(),
+                peer,
+                service,
+                false,
+                request.terminal_policy(),
+            )
+            .map_err(|error| Error::Encoding(error.to_string()))?
+        };
+        let max_apdu_length = inner.max_apdu_length;
+        let guard = EndpointRequestGuard {
+            inner,
+            destination: tsm_mac,
+            invoke_id,
+            owner: registration.owner.clone(),
+            active: true,
+        };
+        let pdu = Apdu::ConfirmedRequest(ConfirmedRequestPdu {
+            segmented: false,
+            more_follows: false,
+            segmented_response_accepted: false,
+            max_segments: None,
+            max_apdu_length,
+            invoke_id,
+            sequence_number: None,
+            proposed_window_size: None,
+            service_choice: service,
+            service_request: service_data.freeze(),
+        });
+        let mut encoded = BytesMut::new();
+        encode_apdu(&mut encoded, &pdu)?;
+        Ok(PreparedEndpointOperation {
+            guard,
+            destination,
+            data_attributes,
+            request,
+            encoded: encoded.to_vec(),
+            response: registration.response,
+            _pace: pace,
+        })
+    }
+}
+
 /// A reserved, encoded operation that has not submitted any traffic.
 #[doc(hidden)]
 pub struct PreparedEndpointOperation {
@@ -10,6 +100,9 @@ pub struct PreparedEndpointOperation {
     pub(super) request: EndpointOperationRequest,
     pub(super) encoded: Vec<u8>,
     pub(super) response: tokio::sync::oneshot::Receiver<TsmResponse>,
+    /// The destination's turn, held through every retry until the
+    /// operation ends, by a terminal, an error or being dropped (#1542).
+    pub(super) _pace: PaceGuard,
 }
 
 /// Caller result plus the narrow transmission evidence needed by source audit.

@@ -535,7 +535,11 @@ device room for its
 other clients. Requests to different destinations don't wait on each other;
 0, the default, sends at once, and more than 3,600,000 (an hour) raises
 `ValueError`. Behind a router the pause after a reply holds for requests made
-one after another only. `EndpointClient` has no pacing.
+one after another only. `BipEndpoint`, `ScEndpoint` and `MstpEndpoint` take the
+same keyword-only `min_request_interval_ms`, validated the same way, and pace
+their `EndpointClient`'s confirmed requests with the same pacer (#1542). On
+both, only new confirmed requests wait: a retry keeps its request's turn, and
+replies, notifications and unconfirmed requests go at once.
 
 ### Sharing a port by address
 
@@ -3855,6 +3859,12 @@ carrying OUT_OF_RESOURCES (a peer `BACnetClient` raises `BacnetAbortError` with
 native-overflow values raise `OverflowError`, all in the constructor. It is the
 endpoint counterpart of `BACnetServer`'s `rpm_max_result_elements`; see
 [RPM budgets](rpm-budget.md).
+
+Each owner also takes a keyword-only `min_request_interval_ms=0`, the least
+time between the client role's confirmed requests to one device, as for
+`BACnetClient` (see [the client constructor](#bacnetclient)). More than
+3,600,000 raises `ValueError` and a negative value `OverflowError`, in the
+constructor, exactly as `BACnetClient` raises them.
 
 ```python
 endpoint = BipEndpoint(device_instance=1001, port=0, read_work_limit=2)

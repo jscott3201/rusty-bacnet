@@ -40,6 +40,7 @@ struct MstpEndpointConfig {
     read_work_limit: usize,
     apdu_timeout_ms: u64,
     apdu_retries: u8,
+    min_request_interval_ms: u64,
 }
 
 #[cfg(test)]
@@ -79,6 +80,7 @@ impl MstpEndpointConfig {
             .queue_capacity(config.queue_capacity)
             .read_work_limit(config.read_work_limit)
             .client_timers(config.apdu_timeout_ms, config.apdu_retries)
+            .min_request_interval_ms(config.min_request_interval_ms)
             .database(db)
             .identity(config.identity.clone())
             .build_session()
@@ -128,6 +130,9 @@ impl PyMstpEndpoint {
     ///         by the server role may expand (must be >0, default 256): its
     ///         own row plus, for a Group's Present_Value, one per member
     ///         property. A read past it is aborted with OUT_OF_RESOURCES.
+    ///     min_request_interval_ms: Keyword-only (default 0, no pacing; at
+    ///         most 3600000). Least time between the client role's confirmed
+    ///         requests to one destination, as for `BACnetClient`.
     #[new]
     #[pyo3(signature = (
         device_instance,
@@ -146,7 +151,8 @@ impl PyMstpEndpoint {
         apdu_timeout_ms=6000,
         apdu_retries=0,
         *,
-        read_work_limit=256
+        read_work_limit=256,
+        min_request_interval_ms=0
     ))]
     fn new(
         device_instance: u32,
@@ -165,6 +171,7 @@ impl PyMstpEndpoint {
         apdu_timeout_ms: u64,
         apdu_retries: u8,
         read_work_limit: usize,
+        min_request_interval_ms: u64,
     ) -> PyResult<Self> {
         if queue_capacity == 0 {
             return Err(PyValueError::new_err(
@@ -172,6 +179,8 @@ impl PyMstpEndpoint {
             ));
         }
         let read_work_limit = parse_read_work_limit(read_work_limit)?;
+        let min_request_interval_ms =
+            crate::client::parse_min_request_interval_ms(min_request_interval_ms)?;
         // Early addressing/baud validation without opening (ValueError).
         crate::mstp_py::validate_mstp_config(
             Some(serial_port),
@@ -212,6 +221,7 @@ impl PyMstpEndpoint {
                 read_work_limit,
                 apdu_timeout_ms,
                 apdu_retries,
+                min_request_interval_ms,
             },
         })
     }

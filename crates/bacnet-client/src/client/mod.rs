@@ -133,7 +133,8 @@ pub struct ClientConfig {
     /// paging a log or polling alike (#1535). Behind a router, whose path
     /// lease every device on that network shares, the pause after a reply
     /// holds for requests made one after another only. At most
-    /// [`MAX_MIN_REQUEST_INTERVAL_MS`], an hour; more fails the build.
+    /// [`MAX_MIN_REQUEST_INTERVAL_MS`], an hour; more fails the build. The
+    /// endpoint client takes the same setting from its session (#1542).
     pub min_request_interval_ms: u64,
 }
 
@@ -516,7 +517,7 @@ pub struct BACnetClient<T: TransportPort> {
     routed_path_limits: Arc<RoutedPathLimits>,
     /// See [`Self::group_source_request_drops`].
     group_source_request_drops: Arc<std::sync::atomic::AtomicU64>,
-    pacer: Box<pacing::RequestPacer>,
+    pacer: Arc<pacing::RequestPacer>,
 }
 
 impl BACnetClient<BipTransport> {
@@ -872,7 +873,7 @@ mod event_notifications;
 mod file_list;
 mod lifecycle;
 mod object_mgmt;
-mod pacing;
+pub(crate) mod pacing;
 mod property;
 mod read_range;
 mod requests;

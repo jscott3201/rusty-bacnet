@@ -45,6 +45,7 @@ struct BipEndpointConfig {
     apdu_timeout_ms: u64,
     apdu_retries: u8,
     registered_network_port: Option<u32>,
+    min_request_interval_ms: u64,
 }
 
 type BipSession = EndpointSession<BipTransport>;
@@ -81,6 +82,7 @@ impl BipEndpointConfig {
             .queue_capacity(config.queue_capacity)
             .read_work_limit(config.read_work_limit)
             .client_timers(config.apdu_timeout_ms, config.apdu_retries)
+            .min_request_interval_ms(config.min_request_interval_ms)
             .database(db)
             .identity(config.identity.clone());
         if let Some(instance) = config.registered_network_port {
@@ -168,6 +170,9 @@ impl PyBipEndpoint {
     ///         this host can share the port; needs an explicit interface and
     ///         a nonzero port. Broadcasts and unicast then arrive in no fixed
     ///         order.
+    ///     min_request_interval_ms: Keyword-only (default 0, no pacing; at
+    ///         most 3600000). Least time between the client role's confirmed
+    ///         requests to one destination, as for `BACnetClient`.
     #[new]
     #[pyo3(signature = (
         device_instance,
@@ -188,7 +193,8 @@ impl PyBipEndpoint {
         registered_network_port=None,
         *,
         read_work_limit=256,
-        share_port_by_address=false
+        share_port_by_address=false,
+        min_request_interval_ms=0
     ))]
     fn new(
         device_instance: u32,
@@ -209,6 +215,7 @@ impl PyBipEndpoint {
         registered_network_port: Option<u32>,
         read_work_limit: usize,
         share_port_by_address: bool,
+        min_request_interval_ms: u64,
     ) -> PyResult<Self> {
         if queue_capacity == 0 {
             return Err(PyValueError::new_err(
@@ -216,6 +223,8 @@ impl PyBipEndpoint {
             ));
         }
         let read_work_limit = parse_read_work_limit(read_work_limit)?;
+        let min_request_interval_ms =
+            crate::client::parse_min_request_interval_ms(min_request_interval_ms)?;
         let interface_ip = parse_ipv4(interface, "interface")?;
         let broadcast = parse_ipv4(broadcast_address, "broadcast_address")?;
         if let Some(selected) = registered_network_port {
@@ -261,6 +270,7 @@ impl PyBipEndpoint {
                 apdu_timeout_ms,
                 apdu_retries,
                 registered_network_port,
+                min_request_interval_ms,
             },
         })
     }

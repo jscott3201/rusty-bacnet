@@ -4,7 +4,7 @@
 //! read from next, so a caller loops until the page says it is done and
 //! keeps the last cursor as its checkpoint. One request is outstanding at a
 //! time. On a [`BACnetClient`] the client's minimum request interval paces
-//! them; the endpoint client has no pacing, so its pages go back to back.
+//! them, and on the endpoint client the session's does (#1542).
 //!
 //! Sequence numbers are the log's own: a log numbers each record with its
 //! Total_Record_Count once the record is added, so the newest record carries

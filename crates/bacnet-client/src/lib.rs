@@ -10,7 +10,7 @@ pub mod tsm;
 #[doc(hidden)]
 pub use endpoint_requester::{
     EndpointOperationAck, EndpointOperationOutcome, EndpointOperationRequest, EndpointReadAck,
-    EndpointReadRequest, EndpointRequester, PreparedEndpointOperation,
+    EndpointReadRequest, EndpointRequester, PacedEndpointOperation, PreparedEndpointOperation,
 };
 mod read_property;
 

@@ -117,7 +117,12 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                     let before = egress.local_network_number().get();
                     let reply = owner.handle(control).await;
                     let source = source.as_ref().and_then(std::sync::Weak::upgrade);
-                    let database = database.as_ref().and_then(std::sync::Weak::upgrade);
+                    // Held across the lock wait below, so it goes off the
+                    // runtime even when the task is aborted there (#1561).
+                    let database = database
+                        .as_ref()
+                        .and_then(std::sync::Weak::upgrade)
+                        .map(crate::held_database::HeldDatabase::new);
                     if let (true, Some(source), Some(database)) = (
                         egress.local_network_number().get() != before,
                         source,

@@ -200,7 +200,8 @@ impl ClientRoleHandle {
                 .await
         } else {
             self.requester
-                .prepare_write(destination, Vec::new(), request)?
+                .prepare_write(destination, Vec::new(), request)
+                .await?
                 .execute()
                 .await
                 .result?
@@ -353,7 +354,8 @@ impl ClientRoleHandle {
                 .into_multiple()
         } else {
             self.requester
-                .prepare_read(destination, data_attributes, request)?
+                .prepare_read(destination, data_attributes, request)
+                .await?
                 .execute()
                 .await
                 .result?
@@ -442,8 +444,9 @@ impl ClientRoleHandle {
 
     /// Read one page of `log`'s Log_Buffer from `cursor`, as
     /// [`bacnet_client::log_reader::read_log_page`] does; each request is
-    /// audited like any other read. The endpoint has no request pacing, so
-    /// its requests go back to back, unlike a paced `BACnetClient`'s.
+    /// audited like any other read, and paced by the session's
+    /// [`min_request_interval_ms`](crate::session::SessionConfig::min_request_interval_ms)
+    /// as a paced `BACnetClient`'s are.
     pub async fn read_log_page(
         &self,
         destination_mac: &[u8],

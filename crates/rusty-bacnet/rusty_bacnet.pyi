@@ -4543,6 +4543,7 @@ class BipEndpoint:
         *,
         read_work_limit: int = 256,
         share_port_by_address: bool = False,
+        min_request_interval_ms: int = 0,
     ) -> None:
         """``read_work_limit``: result rows one ReadProperty served by the
         server role may expand, a Group's member rows included; a read past it
@@ -4550,7 +4551,12 @@ class BipEndpoint:
         ``share_port_by_address`` (default False): bind the interface address
         itself, so endpoints on other addresses of this host can share the
         port. Needs an explicit interface and a nonzero port; broadcasts and
-        unicast then arrive in no fixed order."""
+        unicast then arrive in no fixed order.
+        ``min_request_interval_ms`` (default 0, no pacing; at most 3,600,000,
+        else ValueError) paces the client role's confirmed requests to each
+        destination exactly as ``BACnetClient``'s keyword does (#1542). A
+        retry keeps its request's turn; replies, notifications and
+        unconfirmed requests aren't paced."""
         ...
 
     def add_analog_input(self, instance: int, name: str, units: int = 62, present_value: float = 0.0) -> None: ...
@@ -4648,8 +4654,10 @@ class ScEndpoint:
         services: Optional[list[int]] = None,
         queue_capacity: int = 16,
         read_work_limit: int = 256,
+        min_request_interval_ms: int = 0,
     ) -> None:
-        """``read_work_limit`` is as for ``BipEndpoint``."""
+        """``read_work_limit`` and ``min_request_interval_ms`` are as for
+        ``BipEndpoint``."""
         ...
 
     def add_analog_input(self, instance: int, name: str, units: int = 62, present_value: float = 0.0) -> None: ...
@@ -4745,8 +4753,10 @@ class MstpEndpoint:
         apdu_retries: int = 0,
         *,
         read_work_limit: int = 256,
+        min_request_interval_ms: int = 0,
     ) -> None:
-        """``read_work_limit`` is as for ``BipEndpoint``."""
+        """``read_work_limit`` and ``min_request_interval_ms`` are as for
+        ``BipEndpoint``."""
         ...
 
     def add_analog_input(self, instance: int, name: str, units: int = 62, present_value: float = 0.0) -> None: ...

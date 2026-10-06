@@ -180,6 +180,7 @@
 #![deny(unsafe_code)]
 
 pub mod bip;
+mod held_database;
 pub mod identity;
 pub mod mstp;
 pub mod roles;
