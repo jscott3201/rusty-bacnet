@@ -22,18 +22,20 @@
 //!
 //! - A time range reads an Enumerated by the enumeration of the property it
 //!   names, as `ResolvedEnum::from_property` knows it, since the value alone
-//!   doesn't say. A BACnetBinaryPV, or a property whose enumeration depends
-//!   on the object (Present_Value, so a Binary Value or a Schedule), reads
-//!   ACTIVE as TRUE and any other number as FALSE. Any other enumeration
-//!   (Event_State, Reliability and the rest) reads FALSE. Types the clause
-//!   doesn't name (REAL, CharacterString and the rest) read FALSE too, so an
-//!   unexpected value never grants.
-//! - Only a value read here and found FALSE puts a rule outside its time
-//!   range. A time range with nothing to judge (no reference or an
-//!   unspecified one, a missing object or property, a failed read, NULL,
-//!   index 0, or another device) is FALSE at every moment, so a positive rule
-//!   covering the point with one gives the credential no access there at any
-//!   time: DENIED_NO_ACCESS_RIGHTS, not DENIED_OUT_OF_TIME_RANGE.
+//!   doesn't say. A BACnetBinaryPV, or any property whose type isn't known
+//!   to be another enumeration (the Present_Value of any object among them),
+//!   reads ACTIVE as TRUE and any other number as FALSE.
+//! - A time range whose type can never read TRUE under that reading is
+//!   FALSE at every moment: REAL, Double, strings and the other types the
+//!   clause doesn't name, an enumeration known to be another one
+//!   (Event_State, Reliability and the rest), and a whole array read
+//!   without an index.
+//! - Only a value of a type that can read TRUE, read here and found FALSE,
+//!   puts a rule outside its time range. A time range that is FALSE at every
+//!   moment (the types above, no reference or an unspecified one, a missing
+//!   object or property, a failed read, NULL, index 0, or another device)
+//!   gives a positive rule covering the point no access there at any time:
+//!   DENIED_NO_ACCESS_RIGHTS, not DENIED_OUT_OF_TIME_RANGE.
 //! - A negative rule whose location is ALL denies with
 //!   DENIED_POINT_NO_ACCESS_RIGHTS: it bars this point as much as a rule
 //!   naming the point does, and the clause names a value only for the point
@@ -42,12 +44,15 @@
 //!   names the database's own Device (`LocalDevice::is_local`, as the rest
 //!   of the stack reads references). The wildcard Device instance 4194303
 //!   names no device in particular, so a reference carrying it is never
-//!   read: the evaluator fails closed.
-//! - Nothing is read from another device. Clause 12.35.18 has the device
-//!   ignore an assignment naming a missing object or an object that isn't
-//!   Access Rights. Leaving out an assignment naming another device as well
-//!   is this evaluator's own policy. All three are listed as unresolved, so
-//!   the application can still deny.
+//!   read, and neither is one naming another device. Such a reference never
+//!   grants access. A negative rule whose location or time range names one
+//!   doesn't hold, so it bars no one: Clause 12.34.9.1 has a reference that
+//!   is unspecified or can't be retrieved evaluate to FALSE.
+//! - Clause 12.35.18 has the device ignore an assignment naming a missing
+//!   object or an object that isn't Access Rights. Leaving out an assignment
+//!   naming another device or the wildcard Device as well is this
+//!   evaluator's own policy. All of them are listed as unresolved, so the
+//!   application can still deny.
 
 use std::collections::HashMap;
 
@@ -193,10 +198,12 @@ pub struct UnresolvedAccessRights {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum UnresolvedReason {
-    /// It names an object in another device, or carries the wildcard
-    /// Device, which names none in particular; this evaluator reads nothing
-    /// remotely.
+    /// It names an object in another device, which this evaluator doesn't
+    /// read.
     Remote,
+    /// Its device member is the wildcard Device instance 4194303, which
+    /// names no device in particular, so there is no device to ask.
+    WildcardDevice,
     /// It names an object type other than Access Rights.
     NotAccessRights,
     /// The database holds no object with that identifier.
@@ -223,8 +230,9 @@ pub enum UnresolvedReason {
 ///      it names one (Clause 12.35.18).
 ///    - An element naming a missing object or an object that isn't Access
 ///      Rights gives no rules: Clause 12.35.18 has the device ignore it.
-///      Neither does one naming another device; that is this evaluator's
-///      policy, since it reads nothing remotely. Each such element is listed
+///      Neither does one naming another device or the wildcard Device;
+///      that is this evaluator's policy, since it reads nothing remotely.
+///      Each such element is listed
 ///      in [`AccessRightsEvaluation::unresolved`], so that an application can
 ///      deny when part of a credential's rights is out of its sight.
 ///    - An Access Rights object whose Enable is FALSE gives no rules either
@@ -240,8 +248,8 @@ pub enum UnresolvedReason {
 ///    and a value read here for its time range was FALSE, the credential
 ///    could pass here at another time, so the denial is
 ///    DENIED_OUT_OF_TIME_RANGE. Otherwise it is DENIED_NO_ACCESS_RIGHTS,
-///    including when every rule covering the point has a time range with
-///    nothing to judge (see below).
+///    including when every rule covering the point has a time range that is
+///    FALSE at every moment (see below).
 ///
 /// A rule holds when its enable flag is TRUE, its location covers the point
 /// and its time range is TRUE (Clause 12.34.9.1).
@@ -274,34 +282,43 @@ pub enum UnresolvedReason {
 /// - INTEGER: TRUE above zero.
 /// - Enumerated: read by the property's enumeration
 ///   ([`ResolvedEnum::from_property`]), since the value alone doesn't name
-///   one. For a BACnetBinaryPV, or a property whose enumeration depends on
-///   the object (Present_Value, so a Binary Value or a Schedule), ACTIVE (1)
-///   is TRUE and any other number FALSE. Any other enumeration, such as
-///   Event_State or Reliability, is FALSE. Clause 12.34.9.1 leaves types
-///   other than the four it names to the device, so this is a local choice.
-/// - Any other type, REAL and CharacterString among them: FALSE, the same
-///   local choice.
+///   one. For a BACnetBinaryPV, or any property whose type isn't known to
+///   be another enumeration (the Present_Value of any object among them),
+///   ACTIVE (1) is TRUE and any other number FALSE. Clause 12.34.9.1 leaves
+///   types other than the four it names to the device, so reading these as
+///   BACnetBinaryPV is a local choice.
 ///
-/// Those FALSE values are read here, so a positive rule with one is outside
-/// its time range now and may hold at another time. A time range with
-/// nothing to judge is FALSE at every moment instead: a specifier outside
-/// the two named values, SPECIFIED with no reference, an unspecified
-/// reference, one naming another device or the wildcard Device, a missing
-/// object or a property it doesn't serve, an index on a property that isn't
-/// an array, index 0 (an array's size is no time-range value) or one past
-/// the end, any other failed read, and NULL. Such a rule never makes a
-/// denial DENIED_OUT_OF_TIME_RANGE.
+/// A FALSE from those values is read here, so a positive rule with one is
+/// outside its time range now and may hold at another time. A time range
+/// that can't read TRUE at any moment is FALSE at every moment instead:
+///
+/// - a type that never reads TRUE under these rules: REAL, Double, strings
+///   and the other types the clause doesn't name, an enumeration known to
+///   be another one (Event_State, Reliability and the rest), and a whole
+///   array read without an index (the same local choice);
+/// - a specifier outside the two named values, SPECIFIED with no reference,
+///   an unspecified reference, or one naming another device or the wildcard
+///   Device;
+/// - a missing object or a property it doesn't serve, an index on a
+///   property that isn't an array, index 0 (an array's size is no
+///   time-range value) or one past the end, any other failed read, and NULL.
+///
+/// Such a rule never makes a denial DENIED_OUT_OF_TIME_RANGE.
 ///
 /// # Which device a reference names
 ///
 /// A reference names this device when it has no device member or names the
 /// Device the database speaks for ([`ObjectDatabase::local_device`]), the
 /// reading the rest of the stack takes. Anything else, the wildcard Device
-/// instance 4194303 included, names no device this evaluator can read, so it
-/// fails closed: such a time range has nothing to judge, such a location
-/// covers nothing, and such an Assigned_Access_Rights element is listed as
-/// unresolved. A database holding no Device has no Device of its own, so
-/// then only a reference with no device member is local.
+/// instance 4194303 included, names no device this evaluator can read: such
+/// a time range is FALSE at every moment, such a location covers nothing,
+/// and such an Assigned_Access_Rights element is listed as unresolved. So
+/// such a reference never grants access. A negative rule naming one doesn't
+/// hold either, so it bars no one: Clause 12.34.9.1 has a reference that is
+/// unspecified or can't be retrieved evaluate to FALSE, whichever kind of
+/// rule holds it. An application that would rather deny can act on the
+/// unresolved list. A database holding no Device has no Device of its own,
+/// so then only a reference with no device member is local.
 ///
 /// # Not covered
 ///
@@ -488,8 +505,9 @@ enum TimeRange {
     True,
     /// A value read here as FALSE: the rule may hold at another time.
     False,
-    /// Nothing to judge, so FALSE at every moment: no usable reference, a
-    /// failed read, NULL or index 0 (see [`evaluate_access_rights`]).
+    /// FALSE at every moment: no usable reference, a failed read, NULL,
+    /// index 0, or a type that never reads TRUE (see
+    /// [`evaluate_access_rights`]).
     Never,
 }
 
@@ -547,6 +565,9 @@ impl Scope<'_> {
         reference: &BACnetDeviceObjectReference,
     ) -> Result<Option<Gathered>, UnresolvedReason> {
         let oid = reference.object_identifier;
+        if reference.device_identifier.is_some_and(is_wildcard_device) {
+            return Err(UnresolvedReason::WildcardDevice);
+        }
         if !self.is_local(reference.device_identifier) {
             return Err(UnresolvedReason::Remote);
         }
@@ -704,24 +725,32 @@ impl Scope<'_> {
 /// choices in the module documentation).
 fn time_range_value(property: PropertyIdentifier, value: &PropertyValue) -> TimeRange {
     let holds = match *value {
-        PropertyValue::Null => return TimeRange::Never,
         PropertyValue::Boolean(value) => value,
         PropertyValue::Unsigned(value) => value != 0,
         PropertyValue::Signed(value) => value > 0,
         PropertyValue::Enumerated(raw) => match ResolvedEnum::from_property(property, raw) {
             ResolvedEnum::BinaryPV(state) => state == BinaryPV::ACTIVE,
-            // An enumeration that depends on the object, as Present_Value's
-            // does, may be a BACnetBinaryPV.
+            // A property whose type isn't known to be another enumeration,
+            // the Present_Value of any object among them, reads as one.
             ResolvedEnum::Unknown(raw) => raw == BinaryPV::ACTIVE.to_raw(),
-            _ => false,
+            // Another enumeration never reads TRUE.
+            _ => return TimeRange::Never,
         },
-        _ => false,
+        // NULL, and the types that never read TRUE: REAL, Double, strings,
+        // a whole array and the rest.
+        _ => return TimeRange::Never,
     };
     if holds {
         TimeRange::True
     } else {
         TimeRange::False
     }
+}
+
+/// Whether a device member is the wildcard Device instance 4194303.
+fn is_wildcard_device(device: ObjectIdentifier) -> bool {
+    device.object_type() == ObjectType::DEVICE
+        && device.instance_number() == ObjectIdentifier::WILDCARD_INSTANCE
 }
 
 #[cfg(test)]

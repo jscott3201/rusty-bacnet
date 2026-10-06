@@ -604,7 +604,7 @@ fn unresolved_assignments_are_listed_and_ignored() {
             (1, elements[0].clone(), UnresolvedReason::Remote),
             (2, elements[1].clone(), UnresolvedReason::Missing),
             (5, elements[4].clone(), UnresolvedReason::Unreadable),
-            (6, elements[5].clone(), UnresolvedReason::Remote),
+            (6, elements[5].clone(), UnresolvedReason::WildcardDevice),
         ]
     );
 }
@@ -669,19 +669,30 @@ fn rule_arrays_that_do_not_decode_are_unreadable() {
 
 #[test]
 fn an_assignment_names_this_device_only_with_its_own_device() {
-    // The wildcard Device names no device in particular, so it isn't read.
-    for (reference, resolved) in [
-        (in_device(DEVICE, rights(1)), true),
-        (in_device(UNSPECIFIED, rights(1)), false),
-        (in_device(OTHER_DEVICE, rights(1)), false),
+    // The wildcard Device names no device in particular, so it isn't read,
+    // and no device is asked.
+    for (reference, unresolved) in [
+        (in_device(DEVICE, rights(1)), None),
+        (
+            in_device(UNSPECIFIED, rights(1)),
+            Some(UnresolvedReason::WildcardDevice),
+        ),
+        (
+            in_device(OTHER_DEVICE, rights(1)),
+            Some(UnresolvedReason::Remote),
+        ),
     ] {
         let mut db = database();
         add_rights(&mut db, 1, vec![anytime(None)], vec![]);
         add_credential(&mut db, std::slice::from_ref(&reference));
         let evaluation = evaluate_at(&db, 1);
-        let expected = if resolved { granted(1, 1) } else { no_rights() };
+        let expected = match unresolved {
+            None => granted(1, 1),
+            Some(_) => no_rights(),
+        };
         assert_eq!(evaluation.decision, expected, "{reference:?}");
-        assert_eq!(evaluation.unresolved.is_empty(), resolved, "{reference:?}");
+        let reasons: Vec<_> = evaluation.unresolved.iter().map(|u| u.reason).collect();
+        assert_eq!(reasons, Vec::from_iter(unresolved), "{reference:?}");
     }
 }
 

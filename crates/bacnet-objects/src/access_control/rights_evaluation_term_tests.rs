@@ -78,26 +78,27 @@ fn time_range_values_named_by_the_clause() {
 }
 
 #[test]
-fn time_range_values_the_clause_leaves_to_the_device_read_false() {
+fn types_that_never_read_true_give_no_access() {
     use Judged::*;
+    // A Present_Value reads as a BACnetBinaryPV, so 2 is a FALSE that a
+    // later ACTIVE could replace: out of time range.
     assert_eq!(schedule_holding(PropertyValue::Enumerated(2)), OutOfRange);
-    assert_eq!(schedule_holding(PropertyValue::Real(1.0)), OutOfRange);
-    assert_eq!(schedule_holding(PropertyValue::Double(1.0)), OutOfRange);
+    // These types never read TRUE, so no time is in range.
+    assert_eq!(schedule_holding(PropertyValue::Real(1.0)), Never);
+    assert_eq!(schedule_holding(PropertyValue::Double(1.0)), Never);
     let text = PropertyValue::CharacterString("on".into());
-    assert_eq!(schedule_holding(text), OutOfRange);
-    assert_eq!(
-        schedule_holding(PropertyValue::OctetString(vec![1])),
-        OutOfRange
-    );
+    assert_eq!(schedule_holding(text), Never);
+    assert_eq!(schedule_holding(PropertyValue::OctetString(vec![1])), Never);
     let identifier = PropertyValue::ObjectIdentifier(point(1));
-    assert_eq!(schedule_holding(identifier), OutOfRange);
+    assert_eq!(schedule_holding(identifier), Never);
 }
 
 #[test]
 fn an_enumerated_time_range_reads_by_its_property() {
-    // Reliability 1 is NO_SENSOR, no BACnetBinaryPV: FALSE, though the
-    // number is ACTIVE's. Present_Value's enumeration depends on the object,
-    // so the same number there reads as ACTIVE.
+    // Reliability 1 is NO_SENSOR: an enumeration known not to be a
+    // BACnetBinaryPV never reads TRUE, though the number is ACTIVE's.
+    // Present_Value's type isn't known, so the same number there reads as
+    // ACTIVE.
     let one = PropertyValue::Enumerated(1);
     let analog = oid(ObjectType::ANALOG_VALUE, 5);
     let reading = |property: PropertyIdentifier| {
@@ -115,7 +116,7 @@ fn an_enumerated_time_range_reads_by_its_property() {
             BACnetDeviceObjectPropertyReference::new_local(analog, property.to_raw()),
         )
     };
-    assert_eq!(reading(PropertyIdentifier::RELIABILITY), Judged::OutOfRange);
+    assert_eq!(reading(PropertyIdentifier::RELIABILITY), Judged::Never);
     assert_eq!(reading(PropertyIdentifier::PRESENT_VALUE), Judged::Holds);
 
     // Credential_Status is a BACnetBinaryPV, ACTIVE on a new credential.
@@ -251,6 +252,12 @@ fn time_range_honours_the_array_index() {
         judge(with_commanded_binary_value(), slot(17)),
         Judged::Never
     );
+    // A whole array, read without an index, never reads TRUE.
+    let whole = BACnetDeviceObjectPropertyReference::new_local(
+        binary,
+        PropertyIdentifier::PRIORITY_ARRAY.to_raw(),
+    );
+    assert_eq!(judge(with_commanded_binary_value(), whole), Judged::Never);
     // Present_Value is ACTIVE, but takes no index.
     let value = present_value(binary);
     assert_eq!(
@@ -409,6 +416,9 @@ fn a_zone_is_read_once_per_evaluation() {
     add_credential(&mut db, &[rights(1).into()]);
     assert_eq!(decision(&db), out_of_time(1, 1));
     assert_eq!(reads.load(Ordering::Relaxed), 1);
+    // The next evaluation reads it again.
+    assert_eq!(decision(&db), out_of_time(1, 1));
+    assert_eq!(reads.load(Ordering::Relaxed), 2);
 }
 
 #[test]

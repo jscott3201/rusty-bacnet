@@ -4073,10 +4073,11 @@ Enable is FALSE, and rules whose enable flag is FALSE. An enabled element
 naming a missing object or another object type, or an object whose rules
 don't read as rules (only an application's own object can do that), gives no
 rules, and Clause 12.35.18 has the device ignore the first two. One naming
-another device gives none either: the evaluator reads nothing remotely, a
-policy of its own. The decision ignores all of them, and `unresolved` lists
-each with its index and an `UnresolvedReason`, so the application can choose
-to deny.
+another device or the wildcard Device gives none either: the evaluator reads
+nothing remotely, a policy of its own. The decision ignores all of them, and
+`unresolved` lists each with its index and an `UnresolvedReason` (`Remote`,
+`WildcardDevice`, `NotAccessRights`, `Missing` or `Unreadable`), so the
+application can choose to deny.
 
 A rule holds when it is enabled, its location covers the point and its time
 range is TRUE:
@@ -4086,15 +4087,18 @@ range is TRUE:
   Unsigned as TRUE when nonzero, and an INTEGER as TRUE above zero. An
   Enumerated reads by the property's enumeration
   (`bacnet_types::enums::ResolvedEnum::from_property`): for a BACnetBinaryPV,
-  or a property whose enumeration depends on the object such as
-  Present_Value, ACTIVE is TRUE and any other value FALSE, and any other
-  enumeration (Event_State, Reliability) is FALSE. Any other type is FALSE, a
-  local choice the clause allows. Those FALSE values make a rule out of its
-  time range. A time range with nothing to judge is FALSE at every moment
-  and never makes a denial DENIED_OUT_OF_TIME_RANGE: an unknown specifier,
+  or any property whose type isn't known to be another enumeration (the
+  Present_Value of any object among them), ACTIVE is TRUE and any other
+  value FALSE. Those FALSE values make a rule out of its time range. A time
+  range that can't read TRUE at any moment is FALSE at every moment and never
+  makes a denial DENIED_OUT_OF_TIME_RANGE: a type that never reads TRUE
+  under these rules (REAL, Double, strings, an enumeration known to be
+  another one such as Event_State or Reliability, a whole array read without
+  an index; a local choice the clause allows), an unknown specifier,
   SPECIFIED without a reference, an unspecified reference or one naming
-  another device, a missing object or property, a failed read, NULL, and
-  index 0, since an array's size is no time-range value.
+  another device or the wildcard Device, a missing object or property, a
+  failed read, NULL, and index 0, since an array's size is no time-range
+  value.
 - **Location.** ALL covers every point. An Access Point covers itself, and an
   Access Zone the points its Entry_Points names. Anything else covers
   nothing.
@@ -4102,7 +4106,11 @@ range is TRUE:
 A reference names this device when it has no Device member or names the
 database's own Device (`LocalDevice::is_local`), as elsewhere in the stack.
 The wildcard Device instance 4194303 names no device in particular, so a
-reference carrying it is never read: the evaluator fails closed. The
+reference carrying it is never read, and neither is one naming another
+device. Such a reference never grants access. A negative rule whose location
+or time range names one doesn't hold, so it bars no one: Clause 12.34.9.1
+has a reference that is unspecified or can't be retrieved evaluate to FALSE.
+An application that would rather deny can act on the `unresolved` list. The
 evaluator doesn't judge accompaniment, the credential's status or
 validity window, or the other authorization checks; the documentation of
 `evaluate_access_rights` lists them.

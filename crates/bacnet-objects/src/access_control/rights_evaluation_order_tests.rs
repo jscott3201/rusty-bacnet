@@ -1,11 +1,13 @@
 //! Which rule and which object the Access Rights check names when several
-//! could (#1331), and the error it passes back when a credential's
-//! Assigned_Access_Rights can't be read.
+//! could (#1331), negative rules that can't be judged here, and the error
+//! the check passes back when a credential's Assigned_Access_Rights can't be
+//! read.
 
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 
 use super::tests::*;
 use super::*;
+use crate::schedule::ScheduleObject;
 
 fn point_denial(rights_instance: u32, index: u32) -> AccessRightsDecision {
     denied(
@@ -102,5 +104,58 @@ fn an_unreadable_assignment_list_is_passed_back() {
             }
             other => panic!("expected PROPERTY / {expected:?}, got {other:?}"),
         }
+    }
+}
+
+#[test]
+fn a_negative_rule_with_a_time_range_never_true_bars_no_one() {
+    // An unspecified time range, and one reading NULL: FALSE at every
+    // moment, so neither negative rule holds and the positive rule grants.
+    let mut db = database();
+    db.add(Box::new(
+        ScheduleObject::new(60, "EMPTY", PropertyValue::Null).unwrap(),
+    ))
+    .unwrap();
+    let unspecified = present_value(oid(ObjectType::SCHEDULE, UNSPECIFIED));
+    let null = present_value(oid(ObjectType::SCHEDULE, 60));
+    add_rights(
+        &mut db,
+        1,
+        vec![anytime(None)],
+        vec![
+            during(unspecified, Some(point(1))),
+            during(null, Some(point(1))),
+        ],
+    );
+    add_credential(&mut db, &[rights(1).into()]);
+    assert_eq!(decision(&db), granted(1, 1));
+}
+
+#[test]
+fn a_negative_rule_naming_what_is_not_read_here_bars_no_one() {
+    // Clause 12.34.9.1 has a reference that is unspecified or can't be
+    // retrieved evaluate to FALSE, for a negative rule too: a location or
+    // time range behind the wildcard Device or in another device doesn't
+    // bar, and the ALL positive rule grants.
+    let mut remote_time = present_value(oid(ObjectType::SCHEDULE, 1));
+    remote_time.device_identifier = Some(device(OTHER_DEVICE));
+    let mut wildcard_time = remote_time.clone();
+    wildcard_time.device_identifier = Some(device(UNSPECIFIED));
+    let negatives = [
+        BACnetAccessRule::new(None, Some(in_device(UNSPECIFIED, point(1))), true),
+        BACnetAccessRule::new(None, Some(in_device(OTHER_DEVICE, point(1))), true),
+        BACnetAccessRule::new(None, Some(in_device(UNSPECIFIED, zone(1))), true),
+        BACnetAccessRule::new(Some(wildcard_time), Some(point(1).into()), true),
+        BACnetAccessRule::new(Some(remote_time), Some(point(1).into()), true),
+    ];
+    for negative in negatives {
+        // Schedule 1 here reads TRUE, so only the device member keeps the
+        // time-range rules from holding.
+        let mut db = database();
+        let open = ScheduleObject::new(1, "OPEN", PropertyValue::Boolean(true)).unwrap();
+        db.add(Box::new(open)).unwrap();
+        add_rights(&mut db, 1, vec![anytime(None)], vec![negative.clone()]);
+        add_credential(&mut db, &[rights(1).into()]);
+        assert_eq!(decision(&db), granted(1, 1), "{negative:?}");
     }
 }
