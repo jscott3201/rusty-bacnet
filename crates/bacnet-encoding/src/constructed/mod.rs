@@ -60,6 +60,7 @@ mod log_fields;
 mod log_multiple_record;
 mod log_record;
 mod members;
+pub mod network_port;
 pub mod object_property_reference;
 pub mod port_permission;
 mod property_access_result;
@@ -125,6 +126,11 @@ pub use lighting_command::{
 };
 pub use log_multiple_record::{decode_log_multiple_record, encode_log_multiple_record};
 pub use log_record::{decode_log_record, encode_log_record};
+pub use network_port::{
+    decode_bdt_entry, decode_bdt_entry_list, decode_fdt_entry, decode_fdt_entry_list,
+    decode_host_address, decode_host_n_port, encode_bdt_entry, encode_bdt_entry_list,
+    encode_fdt_entry, encode_fdt_entry_list, encode_host_address, encode_host_n_port,
+};
 pub use object_property_reference::{
     decode_object_property_reference, decode_object_property_reference_at,
     decode_setpoint_reference, decode_setpoint_reference_at, encode_object_property_reference,
