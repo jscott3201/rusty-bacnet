@@ -4,7 +4,7 @@ use crate::property_metadata::{
     PropertyMetadata,
     PropertyWriteCapability::{Always, ReadOnly},
 };
-use bacnet_types::enums::PropertyIdentifier as P;
+use bacnet_types::enums::{IPMode, PropertyIdentifier as P};
 use std::borrow::Cow;
 
 // 135-2020 Table12-71 incl application footnote25; Link_Speed optional per
@@ -35,12 +35,42 @@ const BIP: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::BACNET_IP_UDP_PORT, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::IP_DNS_SERVER, RequiredRead, None, ReadOnly),
 ];
+// Table 12-71 footnotes 11 and 12: a port that can act as a BBMD has these.
+// Clauses 12.56.34 and 12.56.35 make the first two writable in BBMD mode;
+// writes wait for an activation owner, so all three are read-only here.
+const BBMD: &[PropertyMetadata] = &[
+    PropertyMetadata::new(
+        P::BBMD_BROADCAST_DISTRIBUTION_TABLE,
+        RequiredRead,
+        None,
+        ReadOnly,
+    ),
+    PropertyMetadata::new(
+        P::BBMD_ACCEPT_FD_REGISTRATIONS,
+        RequiredRead,
+        None,
+        ReadOnly,
+    ),
+    PropertyMetadata::new(P::BBMD_FOREIGN_DEVICE_TABLE, RequiredRead, None, ReadOnly),
+];
+// Table 12-71 footnote 13: FOREIGN mode has these. Clauses 12.56.37 and
+// 12.56.38 make them writable; read-only here for the same reason.
+const FOREIGN: &[PropertyMetadata] = &[
+    PropertyMetadata::new(P::FD_BBMD_ADDRESS, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::FD_SUBSCRIPTION_LIFETIME, RequiredRead, None, ReadOnly),
+];
 pub(super) fn for_object(object: &NetworkPortObject) -> Cow<'_, [PropertyMetadata]> {
     if object.bip.is_some() {
+        let mode: &[PropertyMetadata] = match object.mode.ip_mode() {
+            IPMode::BBMD => BBMD,
+            IPMode::FOREIGN => FOREIGN,
+            _ => &[],
+        };
         Cow::Owned(
             COMMON
                 .iter()
                 .chain(BIP)
+                .chain(mode)
                 .copied()
                 .map(|mut row| {
                     if row.property_identifier == P::OUT_OF_SERVICE && object.is_bound() {

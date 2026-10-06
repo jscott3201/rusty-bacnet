@@ -149,8 +149,8 @@ impl TransportPort for ObservedBip {
     fn supports_local_nonrouter_number_controls(&self) -> bool {
         self.inner.supports_local_nonrouter_number_controls()
     }
-    fn normal_bip_endpoint(&self) -> Option<SocketAddrV4> {
-        self.inner.normal_bip_endpoint()
+    fn bip_port(&self) -> Option<bacnet_transport::port::BipPort> {
+        self.inner.bip_port()
     }
     fn bip_broadcast_endpoint(&self) -> Option<SocketAddrV4> {
         self.inner.bip_broadcast_endpoint()
@@ -197,9 +197,10 @@ impl TransportPort for ObservedBip {
 pub type Server = BACnetServer<ObservedBip>;
 pub async fn start(transport: BipTransport, gates: Option<Arc<Gates>>) -> (Server, SocketAddrV4) {
     let inner = AnyTransport::Bip(Box::new(transport));
-    assert!(
-        inner.normal_bip_endpoint().is_none(),
-        "no configured NORMAL-B/IP authority"
+    // A BBMD or foreign device, and the server registers no Network Port.
+    assert_ne!(
+        inner.bip_port().unwrap().mode.ip_mode(),
+        bacnet_types::enums::IPMode::NORMAL
     );
     let mut db = ObjectDatabase::new();
     db.add(Box::new(

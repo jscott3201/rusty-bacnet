@@ -51,7 +51,7 @@ ethernet = []
 
 [dev-dependencies]
 rcgen.workspace = true
-tokio = { workspace = true, features = ["test-util"] }
+tokio = { workspace = true, features = ["test-util", "rt-multi-thread"] }
 
 [lints]
 workspace = true

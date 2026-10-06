@@ -65,14 +65,12 @@ impl<S: SerialPort + 'static> TransportPort for AnyTransport<S> {
     ) -> Result<(), Error> {
         match self {
             Self::Bip(transport) => transport.retain_network_port_lease_internal(lease),
-            _ => Err(Error::Encoding(
-                "registered ports require NORMAL B/IP".into(),
-            )),
+            _ => Err(Error::Encoding("registered ports require B/IP".into())),
         }
     }
-    fn normal_bip_endpoint(&self) -> Option<std::net::SocketAddrV4> {
+    fn bip_port(&self) -> Option<crate::port::BipPort> {
         match self {
-            Self::Bip(transport) => transport.normal_bip_endpoint(),
+            Self::Bip(transport) => transport.bip_port(),
             _ => None,
         }
     }
@@ -419,7 +417,7 @@ mod tests {
         let any: AnyTransport<LoopbackSerial> = AnyTransport::Mstp(mstp);
         assert_eq!(any.local_mac(), &[42]);
         assert!(any.supports_local_nonrouter_number_controls());
-        assert!(any.normal_bip_endpoint().is_none());
+        assert!(any.bip_port().is_none());
     }
 
     #[test]

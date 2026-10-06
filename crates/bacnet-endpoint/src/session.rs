@@ -510,7 +510,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         };
         if let Err(error) = self
             .publish_registered_port(
-                receivers.normal_bip_port,
+                receivers.bip_port.clone(),
                 receivers.egress.local_network_number(),
             )
             .await

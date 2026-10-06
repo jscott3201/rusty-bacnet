@@ -1,9 +1,11 @@
 //! One explicit registered B/IP association; declaration is not registration.
+//! The port may run in NORMAL, FOREIGN or BBMD mode; startup publishes it.
 use super::*;
-use std::net::SocketAddrV4;
+use bacnet_transport::port::BipPort;
 
 impl<T: TransportPort + 'static> EndpointSession<T> {
-    /// Select one existing built-in Network Port for the owned NORMAL B/IP link.
+    /// Select one existing built-in Network Port for the owned B/IP link, in
+    /// whichever B/IP mode the transport runs.
     /// Startup requires a matching concrete interface, identity entry and database
     /// snapshot. It publishes actual IP/UDP/MAC before exposing responder roles.
     pub fn with_registered_network_port(mut self, oid: ObjectIdentifier) -> Self {
@@ -21,8 +23,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             .as_mut()
             .ok_or_else(|| invalid("missing ingress"))?;
         let address = ingress
-            .normal_bip_endpoint()
-            .ok_or_else(|| invalid("registration requires NORMAL B/IP"))?;
+            .bip_port()
+            .ok_or_else(|| invalid("registration requires B/IP in one mode"))?
+            .endpoint;
         let ip = *address.ip();
         if ip.is_unspecified()
             || ip.is_multicast()
@@ -54,21 +57,28 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
 
     pub(super) async fn publish_registered_port(
         &mut self,
-        actual: Option<(SocketAddrV4, u16)>,
+        actual: Option<(BipPort, u16)>,
         local_network: &bacnet_network::network_number::LocalNetworkNumber,
     ) -> Result<(), Error> {
         let Some(oid) = self.registered_network_port else {
             return Ok(());
         };
-        let (address, capacity) =
+        let (port, capacity) =
             actual.ok_or_else(|| invalid("registered B/IP mode changed during bind"))?;
+        let address = port.endpoint;
         let mut db = self
             .database
             .as_ref()
             .expect("validated database")
             .write()
             .await;
-        db.publish_bip_port_internal(oid, address.ip().octets(), address.port(), capacity as u32)?;
+        db.publish_bip_port_internal(
+            oid,
+            address.ip().octets(),
+            address.port(),
+            capacity as u32,
+            port.mode,
+        )?;
         // The port's configured number is the local network number from the
         // start (#1403); the Number owner copies every later change from the
         // port, as the full server's does.

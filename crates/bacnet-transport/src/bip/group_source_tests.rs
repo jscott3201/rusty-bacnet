@@ -76,7 +76,7 @@ async fn context(
         local_mac: encode_bip_mac(LOCAL.octets(), 0xBAC0),
         socket,
         npdu_tx,
-        bbmd: bbmd.map(|state| Arc::new(Mutex::new(state))),
+        bbmd: bbmd.map(|state| Arc::new(std::sync::Mutex::new(state))),
         broadcast_addr: SUBNET_BROADCAST,
         broadcast_port,
         pending_bvlc_response: Arc::new(Mutex::new(None)),
@@ -332,7 +332,7 @@ async fn a_bbmd_registers_and_forwards_nothing_from_a_group_source() {
     let refused = 3 * GROUP_SENDERS.len() as u64;
     assert_eq!(drops.sender.load(Ordering::Relaxed), refused);
     let bbmd = ctx.bbmd.as_ref().unwrap();
-    assert_eq!(bbmd.lock().await.fdt().len(), 1, "no group registered");
+    assert_eq!(bbmd.lock().unwrap().fdt().len(), 1, "no group registered");
 
     // A station's broadcast is handed up, and is the first frame the BDT
     // peer and the foreign device see.

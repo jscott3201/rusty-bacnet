@@ -1,18 +1,23 @@
-//! Explicit single NORMAL B/IP port admission and cancellation-owned startup cleanup.
+//! Explicit single B/IP port admission and cancellation-owned startup cleanup.
+//!
+//! The registered port may run in NORMAL, FOREIGN or BBMD mode. Startup
+//! publishes the mode with the actual bind; in BBMD mode the Network Port
+//! object then reads the transport's own tables on each property read.
 use super::*;
 use bacnet_network::layer::ReceivedApdu;
 
 impl<T: TransportPort + 'static> ServerBuilder<T> {
-    /// Select the concrete built-in Network Port for this owned NORMAL B/IP link.
-    /// The object must already describe the concrete interface and configured UDP
-    /// port (zero is allowed). Startup validates then publishes the actual bind.
+    /// Select the concrete built-in Network Port for this owned B/IP link, in
+    /// whichever B/IP mode the transport runs. The object must already
+    /// describe the concrete interface and configured UDP port (zero is
+    /// allowed). Startup validates, then publishes the actual bind and mode.
     pub fn registered_network_port(mut self, oid: ObjectIdentifier) -> Self {
         self.config.registered_network_port = Some(oid);
         self
     }
 }
 impl BipServerBuilder {
-    /// Select the built-in Network Port that represents this owned NORMAL B/IP link.
+    /// Select the built-in Network Port that represents this owned B/IP link.
     pub fn registered_network_port(mut self, oid: ObjectIdentifier) -> Self {
         self.config.registered_network_port = Some(oid);
         self
@@ -28,8 +33,9 @@ pub(super) fn prepare<T: TransportPort>(
         return Ok(());
     };
     let address = transport
-        .normal_bip_endpoint()
-        .ok_or_else(|| Error::Encoding("registered port requires NORMAL B/IP".into()))?;
+        .bip_port()
+        .ok_or_else(|| Error::Encoding("registered port requires B/IP in one mode".into()))?
+        .endpoint;
     let ip = *address.ip();
     if ip.is_unspecified()
         || ip.is_multicast()
@@ -54,15 +60,16 @@ pub(super) fn publish<T: TransportPort + 'static>(
     let Some(oid) = oid else {
         return Ok(());
     };
-    let address = network
+    let port = network
         .transport()
-        .normal_bip_endpoint()
+        .bip_port()
         .ok_or_else(|| Error::Encoding("registered B/IP mode changed during bind".into()))?;
     db.publish_bip_port_internal(
         oid,
-        address.ip().octets(),
-        address.port(),
+        port.endpoint.ip().octets(),
+        port.endpoint.port(),
         network.transport().local_receive_apdu_capacity() as u32,
+        port.mode,
     )?;
     // The port's configured number is the local network number from the
     // start; the control worker copies every later change from the port.

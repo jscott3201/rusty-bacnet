@@ -183,11 +183,16 @@ async fn a_bbmd_and_a_foreign_device_share_a_port_on_two_addresses() {
     // Registration came from the device's own address and the shared port.
     let registered = timeout(Duration::from_secs(2), async {
         loop {
-            let mut state = bbmd.transport.bbmd_state().unwrap().lock().await;
-            if state.is_registered_foreign_device(device_ip.octets(), device_mac.port()) {
+            let registered = bbmd
+                .transport
+                .bbmd_state()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .is_registered_foreign_device(device_ip.octets(), device_mac.port());
+            if registered {
                 break;
             }
-            drop(state);
             tokio::task::yield_now().await;
         }
     });

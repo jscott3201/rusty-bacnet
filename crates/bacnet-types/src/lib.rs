@@ -16,6 +16,7 @@
 #[cfg(not(feature = "std"))]
 extern crate alloc;
 
+pub mod bip_port;
 pub mod bitstring;
 pub mod calendar;
 pub mod constructed;

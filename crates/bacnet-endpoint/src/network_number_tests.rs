@@ -23,8 +23,8 @@ impl TransportPort for ObservedBip {
     fn supports_local_nonrouter_number_controls(&self) -> bool {
         self.bip.supports_local_nonrouter_number_controls()
     }
-    fn normal_bip_endpoint(&self) -> Option<SocketAddrV4> {
-        self.bip.normal_bip_endpoint()
+    fn bip_port(&self) -> Option<bacnet_transport::port::BipPort> {
+        self.bip.bip_port()
     }
     fn bip_broadcast_endpoint(&self) -> Option<SocketAddrV4> {
         self.bip.bip_broadcast_endpoint()

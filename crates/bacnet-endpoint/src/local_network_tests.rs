@@ -90,8 +90,11 @@ impl TransportPort for Capture {
     fn supports_local_nonrouter_number_controls(&self) -> bool {
         true
     }
-    fn normal_bip_endpoint(&self) -> Option<SocketAddrV4> {
-        Some(host(SELF))
+    fn bip_port(&self) -> Option<bacnet_transport::port::BipPort> {
+        Some(bacnet_transport::port::BipPort {
+            endpoint: host(SELF),
+            mode: bacnet_types::bip_port::BipPortMode::Normal,
+        })
     }
     fn retain_network_port_lease_internal(&mut self, lease: Arc<()>) -> Result<(), Error> {
         self.lease = Some(lease);
