@@ -1,7 +1,7 @@
 //! Local opt-in inbound clock policy, independent of DCC and mutation policy.
 
 use super::dcc_policy::{address_length_fits, routed_entry_names_direct_source};
-use super::{limiter_clock, BipServerBuilder, ServerBuilder, TransportPort};
+use super::{runtime_clock, BipServerBuilder, ServerBuilder, TransportPort};
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_network::layer::ReceivedApdu;
 use bacnet_objects::clock::ClockFrame;
@@ -359,7 +359,7 @@ impl TimeSyncLimiter {
     pub(super) fn new(policy: TimeSyncPolicy) -> Self {
         Self {
             state: Mutex::new(State {
-                global: Bucket::new(policy.global_rate, limiter_clock::now()),
+                global: Bucket::new(policy.global_rate, runtime_clock::now()),
                 last_accepted: None,
                 sources: HashMap::new(),
             }),
@@ -370,7 +370,7 @@ impl TimeSyncLimiter {
     /// Admit and apply one request. `local_network`, this network's own
     /// number once known, keys a station's direct and relayed forms alike
     /// ([`TimeSyncSource::from_received`]). `now` is read from
-    /// [`limiter_clock::now`], the clock the limiter was built on (#1550).
+    /// [`runtime_clock::now`], the clock the limiter was built on (#1550).
     pub(super) fn apply_at(
         &self,
         received: &ReceivedApdu,

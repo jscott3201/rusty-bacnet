@@ -8,7 +8,7 @@ fn routed(single: bool, confirmed: bool) -> CovSubscription {
         PropertyIdentifier::PRESENT_VALUE,
     );
     sub.monitored_property = single.then_some(PropertyIdentifier::PRESENT_VALUE);
-    sub.expires_at = Some(Instant::now() + Duration::from_secs(600));
+    sub.expires_at = Some(runtime_clock::now() + Duration::from_secs(600));
     sub.subscriber_network = Some(bacnet_encoding::npdu::NpduAddress {
         network: 7,
         mac_address: MacAddr::from_slice(&[4]),

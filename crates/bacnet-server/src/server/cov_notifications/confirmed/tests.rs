@@ -39,7 +39,7 @@ fn proposal_on(
         subscriber_process_identifier: 7,
         monitored_object_identifier: object,
         issue_confirmed_notifications: true,
-        expires_at: Some(Instant::now() + Duration::from_secs(3600)),
+        expires_at: Some(runtime_clock::now() + Duration::from_secs(3600)),
         last_notified_observation: None,
         monitored_property: (kind == CovNotificationKind::Multiple).then_some(property),
         monitored_property_array_index: None,

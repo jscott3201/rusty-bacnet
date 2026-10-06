@@ -1,6 +1,10 @@
 //! Wire evidence for the live Device `Active_COV_Subscriptions` projection
 //! (Clause 12.11; #813). Every read goes through the running server's
 //! ReadProperty/ReadPropertyMultiple dispatch unless it names `read_local`.
+//!
+//! The tests that check a time remaining run on tokio's paused clock, which
+//! COV lifetimes are measured on (#1556): no time passes unless a test steps
+//! it, so each time remaining is exact and a runner stall can't change one.
 use super::*;
 use bacnet_services::object_mgmt::DeleteObjectRequest;
 use bacnet_services::write_property::WritePropertyRequest;
@@ -23,7 +27,7 @@ mod support;
 #[path = "active_cov_multiple_subscriptions_tests.rs"]
 mod active_cov_multiple_subscriptions_tests;
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn active_cov_wire_lists_accepted_ordinary_and_single_subscriptions() {
     let mut wire = Wire::start(ServerConfig::default()).await;
     assert_eq!(wire.active().await, Vec::new(), "initial list is empty");
@@ -60,7 +64,7 @@ async fn active_cov_wire_lists_accepted_ordinary_and_single_subscriptions() {
         BACnetObjectPropertyReference::new(av(1), PV.to_raw())
     );
     assert!(!ordinary.issue_confirmed_notifications);
-    assert!((299..=300).contains(&ordinary.time_remaining));
+    assert_eq!(ordinary.time_remaining, 300);
     // Ordinary numeric Present_Value reports the object's COV_Increment in use.
     assert_eq!(ordinary.cov_increment, Some(0.0));
 
@@ -72,7 +76,7 @@ async fn active_cov_wire_lists_accepted_ordinary_and_single_subscriptions() {
         BACnetObjectPropertyReference::new(av(1), PV.to_raw())
     );
     assert!(single.issue_confirmed_notifications);
-    assert!((599..=600).contains(&single.time_remaining));
+    assert_eq!(single.time_remaining, 600);
     assert_eq!(single.cov_increment, Some(1.5));
 
     let element = find(&listed, 13);
@@ -185,7 +189,7 @@ async fn active_cov_wire_renewal_cancellation_and_indefinite_lifetime() {
     wire.server.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn active_cov_wire_expiry_delete_object_and_peer_cleanup_remove_entries() {
     let mut wire = Wire::start(ServerConfig::default()).await;
     simple_ack(
@@ -213,7 +217,7 @@ async fn active_cov_wire_expiry_delete_object_and_peer_cleanup_remove_entries() 
             subscriber_process_identifier: 34,
             monitored_object_identifier: av(1),
             issue_confirmed_notifications: false,
-            expires_at: Some(Instant::now() + Duration::from_millis(300)),
+            expires_at: Some(runtime_clock::now() + Duration::from_millis(300)),
             last_notified_observation: None,
             monitored_property: None,
             monitored_property_array_index: None,
@@ -222,16 +226,19 @@ async fn active_cov_wire_expiry_delete_object_and_peer_cleanup_remove_entries() 
             timestamped: false,
         })
         .unwrap();
+    // 1 ms before it expires, the entry is listed with a second left:
+    // positive fractions round up. At its expiry it is omitted, before the
+    // periodic purge runs. Lifetimes are on tokio's clock (#1556), so both
+    // instants are exact.
+    tokio::time::advance(Duration::from_millis(299)).await;
     let listed = wire.active().await;
     assert_eq!(processes(&listed), vec![31, 32, 33, 34]);
     assert_eq!(
         find(&listed, 34).time_remaining,
         1,
-        "positive fractions round up"
+        "1 ms before the expiry"
     );
-
-    // Expired at the sampled instant: omitted before the periodic purge runs.
-    tokio::time::sleep(Duration::from_millis(350)).await;
+    tokio::time::advance(Duration::from_millis(1)).await;
     assert_eq!(processes(&wire.active().await), vec![31, 32, 33]);
     assert_eq!(wire.server.cov_table.read().await.len(), 4, "not purged");
 

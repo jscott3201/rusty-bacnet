@@ -527,7 +527,9 @@ async fn life_safety_operation_panicking_authorizer_fails_closed() {
     );
 }
 
-#[tokio::test]
+// The replay tests run paused: the replay window is measured on tokio's
+// clock (#1556), so a runner stall between the sends can't close it.
+#[tokio::test(start_paused = true)]
 async fn exact_success_duplicate_replays_identical_simple_ack_single_execution() {
     let oid = point_oid(1);
     let executions = Arc::new(AtomicUsize::new(0));
@@ -640,7 +642,7 @@ async fn exact_success_duplicate_replays_identical_simple_ack_single_execution()
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn exact_denied_duplicate_replays_identical_error_single_authorization() {
     let oid = point_oid(1);
     let mut point = LifeSafetyPointObject::new(1, "point").unwrap();

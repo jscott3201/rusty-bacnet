@@ -1,5 +1,6 @@
 use super::*;
 use crate::cov::MultipleRefusal;
+use crate::runtime_clock;
 
 fn cov_property_error(code: ErrorCode) -> Error {
     Error::Protocol {
@@ -115,7 +116,7 @@ pub(crate) fn handle_subscribe_cov_with_initial_endpoint(
         if secs == 0 {
             None
         } else {
-            Some(Instant::now() + Duration::from_secs(secs as u64))
+            Some(runtime_clock::now() + Duration::from_secs(secs as u64))
         }
     });
 
@@ -220,7 +221,8 @@ pub(crate) fn handle_subscribe_cov_property_with_initial_endpoint(
         request.monitored_property_array_index,
     )?;
 
-    let expires_at = lifetime.map(|secs| Instant::now() + Duration::from_secs(u64::from(secs)));
+    let expires_at =
+        lifetime.map(|secs| runtime_clock::now() + Duration::from_secs(u64::from(secs)));
 
     let subscription = CovSubscription {
         subscriber_mac: MacAddr::from_slice(source_mac),
@@ -371,7 +373,7 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
         }
         .into());
     }
-    let expires_at = Instant::now() + Duration::from_secs(u64::from(lifetime));
+    let expires_at = runtime_clock::now() + Duration::from_secs(u64::from(lifetime));
     let subscriber_mac = MacAddr::from_slice(source_mac);
     // The references that pass validation, in request order, up to the first
     // that fails; `names` holds each one's object and property reference.

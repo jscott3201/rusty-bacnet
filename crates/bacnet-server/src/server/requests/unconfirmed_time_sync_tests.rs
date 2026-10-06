@@ -1,7 +1,7 @@
 //! Time synchronization handler controls.
 //!
 //! The async tests run on tokio's paused clock, which the time-sync limiter
-//! reads ([`limiter_clock::now`], #1550). Time moves only when a test
+//! reads ([`runtime_clock::now`], #1550). Time moves only when a test
 //! advances it, so its windows close at exact instants and a stalled runner
 //! can't close one under a test.
 use super::*;

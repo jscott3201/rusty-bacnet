@@ -65,7 +65,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 i_am.object_identifier,
                 &received.source_mac,
                 received.source_network.as_ref(),
-                Instant::now(),
+                runtime_clock::now(),
                 // An I-Am from a group address binds nothing (#1493).
                 |mac| network.transport().is_group_destination(mac),
             );
@@ -121,7 +121,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     let mut buf = BytesMut::new();
                     encode_apdu(&mut buf, &pdu).expect("valid APDU encoding");
 
-                    let now = limiter_clock::now();
+                    let now = runtime_clock::now();
                     let is_unicast = !received.is_group && !received.link_layer_group;
                     let (res, directed) = if let Some(ref source_net) = received.source_network {
                         (
@@ -185,7 +185,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 WhoHasObject::Name(name) => WhoHasTarget::Name(name.clone()),
             };
 
-            let now = limiter_clock::now();
+            let now = runtime_clock::now();
             if discovery_limiter.is_negative_who_has(&target, now) {
                 return;
             }
@@ -405,7 +405,7 @@ pub(super) fn apply_time_sync_request(
     }
     let clock = clock.ok_or_else(|| Error::Encoding("Device clock is disabled".into()))?;
     let mut delta_hundredths = None;
-    let result = limiter.apply_at(received, local_network, limiter_clock::now(), || {
+    let result = limiter.apply_at(received, local_network, runtime_clock::now(), || {
         delta_hundredths = clock
             .read_clock()
             .and_then(|frame| time_sync_policy::step_hundredths(supplied, is_utc, frame));

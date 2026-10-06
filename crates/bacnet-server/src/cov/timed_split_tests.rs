@@ -249,7 +249,7 @@ fn deferred_parts_return_without_eviction_and_discarded_ones_are_counted() {
 fn an_admission_without_a_known_maximum_apdu_keeps_the_one_advertised_before() {
     let mut table = crate::cov::CovSubscriptionTable::new();
     let route = crate::cov::SubscriberEndpoint::new(&[10, 0, 0, 1, 0xBA, 0xC0], None);
-    let expires = std::time::Instant::now() + std::time::Duration::from_secs(300);
+    let expires = crate::runtime_clock::now() + std::time::Duration::from_secs(300);
     let sub = timed_reference(1, expires);
     let advertised = |table: &crate::cov::CovSubscriptionTable| {
         table

@@ -23,10 +23,15 @@ fn remaining(frame: Bytes, kind: CovNotificationKind) -> u32 {
     }
 }
 
+// The tests here run on tokio's paused clock, which COV lifetimes are
+// measured on (#1556): no time passes unless a wait steps it, so a runner
+// stall can't expire a subscription under a test, and each time remaining
+// is exact.
+
 async fn wait_until_expired(expiry: Instant) {
     // Runtime interleaving only: boundary arithmetic is tested with supplied now.
     tokio::time::timeout(Duration::from_secs(2), async {
-        while Instant::now() < expiry {
+        while runtime_clock::now() < expiry {
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
     })
@@ -34,14 +39,27 @@ async fn wait_until_expired(expiry: Instant) {
     .unwrap();
 }
 
-#[tokio::test]
+/// Wait, a millisecond of the clock at a time, until `sent` holds `count`
+/// frames: a paused clock moves on, so a retry timer can fire and the
+/// timeout can end the wait.
+async fn wait_for_frames(sent: &std::sync::Mutex<Vec<Bytes>>, count: usize) {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while sent.lock().unwrap().len() < count {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test(start_paused = true)]
 async fn cov_lifetime_held_initial_and_fanout_expiry_admit_nothing() {
     for initial in [true, false] {
         for kind in [CovNotificationKind::Single, CovNotificationKind::Multiple] {
             for confirmed in [false, true] {
                 let fixture = Fixture::new(false);
                 let mut sub = proposal(kind, confirmed, PropertyIdentifier::PRESENT_VALUE);
-                let expiry = Instant::now() + Duration::from_millis(100);
+                let expiry = runtime_clock::now() + Duration::from_millis(100);
                 sub.expires_at = Some(expiry);
                 let snapshots = vec![fixture.table.write().await.admit_for_test(sub, 0).unwrap()];
                 let db_guard = fixture.db.write().await;
@@ -81,7 +99,7 @@ async fn cov_lifetime_held_initial_and_fanout_expiry_admit_nothing() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn cov_lifetime_context_refresh_uses_live_expiry_without_replacing_snapshot() {
     for initial in [true, false] {
         for confirmed in [false, true] {
@@ -91,7 +109,7 @@ async fn cov_lifetime_context_refresh_uses_live_expiry_without_replacing_snapsho
                 confirmed,
                 PropertyIdentifier::PRESENT_VALUE,
             );
-            sub.expires_at = Some(Instant::now() + Duration::from_secs(1));
+            sub.expires_at = Some(runtime_clock::now() + Duration::from_secs(1));
             let snapshots = vec![fixture.table.write().await.admit_for_test(sub, 0).unwrap()];
             let old_expiry = snapshots[0].expires_at;
             let db_guard = fixture.db.write().await;
@@ -103,7 +121,7 @@ async fn cov_lifetime_context_refresh_uses_live_expiry_without_replacing_snapsho
                     .subscribe_multiple(
                         snapshots[0].key().multiple_context().unwrap(),
                         &snapshots[0].endpoint(),
-                        Instant::now() + Duration::from_secs(1000),
+                        runtime_clock::now() + Duration::from_secs(1000),
                         0,
                         None,
                         vec![],
@@ -123,30 +141,29 @@ async fn cov_lifetime_context_refresh_uses_live_expiry_without_replacing_snapsho
             }
             drop(db_guard);
             work.await;
-            tokio::time::timeout(Duration::from_secs(2), async {
-                while fixture.sent.lock().unwrap().is_empty() {
-                    tokio::task::yield_now().await;
-                }
-            })
-            .await
-            .unwrap();
-            assert!((999..=1000).contains(&remaining(
-                fixture.sent.lock().unwrap()[0].clone(),
-                CovNotificationKind::Multiple
-            )));
+            wait_for_frames(&fixture.sent, 1).await;
+            assert_eq!(
+                remaining(
+                    fixture.sent.lock().unwrap()[0].clone(),
+                    CovNotificationKind::Multiple
+                ),
+                1000
+            );
             assert_eq!(snapshots[0].expires_at, old_expiry);
             fixture.finish(confirmed).await;
         }
     }
 }
 
-#[tokio::test]
+/// The subscription is current 1 ms before its expiry and not at it; the
+/// notification admitted before then is still retried.
+#[tokio::test(start_paused = true)]
 async fn cov_lifetime_admitted_confirmed_retry_survives_expiry_and_ack_drains() {
     for kind in [CovNotificationKind::Single, CovNotificationKind::Multiple] {
         let mut fixture = Fixture::new(false);
         Arc::make_mut(&mut fixture.config).cov_retry_timeout_ms = 200;
         let mut sub = proposal(kind, true, PropertyIdentifier::PRESENT_VALUE);
-        let expiry = Instant::now() + Duration::from_millis(100);
+        let expiry = runtime_clock::now() + Duration::from_millis(100);
         sub.expires_at = Some(expiry);
         let snapshots = vec![fixture
             .table
@@ -155,23 +172,24 @@ async fn cov_lifetime_admitted_confirmed_retry_survives_expiry_and_ack_drains() 
             .admit_for_test(sub.clone(), 0)
             .unwrap()];
         fixture.fire(true, &snapshots).await;
-        tokio::time::timeout(Duration::from_secs(2), async {
-            while fixture.sent.lock().unwrap().is_empty() {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
+        wait_for_frames(&fixture.sent, 1).await;
         assert_eq!(fixture.transactions.active_count(), 1);
-        wait_until_expired(expiry).await;
-        assert!(!fixture.table.read().await.is_current(&snapshots[0]));
-        tokio::time::timeout(Duration::from_secs(2), async {
-            while fixture.sent.lock().unwrap().len() < 2 {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
+        tokio::time::sleep_until((expiry - Duration::from_millis(1)).into()).await;
+        assert!(
+            fixture.table.read().await.is_current(&snapshots[0]),
+            "1 ms before the expiry"
+        );
+        tokio::time::sleep_until(expiry.into()).await;
+        assert!(
+            !fixture.table.read().await.is_current(&snapshots[0]),
+            "at the expiry"
+        );
+        assert_eq!(
+            fixture.sent.lock().unwrap().len(),
+            1,
+            "the retry comes after the expiry"
+        );
+        wait_for_frames(&fixture.sent, 2).await;
         {
             let frames = fixture.sent.lock().unwrap();
             assert_eq!(frames[0], frames[1], "retry retains the admitted APDU");
@@ -179,7 +197,7 @@ async fn cov_lifetime_admitted_confirmed_retry_survives_expiry_and_ack_drains() 
         }
         // A Multiple context always has a finite lifetime.
         sub.expires_at = (kind == CovNotificationKind::Multiple)
-            .then(|| Instant::now() + Duration::from_secs(300));
+            .then(|| runtime_clock::now() + Duration::from_secs(300));
         sub.last_notified_observation = Some(
             crate::cov::CovObservation::new(
                 crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(99.0))
