@@ -547,6 +547,15 @@ impl BACnetObject for Probe {
         self.called("set_present_value_internal", (value,));
         Ok(())
     }
+    fn set_present_value_from_internal(
+        &mut self,
+        value: PropertyValue,
+        origin: &CommandOrigin,
+    ) -> Result<(), Error> {
+        self.called("set_present_value_from_internal", (value, origin));
+        // Unlike the default, which answers as `set_present_value_internal` does.
+        Err(property_error(ErrorCode::VALUE_OUT_OF_RANGE))
+    }
     fn set_tracking_value_internal(&mut self, value: PropertyValue) -> Result<(), Error> {
         self.called("set_tracking_value_internal", (value,));
         Ok(())

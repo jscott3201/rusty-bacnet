@@ -169,6 +169,7 @@ mod loop_properties;
 mod loop_reference_follow;
 mod multi_element_writes;
 mod noncommandable_null_writes;
+mod noncommandable_value_source;
 mod passwords;
 mod property_metadata;
 mod pulse_converter_input_reference;

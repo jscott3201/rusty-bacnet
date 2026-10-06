@@ -16,6 +16,7 @@ use super::{
     written_unsigned,
 };
 use crate::audit::{AuditPolicyAuthority, ObjectAuditPolicy};
+use crate::command_source::{CommandOrigin, SingleValueSource};
 use crate::common::{self, read_identity_properties};
 use crate::traits::{BACnetObject, DeadlineWaker, MonotonicClock};
 use crate::transition::Transition;
@@ -75,6 +76,8 @@ pub struct ColorTemperatureObject {
     max_pres_value: u32,
     /// Audit_Level and Auditable_Operations, once provisioned.
     audit_policy: ObjectAuditPolicy,
+    /// Value_Source, once tracked (#1552).
+    value_source: SingleValueSource,
     engine: Engine<u32>,
 }
 
@@ -102,8 +105,21 @@ impl ColorTemperatureObject {
             min_pres_value: *command::KELVIN.start(),
             max_pres_value: *command::KELVIN.end(),
             audit_policy: ObjectAuditPolicy::default(),
+            value_source: SingleValueSource::default(),
             engine: Engine::new(KELVIN_SAMPLE_STEP),
         })
+    }
+
+    /// Track Value_Source (Clause 19.5, #1552), as a Color object's
+    /// [`set_value_source_tracking`](super::ColorObject::set_value_source_tracking)
+    /// does. A `set_min_max` that moves Present_Value leaves no source
+    /// either.
+    pub fn set_value_source_tracking(&mut self, enabled: bool) {
+        self.value_source.set_enabled(enabled);
+    }
+
+    pub(super) fn value_source(&self) -> &SingleValueSource {
+        &self.value_source
     }
 
     /// Provision the optional Audit_Level and Auditable_Operations rows
@@ -127,6 +143,7 @@ impl ColorTemperatureObject {
     pub fn set_present_value(&mut self, kelvin: u32) -> Result<(), Error> {
         let kelvin = self.written_kelvin(u64::from(kelvin))?;
         self.write_present_value(kelvin);
+        self.value_source.forget();
         Ok(())
     }
 
@@ -148,6 +165,7 @@ impl ColorTemperatureObject {
         if clamped != self.present_value {
             self.engine.halt(self.engine.now());
             self.present_value = clamped;
+            self.value_source.forget();
         }
         if self.default_color_temperature != 0 {
             self.default_color_temperature = self.default_color_temperature.clamp(min, max);
@@ -175,7 +193,9 @@ impl ColorTemperatureObject {
     /// VALUE_OUT_OF_RANGE and leaves the object unchanged.
     pub fn set_color_command(&mut self, command: BACnetColorCommand) -> Result<(), Error> {
         command::check_color_temperature(&command)?;
-        self.take_color_command(command);
+        if self.take_color_command(command) {
+            self.value_source.forget();
+        }
         Ok(())
     }
 
@@ -195,8 +215,9 @@ impl ColorTemperatureObject {
 
     /// Store a checked command and carry it out now (Table 12-Y2). Each
     /// operation but STOP replaces the fade or ramp in progress, and STOP
-    /// ends it (Clause 12.Y.6.1).
-    fn take_color_command(&mut self, command: BACnetColorCommand) {
+    /// ends it (Clause 12.Y.6.1). Whether it set Present_Value: a STOP with
+    /// nothing moving doesn't.
+    fn take_color_command(&mut self, command: BACnetColorCommand) -> bool {
         self.color_command = command;
         let now = self.engine.now();
         let tracking = self.engine.tracking(self.present_value, now);
@@ -213,12 +234,14 @@ impl ColorTemperatureObject {
                     now,
                     milliseconds(fade_time),
                 ));
+                true
             }
             (ColorOperation::RAMP_TO_CCT, Some(target)) => {
                 let rate = command.ramp_rate.unwrap_or(self.default_ramp_rate);
                 self.present_value = target;
                 self.engine
                     .start(Transition::ramp(tracking, target, now, f64::from(rate)));
+                true
             }
             (operation @ (ColorOperation::STEP_UP_CCT | ColorOperation::STEP_DOWN_CCT), _) => {
                 let increment = command
@@ -231,14 +254,36 @@ impl ColorTemperatureObject {
                 };
                 self.present_value = self.clamped(stepped);
                 self.engine.start(None);
+                true
             }
-            (ColorOperation::STOP, _) => {
-                if let Some(reached) = self.engine.halt(now) {
+            (ColorOperation::STOP, _) => match self.engine.halt(now) {
+                Some(reached) => {
                     self.present_value = reached;
+                    true
                 }
-            }
-            _ => {}
+                None => false,
+            },
+            _ => false,
         }
+    }
+
+    /// A Present_Value or Color_Command write, the two that can set
+    /// Present_Value, and whether it did.
+    fn write_output(
+        &mut self,
+        property: PropertyIdentifier,
+        value: PropertyValue,
+    ) -> Result<bool, Error> {
+        if property == PropertyIdentifier::PRESENT_VALUE {
+            let PropertyValue::Unsigned(kelvin) = value else {
+                return Err(common::invalid_data_type_error());
+            };
+            let kelvin = self.written_kelvin(kelvin)?;
+            self.write_present_value(kelvin);
+            return Ok(true);
+        }
+        let command = command::decode_write(value, command::check_color_temperature)?;
+        Ok(self.take_color_command(command))
     }
 
     /// Halt any fade or ramp and move to a written Present_Value as
@@ -279,6 +324,9 @@ impl BACnetObject for ColorTemperatureObject {
             return result;
         }
         if let Some(result) = self.audit_policy.read(property, array_index) {
+            return result;
+        }
+        if let Some(result) = self.value_source.read(property, array_index) {
             return result;
         }
         let unsigned = |value: u32| Ok(PropertyValue::Unsigned(u64::from(value)));
@@ -328,16 +376,12 @@ impl BACnetObject for ColorTemperatureObject {
             return result;
         }
         match property {
-            p if p == PropertyIdentifier::PRESENT_VALUE => {
-                let PropertyValue::Unsigned(kelvin) = value else {
-                    return Err(common::invalid_data_type_error());
-                };
-                let kelvin = self.written_kelvin(kelvin)?;
-                self.write_present_value(kelvin);
-            }
-            p if p == PropertyIdentifier::COLOR_COMMAND => {
-                let command = command::decode_write(value, command::check_color_temperature)?;
-                self.take_color_command(command);
+            p if p == PropertyIdentifier::PRESENT_VALUE
+                || p == PropertyIdentifier::COLOR_COMMAND =>
+            {
+                // A tracked source needs the writer (`write_property_from`).
+                self.value_source.unsourced()?;
+                self.write_output(property, value)?;
             }
             // Clause 12.Y.8 clamps a write as Present_Value's is, except 0,
             // which the restart rule of Clause 12.Y.4 gives a meaning of its
@@ -370,6 +414,29 @@ impl BACnetObject for ColorTemperatureObject {
             }
         }
         Ok(())
+    }
+
+    fn write_property_from(
+        &mut self,
+        property: PropertyIdentifier,
+        array_index: Option<u32>,
+        value: PropertyValue,
+        priority: Option<u8>,
+        origin: &CommandOrigin,
+    ) -> Result<(), Error> {
+        match property {
+            PropertyIdentifier::VALUE_SOURCE => {
+                self.value_source.correct(array_index, value, origin)
+            }
+            PropertyIdentifier::PRESENT_VALUE | PropertyIdentifier::COLOR_COMMAND => {
+                self.value_source.admit(origin)?;
+                if self.write_output(property, value)? {
+                    self.value_source.record(origin);
+                }
+                Ok(())
+            }
+            _ => self.write_property(property, array_index, value, priority),
+        }
     }
 
     fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {

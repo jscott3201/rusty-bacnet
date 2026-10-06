@@ -36,6 +36,8 @@ pub struct MultiStateValueObject {
     pub(crate) event_history: EventHistory,
     /// Implemented paired command-source tracking (Clause 19.5).
     value_source: crate::command_source::ValueSourceTracking,
+    /// The last writer of a noncommandable Present_Value, once tracked (#1552).
+    write_source: crate::command_source::SingleValueSource,
 }
 
 impl MultiStateValueObject {
@@ -84,7 +86,16 @@ impl MultiStateValueObject {
             event_detection_enable: true,
             event_history: EventHistory::default(),
             value_source: crate::command_source::ValueSourceTracking::default(),
+            write_source: crate::command_source::SingleValueSource::default(),
         })
+    }
+
+    /// Track the source of a noncommandable Present_Value (Clause 19.5,
+    /// #1552), as [`AnalogValueObject::set_value_source_tracking`] does.
+    ///
+    /// [`AnalogValueObject::set_value_source_tracking`]: crate::analog::AnalogValueObject::set_value_source_tracking
+    pub fn set_value_source_tracking(&mut self, enabled: bool) {
+        self.write_source.set_enabled(enabled);
     }
 
     /// Set the description string.
@@ -199,6 +210,25 @@ impl MultiStateValueObject {
             .chain(self.event_detector.alarm_values.iter().copied())
     }
 
+    /// A noncommandable Present_Value write, network-equivalent.
+    fn write_direct_present_value(
+        &mut self,
+        array_index: Option<u32>,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        if array_index.is_some() {
+            return Err(common::property_is_not_an_array_error());
+        }
+        if self.access == PresentValueAccess::ReadOnly && !self.out_of_service {
+            return Err(common::write_access_denied_error());
+        }
+        // Clause 19.2: an otherwise permitted noncommandable NULL is a no-op.
+        if value == PropertyValue::Null {
+            return Ok(());
+        }
+        self.set_present_value_directly(value)
+    }
+
     fn set_present_value_directly(&mut self, value: PropertyValue) -> Result<(), Error> {
         self.present_value = Self::checked_present_value(self.number_of_states, value)?;
         let _ = self.recompute_reliability();
@@ -254,10 +284,14 @@ impl BACnetObject for MultiStateValueObject {
         if metadata::excludes(self, property) {
             return Err(common::unknown_property_error());
         }
-        if let Some(result) = self
-            .value_source
-            .read(property, array_index, &self.priority_array)
-        {
+        let source = match self.access {
+            PresentValueAccess::Commandable => {
+                self.value_source
+                    .read(property, array_index, &self.priority_array)
+            }
+            _ => self.write_source.read(property, array_index),
+        };
+        if let Some(result) = source {
             return result;
         }
 
@@ -344,10 +378,13 @@ impl BACnetObject for MultiStateValueObject {
         {
             return Err(common::property_is_not_an_array_error());
         }
-        if property == PropertyIdentifier::VALUE_SOURCE
-            && self.access == PresentValueAccess::Commandable
-        {
-            return self.value_source.correct(value, priority, origin);
+        if property == PropertyIdentifier::VALUE_SOURCE {
+            return match self.access {
+                PresentValueAccess::Commandable => {
+                    self.value_source.correct(value, priority, origin)
+                }
+                _ => self.write_source.correct(array_index, value, origin),
+            };
         }
         if property == PropertyIdentifier::PRESENT_VALUE {
             let number_of_states = self.number_of_states;
@@ -362,7 +399,14 @@ impl BACnetObject for MultiStateValueObject {
                     )
                 }
                 PresentValueAccess::ReadOnly | PresentValueAccess::Writable => {
-                    self.write_property(property, array_index, value, priority)
+                    self.write_source.admit(origin)?;
+                    // A NULL is a no-op (Clause 19.2), so it has no writer.
+                    let null = value == PropertyValue::Null;
+                    self.write_direct_present_value(array_index, value)?;
+                    if !null {
+                        self.write_source.record(origin);
+                    }
+                    Ok(())
                 }
             };
         }
@@ -383,17 +427,9 @@ impl BACnetObject for MultiStateValueObject {
             if self.access == PresentValueAccess::Commandable {
                 return Err(common::write_access_denied_error());
             }
-            if array_index.is_some() {
-                return Err(common::property_is_not_an_array_error());
-            }
-            if self.access == PresentValueAccess::ReadOnly && !self.out_of_service {
-                return Err(common::write_access_denied_error());
-            }
-            // Clause 19.2: an otherwise permitted noncommandable NULL is a no-op.
-            if value == PropertyValue::Null {
-                return Ok(());
-            }
-            return self.set_present_value_directly(value);
+            // A tracked source needs the writer (`write_property_from`).
+            self.write_source.unsourced()?;
+            return self.write_direct_present_value(array_index, value);
         }
         if property == PropertyIdentifier::VALUE_SOURCE {
             return Err(common::write_access_denied_error());
@@ -548,9 +584,22 @@ impl BACnetObject for MultiStateValueObject {
             }
             _ if self.out_of_service => Err(common::write_access_denied_error()),
             PresentValueAccess::ReadOnly | PresentValueAccess::Writable => {
-                self.set_present_value_directly(value)
+                self.set_present_value_directly(value)?;
+                self.write_source.forget();
+                Ok(())
             }
         }
+    }
+
+    fn set_present_value_from_internal(
+        &mut self,
+        value: PropertyValue,
+        origin: &crate::command_source::CommandOrigin,
+    ) -> Result<(), Error> {
+        self.write_source.admit(origin)?;
+        self.set_present_value_internal(value)?;
+        self.write_source.record(origin);
+        Ok(())
     }
 
     fn reliability_evaluation_inhibited_internal(&self) -> bool {

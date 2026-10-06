@@ -145,13 +145,17 @@ const BASE: &[PropertyMetadata] = &[
 ];
 
 pub(super) fn for_object(object: &AnalogValueObject) -> Cow<'_, [PropertyMetadata]> {
-    object.access.project(rows(object))
+    object
+        .access
+        .project(rows(object), object.write_source.is_enabled())
 }
 
 /// Whether `property` is absent under the object's Present_Value access.
 pub(super) fn excludes(object: &AnalogValueObject, property: P) -> bool {
     object.access != PresentValueAccess::Commandable
-        && object.access.excludes(&rows(object), property)
+        && object
+            .access
+            .excludes(&rows(object), property, object.write_source.is_enabled())
 }
 
 fn rows(object: &AnalogValueObject) -> Cow<'_, [PropertyMetadata]> {

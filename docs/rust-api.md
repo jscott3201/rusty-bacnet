@@ -282,6 +282,41 @@ selector gains no authority from that overlap policy.
 Existing delivery, lifetime and renewal
 fences apply; same-generation concurrent completion ordering is separate (#826).
 
+### Source of a noncommandable Present_Value
+
+Clause 19.5 gives an object with no priority array one source to report: the
+writer of its last Present_Value write (#1552). The noncommandable modes of
+Analog, Binary and Multi-state Value, and the Color and Color Temperature
+objects, track it once `set_value_source_tracking(true)` is called before
+registration, as the audit policy is provisioned. Tracking is off by default, so
+Property_List, the PICS and the wire stay as they were. On, the object serves
+`Value_Source` as a required row (the tables' value-source footnote), starting
+at NONE; `Value_Source_Array` and `Last_Command_Time` stay absent, since Clause
+19.5.1.4 keeps the time to objects with a priority array.
+
+- `write_property_from` records its origin as source and owner, published as
+  for a commandable slot: the Device or local initiator, or the address of a
+  writer the server can't tie to one Device. On a colour object a Color_Command
+  that sets Present_Value (a fade, a ramp, a step, or a STOP that halts one)
+  records its writer too; a STOP with nothing moving doesn't. A permitted NULL
+  is a no-op and records nothing, nor does a refused write.
+- Only the owner may write `Value_Source`, under the commandable path's
+  ownership rules; the priority is ignored. Anyone else, or anyone before the
+  first sourced write, gets WRITE_ACCESS_DENIED before the value is checked. A
+  correction keeps the owner; the next write replaces it.
+- Context-free `write_property` of Present_Value (or Color_Command) is refused
+  with WRITE_ACCESS_DENIED while tracking, as a commandable command is, since
+  the source it would leave can't be known.
+- `BACnetServer::write_local` names this Device, or the `LocalCommandSource`
+  object, and the Device owns the source. `set_present_value_local` calls the
+  new `set_present_value_from_internal` hook with this Device. The typed
+  setters (`set_present_value`, `set_color_command`, a `set_min_max` that moves
+  a Color Temperature's value, and plain `set_present_value_internal`) name no
+  writer, so they leave Value_Source NONE with no owner.
+
+COV for these sources is the ordinary property COV: the Table 13-1a-2 bundle
+above stays with the six commandable families.
+
 ### APDU Types
 
 ```rust
@@ -2406,10 +2441,12 @@ For the two noncommandable modes, both `BACnetObject::write_property` and
 NULL write succeeds without changing Present_Value (§19.2); an array index still
 fails because Present_Value is not an array. Read-only in-service writes remain
 denied, including NULL. Priority_Array, Relinquish_Default, Current_Command_Priority,
-Value_Source, Value_Source_Array, Last_Command_Time and commandable-only
-Audit_Priority_Filter are absent from these modes' projected metadata. This does
-not disable the remaining supported AV/BV target Audit policy or add MSV target
-Audit reporting.
+Value_Source_Array, Last_Command_Time and commandable-only Audit_Priority_Filter
+are absent from these modes' projected metadata, and so is Value_Source unless
+`set_value_source_tracking(true)` provisions it (see
+[Source of a noncommandable Present_Value](#source-of-a-noncommandable-present_value)).
+This does not disable the remaining supported AV/BV target Audit policy or add
+MSV target Audit reporting.
 
 `BACnetServer::set_present_value_local` supplies a logical application value to
 Analog/Binary/Multi-state Inputs, noncommandable Values, Loop (the control
@@ -3582,11 +3619,13 @@ registration, as on an Analog or Binary Value (#1525; see
 `Audit_Priority_Filter`, so a priority filter in the policy is left out. The
 other optional rows stay absent:
 
-- `Value_Source`: this crate tracks a value source only for a commandable
-  Present_Value, through its priority array, and neither object has one; the
-  noncommandable Analog, Binary and Multi-state Values leave it out too.
 - `Tags`, `Profile_Location` and `Profile_Name`: no object in this crate
   serves them yet.
+
+`Value_Source` is served once `set_value_source_tracking(true)` turns tracking
+on (#1552): it names the writer of the last Present_Value write, or of the last
+Color_Command that set Present_Value, and only that writer may correct it (see
+[Source of a noncommandable Present_Value](#source-of-a-noncommandable-present_value)).
 
 Two choices here go past the addendum's text. A new object's
 `Default_Fade_Time` is 100 ms, the shortest the range allows, as Lighting

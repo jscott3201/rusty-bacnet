@@ -449,6 +449,16 @@ pub const COMMANDS: &[(&str, Command)] = &[
             o.set_present_value_internal(PropertyValue::Real(21.5))
         )
     }),
+    ("set_present_value_from_internal", |o| {
+        let origin = CommandOrigin::Local {
+            owner_device: oid(ObjectType::DEVICE, 9),
+            initiating_object: None,
+        };
+        format!(
+            "{:?}",
+            o.set_present_value_from_internal(PropertyValue::Real(22.5), &origin)
+        )
+    }),
     ("set_tracking_value_internal", |o| {
         format!(
             "{:?}",
