@@ -203,7 +203,8 @@ fn profile_rows_are_read_only_and_checked_when_provisioned() {
         ]
     );
 
-    for location in ["HTTP://x", "bacnet://5/device,5", "http:x"] {
+    // An empty location is allowed: a client then uses the Device's.
+    for location in ["", "HTTP://x", "bacnet://5/device,5", "http:x"] {
         let ok = ObjectProfile {
             profile_location: Some(location.into()),
             ..ObjectProfile::default()

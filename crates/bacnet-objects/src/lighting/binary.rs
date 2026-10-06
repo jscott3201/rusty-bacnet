@@ -335,7 +335,7 @@ impl BACnetObject for BinaryLightingOutputObject {
     fn write_property(
         &mut self,
         property: PropertyIdentifier,
-        _array_index: Option<u32>,
+        array_index: Option<u32>,
         value: PropertyValue,
         priority: Option<u8>,
     ) -> Result<(), Error> {
@@ -367,7 +367,7 @@ impl BACnetObject for BinaryLightingOutputObject {
         if let Some(result) = color_link::write(&mut self.color_link, property, &value) {
             return result;
         }
-        if let Some(result) = self.profile.write(property, _array_index, &value) {
+        if let Some(result) = self.profile.write(property, array_index, &value) {
             return result;
         }
         if let Some(result) =
@@ -381,7 +381,7 @@ impl BACnetObject for BinaryLightingOutputObject {
         Err(crate::common::unhandled_write_error(
             self.property_metadata().as_ref(),
             property,
-            _array_index,
+            array_index,
         ))
     }
 

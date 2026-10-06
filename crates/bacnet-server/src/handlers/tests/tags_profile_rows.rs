@@ -193,4 +193,33 @@ fn tags_take_array_writes_and_the_profile_rows_none() {
             ErrorCode::UNKNOWN_PROPERTY,
         );
     }
+    // An empty array, too: Tags reaches the object as raw octets.
+    assert_refused(
+        write_at(&mut db, blo, TAGS, None, &[]),
+        ErrorCode::UNKNOWN_PROPERTY,
+    );
+}
+
+#[test]
+fn a_whole_tags_write_takes_up_to_max_tags_elements() {
+    let (mut db, oid) = provisioned_color();
+    // The semantic tag `a`, three octets.
+    let tag = [0x0A, 0x00, 0x61];
+    let max = bacnet_objects::object_profile::MAX_TAGS;
+    write_at(&mut db, oid, TAGS, None, &tag.repeat(max)).unwrap();
+    assert_eq!(
+        read_at(&db, oid, TAGS, Some(0)).unwrap(),
+        [0x22, 0x04, 0x00]
+    );
+    let too_many = write_at(&mut db, oid, TAGS, None, &tag.repeat(max + 1));
+    assert!(
+        matches!(too_many, Err(Error::Protocol { class, code })
+            if class == ErrorClass::RESOURCES.to_raw() as u32
+                && code == ErrorCode::NO_SPACE_TO_WRITE_PROPERTY.to_raw() as u32),
+        "{too_many:?}"
+    );
+    assert_eq!(
+        read_at(&db, oid, TAGS, Some(0)).unwrap(),
+        [0x22, 0x04, 0x00]
+    );
 }

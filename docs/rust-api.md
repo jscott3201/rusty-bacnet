@@ -314,8 +314,13 @@ at NONE; `Value_Source_Array` and `Last_Command_Time` stay absent, since Clause
   a Color Temperature's value, and plain `set_present_value_internal`) name no
   writer, so they leave Value_Source NONE with no owner.
 
-COV for these sources is the ordinary property COV: the Table 13-1a-2 bundle
-above stays with the six commandable families.
+With tracking on and no local Device identity, a Schedule's or Command's write
+to such an object falls back to a context-free write, which is refused: it fails
+closed, as it does for a commandable object.
+
+A noncommandable object's Value_Source COV doesn't yet follow Table 13-1a-2: the
+bundled report above is served for the six commandable families only, and the
+noncommandable case is tracked in #1582.
 
 ### APDU Types
 
@@ -7118,12 +7123,13 @@ audit rows; on a Lighting Output between its colour links and its trims.
   and one that doesn't decode INVALID_DATA_ENCODING.
 - `Profile_Location` and `Profile_Name` belong to the application and are
   read-only over the network, as their O code allows; the PICS lists them as
-  readable only. `set_profile` takes a location whose URI scheme is http, https
-  or bacnet, and a profile name that starts with a decimal vendor identifier
-  and a dash.
+  readable only. `set_profile` takes an empty location or one whose URI scheme
+  is http, https or bacnet, and a profile name that starts with a decimal vendor
+  identifier and a dash.
 
 Tags written over the network are held in memory: a restart brings back what
-the application provisioned.
+the application provisioned (persistence is #1583). More object types and a
+typed decode of a remote device's Tags are #1584.
 
 ### Target Device Audit recipient
 

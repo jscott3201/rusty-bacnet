@@ -15,11 +15,11 @@
 //! - Profile_Location and Profile_Name are the application's: read-only over
 //!   the network, as their O conformance code permits, so the PICS lists
 //!   them as readable only. Provisioning checks each against its subclause:
-//!   a location's URI scheme is http, https or bacnet, and a profile name
-//!   begins with a decimal vendor identifier and a dash.
+//!   a location is empty or its URI scheme is http, https or bacnet, and a
+//!   profile name begins with a decimal vendor identifier and a dash.
 //!
 //! Tags written over the network live in memory only: a restart brings back
-//! what the application provisioned.
+//! what the application provisioned (persistence is #1583).
 
 use bacnet_encoding::constructed::{decode_name_value, encode_name_value};
 use bacnet_encoding::tags::Tag;
@@ -58,9 +58,9 @@ pub struct ObjectProfile {
 impl ObjectProfile {
     /// Check the rows as an object takes them. Too many tags is
     /// NO_SPACE_TO_WRITE_PROPERTY; a tag value that isn't a primitive is
-    /// INVALID_DATA_TYPE; a tag name with a semicolon, a location with
-    /// another URI scheme, or a profile name without its vendor prefix is
-    /// VALUE_OUT_OF_RANGE.
+    /// INVALID_DATA_TYPE; a tag name with a semicolon, a non-empty location
+    /// with another URI scheme, or a profile name without its vendor prefix
+    /// is VALUE_OUT_OF_RANGE.
     pub fn check(&self) -> Result<(), Error> {
         if let Some(tags) = &self.tags {
             check_tags(tags)?;
@@ -235,14 +235,15 @@ fn check_tag(tag: &BACnetNameValue) -> Result<(), Error> {
     Ok(())
 }
 
-/// Whether a Profile_Location URI uses one of the schemes its subclause
-/// allows.
+/// Whether a Profile_Location is empty, which the Profile_Name subclause
+/// allows for, or a URI using one of the schemes its own subclause allows.
 fn location_scheme_allowed(location: &str) -> bool {
-    location.split_once(':').is_some_and(|(scheme, _)| {
-        ["http", "https", "bacnet"]
-            .iter()
-            .any(|allowed| scheme.eq_ignore_ascii_case(allowed))
-    })
+    location.is_empty()
+        || location.split_once(':').is_some_and(|(scheme, _)| {
+            ["http", "https", "bacnet"]
+                .iter()
+                .any(|allowed| scheme.eq_ignore_ascii_case(allowed))
+        })
 }
 
 /// Whether a Profile_Name begins with a vendor identifier in decimal and a
