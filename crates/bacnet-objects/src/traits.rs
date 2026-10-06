@@ -1124,6 +1124,23 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         })
     }
 
+    /// [`set_present_value_internal`](Self::set_present_value_internal) on
+    /// behalf of `origin`, the local Device the application runs in.
+    ///
+    /// A noncommandable Analog, Binary or Multi-state Value that tracks its
+    /// Present_Value's source (#1552) publishes `origin` as Value_Source
+    /// after the update, as Clause 19.5 asks of a write the local device
+    /// makes; plain `set_present_value_internal` leaves it NONE. The server's
+    /// `set_present_value_local` calls this when it knows its Device. The
+    /// default ignores `origin`, and decorators must forward it.
+    fn set_present_value_from_internal(
+        &mut self,
+        value: PropertyValue,
+        _origin: &crate::command_source::CommandOrigin,
+    ) -> Result<(), Error> {
+        self.set_present_value_internal(value)
+    }
+
     /// Apply the `Tracking_Value` the local application derived.
     ///
     /// Only the built-in Life Safety Point and Zone opt in, with a

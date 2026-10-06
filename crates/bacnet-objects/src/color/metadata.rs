@@ -4,6 +4,8 @@ use std::borrow::Cow;
 use bacnet_types::enums::PropertyIdentifier as P;
 
 use crate::audit::ObjectAuditPolicy;
+use crate::command_source::SingleValueSource;
+use crate::object_profile::ObjectProfile;
 use crate::property_metadata::{
     PropertyConformance::{Optional, RequiredRead, RequiredWrite},
     PropertyMetadata,
@@ -22,15 +24,17 @@ use crate::property_metadata::{
 //   `set_min_max`.
 // - Neither table has Status_Flags, Event_State, Reliability or
 //   Out_Of_Service, so neither object serves them.
-// - Audit_Level and Auditable_Operations are present only once
-//   `set_audit_policy` provisions them, as on an Analog or Binary Value
+// - Value_Source is present only once `set_value_source_tracking` turns
+//   tracking on (#1552), and is then required, as the tables' value-source
+//   footnotes make it. Audit_Level and Auditable_Operations are present only
+//   once `set_audit_policy` provisions them, as on an Analog or Binary Value
 //   (#1525): the tables put them in only where the device does audit
 //   reporting. They go in table order, after Transition.
-// - Optional rows the objects don't implement are absent: Value_Source
-//   (no noncommandable object tracks a value source), Tags, Profile_Location
-//   and Profile_Name (no object serves them). Color Temperature's
-//   Min_Pres_Value and Max_Pres_Value are implemented as a pair, as the
-//   table's footnote asks.
+// - Tags, Profile_Location and Profile_Name are present only once
+//   `set_profile` provisions them (#1553), after the audit rows in table
+//   order; Tags is writable, the profile rows read-only. Color
+//   Temperature's Min_Pres_Value and Max_Pres_Value are implemented as a
+//   pair, as the table's footnote asks.
 // - Presence is None on every base row, and neither object is createable at
 //   runtime (the network factory doesn't build them). Property_List is the
 //   only array; COV support is the objects' own `supports_cov`.
@@ -69,26 +73,47 @@ const COLOR_TEMPERATURE_BASE: &[PropertyMetadata] = &[
 ];
 
 pub(super) fn for_color_object(object: &ColorObject) -> Cow<'_, [PropertyMetadata]> {
-    with_audit(COLOR_BASE, object.audit_policy())
+    with_optional(
+        COLOR_BASE,
+        object.value_source(),
+        object.audit_policy(),
+        object.profile(),
+    )
 }
 
 pub(super) fn for_color_temperature_object(
     object: &ColorTemperatureObject,
 ) -> Cow<'_, [PropertyMetadata]> {
-    with_audit(COLOR_TEMPERATURE_BASE, object.audit_policy())
+    with_optional(
+        COLOR_TEMPERATURE_BASE,
+        object.value_source(),
+        object.audit_policy(),
+        object.profile(),
+    )
 }
 
-/// `base` with the provisioned audit rows put in before Property_List.
-fn with_audit(
+/// `base` with the provisioned optional rows put in before Property_List,
+/// in table order: Value_Source, the audit rows, then Tags, Profile_Location
+/// and Profile_Name.
+fn with_optional(
     base: &'static [PropertyMetadata],
+    value_source: &SingleValueSource,
     policy: &ObjectAuditPolicy,
+    profile: &ObjectProfile,
 ) -> Cow<'static, [PropertyMetadata]> {
-    if *policy == ObjectAuditPolicy::default() {
+    let audit = (*policy != ObjectAuditPolicy::default()).then(|| policy.metadata());
+    let mut rows = value_source
+        .metadata()
+        .into_iter()
+        .chain(audit.into_iter().flatten())
+        .chain(profile.metadata())
+        .peekable();
+    if rows.peek().is_none() {
         return Cow::Borrowed(base);
     }
-    let (property_list, rows) = base.split_last().expect("a Property_List row");
-    let mut rows = rows.to_vec();
-    rows.extend(policy.metadata());
-    rows.push(*property_list);
-    Cow::Owned(rows)
+    let (property_list, base) = base.split_last().expect("a Property_List row");
+    let mut metadata = base.to_vec();
+    metadata.extend(rows);
+    metadata.push(*property_list);
+    Cow::Owned(metadata)
 }

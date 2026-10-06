@@ -12,7 +12,8 @@
 //!
 //! Neither object has a priority array, and their property tables have no
 //! Status_Flags, Event_State, Reliability or Out_Of_Service, so the objects
-//! serve none of them.
+//! serve none of them. Value_Source, once tracked, names the last writer of
+//! Present_Value (#1552).
 
 use std::ops::RangeInclusive;
 use std::time::Duration;
@@ -42,6 +43,8 @@ mod engine_tests;
 mod metadata_tests;
 #[cfg(test)]
 mod rows_tests;
+#[cfg(test)]
+mod value_source_tests;
 
 /// The value an xy colour reads as: its two REALs, which encode as the
 /// BACnetxyColor SEQUENCE.

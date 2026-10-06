@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::common::{self, read_common_properties, read_priority_array};
+use crate::object_profile::ObjectProfile;
 use crate::traits::{BACnetObject, DeadlineWaker, MonotonicClock};
 
 // ---------------------------------------------------------------------------
@@ -85,6 +86,8 @@ pub struct LightingOutputObject {
     /// Color_Reference, with Color_Override and Override_Color_Reference
     /// when overridable; absent until set.
     color_link: Option<ColorLink>,
+    /// Tags, Profile_Location and Profile_Name, once provisioned (#1553).
+    profile: ObjectProfile,
     monotonic_clock: Option<Arc<MonotonicClock>>,
     deadline_waker: Option<Arc<DeadlineWaker>>,
     /// The time an object with no clock bound has been advanced to.
@@ -118,6 +121,7 @@ impl LightingOutputObject {
             relinquish_default: 0.0,
             trims: trim::Trims::NONE,
             color_link: None,
+            profile: ObjectProfile::default(),
             monotonic_clock: None,
             deadline_waker: None,
             logical_now: Duration::ZERO,
@@ -210,6 +214,15 @@ impl LightingOutputObject {
     /// The colour link, if one is set.
     pub fn color_link(&self) -> Option<&ColorLink> {
         self.color_link.as_ref()
+    }
+
+    /// Provision the optional Tags, Profile_Location and Profile_Name rows
+    /// before registration (#1553), as a Color object's
+    /// [`set_profile`](crate::color::ColorObject::set_profile) does.
+    pub fn set_profile(&mut self, profile: ObjectProfile) -> Result<(), Error> {
+        profile.check()?;
+        self.profile = profile;
+        Ok(())
     }
 
     /// Set Default_Fade_Time, the milliseconds a fade request without its own
@@ -358,6 +371,7 @@ impl BACnetObject for LightingOutputObject {
             }
             p => color_link::read(self.color_link.as_ref(), p)
                 .or_else(|| self.read_trim(p))
+                .or_else(|| self.profile.read(p, array_index))
                 .unwrap_or_else(|| Err(common::unknown_property_error())),
         }
     }
@@ -365,7 +379,7 @@ impl BACnetObject for LightingOutputObject {
     fn write_property(
         &mut self,
         property: PropertyIdentifier,
-        _array_index: Option<u32>,
+        array_index: Option<u32>,
         value: PropertyValue,
         priority: Option<u8>,
     ) -> Result<(), Error> {
@@ -464,6 +478,9 @@ impl BACnetObject for LightingOutputObject {
         if let Some(result) = color_link::write(&mut self.color_link, property, &value) {
             return result;
         }
+        if let Some(result) = self.profile.write(property, array_index, &value) {
+            return result;
+        }
         if let Some(result) = common::write_cov_increment(&mut self.cov_increment, property, &value)
         {
             return result;
@@ -479,7 +496,7 @@ impl BACnetObject for LightingOutputObject {
         Err(crate::common::unhandled_write_error(
             self.property_metadata().as_ref(),
             property,
-            _array_index,
+            array_index,
         ))
     }
 

@@ -843,6 +843,8 @@ mod trailing_octet_wire_tests;
 mod truncated_request_wire_tests;
 #[cfg(test)]
 mod value_cov_increment_tests;
+#[cfg(test)]
+mod value_source_local_tests;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Start a server builder for a caller-supplied transport type, with default configuration and

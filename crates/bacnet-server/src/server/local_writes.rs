@@ -211,7 +211,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// invalid application value. Other object families fail closed; use
     /// [`BACnetServer::write_local`] for network-equivalent writes and sourced
     /// commands on commandable objects. The Python binding exposes this as
-    /// `BACnetServer.set_present_value_local`.
+    /// `BACnetServer.set_present_value_local`. A noncommandable Value that
+    /// tracks its source (`set_value_source_tracking`, #1552) then publishes
+    /// this server's Device as Value_Source, as Clause 19.5 asks of a write
+    /// the local device makes.
     ///
     /// A Life Safety Point or Zone takes an Enumerated BACnetLifeSafetyState,
     /// a standard value or one from 256 to 65535, in or out of service, since
@@ -803,6 +806,10 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
                 | LocalWrite::ApplicationAccessInput(_)
                 | LocalWrite::WriteGroup { .. } => None,
             };
+            // The application's own Present_Value comes from this Device, which
+            // a tracked noncommandable Value publishes as its source (#1552).
+            let source = source.or(matches!(write, LocalWrite::ApplicationPresentValue)
+                .then_some(crate::LocalCommandSource::ServerDevice));
             let command_origin =
                 source.and_then(|source| crate::command_source::resolve_local(&db, source).ok());
             let result = prepared.unwrap_or_else(|| {
@@ -823,7 +830,10 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
                             command_origin.as_ref(),
                         )
                     }
-                    LocalWrite::ApplicationPresentValue => object.set_present_value_internal(value),
+                    LocalWrite::ApplicationPresentValue => match &command_origin {
+                        Some(origin) => object.set_present_value_from_internal(value, origin),
+                        None => object.set_present_value_internal(value),
+                    },
                     LocalWrite::ApplicationControlledVariableValue => {
                         object.set_controlled_variable_value_internal(value)
                     }

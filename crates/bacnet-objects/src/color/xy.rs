@@ -16,7 +16,9 @@ use super::{
     written_unsigned, written_xy, xy_value,
 };
 use crate::audit::{AuditPolicyAuthority, ObjectAuditPolicy};
+use crate::command_source::{CommandOrigin, SingleValueSource};
 use crate::common::{self, read_identity_properties};
+use crate::object_profile::ObjectProfile;
 use crate::traits::{BACnetObject, DeadlineWaker, MonotonicClock};
 use crate::transition::Transition;
 
@@ -65,6 +67,10 @@ pub struct ColorObject {
     transition: ColorTransition,
     /// Audit_Level and Auditable_Operations, once provisioned.
     audit_policy: ObjectAuditPolicy,
+    /// Value_Source, once tracked (#1552).
+    value_source: SingleValueSource,
+    /// Tags, Profile_Location and Profile_Name, once provisioned (#1553).
+    profile: ObjectProfile,
     engine: Engine<BACnetXyColor>,
 }
 
@@ -86,8 +92,41 @@ impl ColorObject {
             default_fade_time: *command::FADE_TIME_MS.start(),
             transition: ColorTransition::NONE,
             audit_policy: ObjectAuditPolicy::default(),
+            value_source: SingleValueSource::default(),
+            profile: ObjectProfile::default(),
             engine: Engine::new(XY_SAMPLE_STEP),
         })
+    }
+
+    /// Track Value_Source (Clause 19.5, #1552), provisioned before
+    /// registration as the audit policy is.
+    ///
+    /// On, the object serves Value_Source: the writer of the last
+    /// Present_Value write, or of the last Color_Command that set
+    /// Present_Value, which alone may then correct it. Such a write must
+    /// name its writer (`write_property_from`, as the server's network and
+    /// local writes do); one without is refused with WRITE_ACCESS_DENIED.
+    /// The typed setters name none, so after one Value_Source reads NONE.
+    pub fn set_value_source_tracking(&mut self, enabled: bool) {
+        self.value_source.set_enabled(enabled);
+    }
+
+    pub(super) fn value_source(&self) -> &SingleValueSource {
+        &self.value_source
+    }
+
+    /// Provision the optional Tags, Profile_Location and Profile_Name rows
+    /// before registration (#1553; see [`ObjectProfile`]). Tags takes
+    /// writes; the profile rows are read-only over the network. A profile
+    /// that fails [`ObjectProfile::check`] is refused and changes nothing.
+    pub fn set_profile(&mut self, profile: ObjectProfile) -> Result<(), Error> {
+        profile.check()?;
+        self.profile = profile;
+        Ok(())
+    }
+
+    pub(super) fn profile(&self) -> &ObjectProfile {
+        &self.profile
     }
 
     /// Provision the optional Audit_Level and Auditable_Operations rows
@@ -118,6 +157,7 @@ impl ColorObject {
             return Err(common::value_out_of_range_error());
         }
         self.write_present_value(color);
+        self.value_source.forget();
         Ok(())
     }
 
@@ -138,19 +178,22 @@ impl ColorObject {
     /// A refusal is VALUE_OUT_OF_RANGE and leaves the object unchanged.
     pub fn set_color_command(&mut self, command: BACnetColorCommand) -> Result<(), Error> {
         command::check_color(&command)?;
-        self.take_color_command(command);
+        if self.take_color_command(command) {
+            self.value_source.forget();
+        }
         Ok(())
     }
 
     /// Store a checked command and carry it out now (Table 12-X2). A new
     /// FADE_TO_COLOR or a STOP halts the fade in progress (Clause 12.X.6.1).
-    fn take_color_command(&mut self, command: BACnetColorCommand) {
+    /// Whether it set Present_Value: a STOP with no fade running doesn't.
+    fn take_color_command(&mut self, command: BACnetColorCommand) -> bool {
         self.color_command = command;
         let now = self.engine.now();
         match command.operation {
             ColorOperation::FADE_TO_COLOR => {
                 let Some(target) = command.target_color else {
-                    return;
+                    return false;
                 };
                 let tracking = self.engine.tracking(self.present_value, now);
                 let fade_time = command.fade_time.unwrap_or(self.default_fade_time);
@@ -161,14 +204,32 @@ impl ColorObject {
                     now,
                     milliseconds(fade_time),
                 ));
+                true
             }
-            ColorOperation::STOP => {
-                if let Some(reached) = self.engine.halt(now) {
+            ColorOperation::STOP => match self.engine.halt(now) {
+                Some(reached) => {
                     self.present_value = reached;
+                    true
                 }
-            }
-            _ => {}
+                None => false,
+            },
+            _ => false,
         }
+    }
+
+    /// A Present_Value or Color_Command write, the two that can set
+    /// Present_Value, and whether it did.
+    fn write_output(
+        &mut self,
+        property: PropertyIdentifier,
+        value: PropertyValue,
+    ) -> Result<bool, Error> {
+        if property == PropertyIdentifier::PRESENT_VALUE {
+            self.write_present_value(written_xy(value)?);
+            return Ok(true);
+        }
+        let command = command::decode_write(value, command::check_color)?;
+        Ok(self.take_color_command(command))
     }
 
     /// Halt any fade and move to a written Present_Value as Transition says
@@ -201,6 +262,12 @@ impl BACnetObject for ColorObject {
             return result;
         }
         if let Some(result) = self.audit_policy.read(property, array_index) {
+            return result;
+        }
+        if let Some(result) = self.value_source.read(property, array_index) {
+            return result;
+        }
+        if let Some(result) = self.profile.read(property, array_index) {
             return result;
         }
         // Each read takes its own instant, so one ReadPropertyMultiple that
@@ -245,13 +312,16 @@ impl BACnetObject for ColorObject {
         {
             return result;
         }
+        if let Some(result) = self.profile.write(property, array_index, &value) {
+            return result;
+        }
         match property {
-            p if p == PropertyIdentifier::PRESENT_VALUE => {
-                self.write_present_value(written_xy(value)?);
-            }
-            p if p == PropertyIdentifier::COLOR_COMMAND => {
-                let command = command::decode_write(value, command::check_color)?;
-                self.take_color_command(command);
+            p if p == PropertyIdentifier::PRESENT_VALUE
+                || p == PropertyIdentifier::COLOR_COMMAND =>
+            {
+                // A tracked source needs the writer (`write_property_from`).
+                self.value_source.unsourced()?;
+                self.write_output(property, value)?;
             }
             // (0, 0) is taken like any other colour: Clause 12.X.8 has it
             // mean that a restart brings back the colour from before it.
@@ -273,6 +343,29 @@ impl BACnetObject for ColorObject {
             }
         }
         Ok(())
+    }
+
+    fn write_property_from(
+        &mut self,
+        property: PropertyIdentifier,
+        array_index: Option<u32>,
+        value: PropertyValue,
+        priority: Option<u8>,
+        origin: &CommandOrigin,
+    ) -> Result<(), Error> {
+        match property {
+            PropertyIdentifier::VALUE_SOURCE => {
+                self.value_source.correct(array_index, value, origin)
+            }
+            PropertyIdentifier::PRESENT_VALUE | PropertyIdentifier::COLOR_COMMAND => {
+                self.value_source.admit(origin)?;
+                if self.write_output(property, value)? {
+                    self.value_source.record(origin);
+                }
+                Ok(())
+            }
+            _ => self.write_property(property, array_index, value, priority),
+        }
     }
 
     fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {

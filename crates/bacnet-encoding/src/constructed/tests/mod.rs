@@ -30,6 +30,7 @@ mod lift_car_call_list;
 mod lighting_command;
 mod log_multiple_record;
 mod log_record;
+mod name_value;
 mod network_port;
 mod object_identifier_invariant;
 mod port_permission;

@@ -282,6 +282,46 @@ selector gains no authority from that overlap policy.
 Existing delivery, lifetime and renewal
 fences apply; same-generation concurrent completion ordering is separate (#826).
 
+### Source of a noncommandable Present_Value
+
+Clause 19.5 gives an object with no priority array one source to report: the
+writer of its last Present_Value write (#1552). The noncommandable modes of
+Analog, Binary and Multi-state Value, and the Color and Color Temperature
+objects, track it once `set_value_source_tracking(true)` is called before
+registration, as the audit policy is provisioned. Tracking is off by default, so
+Property_List, the PICS and the wire stay as they were. On, the object serves
+`Value_Source` as a required row (the tables' value-source footnote), starting
+at NONE; `Value_Source_Array` and `Last_Command_Time` stay absent, since Clause
+19.5.1.4 keeps the time to objects with a priority array.
+
+- `write_property_from` records its origin as source and owner, published as
+  for a commandable slot: the Device or local initiator, or the address of a
+  writer the server can't tie to one Device. On a colour object a Color_Command
+  that sets Present_Value (a fade, a ramp, a step, or a STOP that halts one)
+  records its writer too; a STOP with nothing moving doesn't. A permitted NULL
+  is a no-op and records nothing, nor does a refused write.
+- Only the owner may write `Value_Source`, under the commandable path's
+  ownership rules; the priority is ignored. Anyone else, or anyone before the
+  first sourced write, gets WRITE_ACCESS_DENIED before the value is checked. A
+  correction keeps the owner; the next write replaces it.
+- Context-free `write_property` of Present_Value (or Color_Command) is refused
+  with WRITE_ACCESS_DENIED while tracking, as a commandable command is, since
+  the source it would leave can't be known.
+- `BACnetServer::write_local` names this Device, or the `LocalCommandSource`
+  object, and the Device owns the source. `set_present_value_local` calls the
+  new `set_present_value_from_internal` hook with this Device. The typed
+  setters (`set_present_value`, `set_color_command`, a `set_min_max` that moves
+  a Color Temperature's value, and plain `set_present_value_internal`) name no
+  writer, so they leave Value_Source NONE with no owner.
+
+With tracking on and no local Device identity, a Schedule's or Command's write
+to such an object falls back to a context-free write, which is refused: it fails
+closed, as it does for a commandable object.
+
+A noncommandable object's Value_Source COV doesn't yet follow Table 13-1a-2: the
+bundled report above is served for the six commandable families only, and the
+noncommandable case is tracked in #1582.
+
 ### APDU Types
 
 ```rust
@@ -2406,10 +2446,12 @@ For the two noncommandable modes, both `BACnetObject::write_property` and
 NULL write succeeds without changing Present_Value (§19.2); an array index still
 fails because Present_Value is not an array. Read-only in-service writes remain
 denied, including NULL. Priority_Array, Relinquish_Default, Current_Command_Priority,
-Value_Source, Value_Source_Array, Last_Command_Time and commandable-only
-Audit_Priority_Filter are absent from these modes' projected metadata. This does
-not disable the remaining supported AV/BV target Audit policy or add MSV target
-Audit reporting.
+Value_Source_Array, Last_Command_Time and commandable-only Audit_Priority_Filter
+are absent from these modes' projected metadata, and so is Value_Source unless
+`set_value_source_tracking(true)` provisions it (see
+[Source of a noncommandable Present_Value](#source-of-a-noncommandable-present_value)).
+This does not disable the remaining supported AV/BV target Audit policy or add
+MSV target Audit reporting.
 
 `BACnetServer::set_present_value_local` supplies a logical application value to
 Analog/Binary/Multi-state Inputs, noncommandable Values, Loop (the control
@@ -3579,14 +3621,14 @@ Of the tables' optional rows, both objects serve `Audit_Level` and
 `Auditable_Operations` once `set_audit_policy` provisions them before
 registration, as on an Analog or Binary Value (#1525; see
 [Object-owned Audit policy](#object-owned-audit-policy)). Neither table has
-`Audit_Priority_Filter`, so a priority filter in the policy is left out. The
-other optional rows stay absent:
+`Audit_Priority_Filter`, so a priority filter in the policy is left out.
+`Tags`, `Profile_Location` and `Profile_Name` are served once `set_profile`
+provisions them (#1553; see [Object profile rows](#object-profile-rows)).
 
-- `Value_Source`: this crate tracks a value source only for a commandable
-  Present_Value, through its priority array, and neither object has one; the
-  noncommandable Analog, Binary and Multi-state Values leave it out too.
-- `Tags`, `Profile_Location` and `Profile_Name`: no object in this crate
-  serves them yet.
+`Value_Source` is served once `set_value_source_tracking(true)` turns tracking
+on (#1552): it names the writer of the last Present_Value write, or of the last
+Color_Command that set Present_Value, and only that writer may correct it (see
+[Source of a noncommandable Present_Value](#source-of-a-noncommandable-present_value)).
 
 Two choices here go past the addendum's text. A new object's
 `Default_Fade_Time` is 100 ms, the shortest the range allows, as Lighting
@@ -7101,6 +7143,38 @@ Generic §19.6.3 (printed820/PDF822) conflicts for the absent case. This bounded
 implementation follows the object-specific clauses; the 2024-04-29 errata does
 not resolve that wording and adds the commandability condition. Other object
 families and broader Audit completion remain open.
+
+### Object profile rows
+
+Most object tables list `Tags`, `Profile_Location` and `Profile_Name` as
+optional rows. `bacnet_objects::object_profile::ObjectProfile` holds the three;
+an object that carries one serves the rows its fields provision (#1553). The
+Color, Color Temperature, Lighting Output and Binary Lighting Output objects
+take one through `set_profile` before registration, which checks it first and
+refuses a bad one without changing anything. An unprovisioned object serves and
+lists none of them, so its wire behaviour, Property_List and PICS are as before.
+The rows go in table order: on the colour objects after Value_Source and the
+audit rows; on a Lighting Output between its colour links and its trims.
+
+- `Tags` is a BACnetARRAY of `bacnet_types::constructed::BACnetNameValue`, a
+  name with an optional `TagValue` (a primitive or a date and time), whose codec
+  is `bacnet_encoding::constructed::{encode_name_value, decode_name_value}`.
+  Reads return each element as `PropertyValue::ApplicationData`. Peers write it
+  whole, one element by index, or its size at index 0, which truncates or
+  appends empty semantic tags (Clause 12.1.5.1); an index past the end is
+  INVALID_ARRAY_INDEX and doesn't grow it. A name with a semicolon is
+  VALUE_OUT_OF_RANGE (Annex Y.1.4), more than `MAX_TAGS` (1024) elements is
+  NO_SPACE_TO_WRITE_PROPERTY, an element of another datatype INVALID_DATA_TYPE
+  and one that doesn't decode INVALID_DATA_ENCODING.
+- `Profile_Location` and `Profile_Name` belong to the application and are
+  read-only over the network, as their O code allows; the PICS lists them as
+  readable only. `set_profile` takes an empty location or one whose URI scheme
+  is http, https or bacnet, and a profile name that starts with a decimal vendor
+  identifier and a dash.
+
+Tags written over the network are held in memory: a restart brings back what
+the application provisioned (persistence is #1583). More object types and a
+typed decode of a remote device's Tags are #1584.
 
 ### Target Device Audit recipient
 

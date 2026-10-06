@@ -51,7 +51,9 @@ pub enum PropertyPresenceCondition {
     ObjectAuditReporting,
     /// An optional Audit priority filter on a commandable reporting object.
     CommandableAuditReporting,
-    /// The Value_Source mechanism is implemented, making its source required.
+    /// The Value_Source mechanism is implemented, making its source required:
+    /// on a commandable object, or on one whose noncommandable Present_Value
+    /// tracks its last writer (#1552).
     ValueSourceTracking,
     /// Source tracking on a commandable object requires its source array and time.
     CommandableValueSourceTracking,
@@ -83,7 +85,9 @@ pub enum PropertyWriteCapability {
     Always,
     /// The property-write route is available only while Out_Of_Service is true.
     WhenOutOfService,
-    /// Correction is restricted to the original command owner at that priority.
+    /// Correction is restricted to the writer the value came from: the
+    /// original command owner at that priority, or for a Present_Value with
+    /// no priority array, its last writer (#1552).
     WhenCommandOwner,
     /// The property has no write route of its own, but a write of the named
     /// property changes it too: State_Text written whole, or its size at
