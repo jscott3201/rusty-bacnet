@@ -133,7 +133,7 @@ fn behind_peer(network: u16) -> NpduAddress {
 /// `device_bindings_tests` covers the same rules with instants ahead of now.
 async fn heard_long_ago(h: &Harness, routed: &NpduAddress) -> bool {
     let age = OBSERVED_BINDING_TTL + Duration::from_secs(60);
-    let Some(then) = Instant::now().checked_sub(age) else {
+    let Some(then) = runtime_clock::now().checked_sub(age) else {
         eprintln!("skipped: the host's monotonic clock is younger than a stale binding");
         return false;
     };

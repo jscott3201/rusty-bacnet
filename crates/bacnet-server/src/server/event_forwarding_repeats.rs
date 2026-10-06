@@ -49,10 +49,11 @@ pub(super) struct ConfirmedEventRepeats {
 impl ConfirmedEventRepeats {
     /// Record a received ConfirmedEventNotification, returning `false` when
     /// the same request from the same source was recorded within
-    /// [`RECORD_WINDOW`]. `now` reads the clock; it is called with the record
-    /// locked, so entries go in in time order. A repeat does not renew the
-    /// entry, so a sender that keeps repeating is forwarded again once the
-    /// window ends.
+    /// [`RECORD_WINDOW`]. `now` reads the clock, which the request path
+    /// passes as [`runtime_clock::now`](crate::runtime_clock::now) (#1556);
+    /// it is called with the record locked, so entries go in in time order.
+    /// A repeat does not renew the entry, so a sender that keeps repeating
+    /// is forwarded again once the window ends.
     pub(super) fn first_receipt(
         &self,
         requester: CanonicalRequester,

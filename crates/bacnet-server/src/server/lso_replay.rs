@@ -35,7 +35,8 @@
 //! 60 s completed-only TTL measured from response time, at most 256 entries,
 //! service requests larger than 64 KiB are served untracked (execute, never
 //! store), oldest-completed-first eviction, all-pending-full serves untracked.
-//! In-memory only; a restart clears the store.
+//! In-memory only; a restart clears the store. The TTL is measured on
+//! [`runtime_clock::now`], so a paused test steps it exactly (#1556).
 //! Retiring a connection does not reinterpret or revoke already admitted work;
 //! a replacement cannot consume that old incarnation's pending/completed entry.
 //!
@@ -49,12 +50,13 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 
 use super::request_peer::{canonical_requester, CanonicalRequester};
+use crate::runtime_clock;
 use bacnet_encoding::apdu::ConfirmedRequest;
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_transport::port::{DirectScIdentity, TransportProvenance};
 
 /// Completed LSO responses are retained for this long after the response time.
-const COMPLETED_RETENTION: Duration = Duration::from_secs(60);
+pub(super) const COMPLETED_RETENTION: Duration = Duration::from_secs(60);
 /// Independent LSO-only entry budget (not shared with the generic tracker).
 const MAX_ENTRIES: usize = 256;
 /// Service requests larger than this are executed untracked (never stored,
@@ -117,7 +119,7 @@ impl LsoReplayCache {
             source_network,
             provenance,
             request,
-            Instant::now(),
+            runtime_clock::now(),
         )
     }
 
@@ -220,7 +222,7 @@ impl PendingLsoReplay {
     }
 
     pub(super) fn complete_with_response(self, response: Bytes) {
-        self.complete_with_response_at(response, Instant::now());
+        self.complete_with_response_at(response, runtime_clock::now());
     }
 
     fn complete_with_response_at(mut self, response: Bytes, now: Instant) {

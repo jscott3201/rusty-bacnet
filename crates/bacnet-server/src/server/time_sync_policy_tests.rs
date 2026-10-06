@@ -207,7 +207,7 @@ fn time_sync_rates_bound_bursts_and_restore_cadence_without_denial_debits() {
     });
     let a = received(&[1], None);
     let b = received(&[2], None);
-    let now = limiter_clock::now();
+    let now = runtime_clock::now();
     for _ in 0..2 {
         limiter.apply_at(&a, None, now, || Ok(())).unwrap();
     }
@@ -243,7 +243,7 @@ fn coalescing_and_source_capacity_preserve_active_routed_identity() {
     let a = received(&[1], Some((7, &[8])));
     let same_via_other_router = received(&[2], Some((7, &[8])));
     let b = received(&[1], Some((8, &[8])));
-    let now = limiter_clock::now();
+    let now = runtime_clock::now();
     limiter.apply_at(&a, None, now, || Ok(())).unwrap();
     assert!(limiter
         .apply_at(
@@ -279,7 +279,7 @@ fn failed_step_does_not_spend_rate_or_coalescing_budget() {
         ..Default::default()
     });
     let a = received(&[1], None);
-    let now = limiter_clock::now();
+    let now = runtime_clock::now();
     assert!(limiter
         .apply_at(&a, None, now, || Err(denied("step cap exceeded")))
         .is_err());
@@ -307,7 +307,7 @@ fn limits_are_independent_and_monotonic_time_does_not_refill_backwards() {
         },
     ] {
         let limiter = TimeSyncLimiter::new(policy.clone());
-        let now = limiter_clock::now();
+        let now = runtime_clock::now();
         let a = received(&[1], None);
         let b = received(&[2], None);
         limiter.apply_at(&a, None, now, || Ok(())).unwrap();
@@ -333,7 +333,7 @@ fn concurrent_time_sync_admission_is_bounded_and_check_apply_is_serialized() {
         ..Default::default()
     }));
     let applied = Arc::new(AtomicUsize::new(0));
-    let now = limiter_clock::now();
+    let now = runtime_clock::now();
     std::thread::scope(|scope| {
         for _ in 0..32 {
             scope.spawn(|| {
@@ -464,7 +464,7 @@ fn global_coalescing_bounds_direct_routed_and_sc_vmac_without_extending_cadence(
         received(&[1], Some((7, &[8]))),
         received(&[2, 3, 4, 5, 6, 7], None),
     ];
-    let now = limiter_clock::now();
+    let now = runtime_clock::now();
     assert!(limiter
         .apply_at(&contexts[0], None, now, || Err(denied("step cap exceeded")))
         .is_err());
@@ -502,7 +502,7 @@ fn a_station_shares_one_budget_direct_and_relayed_through_this_network() {
             per_source_rate: Some(rate(1)),
             ..Default::default()
         });
-        let now = limiter_clock::now();
+        let now = runtime_clock::now();
         limiter.apply_at(&direct, number, now, || Ok(())).unwrap();
         let relayed = received(router, Some((relayed_on, station)));
         let second = limiter.apply_at(&relayed, number, now, || Ok(()));

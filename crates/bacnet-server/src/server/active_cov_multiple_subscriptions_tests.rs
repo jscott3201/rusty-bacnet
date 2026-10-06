@@ -72,7 +72,7 @@ async fn active_cov_multiple_wire_is_listed_readable_and_live_after_acceptance()
     wire.server.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn active_cov_multiple_wire_groups_references_by_recipient_and_form() {
     let mut wire = Wire::start(ServerConfig::default()).await;
     wire.server
@@ -147,10 +147,7 @@ async fn active_cov_multiple_wire_groups_references_by_recipient_and_form() {
             vec![spec(av(1), vec![reference(PV, None, Some(0.0), false)])],
         ),
     ];
-    assert_eq!(
-        untimed(&listed, &[(299, 300), (599, 600), (899, 900)]),
-        expected
-    );
+    assert_eq!(untimed(&listed, &[300, 600, 900]), expected);
     // Multiple references never enter Active_COV_Subscriptions.
     assert_eq!(wire.active().await, Vec::new());
     // The increment in use follows the object; explicit overrides do not.
@@ -172,7 +169,7 @@ async fn active_cov_multiple_wire_groups_references_by_recipient_and_form() {
     wire.server.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn active_cov_multiple_wire_renewal_cancellation_expiry_and_cleanup_are_exact() {
     let mut wire = Wire::start(ServerConfig::default()).await;
     let both = vec![(av(1), vec![plain(PV), plain(FLAGS)])];
@@ -204,7 +201,7 @@ async fn active_cov_multiple_wire_renewal_cancellation_expiry_and_cleanup_are_ex
         vec![spec(av(1), vec![pv_ref.clone(), flags.clone()])],
     );
     assert_eq!(
-        untimed(&wire.multiple().await, &[(599, 600), (299, 300)]),
+        untimed(&wire.multiple().await, &[600, 300]),
         vec![refreshed, confirmed_context.clone()]
     );
     // A re-subscription adds a reference and refreshes the whole context.
@@ -215,7 +212,7 @@ async fn active_cov_multiple_wire_renewal_cancellation_expiry_and_cleanup_are_ex
     );
     let modified = |specs| context(&direct(), 81, false, 50, specs);
     assert_eq!(
-        untimed(&wire.multiple().await, &[(699, 700), (299, 300)]),
+        untimed(&wire.multiple().await, &[700, 300]),
         vec![
             modified(vec![
                 spec(av(1), vec![pv_ref.clone(), flags.clone()]),
@@ -231,7 +228,7 @@ async fn active_cov_multiple_wire_renewal_cancellation_expiry_and_cleanup_are_ex
             .await,
     );
     assert_eq!(
-        untimed(&wire.multiple().await, &[(699, 700), (299, 300)]),
+        untimed(&wire.multiple().await, &[700, 300]),
         vec![
             modified(vec![pv(av(1)), pv(av(2))]),
             confirmed_context.clone()
@@ -244,7 +241,7 @@ async fn active_cov_multiple_wire_renewal_cancellation_expiry_and_cleanup_are_ex
                 .await,
         );
         assert_eq!(
-            untimed(&wire.multiple().await, &[(299, 300)]),
+            untimed(&wire.multiple().await, &[300]),
             vec![confirmed_context.clone()]
         );
     }
@@ -258,7 +255,7 @@ async fn active_cov_multiple_wire_renewal_cancellation_expiry_and_cleanup_are_ex
         process_id: 83,
         confirmed: false,
     };
-    let expires_at = Instant::now() + Duration::from_millis(300);
+    let expires_at = runtime_clock::now() + Duration::from_millis(300);
     let proposal = CovSubscription {
         subscriber_mac: MacAddr::from_slice(&routed().mac),
         subscriber_network: routed().network,
@@ -286,13 +283,17 @@ async fn active_cov_multiple_wire_renewal_cancellation_expiry_and_cleanup_are_ex
             vec![proposal],
         )
         .unwrap();
+    // 1 ms before it expires, the context is listed with a second left:
+    // positive fractions round up. At its expiry it is omitted, before the
+    // periodic purge runs. Lifetimes are on tokio's clock (#1556), so both
+    // instants are exact.
+    tokio::time::advance(Duration::from_millis(299)).await;
     let listed = wire.multiple().await;
     assert_eq!(listed.len(), 2);
-    assert_eq!(listed[1].time_remaining, 1, "positive fractions round up");
-    // Expired at the sampled instant: omitted before the periodic purge runs.
-    tokio::time::sleep(Duration::from_millis(350)).await;
+    assert_eq!(listed[1].time_remaining, 1, "1 ms before the expiry");
+    tokio::time::advance(Duration::from_millis(1)).await;
     assert_eq!(
-        untimed(&wire.multiple().await, &[(299, 300)]),
+        untimed(&wire.multiple().await, &[300]),
         vec![confirmed_context.clone()]
     );
     assert_eq!(wire.server.cov_table.read().await.len(), 2, "not purged");
@@ -315,7 +316,7 @@ async fn active_cov_multiple_wire_renewal_cancellation_expiry_and_cleanup_are_ex
             .await,
     );
     assert_eq!(
-        untimed(&wire.multiple().await, &[(299, 300)]),
+        untimed(&wire.multiple().await, &[300]),
         vec![confirmed_context]
     );
 
@@ -347,7 +348,7 @@ async fn active_cov_multiple_wire_renewal_cancellation_expiry_and_cleanup_are_ex
     wire.server.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn active_cov_multiple_wire_empty_spec_and_rejected_input_leave_the_list_unchanged() {
     let config = ServerConfig {
         cov_policy: CovPolicy {
@@ -377,7 +378,7 @@ async fn active_cov_multiple_wire_empty_spec_and_rejected_input_leave_the_list_u
         10,
         vec![spec(av(1), vec![reference(PV, None, Some(0.0), false)])],
     )];
-    assert_eq!(untimed(&wire.multiple().await, &[(299, 300)]), baseline);
+    assert_eq!(untimed(&wire.multiple().await, &[300]), baseline);
 
     // Each rejected re-subscription carries a new lifetime and delay; none
     // changes the context, its references, lifetime or reported delay. Each
@@ -454,12 +455,12 @@ async fn active_cov_multiple_wire_empty_spec_and_rejected_input_leave_the_list_u
     ];
     for (request, class, code) in rejected {
         error(wire.send(&direct(), request).await, class, code);
-        assert_eq!(untimed(&wire.multiple().await, &[(299, 300)]), baseline);
+        assert_eq!(untimed(&wire.multiple().await, &[300]), baseline);
     }
     wire.server.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn active_cov_multiple_wire_rpm_rp_and_local_reads_agree_within_scope() {
     let mut wire = Wire::start(ServerConfig::default()).await;
     simple_ack(
@@ -500,11 +501,8 @@ async fn active_cov_multiple_wire_rpm_rp_and_local_reads_agree_within_scope() {
         7,
         vec![spec(av(1), vec![reference(PV, None, Some(0.25), false)])],
     )];
-    assert_eq!(
-        untimed(&decode_contexts(&multiple[0]), &[(299, 300)]),
-        expected
-    );
-    assert_eq!(untimed(&wire.multiple().await, &[(299, 300)]), expected);
+    assert_eq!(untimed(&decode_contexts(&multiple[0]), &[300]), expected);
+    assert_eq!(untimed(&wire.multiple().await, &[300]), expected);
     // Active_COV_Subscriptions rows in the same response list only the
     // ordinary entry.
     let ordinary = rows(&ack, ACTIVE);
