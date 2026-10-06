@@ -39,7 +39,9 @@ use crate::property_metadata::{
 // code with the routed Unsigned32 arm, so RequiredWrite/Always;
 // Reason_For_Disable carries R with no arm, so RequiredRead/ReadOnly; and
 // Activation_Time, Expiration_Time and Credential_Disable carry R with routed
-// arms, so RequiredRead/Always.
+// arms, so RequiredRead/Always. Authorization_Exemptions (#1331) carries the
+// table O code with no write arm, so Optional/ReadOnly; it is a per-instance
+// row, present once the application sets it, before Property_List.
 // Table 12-38 has neither Present_Value nor Assigned_Access_Rights, so the
 // user serves neither (#1064 removed the implementation-extra rows the 0.1.0
 // import carried). User_Type/Credentials carry the table R code; the
@@ -125,9 +127,15 @@ const CREDENTIAL_DATA_INPUT_BASE: &[PropertyMetadata] = &[
 ];
 
 pub(super) fn for_access_credential_object(
-    _object: &AccessCredentialObject,
+    object: &AccessCredentialObject,
 ) -> Cow<'_, [PropertyMetadata]> {
-    Cow::Borrowed(ACCESS_CREDENTIAL_BASE)
+    if object.authorization_exemptions().is_none() {
+        return Cow::Borrowed(ACCESS_CREDENTIAL_BASE);
+    }
+    with_row_before_property_list(
+        ACCESS_CREDENTIAL_BASE,
+        PropertyMetadata::new(P::AUTHORIZATION_EXEMPTIONS, Optional, None, ReadOnly),
+    )
 }
 
 pub(super) fn for_access_user_object(_object: &AccessUserObject) -> Cow<'_, [PropertyMetadata]> {
@@ -138,15 +146,23 @@ pub(super) fn for_access_rights_object(object: &AccessRightsObject) -> Cow<'_, [
     if object.accompaniment().is_none() {
         return Cow::Borrowed(ACCESS_RIGHTS_BASE);
     }
-    let mut rows = ACCESS_RIGHTS_BASE.to_vec();
+    with_row_before_property_list(
+        ACCESS_RIGHTS_BASE,
+        PropertyMetadata::new(P::ACCOMPANIMENT, Optional, None, Always),
+    )
+}
+
+/// `base` with a per-instance optional `row` added just before Property_List.
+fn with_row_before_property_list(
+    base: &[PropertyMetadata],
+    row: PropertyMetadata,
+) -> Cow<'static, [PropertyMetadata]> {
+    let mut rows = base.to_vec();
     let before_property_list = rows
         .iter()
         .position(|row| row.property_identifier == P::PROPERTY_LIST)
         .expect("Property_List row");
-    rows.insert(
-        before_property_list,
-        PropertyMetadata::new(P::ACCOMPANIMENT, Optional, None, Always),
-    );
+    rows.insert(before_property_list, row);
     Cow::Owned(rows)
 }
 
