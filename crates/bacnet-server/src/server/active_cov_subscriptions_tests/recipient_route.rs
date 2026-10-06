@@ -154,7 +154,7 @@ async fn unchanged(wire: &Wire, before: &crate::cov::CovSubscriptionSnapshot) {
     assert_eq!(table.len(), 1);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn cov_recipient_wire_refusal_mode_lifetime_and_cross_router_cancel() {
     for single in [false, true] {
         let allowed = Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -210,7 +210,7 @@ async fn cov_recipient_wire_refusal_mode_lifetime_and_cross_router_cancel() {
         let listed = wire.active().await;
         assert_eq!(listed.len(), 1);
         assert!(listed[0].issue_confirmed_notifications);
-        assert!((599..=600).contains(&listed[0].time_remaining));
+        assert_eq!(listed[0].time_remaining, 600);
         if !single {
             for lifetime in [None, Some(0)] {
                 simple_ack(
@@ -273,7 +273,7 @@ async fn cov_recipient_wire_cleanup_expiry_and_delete_follow_current_route() {
         let old = live(&wire).await;
         let mut expired = (*old).clone();
         expired.subscriber_mac = MacAddr::from_slice(&router_b().mac);
-        expired.expires_at = Some(Instant::now());
+        expired.expires_at = Some(runtime_clock::now());
         wire.server
             .cov_table
             .write()

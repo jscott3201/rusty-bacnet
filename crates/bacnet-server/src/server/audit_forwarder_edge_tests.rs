@@ -123,7 +123,7 @@ async fn audit_forwarding_observed_binding_and_local_alias_do_not_send() {
         oid(ObjectType::DEVICE, 20),
         &[2],
         None,
-        Instant::now(),
+        runtime_clock::now(),
         |_| false,
     );
     f.unconfirmed(payload(false)).await;

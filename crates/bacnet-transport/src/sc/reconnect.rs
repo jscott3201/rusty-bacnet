@@ -10,6 +10,9 @@ use bacnet_types::error::Error;
 /// Equal initial and maximum delays leave no room for jitter. If OS randomness
 /// is unavailable, the nominal backoff is used. Jitter applies only to active-hub
 /// retries, not the separate failover attempt or primary-restoration timer.
+/// While the failover hub is active, each attempt to restore the primary
+/// starts `initial_delay_ms` after the failover connected or the previous
+/// attempt ended.
 #[derive(Debug, Clone)]
 pub struct ScReconnectConfig {
     /// Initial nominal backoff and minimum reconnect sleep (ms), nonzero and

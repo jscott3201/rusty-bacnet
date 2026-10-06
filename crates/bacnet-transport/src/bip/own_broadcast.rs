@@ -9,10 +9,9 @@
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
 
-use tokio::sync::Mutex;
 use tracing::debug;
 
-use crate::bbmd::BbmdState;
+use crate::bbmd::{self, BbmdState};
 
 use super::fanout::FanoutDispatcher;
 
@@ -22,12 +21,12 @@ use super::fanout::FanoutDispatcher;
 /// these forwards share it with everything forwarded with this BBMD's IP as
 /// origin, including the broadcasts it routes.
 pub(super) struct OwnBroadcastForwarder {
-    bbmd: Arc<Mutex<BbmdState>>,
+    bbmd: Arc<std::sync::Mutex<BbmdState>>,
     fanout: FanoutDispatcher,
 }
 
 impl OwnBroadcastForwarder {
-    pub(super) fn new(bbmd: Arc<Mutex<BbmdState>>, fanout: FanoutDispatcher) -> Self {
+    pub(super) fn new(bbmd: Arc<std::sync::Mutex<BbmdState>>, fanout: FanoutDispatcher) -> Self {
         Self { bbmd, fanout }
     }
 
@@ -40,9 +39,9 @@ impl OwnBroadcastForwarder {
     /// Original-Broadcast-NPDU. Throttled targets, a full queue and failed
     /// sends are counted in the fanout counters and logged; a closed fanout
     /// worker or a Forwarded-NPDU that cannot be encoded is only logged.
-    pub(super) async fn forward(&self, npdu: &[u8]) {
+    pub(super) fn forward(&self, npdu: &[u8]) {
         let ((origin_ip, origin_port), targets, dedup_count) = {
-            let mut state = self.bbmd.lock().await;
+            let mut state = bbmd::lock(&self.bbmd);
             let origin = state.local_address();
             let before = state.fdt_counters().destinations_deduplicated;
             // The self BDT row is always skipped; excluding the origin as well

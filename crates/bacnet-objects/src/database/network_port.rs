@@ -1,6 +1,7 @@
 //! Explicit receiving-port reservation and publication for one owned B/IP link.
 use super::*;
 use crate::network_port::{BipPortConfig, NetworkPortObject};
+use bacnet_types::bip_port::BipPortMode;
 use std::sync::Weak;
 
 pub(super) struct NetworkPortRegistration {
@@ -35,8 +36,9 @@ impl ObjectDatabase {
             .cloned()
     }
 
-    /// Reserve exactly one concrete built-in NORMAL B/IP object before bind.
-    /// The returned token must move into the transport before it can start.
+    /// Reserve exactly one concrete built-in B/IP object before bind, in any
+    /// B/IP mode. The returned token must move into the transport before it
+    /// can start.
     #[doc(hidden)]
     pub fn reserve_bip_port_internal(
         &mut self,
@@ -62,7 +64,7 @@ impl ObjectDatabase {
         let configured = authority
             .configuration_internal()
             .cloned()
-            .ok_or_else(|| invalid("registration requires IPV4/NORMAL"))?;
+            .ok_or_else(|| invalid("registration requires an IPV4 port"))?;
         if configured.ip_address != ip || configured.udp_port != udp {
             return Err(invalid(
                 "Network Port configuration differs from transport interface/UDP",
@@ -79,7 +81,9 @@ impl ObjectDatabase {
         Ok((configured, lease))
     }
 
-    /// Reconcile one actual bind under the database write lock before publication.
+    /// Reconcile one actual bind and its B/IP mode under the database write
+    /// lock before publication. In BBMD mode `mode` must carry the started
+    /// transport's tables, which the object then reads live.
     #[doc(hidden)]
     pub fn publish_bip_port_internal(
         &mut self,
@@ -87,6 +91,7 @@ impl ObjectDatabase {
         ip: [u8; 4],
         udp: u16,
         capacity: u32,
+        mode: BipPortMode,
     ) -> Result<(), Error> {
         let registration = self
             .network_port
@@ -106,7 +111,7 @@ impl ObjectDatabase {
         }
         self.builtin_network_port_mut(&oid)
             .ok_or_else(|| invalid("selected Network Port authority disappeared"))?
-            .reconcile_internal(&lease, ip, udp, capacity)?;
+            .reconcile_internal(&lease, ip, udp, capacity, mode)?;
         self.network_port
             .as_mut()
             .expect("validated registration")

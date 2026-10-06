@@ -320,6 +320,17 @@ impl std::fmt::Debug for ReceivedNpdu {
     }
 }
 
+/// What a B/IP transport reports for registration as a Network Port
+/// ([`TransportPort::bip_port`]).
+#[derive(Debug, Clone)]
+pub struct BipPort {
+    /// The IPv4 address and UDP port: configured before start, announced
+    /// after.
+    pub endpoint: std::net::SocketAddrV4,
+    /// The B/IP mode, with what its Network Port properties need.
+    pub mode: bacnet_types::bip_port::BipPortMode,
+}
+
 /// Trait for BACnet data-link transports.
 ///
 /// Implementations handle the data-link framing (e.g., BVLL for BACnet/IP)
@@ -346,19 +357,24 @@ pub trait TransportPort: Send + Sync {
         false
     }
 
-    /// Explicit capability for registration as one NORMAL IPv4 Network Port.
+    /// Explicit capability for registration as one IPv4 Network Port, with
+    /// the B/IP mode the port reports (Clause 12.56.21).
     ///
-    /// Before start this is the configured announced interface/UDP port; after
-    /// start it is the actual announced address. BBMD and foreign-device modes
-    /// must return None, including staged configuration. Custom implementations
-    /// asserting this capability must preserve NORMAL mode through ownership.
-    /// The default refuses registration; broadcast support alone is insufficient.
-    fn normal_bip_endpoint(&self) -> Option<std::net::SocketAddrV4> {
+    /// Before start the endpoint is the configured interface and UDP port;
+    /// after start it is the address the transport announces. In BBMD mode
+    /// the tables appear once start creates them, and stay the transport's
+    /// own live state. A transport with no single mode to report, such as a
+    /// BBMD that also registers as a foreign device, returns None. Custom
+    /// implementations asserting this capability must keep the mode they
+    /// report through ownership. The default refuses registration; broadcast
+    /// support alone is insufficient.
+    fn bip_port(&self) -> Option<BipPort> {
         None
     }
 
     /// Retain selected Network Port protection through the last socket owner.
-    /// Must be installed once before start, only on a NORMAL B/IP transport.
+    /// Must be installed once before start, only on a transport that reports
+    /// a [`bip_port`](Self::bip_port).
     /// Successful stop releases it after quiescence; abort/drop must retain it
     /// in every surviving socket worker. Custom implementors own this contract.
     #[doc(hidden)]

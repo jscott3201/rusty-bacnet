@@ -55,7 +55,7 @@ pub(in crate::server) async fn active_cov_snapshot(
     let live = if selection.reads_cov() {
         let entries = {
             let table = tables.cov.read().await;
-            table.live_cov_entries(selection, Instant::now())
+            table.live_cov_entries(selection, runtime_clock::now())
         };
         LiveDeviceCov::project(db, selection, entries)
     } else {
@@ -75,7 +75,7 @@ pub(in crate::server) async fn address_bindings(
         return None;
     }
     let table = table.read().await;
-    Some(table.address_binding_list(Instant::now()))
+    Some(table.address_binding_list(runtime_clock::now()))
 }
 
 /// Budgeted ReadPropertyMultiple under one database read guard. The request

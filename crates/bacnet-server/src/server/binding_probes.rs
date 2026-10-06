@@ -316,7 +316,7 @@ impl<T: TransportPort + 'static> DeviceLookup<'_, T> {
     /// `device`'s binding as the table holds it now.
     pub(super) async fn resolve(&self, device: ObjectIdentifier) -> DeviceResolution {
         let table = self.bindings.read().await;
-        table.resolve_at(&device, Instant::now(), |mac| self.is_group(mac))
+        table.resolve_at(&device, runtime_clock::now(), |mac| self.is_group(mac))
     }
 
     /// Begin looking for `device`: join the Who-Is out for it, or send one
@@ -325,7 +325,8 @@ impl<T: TransportPort + 'static> DeviceLookup<'_, T> {
         let (step, scope) = {
             let mut table = self.bindings.write().await;
             // An I-Am may have come in since the caller looked.
-            let resolution = table.resolve_at(&device, Instant::now(), |mac| self.is_group(mac));
+            let resolution =
+                table.resolve_at(&device, runtime_clock::now(), |mac| self.is_group(mac));
             if !can_look_for(device, &resolution) {
                 return LookupStart::Resolved(resolution);
             }
@@ -373,7 +374,7 @@ impl<T: TransportPort + 'static> DeviceLookup<'_, T> {
         self.bindings
             .write()
             .await
-            .forget_stale(&device, Instant::now());
+            .forget_stale(&device, runtime_clock::now());
         Err(LookupMiss::Undiscovered)
     }
 

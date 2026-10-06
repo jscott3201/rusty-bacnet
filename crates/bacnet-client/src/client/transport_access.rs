@@ -44,8 +44,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     ///   the frame, so a hand-built confirmed request can reuse an invoke ID
     ///   that is already in flight. Send through the client's request methods,
     ///   and use its BBMD helpers for BBMD management.
-    /// - Holding the `bbmd_state()` lock across an await or a client call. A
-    ///   broadcast from the client takes the same lock, so the two deadlock.
+    /// - Holding the `bbmd_state()` lock across an await or a client call.
+    ///   It is a synchronous mutex the receive loop and a broadcast from the
+    ///   client take too, so holding it stalls the transport or deadlocks.
     ///   Lock, copy what you need and release.
     ///
     /// The live MS/TP master node and the BACnet/SC connection, whose locks
@@ -79,7 +80,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     ///     assert_eq!(client.transport().fanout_counters().packets_forwarded, 0);
     ///     // This client is not a BBMD, so it has no BBMD state or FDT.
     ///     assert!(client.transport().bbmd_state().is_none());
-    ///     assert!(client.transport().fdt_counters().await.is_none());
+    ///     assert!(client.transport().fdt_counters().is_none());
     ///     client.stop().await?;
     ///     Ok::<_, bacnet_types::error::Error>(())
     /// }))?;

@@ -450,7 +450,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             ),
                             invoke_id,
                             &req.service_request,
-                            Instant::now,
+                            runtime_clock::now,
                         ) {
                             received_event = Some(notification);
                         } else {

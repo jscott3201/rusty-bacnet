@@ -2,6 +2,10 @@
 use super::*;
 use bacnet_objects::network_port::{BipPortConfig, NetworkPortObject};
 
+#[path = "network_port_bip_mode_tests.rs"]
+mod network_port_bip_mode_tests;
+#[path = "network_port_mode_tests.rs"]
+mod network_port_mode_tests;
 #[path = "sc_network_number_tests.rs"]
 mod sc_network_number_tests;
 
@@ -31,7 +35,7 @@ async fn registered_port_bare_drop_and_retained_network_refusal_keep_lease() {
         let mut server = BACnetServer::start(config, db, transport).await.unwrap();
         let db = server.database().clone();
         let network = server.test_network().clone();
-        let address = network.transport().normal_bip_endpoint().unwrap();
+        let address = network.transport().bip_port().unwrap().endpoint;
         if stop_first {
             assert!(server.stop().await.is_err());
         }
@@ -86,8 +90,9 @@ async fn network_number_server_held_learning_preserves_audit_ack_progress() {
     let address = server
         .test_network()
         .transport()
-        .normal_bip_endpoint()
-        .unwrap();
+        .bip_port()
+        .unwrap()
+        .endpoint;
     let peer = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
         .await
         .unwrap();

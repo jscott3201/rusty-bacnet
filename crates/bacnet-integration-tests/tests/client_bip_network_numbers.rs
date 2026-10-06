@@ -23,7 +23,11 @@ use tokio::net::UdpSocket;
 type Client = BACnetClient<BipTransport>;
 async fn client(transport: BipTransport) -> (Client, SocketAddrV4) {
     assert!(transport.supports_local_nonrouter_number_controls());
-    assert!(transport.normal_bip_endpoint().is_none());
+    // A BBMD or foreign device; no Network Port is registered here.
+    assert_ne!(
+        transport.bip_port().unwrap().mode.ip_mode(),
+        bacnet_types::enums::IPMode::NORMAL
+    );
     let client = bounded(BACnetClient::start(ClientConfig::default(), transport))
         .await
         .unwrap();

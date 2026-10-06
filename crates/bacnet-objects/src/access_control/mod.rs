@@ -8,6 +8,9 @@
 //! - AccessUser (type 35)
 //! - AccessZone (type 36)
 //! - CredentialDataInput (type 37)
+//!
+//! [`evaluate_access_rights`] checks a credential against the Access Rights
+//! it is assigned, for the application to act on (#1331).
 
 use bacnet_encoding::primitives::encode_timestamp_choice;
 use bacnet_types::constructed::BACnetDeviceObjectReference;
@@ -163,6 +166,7 @@ mod point;
 mod point_authorization;
 mod point_event_time;
 mod rights;
+mod rights_evaluation;
 mod rights_writes;
 mod user;
 mod zone;
@@ -174,6 +178,7 @@ pub use door::*;
 pub use input::*;
 pub use point::*;
 pub use rights::*;
+pub use rights_evaluation::*;
 pub use user::*;
 pub use zone::*;
 
@@ -185,6 +190,8 @@ mod constructed_value_tests;
 mod credential_data_input_format_tests;
 #[cfg(test)]
 mod credential_data_input_out_of_service_tests;
+#[cfg(test)]
+mod credential_exemption_tests;
 #[cfg(test)]
 mod credential_tests;
 #[cfg(test)]

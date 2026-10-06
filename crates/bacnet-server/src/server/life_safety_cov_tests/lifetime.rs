@@ -1,7 +1,9 @@
 use super::*;
 use bacnet_services::cov::SubscribeCOVPropertyRequest;
 
-#[tokio::test]
+/// Paused: the lifetime is on tokio's clock (#1556), so its one second can't
+/// run out between the subscription and its initial notification.
+#[tokio::test(start_paused = true)]
 async fn cov_lifetime_one_second_initial_wire_remains_positive() {
     let fixture = DispatchFixture::new(life_safety_db(), []).await;
     let request = SubscribeCOVPropertyRequest {
@@ -108,9 +110,11 @@ fn encoded(
 }
 
 async fn take(fixture: &DispatchFixture, count: usize, family: Family, expected: u32) {
+    // Sleeping, not yielding, lets the timeout end the wait on a paused
+    // clock too.
     tokio::time::timeout(Duration::from_secs(2), async {
         while fixture.sent.len() < count {
-            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(1)).await;
         }
     })
     .await
@@ -195,7 +199,9 @@ async fn wire_case(family: Family, confirmed: bool, lifetime: Option<u32>, expec
     assert_eq!(fixture.cov_in_flight.available_permits(), 255);
 }
 
-#[tokio::test]
+/// Paused, like the test above, so the one-second lifetime lasts until the
+/// fanout (#1556).
+#[tokio::test(start_paused = true)]
 async fn cov_lifetime_all_owned_wire_families_initial_and_fanout_are_positive() {
     for family in [Family::Ordinary, Family::Property, Family::Multiple] {
         for confirmed in [false, true] {

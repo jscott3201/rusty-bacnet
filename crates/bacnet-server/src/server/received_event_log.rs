@@ -38,7 +38,7 @@ use tokio::sync::RwLock;
 use tracing::debug;
 
 use super::event_suppression::{EventSuppression, EventSuppressions};
-use super::limiter_clock;
+use super::runtime_clock;
 
 /// The records one source may add to the Event Logs that collect received
 /// notifications in each one-second window.
@@ -173,7 +173,7 @@ pub(super) async fn log_received_event_notification(
         }
         notification
     };
-    if !allowances.admit(&source, limiter_clock::now()) {
+    if !allowances.admit(&source, runtime_clock::now()) {
         suppressions.record(EventSuppression::ReceivedNotLogged);
         debug!(
             ?source,

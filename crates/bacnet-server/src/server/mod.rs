@@ -60,8 +60,8 @@ pub use crate::cov::{CovCounters, CovPolicy};
 use crate::cov::{
     CovNotificationKind, CovSubscription, CovSubscriptionSnapshot, CovSubscriptionTable,
 };
-use crate::handlers;
 use crate::life_safety::{LifeSafetyOperationAuthorizationContext, LifeSafetyOperationAuthorizer};
+use crate::{handlers, runtime_clock};
 use confirmed_request_tracker::{
     ConfirmedRequestAdmission, ConfirmedRequestTracker, PendingConfirmedRequest,
 };
@@ -586,7 +586,6 @@ pub(crate) mod event_timestamp;
 mod handles;
 mod learned_router_cache;
 mod lifecycle;
-mod limiter_clock;
 mod local_writes;
 mod network_port;
 #[cfg(test)]

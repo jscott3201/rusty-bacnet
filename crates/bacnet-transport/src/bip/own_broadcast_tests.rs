@@ -96,7 +96,7 @@ fn hand_wired_bbmd(
         Arc::clone(&transport.fanout_limiter),
         Arc::clone(&transport.fanout_counters),
     );
-    let bbmd = Arc::new(Mutex::new(state));
+    let bbmd = Arc::new(std::sync::Mutex::new(state));
     transport.own_broadcast = Some(OwnBroadcastForwarder::new(Arc::clone(&bbmd), dispatcher));
     transport.bbmd = Some(bbmd);
     transport.socket = Some(Arc::clone(socket));
@@ -221,7 +221,7 @@ async fn bbmd_own_broadcast_skips_an_expired_foreign_device() {
         "only the live foreign device is a target"
     );
     assert!(rx.try_recv().is_err(), "exactly one fanout job");
-    let state = bbmd.bbmd_state().unwrap().lock().await;
+    let state = bbmd.bbmd_state().unwrap().lock().unwrap();
     assert_eq!(state.fdt_len_for_test(), 1, "the expired entry is purged");
 }
 
