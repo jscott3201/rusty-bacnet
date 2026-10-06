@@ -1,6 +1,7 @@
-//! Primary restore after a duplicate-VMAC refusal.
+//! Primary restore after a duplicate-VMAC refusal, and the restore cadence
+//! after a failover.
 //!
-//! Both tests run on tokio's paused clock (#1549). The restore interval, the
+//! The tests run on tokio's paused clock (#1549). The restore interval, the
 //! 100 ms connect timeout and the tests' deadlines all read tokio's clock. On
 //! real time a runner stall could fire the test's 2 s deadline and the next
 //! restore tick in one turn, and the test future, polled first, saw its
@@ -11,6 +12,7 @@
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::Error;
 
+use super::test_waits::until;
 use super::*;
 
 async fn hub_accept(ws_hub: &LoopbackWebSocket, hub_vmac: Vmac) {
@@ -233,6 +235,86 @@ async fn primary_restore_reseed_failure_blocks_stale_restore_retry() {
     assert_eq!(c.local_vmac, client_vmac);
     assert!(!c.connect_retry_allowed);
     drop(c);
+
+    transport.stop().await.unwrap();
+}
+
+/// Restore ticks don't pile up while the primary hub is active (#1555). The
+/// transport stays on the primary for ten restore intervals, loses it, and
+/// fails over after one failed redial. Its first restore attempt comes
+/// exactly one interval after the failover connected, not 1 ms sooner and
+/// not as a burst of the ticks it spent on the primary, and the next comes
+/// one interval after that.
+#[tokio::test(start_paused = true)]
+async fn primary_restore_attempts_start_one_interval_after_failover() {
+    const INTERVAL: Duration = Duration::from_millis(25);
+    let (primary_client, primary_hub) = LoopbackWebSocket::pair();
+    let (failover_client, failover_hub) = LoopbackWebSocket::pair();
+    let (dial_tx, mut dials) = tokio::sync::mpsc::unbounded_channel();
+    let failover_hub_vmac = [0x20; 6];
+
+    let mut transport = ScTransport::new(primary_client, [0x01; 6])
+        .with_device_uuid([1; 16])
+        .with_connect_timeout_ms(100)
+        .with_heartbeat_interval_ms(5_000)
+        // Each dial of the primary, redial or restore, fails at once and
+        // reports when it started.
+        .with_connector(move || {
+            let dials = dial_tx.clone();
+            async move {
+                let _ = dials.send(tokio::time::Instant::now());
+                Err::<LoopbackWebSocket, _>(Error::Encoding("primary hub still down".into()))
+            }
+        })
+        .with_reconnect(ScReconnectConfig {
+            initial_delay_ms: INTERVAL.as_millis() as u64,
+            max_delay_ms: INTERVAL.as_millis() as u64,
+            max_retries: 1,
+        })
+        .with_failover(failover_client);
+
+    let primary_task = tokio::spawn(async move {
+        hub_accept(&primary_hub, [0x10; 6]).await;
+        primary_hub
+    });
+    let _rx = transport.start().await.unwrap();
+    let primary_hub = primary_task.await.unwrap();
+    tokio::time::sleep(INTERVAL * 10).await;
+    assert!(dials.try_recv().is_err(), "a dial while on the primary");
+
+    let failover_task = tokio::spawn(async move {
+        hub_accept(&failover_hub, failover_hub_vmac).await;
+        failover_hub
+    });
+    drop(primary_hub);
+    let redial = tokio::time::timeout(Duration::from_secs(1), dials.recv())
+        .await
+        .expect("no redial after the primary socket closed")
+        .unwrap();
+    let _failover_hub = failover_task.await.unwrap();
+    let conn = transport.connection().unwrap().clone();
+    let watched = &conn;
+    until("failover hub published", || async move {
+        watched.lock().await.hub_vmac == Some(failover_hub_vmac)
+    })
+    .await;
+    // The redial failed at once, so the failover connected at that instant.
+    assert_eq!(tokio::time::Instant::now(), redial);
+
+    let mut due = redial + INTERVAL;
+    for nth in ["first", "second"] {
+        tokio::time::sleep_until(due - Duration::from_millis(1)).await;
+        assert!(
+            dials.try_recv().is_err(),
+            "{nth} restore attempt 1 ms early"
+        );
+        let attempt = tokio::time::timeout(Duration::from_secs(1), dials.recv())
+            .await
+            .unwrap_or_else(|_| panic!("no {nth} restore attempt"))
+            .unwrap();
+        assert_eq!(attempt, due, "{nth} restore attempt");
+        due += INTERVAL;
+    }
 
     transport.stop().await.unwrap();
 }

@@ -515,15 +515,16 @@ async fn sc_reconnect_connector_timeout_counts_as_failed_attempt() {
 }
 
 /// A primary-restore dial that never answers is given up at the connect
-/// timeout (#1555), and the failover hub carries traffic throughout. The
-/// restore dial runs inside the receive loop, so while it hangs no later
-/// restore tick can run; once it is given up, the next one dials straight
-/// away. Ticks the interval missed during the dial fire at once (tokio's
-/// default), so the second dial starts exactly when the first times out,
-/// and not 1 ms before. A dial left hanging would never let it start.
+/// timeout (#1555), and the failover hub carries sends throughout. While the
+/// dial hangs no later attempt can start. Once it is given up, the next one
+/// waits a full restore interval from then, so each dial starts exactly the
+/// timeout plus the interval after the one before, and not 1 ms sooner. A
+/// dial left hanging would never let a second one start.
 #[tokio::test(start_paused = true)]
 async fn sc_primary_restore_connector_timeout_leaves_failover_send_path_active() {
     const CONNECT_TIMEOUT: Duration = Duration::from_millis(50);
+    // The restore interval is the reconnect's initial delay.
+    const GAP: Duration = Duration::from_millis(50 + 10);
     let (primary_client, _stale_primary_hub) = LoopbackWebSocket::pair();
     let (failover_client, failover_hub) = LoopbackWebSocket::pair();
     let (dial_tx, mut dials) = tokio::sync::mpsc::unbounded_channel();
@@ -573,17 +574,22 @@ async fn sc_primary_restore_connector_timeout_leaves_failover_send_path_active()
         }
     };
     send_on_failover([0x0a, 0x0b, 0x0c]).await;
-
-    tokio::time::sleep_until(first + CONNECT_TIMEOUT - Duration::from_millis(1)).await;
     assert!(
-        dials.try_recv().is_err(),
-        "a second restore dial before the first timed out"
+        tokio::time::Instant::now() < first + CONNECT_TIMEOUT,
+        "the send waited for the restore dial"
     );
-    let second = tokio::time::timeout(Duration::from_secs(1), dials.recv())
-        .await
-        .expect("no second restore dial: the first was never given up")
-        .unwrap();
-    assert_eq!(second, first + CONNECT_TIMEOUT);
+
+    let mut previous = first;
+    for nth in ["second", "third"] {
+        tokio::time::sleep_until(previous + GAP - Duration::from_millis(1)).await;
+        assert!(dials.try_recv().is_err(), "{nth} restore dial 1 ms early");
+        let next = tokio::time::timeout(Duration::from_secs(1), dials.recv())
+            .await
+            .unwrap_or_else(|_| panic!("no {nth} restore dial: the one before never gave up"))
+            .unwrap();
+        assert_eq!(next, previous + GAP, "{nth} restore dial");
+        previous = next;
+    }
 
     // The failed restore left the failover hub in place.
     assert_eq!(conn.lock().await.hub_vmac, Some(failover_hub_vmac));

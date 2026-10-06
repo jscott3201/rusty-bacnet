@@ -184,6 +184,11 @@ async fn cov_lifetime_admitted_confirmed_retry_survives_expiry_and_ack_drains() 
             !fixture.table.read().await.is_current(&snapshots[0]),
             "at the expiry"
         );
+        assert_eq!(
+            fixture.sent.lock().unwrap().len(),
+            1,
+            "the retry comes after the expiry"
+        );
         wait_for_frames(&fixture.sent, 2).await;
         {
             let frames = fixture.sent.lock().unwrap();

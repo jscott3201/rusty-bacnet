@@ -273,7 +273,7 @@ async fn cov_recipient_wire_cleanup_expiry_and_delete_follow_current_route() {
         let old = live(&wire).await;
         let mut expired = (*old).clone();
         expired.subscriber_mac = MacAddr::from_slice(&router_b().mac);
-        expired.expires_at = Some(Instant::now());
+        expired.expires_at = Some(runtime_clock::now());
         wire.server
             .cov_table
             .write()

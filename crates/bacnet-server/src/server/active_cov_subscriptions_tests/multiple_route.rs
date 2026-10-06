@@ -373,7 +373,7 @@ async fn multiple_route_wire_delete_expiry_and_current_peer_cleanup_remove_migra
             .subscribe_multiple(
                 old.key().multiple_context().unwrap(),
                 &crate::cov::SubscriberEndpoint::new(&router_b().mac, router_b().network.as_ref()),
-                Instant::now(),
+                runtime_clock::now(),
                 0,
                 None,
                 vec![],

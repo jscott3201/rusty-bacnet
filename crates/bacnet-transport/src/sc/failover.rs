@@ -7,6 +7,7 @@ use bacnet_types::error::Error;
 use bytes::BytesMut;
 use tokio::sync::{watch, Mutex};
 use tokio::task::JoinHandle;
+use tokio::time::{Instant, Interval, MissedTickBehavior};
 use tracing::warn;
 
 use crate::sc_frame::{encode_sc_message, ScMessage};
@@ -20,6 +21,21 @@ use super::{
 pub(super) enum ActiveHub {
     Primary,
     Failover,
+}
+
+/// The cadence of primary-restore attempts while the failover hub is active,
+/// first due one `period` from now (#1555).
+///
+/// The receive loop resets it after every attempt and after every reconnect,
+/// so an attempt is always one `period` after the last attempt ended or the
+/// connection came up. Without the resets, a tick the loop didn't take (a
+/// dial that ran past the period, or time spent on the primary hub, when
+/// restore ticks are off) would be due at once. `Delay` is a guard on top: a
+/// tick that is late anyway brings one attempt, never a burst of them.
+pub(super) fn restore_interval(period: Duration) -> Interval {
+    let mut interval = tokio::time::interval_at(Instant::now() + period, period);
+    interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    interval
 }
 
 /// Borrowed state a primary-restore attempt reads and updates.
