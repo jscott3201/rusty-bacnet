@@ -20,9 +20,11 @@ pub use crate::bbmd::{FdtCounters, ForeignDevicePolicy};
 #[cfg(test)]
 use crate::bvll::decode_bvll;
 use crate::bvll::{decode_bip_mac, encode_bip_mac, encode_bvll, BvllMessage};
-use crate::port::{ReceivedNpdu, TransportPort};
+use crate::port::{BipPort, ReceivedNpdu, TransportPort};
 #[cfg(test)]
 use crate::udp_metadata::{DestinationReceiver, IpVersion};
+use bacnet_types::bip_port::{BbmdTables, BipPortMode};
+use bacnet_types::constructed::BACnetHostNPort;
 use bacnet_types::enums::{BvlcFunction, BvlcResultCode};
 use bacnet_types::error::Error;
 
@@ -91,7 +93,7 @@ pub struct BipTransport {
     /// BBMD configuration before start (consumed by `start()`).
     bbmd_config: Option<BbmdConfig>,
     /// BBMD state (when acting as a BBMD, created in `start()`).
-    bbmd: Option<Arc<Mutex<BbmdState>>>,
+    bbmd: Option<Arc<std::sync::Mutex<BbmdState>>>,
     /// BBMD FDT expiry purge task.
     bbmd_fdt_purge_task: Option<JoinHandle<()>>,
     /// Foreign device config (when registered as a foreign device).
@@ -270,12 +272,16 @@ impl BipTransport {
         self.foreign_device = Some(config);
     }
 
-    /// Get the BBMD state (if BBMD mode is enabled).
+    /// Get the BBMD state (if BBMD mode is enabled). It appears when
+    /// `start()` creates it.
     ///
-    /// Do not hold its guard across [`send_broadcast`](TransportPort::send_broadcast)
-    /// or a restart of a `0.0.0.0`-bound BBMD: both lock this mutex, so the
-    /// call would deadlock.
-    pub fn bbmd_state(&self) -> Option<&Arc<Mutex<BbmdState>>> {
+    /// The lock is a synchronous [`std::sync::Mutex`]: the transport holds it
+    /// only for short, synchronous critical sections, and so must every
+    /// caller. Holding its guard across an await, or across a call such as
+    /// [`send_broadcast`](TransportPort::send_broadcast) or a restart of a
+    /// `0.0.0.0`-bound BBMD that locks it too, can stall or deadlock the
+    /// transport.
+    pub fn bbmd_state(&self) -> Option<&Arc<std::sync::Mutex<BbmdState>>> {
         self.bbmd.as_ref()
     }
 
@@ -288,13 +294,10 @@ impl BipTransport {
     }
 
     /// Return operational Foreign Device Table counters if BBMD mode is enabled.
-    pub async fn fdt_counters(&self) -> Option<FdtCounters> {
-        if let Some(bbmd) = &self.bbmd {
-            let state = bbmd.lock().await;
-            Some(state.fdt_counters())
-        } else {
-            None
-        }
+    pub fn fdt_counters(&self) -> Option<FdtCounters> {
+        self.bbmd
+            .as_ref()
+            .map(|bbmd| bbmd::lock(bbmd).fdt_counters())
     }
 
     /// Return the operational broadcast forwarding fanout counters.
@@ -378,15 +381,12 @@ impl BipTransport {
         .map_err(std::io::Error::other)?
     }
 
-    fn spawn_bbmd_fdt_purge_task(bbmd: Arc<Mutex<BbmdState>>) -> JoinHandle<()> {
+    fn spawn_bbmd_fdt_purge_task(bbmd: Arc<std::sync::Mutex<BbmdState>>) -> JoinHandle<()> {
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(Self::BBMD_FDT_PURGE_INTERVAL);
             loop {
                 ticker.tick().await;
-                let purged = {
-                    let mut state = bbmd.lock().await;
-                    state.purge_expired()
-                };
+                let purged = bbmd::lock(&bbmd).purge_expired();
                 if purged > 0 {
                     debug!(purged, "Purged expired BBMD FDT entries");
                 }
@@ -565,10 +565,10 @@ impl TransportPort for BipTransport {
             || self.socket.is_some()
             || self.recv_task.is_some()
             || self.network_port_lease.is_some()
-            || self.normal_bip_endpoint().is_none()
+            || self.bip_port().is_none()
         {
             return Err(Error::Encoding(
-                "registered B/IP lease requires unstarted NORMAL transport".into(),
+                "registered B/IP lease requires an unstarted transport in one B/IP mode".into(),
             ));
         }
         self.network_port_lease = Some(lease);
@@ -577,10 +577,26 @@ impl TransportPort for BipTransport {
     fn supports_local_nonrouter_number_controls(&self) -> bool {
         true
     }
-    fn normal_bip_endpoint(&self) -> Option<SocketAddrV4> {
-        if self.bbmd_config.is_some() || self.bbmd.is_some() || self.foreign_device.is_some() {
-            return None;
-        }
+    fn bip_port(&self) -> Option<BipPort> {
+        let staged_bbmd = self.bbmd_config.is_some();
+        let mode = match (&self.foreign_device, staged_bbmd || self.bbmd.is_some()) {
+            // A BBMD that also registers elsewhere has no single mode.
+            (Some(_), true) => return None,
+            (Some(fd), false) => BipPortMode::Foreign {
+                bbmd: BACnetHostNPort::from_socket_addr(
+                    SocketAddrV4::new(fd.bbmd_ip, fd.bbmd_port).into(),
+                ),
+                subscription_lifetime: fd.ttl,
+            },
+            // Staged configuration replaces any earlier state at the next
+            // start, so only started, current state is lent.
+            (None, true) => BipPortMode::Bbmd {
+                tables: self.bbmd.as_ref().filter(|_| !staged_bbmd).map(|state| {
+                    Arc::new(bbmd::LiveTables(Arc::clone(state))) as Arc<dyn BbmdTables>
+                }),
+            },
+            (None, false) => BipPortMode::Normal,
+        };
         let ip = if self.socket.is_some() {
             Ipv4Addr::new(
                 self.local_mac[0],
@@ -591,7 +607,10 @@ impl TransportPort for BipTransport {
         } else {
             self.interface
         };
-        Some(SocketAddrV4::new(ip, self.port))
+        Some(BipPort {
+            endpoint: SocketAddrV4::new(ip, self.port),
+            mode,
+        })
     }
     fn bip_broadcast_endpoint(&self) -> Option<SocketAddrV4> {
         Some(SocketAddrV4::new(self.broadcast_address, self.port))
@@ -637,11 +656,11 @@ impl TransportPort for BipTransport {
             let state = initial_bbmd_state(config, self.bdt_persist_path.as_deref(), &own_address)?;
             let (ip, _) = state.local_address();
             self.bbmd_config = None;
-            self.bbmd = Some(Arc::new(Mutex::new(state)));
+            self.bbmd = Some(Arc::new(std::sync::Mutex::new(state)));
             Some(ip)
         } else if let Some(bbmd) = self.bbmd.as_ref().filter(|_| wildcard_bind) {
             // An explicit interface keeps its IP and port across restarts.
-            let mut state = bbmd.lock().await;
+            let mut state = bbmd::lock(bbmd);
             refresh_own_address(&mut state, &own_address)?;
             Some(state.local_address().0)
         } else {
@@ -808,7 +827,7 @@ impl TransportPort for BipTransport {
         // happens to it (see OwnBroadcastForwarder::forward) never fails this
         // send, and a failed local send does not withdraw it.
         if let Some(forwarder) = &self.own_broadcast {
-            forwarder.forward(npdu).await;
+            forwarder.forward(npdu);
         }
 
         socket.send_to(&buf, dest).await.map_err(Error::Transport)?;

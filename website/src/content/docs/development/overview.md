@@ -12,7 +12,7 @@ description: "Choose an integration path, find its API and evidence boundaries, 
 | Send requests to other devices | Standalone `BACnetClient`; choose a transport and use the API reference |
 | Model a device with the full server's service set | Standalone `BACnetServer` and its object database |
 | Request and respond as one device through one transport | [Shared endpoints](/rusty-bacnet/development/shared-endpoints/) for B/IP, SC or MS/TP |
-| Associate a NORMAL B/IP socket with a Network Port object | [Network Port registration](/rusty-bacnet/development/network-number/#register-a-normal-bip-receiving-port) |
+| Associate a B/IP socket with a Network Port object | [Network Port registration](/rusty-bacnet/development/network-number/#register-a-bip-receiving-port) |
 | Learn and answer local network-number queries | [Passive Number controls](/rusty-bacnet/development/network-number/); no discovery command or startup announcement required |
 | Connect through an SC hub | [BACnet/SC setup](/rusty-bacnet/development/bacnet-sc/), with explicit trust, credentials and durable device identity |
 

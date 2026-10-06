@@ -58,7 +58,7 @@ fn test_ctx(
         local_mac: encode_bip_mac(Ipv4Addr::LOCALHOST.octets(), local_port),
         socket,
         npdu_tx,
-        bbmd: bbmd.map(|s| Arc::new(Mutex::new(s))),
+        bbmd: bbmd.map(|s| Arc::new(std::sync::Mutex::new(s))),
         broadcast_addr: Ipv4Addr::LOCALHOST,
         broadcast_port: local_port,
         pending_bvlc_response: Arc::new(Mutex::new(None)),
@@ -253,7 +253,7 @@ async fn rate_limit_source_quota_ignores_udp_port() {
     // The evading port must not have created a second FDT entry.
     {
         let state = bbmd_transport.bbmd_state().unwrap();
-        let mut state = state.lock().await;
+        let mut state = state.lock().unwrap();
         assert_eq!(
             state.fdt().len(),
             1,
@@ -421,7 +421,7 @@ async fn rate_limit_discards_malformed_and_unauthorized_before_normal_handling()
 
     // No FDT mutation could have occurred through the discarded path.
     let bbmd = ctx.bbmd.as_ref().unwrap();
-    assert!(bbmd.lock().await.fdt().is_empty());
+    assert!(bbmd.lock().unwrap().fdt().is_empty());
 }
 
 #[tokio::test]

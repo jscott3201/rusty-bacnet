@@ -215,7 +215,7 @@ async fn bbmd_register_foreign_device() {
     // Verify the BBMD has the foreign device in its FDT
     {
         let bbmd_state = bbmd_transport.bbmd_state().unwrap();
-        let mut state = bbmd_state.lock().await;
+        let mut state = bbmd_state.lock().unwrap();
         let fdt = state.fdt();
         assert_eq!(fdt.len(), 1);
         assert_eq!(fdt[0].ttl, 60);
@@ -486,7 +486,7 @@ async fn register_foreign_device_rejects_zero_ttl() {
 
     {
         let state = bbmd_transport.bbmd_state().unwrap();
-        let mut state = state.lock().await;
+        let mut state = state.lock().unwrap();
         assert!(state.fdt().is_empty());
     }
 
@@ -513,7 +513,7 @@ async fn register_foreign_device_rejects_malformed_ttl_payload_lengths() {
 
     {
         let state = bbmd_transport.bbmd_state().unwrap();
-        let mut state = state.lock().await;
+        let mut state = state.lock().unwrap();
         assert!(state.fdt().is_empty());
     }
 
@@ -742,7 +742,7 @@ async fn bbmd_management_acl_preserved_after_start() {
 
     {
         let state = transport.bbmd_state().unwrap();
-        let s = state.lock().await;
+        let s = state.lock().unwrap();
         assert!(s.is_management_allowed(&[10, 0, 0, 1]));
         assert!(!s.is_management_allowed(&[10, 0, 0, 2]));
     }

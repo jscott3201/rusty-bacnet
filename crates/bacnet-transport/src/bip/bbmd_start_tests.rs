@@ -197,7 +197,7 @@ async fn wildcard_bbmd_uses_its_own_bdt_row_as_origin_and_local_mac() {
 
     assert_eq!(bbmd.local_mac(), encode_bip_mac(own.0, own.1));
     {
-        let state = bbmd.bbmd_state().unwrap().lock().await;
+        let state = bbmd.bbmd_state().unwrap().lock().unwrap();
         assert_eq!(state.local_address(), own);
         assert_eq!(state.bdt().len(), 2, "no second self row");
     }
@@ -353,7 +353,7 @@ async fn wildcard_bbmd_reads_its_own_row_from_the_persisted_bdt() {
         bbmd.local_mac(),
         encode_bip_mac(Ipv4Addr::LOCALHOST.octets(), port)
     );
-    let bdt = bbmd.bbmd_state().unwrap().lock().await.bdt().to_vec();
+    let bdt = bbmd.bbmd_state().unwrap().lock().unwrap().bdt().to_vec();
     assert_eq!(bdt, vec![row(Ipv4Addr::LOCALHOST, port)]);
     bbmd.stop().await.unwrap();
 }
@@ -415,7 +415,7 @@ async fn restart_chooses_the_bbmd_address_again_and_drops_the_stale_self_row() {
             // 127.0.0.1 is not among the host's addresses yet, so its row at
             // the bound port is not the BBMD's own, and a self row for LAN is
             // added.
-            let mut state = bbmd.bbmd_state().unwrap().lock().await;
+            let mut state = bbmd.bbmd_state().unwrap().lock().unwrap();
             state
                 .set_bdt(vec![peer_row.clone(), loopback_row.clone()])
                 .unwrap();
@@ -439,7 +439,7 @@ async fn restart_chooses_the_bbmd_address_again_and_drops_the_stale_self_row() {
         let own = (Ipv4Addr::LOCALHOST.octets(), port);
         assert_eq!(bbmd.local_mac(), encode_bip_mac(own.0, own.1));
         {
-            let mut state = bbmd.bbmd_state().unwrap().lock().await;
+            let mut state = bbmd.bbmd_state().unwrap().lock().unwrap();
             assert_eq!(state.local_address(), own);
             // The self row appended for LAN is gone, not left behind as a peer.
             assert_eq!(state.bdt(), &[peer_row, loopback_row]);
@@ -475,7 +475,7 @@ async fn failed_restart_keeps_the_bbmd_state_and_bdt() {
             row(OTHER_LAN, port),
         ];
         let (own, bdt) = {
-            let mut state = bbmd.bbmd_state().unwrap().lock().await;
+            let mut state = bbmd.bbmd_state().unwrap().lock().unwrap();
             state.set_bdt(listed.clone()).unwrap();
             assert_eq!(
                 state.register_foreign_device([127, 0, 0, 1], 47809, 60),
@@ -499,7 +499,7 @@ async fn failed_restart_keeps_the_bbmd_state_and_bdt() {
         );
         assert!(bbmd.socket.is_none() && bbmd.recv_task.is_none());
         {
-            let mut state = bbmd.bbmd_state().unwrap().lock().await;
+            let mut state = bbmd.bbmd_state().unwrap().lock().unwrap();
             assert_eq!(state.local_address(), own);
             assert_eq!(state.bdt(), bdt.as_slice());
             assert_eq!(state.fdt().len(), 1);
@@ -512,10 +512,11 @@ async fn failed_restart_keeps_the_bbmd_state_and_bdt() {
             continue;
         };
         let _rx = started.unwrap();
-        let state = bbmd.bbmd_state().unwrap().lock().await;
-        assert_eq!(state.local_address(), (Ipv4Addr::LOCALHOST.octets(), port));
-        assert_eq!(state.bdt(), listed.as_slice());
-        drop(state);
+        {
+            let state = bbmd.bbmd_state().unwrap().lock().unwrap();
+            assert_eq!(state.local_address(), (Ipv4Addr::LOCALHOST.octets(), port));
+            assert_eq!(state.bdt(), listed.as_slice());
+        }
         bbmd.stop().await.unwrap();
         return;
     }
@@ -536,7 +537,7 @@ async fn restart_that_would_overflow_the_bdt_fails_with_context_and_keeps_the_st
         bbmd.bbmd_state()
             .unwrap()
             .lock()
-            .await
+            .unwrap()
             .set_bdt(full.clone())
             .unwrap();
         bbmd.stop().await.unwrap();
@@ -559,14 +560,17 @@ async fn restart_that_would_overflow_the_bdt_fails_with_context_and_keeps_the_st
             "{text}"
         );
         assert!(bbmd.socket.is_none());
-        let state = bbmd.bbmd_state().unwrap().lock().await;
+        let state = bbmd.bbmd_state().unwrap().lock().unwrap();
         assert_eq!(state.local_address(), (LAN.octets(), port));
         assert_eq!(state.bdt(), full.as_slice());
         return;
     }
 }
 
-#[tokio::test]
+/// Another thread holds the BBMD state's lock for the whole restart. A
+/// restart that chose the address again would block on it, and the timeout
+/// would fire on the other worker.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn explicit_interface_restart_keeps_the_bbmd_address_without_locking_the_state() {
     // Each run starts on a fresh port; see `restart` for why it can lose it.
     for attempt in 1..=ATTEMPTS {
@@ -576,18 +580,30 @@ async fn explicit_interface_restart_keeps_the_bbmd_address_without_locking_the_s
         let own = (Ipv4Addr::LOCALHOST.octets(), bbmd.port);
         bbmd.stop().await.unwrap();
 
-        // A restart that chose the address again would wait for this guard.
         let state = Arc::clone(bbmd.bbmd_state().unwrap());
-        let guard = state.lock().await;
-        let restarted = tokio::time::timeout(Duration::from_secs(2), restart(&mut bbmd, attempt))
-            .await
-            .expect("an explicit-interface restart does not lock the BBMD state");
+        let (locked_tx, locked) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let holder = std::thread::spawn(move || {
+            let guard = state.lock().unwrap();
+            locked_tx.send(guard.local_address()).unwrap();
+            let _ = released.recv();
+        });
+        let held_address = locked.recv().unwrap();
+        let mut restarting = tokio::spawn(async move {
+            let started = restart(&mut bbmd, attempt).await;
+            (bbmd, started)
+        });
+        let outcome = tokio::time::timeout(Duration::from_secs(2), &mut restarting).await;
+        release.send(()).unwrap();
+        holder.join().unwrap();
+        let (mut bbmd, restarted) = outcome
+            .expect("an explicit-interface restart does not lock the BBMD state")
+            .unwrap();
         let Some(started) = restarted else {
             continue;
         };
         let _rx = started.unwrap();
-        assert_eq!(guard.local_address(), own);
-        drop(guard);
+        assert_eq!(held_address, own);
         assert_eq!(bbmd.local_mac(), encode_bip_mac(own.0, own.1));
         bbmd.stop().await.unwrap();
         return;

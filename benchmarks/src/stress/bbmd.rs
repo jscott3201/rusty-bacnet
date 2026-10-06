@@ -77,8 +77,11 @@ pub async fn run(duration_secs: u64, steps: &[u64]) -> Vec<DegradationPoint> {
 
         // Verify FDT size
         if let Some(state) = bbmd.bbmd_state() {
-            let mut st = state.lock().await;
-            let fdt_len = st.fdt().len();
+            let fdt_len = state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .fdt()
+                .len();
             eprintln!("  FDT entries: {} (expected {})", fdt_len, count);
         }
 

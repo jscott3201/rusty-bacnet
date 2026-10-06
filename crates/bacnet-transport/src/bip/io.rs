@@ -9,7 +9,7 @@ use tracing::{debug, warn};
 use bacnet_types::enums::{BvlcFunction, BvlcResultCode};
 use bacnet_types::MacAddr;
 
-use crate::bbmd::BbmdState;
+use crate::bbmd::{self, BbmdState};
 use crate::bvll::{self, encode_bip_mac, encode_bvll, encode_bvll_forwarded};
 use crate::port::{ReceivedNpdu, TransportProvenance};
 
@@ -44,7 +44,7 @@ pub(super) struct RecvContext {
     pub(super) local_mac: [u8; 6],
     pub(super) socket: Arc<super::BipSocket>,
     pub(super) npdu_tx: mpsc::Sender<ReceivedNpdu>,
-    pub(super) bbmd: Option<Arc<Mutex<BbmdState>>>,
+    pub(super) bbmd: Option<Arc<std::sync::Mutex<BbmdState>>>,
     pub(super) broadcast_addr: Ipv4Addr,
     pub(super) broadcast_port: u16,
     pub(super) pending_bvlc_response: Arc<Mutex<Option<PendingBvlcResponse>>>,
@@ -152,7 +152,7 @@ pub(super) async fn handle_bvll_message(
             // If BBMD, forward as Forwarded-NPDU to BDT peers + FDT entries
             if let Some(bbmd) = &ctx.bbmd {
                 let (targets, dedup_count) = {
-                    let mut state = bbmd.lock().await;
+                    let mut state = bbmd::lock(bbmd);
                     let before = state.fdt_counters().destinations_deduplicated;
                     let targets = state.forwarding_targets(sender.0, sender.1);
                     let after = state.fdt_counters().destinations_deduplicated;
@@ -198,7 +198,7 @@ pub(super) async fn handle_bvll_message(
                     return;
                 }
                 let (is_bdt_peer, needs_local_broadcast) = {
-                    let state = bbmd.lock().await;
+                    let state = bbmd::lock(bbmd);
                     (
                         state.is_bdt_peer(sender.0, sender.1),
                         state.forwarded_npdu_needs_local_broadcast(sender.0, sender.1),
@@ -234,7 +234,7 @@ pub(super) async fn handle_bvll_message(
 
                 // Forward to FDT entries (BDT peers don't need it — they got it directly)
                 let (fdt_targets, dedup_count) = {
-                    let mut state = bbmd.lock().await;
+                    let mut state = bbmd::lock(bbmd);
                     let before = state.fdt_counters().destinations_deduplicated;
                     let targets = state.fdt_forwarding_targets(orig_ip, orig_port);
                     let after = state.fdt_counters().destinations_deduplicated;
@@ -303,7 +303,7 @@ pub(super) async fn handle_bvll_message(
             // If BBMD, verify sender is a registered foreign device
             if let Some(bbmd) = &ctx.bbmd {
                 let is_registered = {
-                    let mut state = bbmd.lock().await;
+                    let mut state = bbmd::lock(bbmd);
                     state.is_registered_foreign_device(sender.0, sender.1)
                 };
                 if !is_registered {
@@ -335,7 +335,7 @@ pub(super) async fn handle_bvll_message(
                 }
 
                 let (targets, dedup_count) = {
-                    let mut state = bbmd.lock().await;
+                    let mut state = bbmd::lock(bbmd);
                     let before = state.fdt_counters().destinations_deduplicated;
                     let targets = state.forwarding_targets(sender.0, sender.1);
                     let after = state.fdt_counters().destinations_deduplicated;
@@ -400,7 +400,7 @@ pub(super) async fn handle_bvll_message(
                 }
                 let ttl = u16::from_be_bytes([msg.payload[0], msg.payload[1]]);
                 let result = {
-                    let mut state = bbmd.lock().await;
+                    let mut state = bbmd::lock(bbmd);
                     state.register_foreign_device(sender.0, sender.1, ttl)
                 };
                 debug!(
@@ -422,10 +422,8 @@ pub(super) async fn handle_bvll_message(
 
         f if f == BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE => {
             if let Some(bbmd) = &ctx.bbmd {
-                let state = bbmd.lock().await;
                 let mut payload = BytesMut::new();
-                state.encode_bdt(&mut payload);
-                drop(state);
+                bbmd::lock(bbmd).encode_bdt(&mut payload);
                 let resp_len = 4 + payload.len();
                 let allowed = match ctx.management_limiter.lock() {
                     Ok(mut limiter) => limiter.check_and_record_bdt_response(sender.0, resp_len),
@@ -476,10 +474,8 @@ pub(super) async fn handle_bvll_message(
 
         f if f == BvlcFunction::READ_FOREIGN_DEVICE_TABLE => {
             if let Some(bbmd) = &ctx.bbmd {
-                let mut state = bbmd.lock().await;
                 let mut payload = BytesMut::new();
-                state.encode_fdt(&mut payload);
-                drop(state);
+                bbmd::lock(bbmd).encode_fdt(&mut payload);
                 let resp_len = 4 + payload.len();
                 let allowed = match ctx.management_limiter.lock() {
                     Ok(mut limiter) => limiter.check_and_record_fdt_response(sender.0, resp_len),
@@ -521,7 +517,7 @@ pub(super) async fn handle_bvll_message(
             if let Some(bbmd) = &ctx.bbmd {
                 // Check management ACL before accepting Delete-FDT-Entry
                 let allowed = {
-                    let state = bbmd.lock().await;
+                    let state = bbmd::lock(bbmd);
                     state.is_management_allowed(&sender.0)
                 };
                 if !allowed {
@@ -545,7 +541,7 @@ pub(super) async fn handle_bvll_message(
                     ];
                     let port = u16::from_be_bytes([msg.payload[4], msg.payload[5]]);
                     let result = {
-                        let mut state = bbmd.lock().await;
+                        let mut state = bbmd::lock(bbmd);
                         state.delete_foreign_device(ip, port)
                     };
                     send_bvlc_result(&ctx.socket, sender, result).await;
