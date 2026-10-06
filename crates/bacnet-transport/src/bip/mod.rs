@@ -827,7 +827,7 @@ impl TransportPort for BipTransport {
         // happens to it (see OwnBroadcastForwarder::forward) never fails this
         // send, and a failed local send does not withdraw it.
         if let Some(forwarder) = &self.own_broadcast {
-            forwarder.forward(npdu).await;
+            forwarder.forward(npdu);
         }
 
         socket.send_to(&buf, dest).await.map_err(Error::Transport)?;

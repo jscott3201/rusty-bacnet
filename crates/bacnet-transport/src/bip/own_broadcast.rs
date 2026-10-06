@@ -39,7 +39,7 @@ impl OwnBroadcastForwarder {
     /// Original-Broadcast-NPDU. Throttled targets, a full queue and failed
     /// sends are counted in the fanout counters and logged; a closed fanout
     /// worker or a Forwarded-NPDU that cannot be encoded is only logged.
-    pub(super) async fn forward(&self, npdu: &[u8]) {
+    pub(super) fn forward(&self, npdu: &[u8]) {
         let ((origin_ip, origin_port), targets, dedup_count) = {
             let mut state = bbmd::lock(&self.bbmd);
             let origin = state.local_address();

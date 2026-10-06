@@ -4,8 +4,10 @@ use crate::mutation::{MutationAuthorizationContext, MutationAuthorizer, Mutation
 /// Server configuration.
 #[derive(Clone)]
 pub struct ServerConfig {
-    /// Explicit concrete Network Port for one owned NORMAL B/IP transport.
-    /// None leaves configured objects unbound and receiving-port wildcard unavailable.
+    /// Explicit concrete Network Port for one owned B/IP transport, in
+    /// NORMAL, FOREIGN or BBMD mode (a BBMD that also registers as a foreign
+    /// device is refused at start). None leaves configured objects unbound
+    /// and receiving-port wildcard unavailable.
     pub registered_network_port: Option<ObjectIdentifier>,
     /// Optional target Audit Reporter profile. Its recipient is provisioned on
     /// the built-in Device and becomes writable while the runtime is installed.

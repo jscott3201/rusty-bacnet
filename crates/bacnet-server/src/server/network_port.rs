@@ -32,10 +32,18 @@ pub(super) fn prepare<T: TransportPort>(
     let Some(oid) = oid else {
         return Ok(());
     };
-    let address = transport
-        .bip_port()
-        .ok_or_else(|| Error::Encoding("registered port requires B/IP in one mode".into()))?
-        .endpoint;
+    let address = match transport.bip_port() {
+        Some(port) => port.endpoint,
+        // A B/IP link that reports no mode is configured both ways.
+        None if transport.bip_broadcast_endpoint().is_some() => {
+            return Err(Error::Encoding(
+                "registered Network Port refused: a BBMD that also registers as a foreign \
+                 device has no single B/IP mode"
+                    .into(),
+            ))
+        }
+        None => return Err(Error::Encoding("registered port requires B/IP".into())),
+    };
     let ip = *address.ip();
     if ip.is_unspecified()
         || ip.is_multicast()

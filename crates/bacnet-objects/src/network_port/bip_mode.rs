@@ -6,6 +6,11 @@
 //! mode adds BBMD_Broadcast_Distribution_Table, BBMD_Accept_FD_Registrations
 //! and BBMD_Foreign_Device_Table, each read from the transport's own tables
 //! at the moment of the read.
+//!
+//! The mode is the last one published. After its owner stops, the port keeps
+//! reporting it, as it keeps the last published bind; a BBMD's rows then show
+//! the stopped transport's tables as they were left, with registrations
+//! still expiring on schedule.
 
 use std::sync::Arc;
 

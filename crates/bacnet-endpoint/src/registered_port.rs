@@ -22,10 +22,17 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             .ingress
             .as_mut()
             .ok_or_else(|| invalid("missing ingress"))?;
-        let address = ingress
-            .bip_port()
-            .ok_or_else(|| invalid("registration requires B/IP in one mode"))?
-            .endpoint;
+        let address = match ingress.bip_port() {
+            Some(port) => port.endpoint,
+            // A B/IP link that reports no mode is configured both ways.
+            None if ingress.bip_broadcast_endpoint().is_some() => {
+                return Err(invalid(
+                    "registered Network Port refused: a BBMD that also registers as a \
+                     foreign device has no single B/IP mode",
+                ))
+            }
+            None => return Err(invalid("registration requires B/IP")),
+        };
         let ip = *address.ip();
         if ip.is_unspecified()
             || ip.is_multicast()

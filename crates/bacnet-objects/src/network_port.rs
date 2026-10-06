@@ -39,7 +39,9 @@ pub struct NetworkPortObject {
     mac_address: MacAddr,
     apdu_length: u32,
     bip: Option<BipPortConfig>,
-    /// The mode the published owner reported; NORMAL until one publishes.
+    /// The mode the last published owner reported; NORMAL until one
+    /// publishes. Like the bind, it stays after that owner stops, until a
+    /// new registration reserves the port.
     mode: bip_mode::LiveMode,
     binding: std::sync::Weak<()>,
 }

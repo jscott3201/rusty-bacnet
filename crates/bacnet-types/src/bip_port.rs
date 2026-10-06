@@ -2,7 +2,10 @@
 //!
 //! A B/IP port runs in NORMAL, FOREIGN or BBMD mode (Clause 12.56.21), and
 //! which Network Port properties exist depends on the mode (Table 12-71,
-//! footnotes 11 to 13). The transport layer owns that state and the object
+//! footnotes 11 to 13, and the informative Table 12-72). The footnotes tie
+//! the BBMD rows to a port able to act as a BBMD; this stack reads that as
+//! a port configured as one, since a port's mode can't change while it is
+//! registered. The transport layer owns that state and the object
 //! layer serves it, and neither crate depends on the other, so the contract
 //! between them lives here.
 //!

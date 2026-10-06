@@ -159,3 +159,26 @@ async fn a_foreign_device_transport_publishes_its_bbmd_and_lifetime() {
     assert!(!listed.contains(&P::BBMD_BROADCAST_DISTRIBUTION_TABLE));
     server.stop().await.unwrap();
 }
+
+/// A transport set up both as a BBMD and as a foreign device has no single
+/// mode, so the server refuses to start with a port registered on it, says
+/// why, and leaves the port free.
+#[tokio::test]
+async fn a_bbmd_that_also_registers_as_a_foreign_device_fails_to_start() {
+    let mut transport =
+        BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::new(127, 255, 255, 255));
+    transport.enable_bbmd(Vec::new());
+    transport.register_as_foreign_device(ForeignDeviceConfig {
+        bbmd_ip: Ipv4Addr::LOCALHOST,
+        bbmd_port: 47808,
+        ttl: 120,
+    });
+    let error = match BACnetServer::start(registered(), database(), transport).await {
+        Ok(_) => panic!("a BBMD that is also a foreign device must not register"),
+        Err(error) => error.to_string(),
+    };
+    assert!(
+        error.contains("a BBMD that also registers as a foreign device"),
+        "{error}"
+    );
+}

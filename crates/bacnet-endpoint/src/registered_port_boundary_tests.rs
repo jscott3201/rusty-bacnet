@@ -19,9 +19,10 @@ async fn registered_port_invalid_selection_profile_and_identity_fail_before_publ
         assert!(endpoint.start().await.is_err());
         assert!(endpoint.bip_local_address().is_none());
     }
-    // BBMD and foreign-device links register in their own mode (#939), so
-    // only a wildcard interface and an identity mismatch are refused here.
-    for mode in 2..4 {
+    // BBMD and foreign-device links register in their own mode (#939); a
+    // link configured as both, a wildcard interface and an identity mismatch
+    // are refused.
+    for mode in 1..4 {
         let id = if mode == 2 {
             crate::DeviceIdentity::new(785, 555)
                 .unwrap()
@@ -40,6 +41,14 @@ async fn registered_port_invalid_selection_profile_and_identity_fail_before_publ
             .database(db)
             .registered_network_port(port());
         builder = match mode {
+            1 => builder
+                .identity(id)
+                .enable_bbmd(vec![])
+                .register_as_foreign_device(bacnet_transport::bip::ForeignDeviceConfig {
+                    bbmd_ip: Ipv4Addr::LOCALHOST,
+                    bbmd_port: 47808,
+                    ttl: 60,
+                }),
             2 => builder.identity(id),
             _ => builder.identity(
                 crate::DeviceIdentity::new(785, 555)
@@ -49,7 +58,13 @@ async fn registered_port_invalid_selection_profile_and_identity_fail_before_publ
             ),
         };
         let mut endpoint = builder.build_session().unwrap();
-        assert!(endpoint.start().await.is_err());
+        let error = endpoint.start().await.unwrap_err().to_string();
+        if mode == 1 {
+            assert!(
+                error.contains("a BBMD that also registers as a foreign device"),
+                "{error}"
+            );
+        }
         assert!(endpoint.bip_local_address().is_none());
         assert!(endpoint
             .database
