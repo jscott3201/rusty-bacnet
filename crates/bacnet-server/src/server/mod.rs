@@ -178,12 +178,6 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
         Ok(self)
     }
 
-    /// Set the password required for ReinitializeDevice requests.
-    pub fn reinit_password(mut self, password: impl Into<String>) -> Self {
-        self.config.reinit_password = Some(password.into());
-        self
-    }
-
     /// Set the policy that authorizes inbound LifeSafetyOperation requests.
     pub fn life_safety_operation_authorizer<F>(mut self, authorizer: F) -> Self
     where
@@ -324,12 +318,6 @@ impl BipServerBuilder {
     pub fn device_binding(mut self, binding: DeviceBinding) -> Result<Self, Error> {
         register_configured_binding(&mut self.configured_device_bindings, binding)?;
         Ok(self)
-    }
-
-    /// Set the password required for ReinitializeDevice requests.
-    pub fn reinit_password(mut self, password: impl Into<String>) -> Self {
-        self.config.reinit_password = Some(password.into());
-        self
     }
 
     /// Set the policy that authorizes inbound LifeSafetyOperation requests.
@@ -537,7 +525,9 @@ impl BACnetServer<BipTransport> {
 
 mod clock;
 mod command_runs;
+mod reinitialize;
 mod time_sync_policy;
+pub use reinitialize::{ReinitializeContext, ReinitializeHandler};
 mod write_group;
 #[cfg(test)]
 pub(crate) use clock::clocked_test_database;

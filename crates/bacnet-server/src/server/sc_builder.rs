@@ -151,12 +151,6 @@ impl ScServerBuilder {
         self
     }
 
-    /// Set the password required for ReinitializeDevice requests.
-    pub fn reinit_password(mut self, password: impl Into<String>) -> Self {
-        self.config.reinit_password = Some(password.into());
-        self
-    }
-
     /// Set the policy that authorizes inbound LifeSafetyOperation requests.
     pub fn life_safety_operation_authorizer<F>(mut self, authorizer: F) -> Self
     where

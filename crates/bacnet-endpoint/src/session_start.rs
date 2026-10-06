@@ -5,7 +5,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         &mut self,
         receivers: bacnet_endpoint_core::endpoint_ingress::IngressReceivers,
         mut source_routes: Option<crate::source_audit::recipient::SourceRoutes>,
-        device_write_target: Option<ObjectIdentifier>,
+        device_target: Option<ObjectIdentifier>,
     ) -> Result<(), Error> {
         let egress = receivers.egress.clone();
         self.egress = Some(egress.clone());
@@ -69,13 +69,13 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                     responder =
                         responder.with_registered_port(oid, self.registered_port_lease.clone());
                 }
-                if let Some(device) = device_write_target {
-                    responder = responder.with_device_writes(
-                        device,
-                        self.device_write_authorizer
-                            .clone()
-                            .expect("validated authorizer"),
-                    );
+                if let (Some(device), Some(authorizer)) =
+                    (device_target, self.device_write_authorizer.clone())
+                {
+                    responder = responder.with_device_writes(device, authorizer);
+                }
+                if let Some(handler) = self.reinitialize.clone() {
+                    responder = responder.with_reinitialize(handler, self.reinit_password.clone());
                 }
                 let responder = Arc::new(responder);
                 let handle = ServerRoleHandle::new(
