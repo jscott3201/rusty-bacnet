@@ -228,7 +228,7 @@ async fn ethernet_number_full_server_and_client_wire() {
     for case in ["server-stop", "server-drop", "client-stop", "client-drop"] {
         let transport: AnyTransport<LoopbackSerial> =
             AnyTransport::Ethernet(EthernetTransport::new(&interface()));
-        assert!(transport.normal_bip_endpoint().is_none());
+        assert!(transport.bip_port().is_none());
         let is_server = case.starts_with("server");
         let (mut server, mut client) = if is_server {
             let mut db = ObjectDatabase::new();

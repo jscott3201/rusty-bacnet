@@ -479,7 +479,7 @@ async fn dbtn_delivers_local_subnet_broadcast_under_tight_fanout_budget() {
         local_mac: encode_bip_mac(Ipv4Addr::LOCALHOST.octets(), local_port),
         socket: bbmd_socket,
         npdu_tx,
-        bbmd: Some(Arc::new(Mutex::new(state))),
+        bbmd: Some(Arc::new(std::sync::Mutex::new(state))),
         broadcast_addr: Ipv4Addr::LOCALHOST,
         broadcast_port: local_broadcast_port,
         pending_bvlc_response: Arc::new(Mutex::new(None)),

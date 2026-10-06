@@ -286,7 +286,65 @@ async fn pending_in_flight_duplicate_discards_without_replay() {
     assert_eq!(executions.load(Ordering::Acquire), 1);
 }
 
-#[tokio::test]
+/// A completed operation is replayed until exactly the end of its retention
+/// window, which starts at the response and is measured on tokio's clock
+/// (#1556): a duplicate 1 ms before the end gets the original bytes with no
+/// second authorization, and one at the end is executed again. SILENCE has
+/// run by then, so the second execution finds nothing expected and answers
+/// with an Error.
+#[tokio::test(start_paused = true)]
+async fn a_completed_operation_replays_until_exactly_its_window_ends() {
+    let oid = point_oid(1);
+    let mut point = LifeSafetyPointObject::new(1, "point").unwrap();
+    point.set_operation_expected(LifeSafetyOperation::SILENCE);
+    let mut objects = ObjectDatabase::new();
+    objects.add(Box::new(point)).unwrap();
+    let db = Arc::new(RwLock::new(objects));
+    let authorizations = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&authorizations);
+    let config = ServerConfig {
+        life_safety_operation_authorizer: Some(Arc::new(move |_| {
+            observed.fetch_add(1, Ordering::AcqRel);
+            true
+        })),
+        ..ServerConfig::default()
+    };
+    let tracker = Arc::new(ConfirmedRequestTracker::default());
+    let send = || {
+        dispatch_raw_with_tracker(
+            Arc::clone(&db),
+            config.clone(),
+            &tracker,
+            MacAddr::from_slice(&[7, 7, 7]),
+            None,
+            0x51,
+            request(LifeSafetyOperation::SILENCE, Some(oid)),
+        )
+    };
+    let first = send().await.unwrap();
+    assert_simple_ack(decode_raw(&first));
+
+    let window = super::lso_replay::COMPLETED_RETENTION;
+    tokio::time::advance(window - Duration::from_millis(1)).await;
+    assert_eq!(send().await.unwrap(), first, "1 ms before the window ends");
+    assert_eq!(authorizations.load(Ordering::Acquire), 1);
+
+    tokio::time::advance(Duration::from_millis(1)).await;
+    assert_error(
+        decode_raw(&send().await.unwrap()),
+        ErrorClass::OBJECT,
+        ErrorCode::INVALID_OPERATION_IN_THIS_STATE,
+    );
+    assert_eq!(
+        authorizations.load(Ordering::Acquire),
+        2,
+        "at the window's end"
+    );
+}
+
+/// Paused: the replay window is measured on tokio's clock (#1556), so a
+/// runner stall between the sends can't close it.
+#[tokio::test(start_paused = true)]
 async fn routed_same_origin_replays_while_other_origins_execute_independently() {
     // (c): routing identity follows the canonical requester — same routed
     // origin via a different router replays; a different network, a direct
@@ -388,7 +446,9 @@ async fn routed_same_origin_replays_while_other_origins_execute_independently() 
 async fn invoke_reuse_with_changed_bytes_and_new_invoke_execute() {
     // (d): full key match required — a reused invoke ID with different bytes
     // and a new invoke ID with identical bytes both execute fresh; post-TTL
-    // expiry is covered by the cache unit tests with a deterministic clock.
+    // expiry is covered by the cache unit tests with a deterministic clock,
+    // and through dispatch by
+    // `a_completed_operation_replays_until_exactly_its_window_ends`.
     // After the first SILENCE applies (expectation clears to NONE), any fresh
     // execution of the same operation fails with INVALID_OPERATION, while a
     // replay would have returned the original SimpleACK — the Error proves a

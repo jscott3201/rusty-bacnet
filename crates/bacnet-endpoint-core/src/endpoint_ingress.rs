@@ -107,9 +107,10 @@ pub struct IngressReceivers {
     /// other links retain discard behavior.
     #[doc(hidden)]
     pub network_controls: Option<mpsc::Receiver<bacnet_network::layer::ReceivedNetworkControl>>,
-    /// Post-bind registration capability and independently supported port capacity.
+    /// Post-bind registration capability, with the B/IP mode, and
+    /// independently supported port capacity.
     #[doc(hidden)]
-    pub normal_bip_port: Option<(std::net::SocketAddrV4, u16)>,
+    pub bip_port: Option<(bacnet_transport::port::BipPort, u16)>,
     /// Actual announced IPv4 address and bound UDP port, when this is B/IP.
     #[doc(hidden)]
     pub bip_local_address: Option<std::net::SocketAddrV4>,
@@ -178,10 +179,10 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
         self.network.as_ref()?.transport().bip_broadcast_endpoint()
     }
 
-    /// Pre-bind NORMAL B/IP registration capability.
+    /// Pre-bind B/IP registration capability, with the configured mode.
     #[doc(hidden)]
-    pub fn normal_bip_endpoint(&self) -> Option<std::net::SocketAddrV4> {
-        self.network.as_ref()?.transport().normal_bip_endpoint()
+    pub fn bip_port(&self) -> Option<bacnet_transport::port::BipPort> {
+        self.network.as_ref()?.transport().bip_port()
     }
     /// Attach selected-object protection before starting the transport.
     #[doc(hidden)]
@@ -227,10 +228,10 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
             .supports_local_nonrouter_number_controls()
             .then_some(controls)
             .flatten();
-        let normal_bip_port = network
+        let bip_port = network
             .transport()
-            .normal_bip_endpoint()
-            .map(|address| (address, network.transport().local_receive_apdu_capacity()));
+            .bip_port()
+            .map(|port| (port, network.transport().local_receive_apdu_capacity()));
         let bip_broadcast_endpoint = network.transport().bip_broadcast_endpoint();
         let bip_local_address = bip_broadcast_endpoint.and_then(|_| {
             bacnet_transport::bvll::decode_bip_mac(network.local_mac())
@@ -275,7 +276,7 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
 
         Ok(IngressReceivers {
             network_controls: controls,
-            normal_bip_port,
+            bip_port,
             bip_local_address,
             bip_broadcast_endpoint,
             inbound_requests,

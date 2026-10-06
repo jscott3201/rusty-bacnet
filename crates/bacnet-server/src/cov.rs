@@ -11,6 +11,8 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::MacAddr;
 
+use crate::runtime_clock;
+
 mod identity;
 pub use identity::*;
 pub(crate) mod active;
@@ -64,7 +66,9 @@ pub struct CovSubscription {
     /// Notification form. Mutable renewal data for ordinary/Single subscriptions;
     /// part of the canonical identity for Multiple references.
     pub issue_confirmed_notifications: bool,
-    /// When this subscription expires (None = infinite lifetime).
+    /// When this subscription expires (None = infinite lifetime), on tokio's
+    /// clock: `tokio::time::Instant::now().into_std()` plus the lifetime,
+    /// which is `Instant::now()` plus it unless a test has paused the clock.
     pub expires_at: Option<Instant>,
     /// Last delivered bounded observation, including specialized command fields.
     pub last_notified_observation: Option<CovObservation>,
@@ -301,7 +305,7 @@ impl CovSubscriptionTable {
 
     /// Remove all expired subscriptions. Returns the number removed.
     pub fn purge_expired(&mut self) -> usize {
-        let now = Instant::now();
+        let now = runtime_clock::now();
         let mut purged_count = 0;
         let mut to_remove = Vec::new();
         for (k, sub) in &self.subs {
@@ -324,10 +328,10 @@ impl CovSubscriptionTable {
     }
 
     /// Test fixture: let every subscription's lifetime run out now, without
-    /// waiting on the wall clock that lifetimes use.
+    /// waiting for the clock that lifetimes use to reach it.
     #[cfg(test)]
     pub(crate) fn expire_all_for_test(&mut self) {
-        let now = Instant::now();
+        let now = runtime_clock::now();
         for entry in self.subs.values_mut() {
             entry.subscription.expires_at = Some(now);
         }
@@ -351,7 +355,7 @@ impl CovSubscriptionTable {
         &self,
         property: PropertyIdentifier,
     ) -> HashMap<ObjectIdentifier, f64> {
-        let now = Instant::now();
+        let now = runtime_clock::now();
         let mut finest = HashMap::new();
         for sub in self.subs.values() {
             if sub.monitored_property != Some(property)
@@ -377,7 +381,7 @@ impl CovSubscriptionTable {
 
     /// Whether a snapshot still owns a live entry in this table.
     pub fn is_current(&self, snapshot: &CovSubscriptionSnapshot) -> bool {
-        self.remaining_lifetime(snapshot, Instant::now())
+        self.remaining_lifetime(snapshot, runtime_clock::now())
             .and_then(CovTimeRemaining::wire_seconds)
             .is_some()
     }

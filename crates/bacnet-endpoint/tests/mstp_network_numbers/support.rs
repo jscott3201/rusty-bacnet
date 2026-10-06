@@ -109,8 +109,8 @@ impl TransportPort for GatedTransport {
     fn supports_local_nonrouter_number_controls(&self) -> bool {
         self.inner.supports_local_nonrouter_number_controls()
     }
-    fn normal_bip_endpoint(&self) -> Option<std::net::SocketAddrV4> {
-        self.inner.normal_bip_endpoint()
+    fn bip_port(&self) -> Option<bacnet_transport::port::BipPort> {
+        self.inner.bip_port()
     }
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
         self.inner.start().await
@@ -302,10 +302,7 @@ pub async fn transport(mode: MstpExecutionMode, gates: Arc<Gates>) -> (GatedTran
     let inner = AnyTransport::Mstp(transport);
     assert_eq!(inner.local_receive_apdu_capacity(), 480);
     assert_eq!(inner.egress_apdu_limit(), 480);
-    assert!(
-        inner.normal_bip_endpoint().is_none(),
-        "no configured B/IP authority"
-    );
+    assert!(inner.bip_port().is_none(), "no configured B/IP authority");
     let serial = Arc::new(peer);
     let drain_serial = serial.clone();
     let drain = tokio::spawn(async move {

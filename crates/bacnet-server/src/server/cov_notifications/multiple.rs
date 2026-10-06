@@ -209,7 +209,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     );
                     return;
                 }
-                let now = Instant::now();
+                let now = runtime_clock::now();
                 let store = table.timed().clone();
                 // An unconfirmed context sends one report at a time, so no later
                 // report overtakes the parts of this one (#986, #1038); a

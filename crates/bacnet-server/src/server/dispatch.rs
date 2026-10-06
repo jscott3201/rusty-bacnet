@@ -279,7 +279,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
             }
             Apdu::UnconfirmedRequest(req) => {
-                let now = limiter_clock::now();
+                let now = runtime_clock::now();
                 if req.service_choice == UnconfirmedServiceChoice::WHO_IS {
                     match discovery_limiter.pre_check_who_is(&req.service_request, &received, now) {
                         PreCheckDecision::Admit => {}

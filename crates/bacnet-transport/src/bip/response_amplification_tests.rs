@@ -348,7 +348,7 @@ async fn test_bbmd_wire_read_fdt_throttling() {
 
     // Populate the running BBMD's FDT with 128 entries
     if let Some(bbmd_arc) = bbmd_transport.bbmd_state() {
-        let mut state = bbmd_arc.lock().await;
+        let mut state = bbmd_arc.lock().unwrap();
         for i in 0..BbmdState::MAX_FDT_ENTRIES {
             let ip = [10, 0, (i / 256) as u8, (i % 256) as u8];
             state.register_foreign_device(ip, 0xBAC0 + (i as u16), 300);

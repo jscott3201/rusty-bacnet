@@ -1,6 +1,6 @@
 //! The per-source allowance on received notifications logged (#1346), on
-//! hand-set instants: offsets from one reading of the limiters' clock
-//! ([`limiter_clock::now`]), the one the receive path reads (#1550).
+//! hand-set instants: offsets from one reading of the server's timer clock
+//! ([`runtime_clock::now`]), the one the receive path reads (#1550).
 use super::*;
 
 fn peer(n: u32) -> CanonicalPeer {
@@ -15,7 +15,7 @@ fn taken(log: &ReceivedEventLog, source: &CanonicalPeer, now: Instant, count: u3
 #[test]
 fn each_source_gets_its_rate_in_each_window() {
     let log = ReceivedEventLog::default();
-    let start = limiter_clock::now();
+    let start = runtime_clock::now();
     assert_eq!(taken(&log, &peer(1), start, 8), RECEIVED_EVENT_LOG_RATE);
     // Another source's allowance is its own.
     assert_eq!(taken(&log, &peer(2), start, 8), RECEIVED_EVENT_LOG_RATE);
@@ -35,7 +35,7 @@ fn each_source_gets_its_rate_in_each_window() {
 #[test]
 fn a_flood_of_sources_shares_one_allowance_past_the_table() {
     let log = ReceivedEventLog::default();
-    let now = limiter_clock::now();
+    let now = runtime_clock::now();
     let tracked = RECEIVED_EVENT_LOG_SOURCES as u32;
     let mut total = 0;
     for n in 0..tracked {
@@ -61,7 +61,7 @@ fn a_flood_of_sources_shares_one_allowance_past_the_table() {
 #[test]
 fn a_new_source_takes_the_place_of_one_silent_for_a_window() {
     let log = ReceivedEventLog::default();
-    let start = limiter_clock::now();
+    let start = runtime_clock::now();
     let tracked = RECEIVED_EVENT_LOG_SOURCES as u32;
     for n in 0..tracked {
         assert_eq!(taken(&log, &peer(n), start, 1), 1);
@@ -84,7 +84,7 @@ fn a_new_source_takes_the_place_of_one_silent_for_a_window() {
 #[test]
 fn the_ceiling_holds_window_after_window() {
     let log = ReceivedEventLog::default();
-    let start = limiter_clock::now();
+    let start = runtime_clock::now();
     let ceiling = (RECEIVED_EVENT_LOG_SOURCES as u32 + 1) * RECEIVED_EVENT_LOG_RATE;
     let mut next = 0;
     for window in 0..5 {
@@ -106,7 +106,7 @@ fn the_ceiling_holds_window_after_window() {
 #[test]
 fn a_source_that_sent_late_in_its_window_keeps_its_place() {
     let log = ReceivedEventLog::default();
-    let start = limiter_clock::now();
+    let start = runtime_clock::now();
     let late = start + Duration::from_millis(900);
     let tracked = RECEIVED_EVENT_LOG_SOURCES as u32;
     for n in 0..tracked {

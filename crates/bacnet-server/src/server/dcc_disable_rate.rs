@@ -1,4 +1,4 @@
-use super::{limiter_clock, BipServerBuilder, ServerBuilder, TransportPort};
+use super::{runtime_clock, BipServerBuilder, ServerBuilder, TransportPort};
 use bacnet_types::error::Error;
 use std::sync::Mutex;
 use std::time::Instant;
@@ -60,7 +60,7 @@ impl Bucket {
             maximum,
             state: Mutex::new(State {
                 credit: maximum,
-                last: limiter_clock::now(),
+                last: runtime_clock::now(),
             }),
         })
     }
@@ -68,7 +68,7 @@ impl Bucket {
     pub(super) fn admit(&self) -> bool {
         let mut state = self.state.lock().unwrap();
         // Read time under the lock: concurrent callers cannot move last backwards.
-        let now = limiter_clock::now();
+        let now = runtime_clock::now();
         state.credit = state
             .credit
             .saturating_add(now.saturating_duration_since(state.last).as_nanos())

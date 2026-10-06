@@ -61,7 +61,7 @@ async fn forwarded_npdu_from_bdt_peer_uses_originating_source_mac() {
         local_mac: encode_bip_mac(Ipv4Addr::LOCALHOST.octets(), local_port),
         socket,
         npdu_tx,
-        bbmd: Some(Arc::new(Mutex::new(state))),
+        bbmd: Some(Arc::new(std::sync::Mutex::new(state))),
         broadcast_addr: Ipv4Addr::LOCALHOST,
         broadcast_port: local_broadcast_port,
         pending_bvlc_response: Arc::new(Mutex::new(None)),
@@ -151,7 +151,7 @@ async fn forwarded_npdu_from_non_bdt_sender_is_rejected_without_delivery() {
         local_mac: encode_bip_mac(Ipv4Addr::LOCALHOST.octets(), local_port),
         socket: bbmd_socket,
         npdu_tx,
-        bbmd: Some(Arc::new(Mutex::new(state))),
+        bbmd: Some(Arc::new(std::sync::Mutex::new(state))),
         broadcast_addr: Ipv4Addr::LOCALHOST,
         broadcast_port: local_broadcast_port,
         pending_bvlc_response: Arc::new(Mutex::new(None)),
@@ -230,7 +230,7 @@ async fn forwarded_npdu_from_directed_broadcast_peer_skips_local_rebroadcast() {
         local_mac: encode_bip_mac(Ipv4Addr::LOCALHOST.octets(), local_port),
         socket: bbmd_socket,
         npdu_tx,
-        bbmd: Some(Arc::new(Mutex::new(state))),
+        bbmd: Some(Arc::new(std::sync::Mutex::new(state))),
         broadcast_addr: Ipv4Addr::LOCALHOST,
         broadcast_port: local_broadcast_port,
         pending_bvlc_response: Arc::new(Mutex::new(None)),
@@ -325,7 +325,7 @@ async fn forwarded_npdu_fdt_fanout_respects_budget_and_increments_counter() {
         );
     }
 
-    let bbmd_state = Arc::new(Mutex::new(state));
+    let bbmd_state = Arc::new(std::sync::Mutex::new(state));
     let ctx = RecvContext {
         local_mac: encode_bip_mac(Ipv4Addr::LOCALHOST.octets(), local_port),
         socket: bbmd_socket,
@@ -365,7 +365,7 @@ async fn forwarded_npdu_fdt_fanout_respects_budget_and_increments_counter() {
     assert_no_bvll(&fd_sockets[2], "third foreign device").await;
 
     // Counter was incremented
-    let counters = bbmd_state.lock().await.fdt_counters();
+    let counters = bbmd_state.lock().unwrap().fdt_counters();
     assert_eq!(counters.fanout_budget_reached, 1);
 }
 
@@ -410,7 +410,7 @@ async fn forwarded_npdu_bbmd_self_sender_is_ignored_before_delivery_and_fanout()
         local_mac: encode_bip_mac(self_sender.0, local_port),
         socket,
         npdu_tx,
-        bbmd: Some(Arc::new(Mutex::new(state))),
+        bbmd: Some(Arc::new(std::sync::Mutex::new(state))),
         broadcast_addr: Ipv4Addr::LOCALHOST,
         broadcast_port: local_sink.local_addr().unwrap().port(),
         pending_bvlc_response: Arc::new(Mutex::new(None)),
@@ -516,7 +516,7 @@ async fn forwarded_npdu_arriving_by_broadcast_is_not_rebroadcast_locally() {
         local_mac: encode_bip_mac(Ipv4Addr::LOCALHOST.octets(), local_port),
         socket,
         npdu_tx,
-        bbmd: Some(Arc::new(Mutex::new(state))),
+        bbmd: Some(Arc::new(std::sync::Mutex::new(state))),
         broadcast_addr: Ipv4Addr::LOCALHOST,
         broadcast_port: local_sink.local_addr().unwrap().port(),
         pending_bvlc_response: Arc::new(Mutex::new(None)),

@@ -578,7 +578,7 @@ pub(super) fn timed_reference(
 fn empty_admissions_of_unknown_contexts_leave_no_deadline_state() {
     let mut table = crate::cov::CovSubscriptionTable::new();
     let route = crate::cov::SubscriberEndpoint::new(&[10, 0, 0, 1, 0xBA, 0xC0], None);
-    let expires = std::time::Instant::now() + std::time::Duration::from_secs(300);
+    let expires = crate::runtime_clock::now() + std::time::Duration::from_secs(300);
     // A peer varying process and form across empty-list requests.
     for process_id in 0..64 {
         for confirmed in [false, true] {
@@ -597,7 +597,7 @@ fn empty_admissions_of_unknown_contexts_leave_no_deadline_state() {
 
 #[tokio::test(start_paused = true)]
 async fn cancel_and_expiry_take_a_contexts_deadline_state_along() {
-    let far = std::time::Instant::now() + std::time::Duration::from_secs(300);
+    let far = crate::runtime_clock::now() + std::time::Duration::from_secs(300);
     for expire in [false, true] {
         let mut table = crate::cov::CovSubscriptionTable::new();
         let sub = table.admit_for_test(timed_reference(1, far), 10).unwrap();

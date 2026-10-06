@@ -11,8 +11,10 @@ use bacnet_types::error::Error;
 use bytes::{BufMut, BytesMut};
 
 mod policy;
+mod tables;
 use policy::ForeignDeviceRateTracker;
 pub use policy::{FdtCounters, ForeignDevicePolicy};
+pub(crate) use tables::{lock, LiveTables};
 
 /// BDT entry wire format size: IP(4) + port(2) + mask(4) = 10 bytes.
 pub const BDT_ENTRY_SIZE: usize = 10;

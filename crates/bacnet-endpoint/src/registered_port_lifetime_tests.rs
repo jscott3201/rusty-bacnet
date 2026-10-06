@@ -63,11 +63,11 @@ impl TransportPort for Controlled {
     fn supports_local_nonrouter_number_controls(&self) -> bool {
         self.bip.supports_local_nonrouter_number_controls()
     }
-    fn normal_bip_endpoint(&self) -> Option<SocketAddrV4> {
+    fn bip_port(&self) -> Option<bacnet_transport::port::BipPort> {
         if self.bound && self.control.mismatch.load(Ordering::SeqCst) {
             None
         } else {
-            self.bip.normal_bip_endpoint()
+            self.bip.bip_port()
         }
     }
     fn retain_network_port_lease_internal(&mut self, lease: Arc<()>) -> Result<(), Error> {

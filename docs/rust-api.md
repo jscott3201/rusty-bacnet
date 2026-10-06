@@ -4319,8 +4319,8 @@ let drops = sc_client.transport().npdu_drop_counts();
 // B/IP (bip_builder): counter snapshots to poll, and the BBMD state if any.
 let management = bip_client.transport().management_counters();
 let fanout = bip_client.transport().fanout_counters();
-let fdt = bip_client.transport().fdt_counters().await; // None unless a BBMD
-let bbmd = bip_client.transport().bbmd_state().cloned(); // Option<Arc<Mutex<BbmdState>>>
+let fdt = bip_client.transport().fdt_counters(); // None unless a BBMD
+let bbmd = bip_client.transport().bbmd_state().cloned(); // Option<Arc<std::sync::Mutex<BbmdState>>>
 
 // MS/TP: the same counts-only handle you can take before handing the transport over.
 let diagnostics = mstp_client.transport().diagnostics();
@@ -4330,8 +4330,10 @@ Reading state and diagnostics is what the borrow supports. Two things go around
 the client and are not supported while it runs: sending through the transport
 (`send_unicast`, `send_broadcast`), which the client's transaction state
 machine never sees, so a hand-built confirmed request can reuse an in-flight
-invoke ID; and holding the `bbmd_state()` lock across an await, which deadlocks
-against the client's next broadcast. The live MS/TP master node and SC
+invoke ID; and holding the `bbmd_state()` lock across an await. That lock is
+a synchronous `std::sync::Mutex` the receive loop and the client's broadcasts
+take for short critical sections, so holding it stalls the transport or
+deadlocks. Lock, copy and release. The live MS/TP master node and SC
 connection are not public.
 
 The management, FDT and fanout counters count what this transport does as a
@@ -6597,7 +6599,8 @@ let client = BACnetClient::generic_builder()
 ### Configured Network Port snapshots
 
 `NetworkPortObject::new_bip(instance, name, BipPortConfig)` constructs a complete,
-unbound flat IPV4/NORMAL application configuration. Instance is the declared local
+unbound flat IPV4 application configuration, which reads as NORMAL until a
+registered owner publishes another B/IP mode (see below). Instance is the declared local
 Port ID (local policy: 1–255), separate from UDP port zero. `BipPortConfig` carries
 fixed four-octet IP/mask/gateway values, a nonempty DNS array, network number
 0–65534, and APDU_Length399 >=50. Defaults are unknown zero addresses/mask/gateway,
@@ -6617,7 +6620,17 @@ Live transport association, post-bind synchronization and activation are separat
 
 ### Registered B/IP Network Port
 
-This receiving-port association remains a bounded single NORMAL B/IP profile. Local Network Number behavior is described below; complete Network Port conformance, BBMD/foreign-device registration authority and multiport routing remain outside this registration contract.
+This receiving-port association is a bounded single B/IP profile, in whichever B/IP mode the owned transport runs (#939). Local Network Number behavior is described below; complete Network Port conformance and multiport routing remain outside this registration contract.
+
+A transport reports its registration capability through `TransportPort::bip_port()`, which returns a `bacnet_transport::port::BipPort`: the endpoint (configured before start, announced after) and a `bacnet_types::bip_port::BipPortMode`. Startup publishes that mode with the bind, and the port's BACnet_IP_Mode reads it: NORMAL, FOREIGN or BBMD. Property_List and the property metadata follow the mode (Clause 12.56, Table 12-71 footnotes 11 to 13):
+
+- **FOREIGN** adds FD_BBMD_Address (a `BACnetHostNPort`) and FD_Subscription_Lifetime, from the transport's `ForeignDeviceConfig`, which can't change while the server owns it.
+- **BBMD** adds BBMD_Broadcast_Distribution_Table and BBMD_Foreign_Device_Table (BACnetLISTs of `BACnetBDTEntry` and `BACnetFDTEntry`) and BBMD_Accept_FD_Registrations. The object holds the transport's own BBMD state through the `bacnet_types::bip_port::BbmdTables` view and reads it on every property read, so a BDT change, a new or expired registration, or a policy change made through `BipTransport::bbmd_state()` shows on the next read. FDT entries carry each registrant's time to live and the seconds it has left, grace period included; an entry past its time no longer appears even before the purge task removes it. The BDT includes the BBMD's own row.
+- **NORMAL** has none of them: reading one answers UNKNOWN_PROPERTY.
+
+All five are read-only for now, and the PICS draft lists them as not writable. Clauses 12.56.34, 12.56.35, 12.56.37 and 12.56.38 make the BDT, Accept_FD_Registrations and both FD properties writable, with a write setting Changes_Pending until ReinitializeDevice activates it; until that activation path exists, a write answers WRITE_ACCESS_DENIED, as every configuration row of this object does. A transport configured both as a BBMD and as a foreign device has no single mode, and starting with a port registered on it fails with an error that says so. After the owner stops, the port keeps reporting the last published mode, as it keeps the last published bind; a BBMD's rows then show the stopped transport's tables as they were left, until a new registration. NAT traversal (BACnet_IP_NAT_Traversal, BACnet_IP_Global_Address) and B/IP multicast (BACnet_IP_Multicast_Address) are not modeled yet.
+
+The BBMD state lock is a synchronous `std::sync::Mutex` (it was a Tokio mutex before #939): the transport and the Network Port view hold it only for short, synchronous critical sections, so the object can read it under the database read lock without awaiting. Lock order stays ObjectDatabase, then the BBMD state; the transport never takes the database.
 
 ### Local Network Number controls
 
@@ -6633,11 +6646,11 @@ Standalone clients start UNKNOWN on transports that opt into local nonrouter Num
 
 The pre-1.0 Rust helper moved directly from `bacnet_objects::network_port::NetworkNumber` to `bacnet_types::network_number::NetworkNumber`, with no compatibility alias. Its default is UNKNOWN; `configured(number)` returns `None` for reserved 65535. Pure observation reports configured conflicts to the caller for logging. Shared nonrouter packet parsing and reply encoding live in `bacnet_network::network_number`; registered database authority remains in the server/object adapter.
 
-Transport wrappers must delegate `TransportPort::supports_local_nonrouter_number_controls` when preserving these semantics; the default is false. This capability is independent of NORMAL B/IP registration and conveys no configured-number or control-origin authority.
+Transport wrappers must delegate `TransportPort::supports_local_nonrouter_number_controls` when preserving these semantics; the default is false. This capability is independent of B/IP registration and conveys no configured-number or control-origin authority.
 
 SC starts UNKNOWN with no configured SC Network Port API; unrelated configured objects provide no authority. SC logical broadcast is the BVLC broadcast destination VMAC. A direct unicast What-Is is valid, but its Number reply uses the Hub broadcast path, never the saved original-direct APDU response capability. Hub-relayed controls do not identify an originating TLS leaf; SC control-origin authorization remains separate (#518). A message from a direct-connection peer is never a logical broadcast, so it can ask but cannot teach.
 
-B/IP BBMD and configured foreign modes start UNKNOWN with no registered Network Port authority. BBMD mode learns admitted Original-Broadcast, BDT Forwarded-NPDU and registered foreign-device DBTN announcements; its own Number reply is a local Original-Broadcast, which it also forwards as a Forwarded-NPDU to its BDT peers and registered foreign devices like its other broadcasts (#937). It rejects an exact self UDP source tuple before forwarded delivery or fanout, preserving the self BDT row and admitted peers on the same IP at different ports. Configured foreign mode accepts structurally valid Forwarded-NPDU from alternate UDP senders under its existing compatibility policy and answers by DBTN to its configured BBMD. Logical broadcast conveys no authenticated origin. Registration rejection does not suppress DBTN attempts; the existing periodic registration loop continues. Shared-endpoint Number wire tests cover BBMD ServerOnly admission and Original-Broadcast replies, foreign ClientOnly alternate forwarding and DBTN through registration rejection/retry, and Both requester/responder progress during live controls plus stop/drop socket release. Linux loopback supplies the independent BBMD broadcast capture; foreign direct capture also runs on macOS. Existing controlled endpoint tests separately prove held-send cancellation and resumed stop. Broader shared-endpoint BBMD/foreign behavior remains experimental; these modes add no configured Network Port authority.
+B/IP BBMD and configured foreign modes start UNKNOWN unless a Network Port is registered for them, which then supplies configured authority as in NORMAL mode. BBMD mode learns admitted Original-Broadcast, BDT Forwarded-NPDU and registered foreign-device DBTN announcements; its own Number reply is a local Original-Broadcast, which it also forwards as a Forwarded-NPDU to its BDT peers and registered foreign devices like its other broadcasts (#937). It rejects an exact self UDP source tuple before forwarded delivery or fanout, preserving the self BDT row and admitted peers on the same IP at different ports. Configured foreign mode accepts structurally valid Forwarded-NPDU from alternate UDP senders under its existing compatibility policy and answers by DBTN to its configured BBMD. Logical broadcast conveys no authenticated origin. Registration rejection does not suppress DBTN attempts; the existing periodic registration loop continues. Shared-endpoint Number wire tests cover BBMD ServerOnly admission and Original-Broadcast replies, foreign ClientOnly alternate forwarding and DBTN through registration rejection/retry, and Both requester/responder progress during live controls plus stop/drop socket release. Linux loopback supplies the independent BBMD broadcast capture; foreign direct capture also runs on macOS. Existing controlled endpoint tests separately prove held-send cancellation and resumed stop. Broader shared-endpoint BBMD/foreign behavior remains experimental; only a registered Network Port adds configured authority in these modes.
 
 B/IPv6 starts UNKNOWN with no configured IPv6 Network Port authority. Normal mode learns admitted OriginalBroadcast announcements and answers by multicast OriginalBroadcast on the selected link. In the Rust configured foreign-device mode, an admitted Forwarded-NPDU from the configured BBMD is a logical broadcast despite its unicast UDP hop; replies use DBTN to that BBMD. A different BBMD endpoint cannot teach. Unicast NNI, routed controls and malformed payloads remain ineligible. Existing selected-link, source-address, destination/interface and VMAC checks still apply. There is no new IPv6 endpoint builder, number setter or Python foreign-device API.
 
@@ -6654,17 +6667,19 @@ A configured object becomes the receiving port only through explicit selection:
 `ServerConfig.registered_network_port = Some(oid)`, the server builder's
 `.registered_network_port(oid)`, or the B/IP endpoint builder's method of the same
 name (`EndpointSession::with_registered_network_port` for direct composition).
-The selected built-in IPV4/NORMAL object must already exist with instance 1–255,
+The selected built-in IPV4 object must already exist with instance 1–255,
 matching concrete unicast interface and configured UDP port. Port zero is valid
-before bind. BBMD, foreign-device, wildcard-interface and non-B/IP registration
-are rejected before publication; declarations alone remain unregistered.
+before bind. A NORMAL, foreign-device or BBMD transport may register; a
+wildcard interface, a BBMD that also registers as a foreign device, and
+non-B/IP links are rejected before publication; declarations alone remain
+unregistered.
 Custom objects and wrappers cannot impersonate a selected built-in: the database
 uses crate-authorized concrete storage access before configuration callbacks.
 Borrowed Device read views remain supported; no public mutable downcast is exposed.
 
-Startup validates the actual NORMAL capability again after bind and reconciles
+Startup validates the actual B/IP capability again after bind and reconciles
 only the selected object and optional identity entry with the announced IP, actual
-UDP port and derived MAC. Port `APDU_Length` (399) is independently supported at 1476;
+UDP port, derived MAC and B/IP mode; a BBMD must have created its tables by then. Port `APDU_Length` (399) is independently supported at 1476;
 Device `Max_APDU_Length_Accepted` (62) may remain 480. Mask, gateway and DNS remain explicit configuration, with
 no NIC discovery or fabricated subnet. The obsolete identity `sync_bip_bind`
 setter is removed. Configuration/activation writes remain denied, and registered
@@ -6678,8 +6693,9 @@ Unregistered responders cannot inherit another owner's association from a shared
 database. Mixed RPM succeeds with inline UNKNOWN_OBJECT for an unavailable port
 when another property is accessible. Successful target Audit uses the same
 concrete object and preserves per-target records. Endpoint responder RPM remains
-unsupported. Same-device multiport/router generations, rebind, pending activation,
-BBMD/foreign/DHCP and full Network Port conformance remain outside this profile.
+unsupported. Same-device multiport/router generations, rebind, pending activation
+(and with it writes to the BBMD and foreign-device rows), NAT traversal, B/IP
+multicast, DHCP and full Network Port conformance remain outside this profile.
 
 `EndpointSession::bip_local_address()` returns the active post-bind announced
 address, including the actual ephemeral UDP port, for registered and unregistered

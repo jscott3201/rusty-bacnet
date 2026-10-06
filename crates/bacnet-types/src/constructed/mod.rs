@@ -47,6 +47,8 @@ pub use log::{
 };
 mod name_value;
 pub use name_value::{BACnetNameValue, TagValue};
+mod network_port;
+pub use network_port::{BACnetBDTEntry, BACnetFDTEntry, BACnetHostAddress, BACnetHostNPort};
 mod property_access;
 pub use property_access::{AccessResult, BACnetPropertyAccessResult};
 mod property_value;
