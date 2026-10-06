@@ -4,7 +4,7 @@ use crate::device_view::{DeviceExecution, DeviceReadContext};
 use bacnet_services::read_property::ReadPropertyRequest;
 use bacnet_types::error::ErrorDetail;
 
-/// ReadProperty under the narrow responder's actual RP[/WP][/ReinitializeDevice] execution
+/// ReadProperty under the narrow responder's actual RP[/WP/ReinitializeDevice] execution
 /// profile, within the responder's configured read work limit.
 pub(super) async fn read_property_response(
     db: &RwLock<ObjectDatabase>,
