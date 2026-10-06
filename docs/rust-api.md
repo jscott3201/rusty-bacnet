@@ -5545,7 +5545,8 @@ application that keeps a clone of `server.database()` releases it with
 `bacnet_server::server::drop_database_off_runtime`, which drops the database
 on the blocking pool should that clone be the last handle; it usually isn't,
 and the call just lets go. It is `stop().await`, not this, that waits for
-storage.
+storage. An endpoint session's own holders let go the same way; see
+[Endpoint shutdown and the object database](#endpoint-shutdown-and-the-object-database).
 The target-Audit drain retains the ingress needed for acknowledgments until its
 existing completion/deadline boundary. Cancelling a stop waiter retains cleanup:
 call `stop()` again to join it. Transport cleanup errors retain the owner for retry;
@@ -6637,6 +6638,18 @@ pre-start state. Local Number controls have the bounded wire coverage above;
 broader BBMD/foreign administration remains experimental.
 BIPv6/Ethernet have no endpoint builder — keep the standalone path there and
 do not expect identical administration across data links.
+
+### Endpoint shutdown and the object database
+
+An `EndpointSession` keeps its object database through `stop()` and lets go
+of it when it drops. Every endpoint holder of the database lets go through
+`bacnet_server::server::drop_database_off_runtime` (#1561): the session, the
+server role's responder (which a cloned `ServerRoleHandle` or the dispatch task
+may hold last), the source Audit runtime (which an audited request in flight
+may hold last) and the session's Number task. So whichever goes last, in async
+code a durable object's final saves run on Tokio's blocking pool, not on a
+runtime worker. Nothing waits for those saves: storage may still change after
+the drop returns.
 
 
 ### Authorized endpoint Device writes

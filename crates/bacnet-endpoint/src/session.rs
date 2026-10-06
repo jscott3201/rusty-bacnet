@@ -22,6 +22,14 @@
 //! the session drops, [`Weak`](std::sync::Weak) upgrade fails and every role
 //! call reports shutdown.
 //!
+//! The session keeps its object database through `stop()` and lets go of it
+//! when it drops. Every endpoint holder of the database (the session, the
+//! server role's responder, a cloned server role handle, the source Audit
+//! runtime and the session's tasks) lets go through
+//! [`drop_database_off_runtime`], so whichever goes last, in async code the
+//! objects and any durable saves they wait for drop on Tokio's blocking pool,
+//! not on a runtime worker (#1561).
+//!
 //! ```compile_fail,E0596
 //! // Lifecycle is owner-exclusive: `stop` takes `&mut self`, so a shared
 //! // borrow cannot drive shutdown.
@@ -81,7 +89,7 @@ use crate::roles::{
 };
 use bacnet_server::server::{
     __endpoint_EndpointResponder as EndpointResponder,
-    __endpoint_NotificationTransactions as NotificationTransactions,
+    __endpoint_NotificationTransactions as NotificationTransactions, drop_database_off_runtime,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -797,6 +805,13 @@ impl<T: TransportPort + 'static> Drop for EndpointSession<T> {
         }
         if let Some(task) = self.dispatch_task.take() {
             task.abort();
+        }
+        // The session's own handle, kept through stop(), goes off the
+        // runtime if it is the last (#1561). Every other endpoint holder
+        // (responder, source Audit, the aborted tasks' handles) lets go the
+        // same way when it drops, whichever goes last.
+        if let Some(db) = self.database.take() {
+            drop(drop_database_off_runtime(db));
         }
     }
 }

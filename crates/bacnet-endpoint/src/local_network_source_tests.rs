@@ -195,3 +195,6 @@ async fn source_routes_refuse_another_network_and_an_unknown_number() {
 
 #[path = "local_network_recipient_tests.rs"]
 mod recipient;
+
+#[path = "durable_drop_tests.rs"]
+mod durable_drop;

@@ -41,7 +41,9 @@ mod delivery;
 mod failures;
 
 pub(crate) struct SourceAudit {
-    db: Arc<RwLock<ObjectDatabase>>,
+    /// Released off the runtime by whichever caller, worker or session
+    /// drops the source last (#1561).
+    db: crate::held_database::HeldDatabase,
     selected: ObjectIdentifier,
     device: ObjectIdentifier,
     runtime: Weak<SourceRecipient>,
@@ -95,7 +97,7 @@ impl SourceAudit {
             failures: Arc::clone(&failures),
         });
         let source = Arc::new(Self {
-            db: Arc::clone(&db),
+            db: crate::held_database::HeldDatabase::new(Arc::clone(&db)),
             selected,
             device,
             runtime: Arc::downgrade(&runtime),

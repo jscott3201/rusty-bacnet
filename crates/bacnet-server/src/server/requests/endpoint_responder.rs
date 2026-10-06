@@ -80,6 +80,18 @@ pub struct EndpointResponder {
     read_work_limit: usize,
 }
 
+impl Drop for EndpointResponder {
+    /// The responder's handle on the database goes through
+    /// [`drop_database_off_runtime`](crate::server::drop_database_off_runtime):
+    /// whichever role handle or dispatch task drops the responder last, in
+    /// async code it never drops the objects on a runtime worker (#1561).
+    fn drop(&mut self) {
+        drop(crate::server::drop_database_off_runtime(std::mem::take(
+            &mut self.db,
+        )));
+    }
+}
+
 impl EndpointResponder {
     #[doc(hidden)]
     pub fn new(db: Arc<RwLock<ObjectDatabase>>, egress: EndpointEgress) -> Self {
