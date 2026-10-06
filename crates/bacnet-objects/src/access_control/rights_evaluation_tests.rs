@@ -14,6 +14,7 @@ use crate::access_control::{
     AccessCredentialObject, AccessPointObject, AccessRightsObject, AccessZoneObject,
 };
 use crate::device::{DeviceConfig, DeviceObject};
+use crate::schedule::ScheduleObject;
 
 /// The Device the test databases speak for.
 pub(super) const DEVICE: u32 = 100;
@@ -116,6 +117,14 @@ pub(super) fn database() -> ObjectDatabase {
     lobby.set_exit_points([point(2)]).unwrap();
     db.add(Box::new(lobby)).unwrap();
     db
+}
+
+/// Add Schedule 50, its Present_Value FALSE, and return a reference to that
+/// value: a time range read here and found FALSE.
+pub(super) fn add_closed_schedule(db: &mut ObjectDatabase) -> BACnetDeviceObjectPropertyReference {
+    let closed = ScheduleObject::new(50, "CLOSED", PropertyValue::Boolean(false)).unwrap();
+    db.add(Box::new(closed)).unwrap();
+    present_value(oid(ObjectType::SCHEDULE, 50))
 }
 
 /// Add Access Rights `instance` with these rules, enabled.
@@ -390,14 +399,14 @@ fn a_negative_rule_names_the_place_it_bars() {
 #[test]
 fn a_negative_rule_that_does_not_hold_lets_the_positive_rules_decide() {
     let mut db = database();
-    // Barred at Point 2 only, and while an unspecified time range reads
-    // FALSE: neither negative rule holds at Point 1.
-    let never = present_value(oid(ObjectType::SCHEDULE, UNSPECIFIED));
+    // Barred at Point 2, and at Point 1 while a schedule now FALSE is TRUE:
+    // neither negative rule holds at Point 1 now.
+    let closed = add_closed_schedule(&mut db);
     add_rights(
         &mut db,
         1,
         vec![anytime(Some(point(1)))],
-        vec![anytime(Some(point(2))), during(never, Some(point(1)))],
+        vec![anytime(Some(point(2))), during(closed, Some(point(1)))],
     );
     add_credential(&mut db, &[rights(1).into()]);
     assert_eq!(decision(&db), granted(1, 1));
@@ -405,17 +414,17 @@ fn a_negative_rule_that_does_not_hold_lets_the_positive_rules_decide() {
 
 #[test]
 fn out_of_time_range_needs_a_positive_rule_covering_the_point() {
-    let never = present_value(oid(ObjectType::SCHEDULE, UNSPECIFIED));
     // Covers Point 1 outside its time range: out of time range, naming the
     // first such rule.
     let mut db = database();
+    let closed = add_closed_schedule(&mut db);
     add_rights(
         &mut db,
         1,
         vec![
             anytime(Some(point(2))),
-            during(never.clone(), Some(point(1))),
-            during(never.clone(), Some(zone(1))),
+            during(closed.clone(), Some(point(1))),
+            during(closed, Some(zone(1))),
         ],
         vec![],
     );
@@ -428,10 +437,11 @@ fn out_of_time_range_needs_a_positive_rule_covering_the_point() {
 
     // Rules for other places, in or out of their time range: no rights.
     let mut db = database();
+    let closed = add_closed_schedule(&mut db);
     add_rights(
         &mut db,
         1,
-        vec![anytime(Some(point(2))), during(never, Some(point(2)))],
+        vec![anytime(Some(point(2))), during(closed, Some(point(2)))],
         vec![],
     );
     add_credential(&mut db, &[rights(1).into()]);
@@ -442,14 +452,14 @@ fn out_of_time_range_needs_a_positive_rule_covering_the_point() {
 fn a_disabled_rule_counts_for_nothing() {
     // A disabled positive rule neither grants nor makes the denial out of
     // time range.
-    let never = present_value(oid(ObjectType::SCHEDULE, UNSPECIFIED));
     let mut db = database();
+    let closed = add_closed_schedule(&mut db);
     add_rights(
         &mut db,
         1,
         vec![
             disabled(anytime(None)),
-            disabled(during(never, Some(point(1)))),
+            disabled(during(closed, Some(point(1)))),
         ],
         vec![],
     );
@@ -576,6 +586,8 @@ fn unresolved_assignments_are_listed_and_ignored() {
         in_device(UNSPECIFIED, oid(ObjectType::ACCESS_RIGHTS, UNSPECIFIED)),
         // An Enable that isn't a BOOLEAN.
         rights(5).into(),
+        // The wildcard Device names no device in particular.
+        in_device(UNSPECIFIED, rights(1)),
         rights(1).into(),
     ];
     add_credential(&mut db, &elements);
@@ -592,6 +604,7 @@ fn unresolved_assignments_are_listed_and_ignored() {
             (1, elements[0].clone(), UnresolvedReason::Remote),
             (2, elements[1].clone(), UnresolvedReason::Missing),
             (5, elements[4].clone(), UnresolvedReason::Unreadable),
+            (6, elements[5].clone(), UnresolvedReason::Remote),
         ]
     );
 }
@@ -655,10 +668,11 @@ fn rule_arrays_that_do_not_decode_are_unreadable() {
 }
 
 #[test]
-fn an_assignment_names_this_device_with_its_own_or_the_wildcard_device() {
+fn an_assignment_names_this_device_only_with_its_own_device() {
+    // The wildcard Device names no device in particular, so it isn't read.
     for (reference, resolved) in [
         (in_device(DEVICE, rights(1)), true),
-        (in_device(UNSPECIFIED, rights(1)), true),
+        (in_device(UNSPECIFIED, rights(1)), false),
         (in_device(OTHER_DEVICE, rights(1)), false),
     ] {
         let mut db = database();

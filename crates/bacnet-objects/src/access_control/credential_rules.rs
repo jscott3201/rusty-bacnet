@@ -202,13 +202,21 @@ pub(super) fn check_authentication_factor(
     }
 }
 
+/// The vendor range of BACnetAuthorizationExemption. Unlike the other
+/// access-control enumerations it tops out at 255: the comment on its Clause
+/// 21 production and Table 23-1 reserve 0 to 63 for ASHRAE and leave 64 to
+/// 255 to vendors.
+const EXEMPTION_VENDOR: std::ops::RangeInclusive<u32> = 64..=255;
+
 /// Refuse an Authorization_Exemptions value outside the named checks and the
 /// vendor range with VALUE_OUT_OF_RANGE.
 pub(super) fn check_authorization_exemption(
     exemption: AuthorizationExemption,
 ) -> Result<(), Error> {
     let raw = exemption.to_raw();
-    if raw <= AuthorizationExemption::AUTHORIZATION_DELAY.to_raw() || VENDOR.contains(&raw) {
+    if raw <= AuthorizationExemption::AUTHORIZATION_DELAY.to_raw()
+        || EXEMPTION_VENDOR.contains(&raw)
+    {
         Ok(())
     } else {
         Err(common::value_out_of_range_error())

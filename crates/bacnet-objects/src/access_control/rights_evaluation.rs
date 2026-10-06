@@ -20,21 +20,36 @@
 //! [`evaluate_access_rights`] documents each step. Where Clause 12.34.9
 //! leaves the reading to the device, this evaluator takes these:
 //!
-//! - A time range reads an Enumerated as a BACnetBinaryPV, since a read
-//!   value doesn't carry its enumeration: ACTIVE is TRUE and any other value
-//!   FALSE. Types the clause doesn't name (REAL, CharacterString and the
-//!   rest) read FALSE, so an unexpected value never grants.
+//! - A time range reads an Enumerated by the enumeration of the property it
+//!   names, as `ResolvedEnum::from_property` knows it, since the value alone
+//!   doesn't say. A BACnetBinaryPV, or a property whose enumeration depends
+//!   on the object (Present_Value, so a Binary Value or a Schedule), reads
+//!   ACTIVE as TRUE and any other number as FALSE. Any other enumeration
+//!   (Event_State, Reliability and the rest) reads FALSE. Types the clause
+//!   doesn't name (REAL, CharacterString and the rest) read FALSE too, so an
+//!   unexpected value never grants.
+//! - Only a value read here and found FALSE puts a rule outside its time
+//!   range. A time range with nothing to judge (no reference or an
+//!   unspecified one, a missing object or property, a failed read, NULL,
+//!   index 0, or another device) is FALSE at every moment, so a positive rule
+//!   covering the point with one gives the credential no access there at any
+//!   time: DENIED_NO_ACCESS_RIGHTS, not DENIED_OUT_OF_TIME_RANGE.
 //! - A negative rule whose location is ALL denies with
 //!   DENIED_POINT_NO_ACCESS_RIGHTS: it bars this point as much as a rule
 //!   naming the point does, and the clause names a value only for the point
 //!   and zone cases.
-//! - A reference whose device member is the wildcard Device instance 4194303
-//!   names this device. One naming any other device is never read: its time
-//!   range and location are FALSE, and its Assigned_Access_Rights element is
-//!   listed as unresolved for the application to weigh.
-//! - Assigned_Access_Rights elements that can't be resolved here are left out
-//!   of the decision, as Clause 12.35.18 asks, and listed, so that the
-//!   application can still deny.
+//! - A reference names this device only when it has no device member or
+//!   names the database's own Device (`LocalDevice::is_local`, as the rest
+//!   of the stack reads references). The wildcard Device instance 4194303
+//!   names no device in particular, so a reference carrying it is never
+//!   read: the evaluator fails closed.
+//! - Nothing is read from another device. Clause 12.35.18 has the device
+//!   ignore an assignment naming a missing object or an object that isn't
+//!   Access Rights. Leaving out an assignment naming another device as well
+//!   is this evaluator's own policy. All three are listed as unresolved, so
+//!   the application can still deny.
+
+use std::collections::HashMap;
 
 use bacnet_encoding::constructed::{decode_access_rule, decode_assigned_access_rights};
 use bacnet_types::constructed::{
@@ -43,7 +58,7 @@ use bacnet_types::constructed::{
 };
 use bacnet_types::enums::{
     AccessEvent, AccessRuleLocationSpecifier, AccessRuleTimeRangeSpecifier, AuthorizationExemption,
-    BinaryPV, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier,
+    BinaryPV, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier, ResolvedEnum,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
@@ -63,10 +78,13 @@ pub struct AccessRightsEvaluation {
     pub decision: AccessRightsDecision,
     /// The enabled Assigned_Access_Rights elements that gave no rules
     /// because their Access Rights object couldn't be read here, in array
-    /// order. The decision leaves them out, as Clause 12.35.18 has the
-    /// device do; an application that would rather deny while part of a
-    /// credential's rights is out of sight checks that this is empty. Always
-    /// empty for [`AccessRightsDecision::Exempt`], which reads no rights.
+    /// order. The decision leaves them out. Clause 12.35.18 asks for that
+    /// with a missing object or one that isn't Access Rights; for an object
+    /// in another device, or behind the wildcard Device, it is this
+    /// evaluator's policy, since it reads nothing remotely. An application
+    /// that would rather deny while part of a credential's rights is out of
+    /// sight checks that this is empty. Always empty for
+    /// [`AccessRightsDecision::Exempt`], which reads no rights.
     pub unresolved: Vec<UnresolvedAccessRights>,
 }
 
@@ -94,8 +112,8 @@ pub enum AccessRightsDecision {
         access_event: AccessEvent,
         /// The rule behind the denial: the negative rule that held, or, for
         /// DENIED_OUT_OF_TIME_RANGE, the first positive rule that covered
-        /// the point outside its time range. `None` for
-        /// DENIED_NO_ACCESS_RIGHTS.
+        /// the point while a value read for its time range was FALSE. `None`
+        /// for DENIED_NO_ACCESS_RIGHTS.
         rule: Option<AccessRulePosition>,
     },
 }
@@ -175,8 +193,9 @@ pub struct UnresolvedAccessRights {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum UnresolvedReason {
-    /// It names an object in another device, which this evaluator doesn't
-    /// read.
+    /// It names an object in another device, or carries the wildcard
+    /// Device, which names none in particular; this evaluator reads nothing
+    /// remotely.
     Remote,
     /// It names an object type other than Access Rights.
     NotAccessRights,
@@ -202,10 +221,11 @@ pub enum UnresolvedReason {
 ///    - An element whose own enable flag is FALSE is skipped, and so is the
 ///      unused marker, instance 4194303 in the object and in the device when
 ///      it names one (Clause 12.35.18).
-///    - An element naming another device, a missing object or an object that
-///      isn't Access Rights gives no rules. Clause 12.35.18 has the device
-///      ignore such an element, so the decision does; the element is listed
-///      in [`AccessRightsEvaluation::unresolved`] so that an application can
+///    - An element naming a missing object or an object that isn't Access
+///      Rights gives no rules: Clause 12.35.18 has the device ignore it.
+///      Neither does one naming another device; that is this evaluator's
+///      policy, since it reads nothing remotely. Each such element is listed
+///      in [`AccessRightsEvaluation::unresolved`], so that an application can
 ///      deny when part of a credential's rights is out of its sight.
 ///    - An Access Rights object whose Enable is FALSE gives no rules either
 ///      (Clause 12.34.8), and isn't listed: it was found.
@@ -217,9 +237,11 @@ pub enum UnresolvedReason {
 /// 4. **Positive rules.** Otherwise the first enabled positive rule that
 ///    holds, in the same order, grants access.
 /// 5. **No rule held.** When some enabled positive rule covered this point
-///    but its time range was FALSE, the credential could pass here at another
-///    time, so the denial is DENIED_OUT_OF_TIME_RANGE. Otherwise it is
-///    DENIED_NO_ACCESS_RIGHTS.
+///    and a value read here for its time range was FALSE, the credential
+///    could pass here at another time, so the denial is
+///    DENIED_OUT_OF_TIME_RANGE. Otherwise it is DENIED_NO_ACCESS_RIGHTS,
+///    including when every rule covering the point has a time range with
+///    nothing to judge (see below).
 ///
 /// A rule holds when its enable flag is TRUE, its location covers the point
 /// and its time range is TRUE (Clause 12.34.9.1).
@@ -229,10 +251,11 @@ pub enum UnresolvedReason {
 /// - ALL covers every point, whatever the location reference holds.
 /// - SPECIFIED with an Access Point covers that point only.
 /// - SPECIFIED with an Access Zone covers the point when the zone's
-///   Entry_Points names it.
+///   Entry_Points names it in this device. Each zone's list is read once
+///   per evaluation.
 /// - Anything else covers nothing: no reference, an unspecified one, one to
-///   another device, a missing zone, another object type, or a specifier
-///   outside the two named values.
+///   another device or the wildcard Device, a missing zone, another object
+///   type, or a specifier outside the two named values.
 ///
 /// A negative rule that holds denies with DENIED_POINT_NO_ACCESS_RIGHTS when
 /// its location names the point and DENIED_ZONE_NO_ACCESS_RIGHTS when it
@@ -249,30 +272,36 @@ pub enum UnresolvedReason {
 /// - BOOLEAN: its value.
 /// - Unsigned: TRUE unless zero.
 /// - INTEGER: TRUE above zero.
-/// - Enumerated: TRUE for ACTIVE (1), FALSE for INACTIVE (0). A read value
-///   doesn't say which enumeration it belongs to, so every Enumerated is
-///   read as a BACnetBinaryPV, and any other number is FALSE. Clause
-///   12.34.9.1 leaves types other than the four it names to the device, so
-///   this is a local choice.
+/// - Enumerated: read by the property's enumeration
+///   ([`ResolvedEnum::from_property`]), since the value alone doesn't name
+///   one. For a BACnetBinaryPV, or a property whose enumeration depends on
+///   the object (Present_Value, so a Binary Value or a Schedule), ACTIVE (1)
+///   is TRUE and any other number FALSE. Any other enumeration, such as
+///   Event_State or Reliability, is FALSE. Clause 12.34.9.1 leaves types
+///   other than the four it names to the device, so this is a local choice.
 /// - Any other type, REAL and CharacterString among them: FALSE, the same
 ///   local choice.
 ///
-/// The time range is FALSE when the reference is missing or unspecified,
-/// names another device, or names a missing object, a property the object
-/// doesn't serve, an index on a property that isn't an array, or one past
-/// the end; when the read fails; and when the value is NULL. A specifier
-/// outside the two named values is FALSE too.
+/// Those FALSE values are read here, so a positive rule with one is outside
+/// its time range now and may hold at another time. A time range with
+/// nothing to judge is FALSE at every moment instead: a specifier outside
+/// the two named values, SPECIFIED with no reference, an unspecified
+/// reference, one naming another device or the wildcard Device, a missing
+/// object or a property it doesn't serve, an index on a property that isn't
+/// an array, index 0 (an array's size is no time-range value) or one past
+/// the end, any other failed read, and NULL. Such a rule never makes a
+/// denial DENIED_OUT_OF_TIME_RANGE.
 ///
 /// # Which device a reference names
 ///
-/// A reference names this device when it has no device member, when its
-/// device member is the wildcard Device instance 4194303, or when it names
-/// the Device the database speaks for ([`ObjectDatabase::local_device`]).
-/// Anything else names another device, and this evaluator reads nothing
-/// remotely: such a time range or location is FALSE and such an
-/// Assigned_Access_Rights element is listed as unresolved. A database
-/// holding no Device knows no Device of its own, so then only the first two
-/// forms are local.
+/// A reference names this device when it has no device member or names the
+/// Device the database speaks for ([`ObjectDatabase::local_device`]), the
+/// reading the rest of the stack takes. Anything else, the wildcard Device
+/// instance 4194303 included, names no device this evaluator can read, so it
+/// fails closed: such a time range has nothing to judge, such a location
+/// covers nothing, and such an Assigned_Access_Rights element is listed as
+/// unresolved. A database holding no Device has no Device of its own, so
+/// then only a reference with no device member is local.
 ///
 /// # Not covered
 ///
@@ -342,10 +371,11 @@ pub fn evaluate_access_rights(
             unresolved: Vec::new(),
         });
     }
-    let scope = Scope {
+    let mut scope = Scope {
         db,
         local: db.local_device(),
         point,
+        zones: HashMap::new(),
     };
     let (gathered, unresolved) = scope.gather(&assigned_access_rights(holder)?);
     Ok(AccessRightsEvaluation {
@@ -450,24 +480,35 @@ impl Place {
     }
 }
 
-/// One evaluation: the database, its own Device and the point where the
-/// credential was presented.
-#[derive(Clone, Copy)]
+/// A rule's time range, as far as this database can tell (Clause
+/// 12.34.9.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TimeRange {
+    /// ALWAYS, or a value read here as TRUE.
+    True,
+    /// A value read here as FALSE: the rule may hold at another time.
+    False,
+    /// Nothing to judge, so FALSE at every moment: no usable reference, a
+    /// failed read, NULL or index 0 (see [`evaluate_access_rights`]).
+    Never,
+}
+
+/// One evaluation: the database, its own Device, the point where the
+/// credential was presented, and what each zone's Entry_Points said about
+/// that point, read once per evaluation however many rules name the zone.
 struct Scope<'a> {
     db: &'a ObjectDatabase,
     local: LocalDevice,
     point: ObjectIdentifier,
+    zones: HashMap<ObjectIdentifier, bool>,
 }
 
 impl Scope<'_> {
     /// Whether a reference with this device member names this device: no
-    /// member, the wildcard Device, or the database's own Device.
+    /// member, or the database's own Device. The wildcard Device names none
+    /// in particular, so it isn't local.
     fn is_local(&self, device: Option<ObjectIdentifier>) -> bool {
-        device.is_none_or(|device| {
-            let wildcard = device.object_type() == ObjectType::DEVICE
-                && device.instance_number() == ObjectIdentifier::WILDCARD_INSTANCE;
-            wildcard || self.local.is_local(Some(device))
-        })
+        self.local.is_local(device)
     }
 
     /// The enabled Access Rights objects the enabled elements of
@@ -536,10 +577,10 @@ impl Scope<'_> {
     }
 
     /// The decision over the gathered rules (Clause 12.34.9.2).
-    fn decide(&self, gathered: &[Gathered]) -> AccessRightsDecision {
+    fn decide(&mut self, gathered: &[Gathered]) -> AccessRightsDecision {
         for (position, rule) in enabled_rules(gathered, AccessRuleKind::Negative) {
             if let Some(place) = self.location(rule) {
-                if self.time_range(rule) {
+                if self.time_range(rule) == TimeRange::True {
                     return AccessRightsDecision::Denied {
                         access_event: place.denial(),
                         rule: Some(position),
@@ -550,10 +591,13 @@ impl Scope<'_> {
         let mut out_of_time = None;
         for (position, rule) in enabled_rules(gathered, AccessRuleKind::Positive) {
             if self.location(rule).is_some() {
-                if self.time_range(rule) {
-                    return AccessRightsDecision::Granted { rule: position };
+                match self.time_range(rule) {
+                    TimeRange::True => return AccessRightsDecision::Granted { rule: position },
+                    TimeRange::False => {
+                        out_of_time.get_or_insert(position);
+                    }
+                    TimeRange::Never => {}
                 }
-                out_of_time.get_or_insert(position);
             }
         }
         match out_of_time {
@@ -569,7 +613,7 @@ impl Scope<'_> {
     }
 
     /// What the rule's location matched at this point, if anything.
-    fn location(&self, rule: &BACnetAccessRule) -> Option<Place> {
+    fn location(&mut self, rule: &BACnetAccessRule) -> Option<Place> {
         match rule.location_specifier {
             AccessRuleLocationSpecifier::ALL => Some(Place::Everywhere),
             AccessRuleLocationSpecifier::SPECIFIED => {
@@ -590,8 +634,20 @@ impl Scope<'_> {
         }
     }
 
-    /// Whether the zone `zone` names the point among its Entry_Points.
-    fn enters(&self, zone: ObjectIdentifier) -> bool {
+    /// Whether the zone `zone` names the point among its Entry_Points,
+    /// read once per evaluation.
+    fn enters(&mut self, zone: ObjectIdentifier) -> bool {
+        if let Some(&enters) = self.zones.get(&zone) {
+            return enters;
+        }
+        let enters = self.read_entry_points(zone);
+        self.zones.insert(zone, enters);
+        enters
+    }
+
+    /// Whether the zone's Entry_Points, as it serves them now, names the
+    /// point in this device.
+    fn read_entry_points(&self, zone: ObjectIdentifier) -> bool {
         let Some(zone) = self.db.get(&zone) else {
             return false;
         };
@@ -605,50 +661,66 @@ impl Scope<'_> {
         })
     }
 
-    /// The rule's time range: TRUE or FALSE (Clause 12.34.9.1).
-    fn time_range(&self, rule: &BACnetAccessRule) -> bool {
+    /// The rule's time range (Clause 12.34.9.1).
+    fn time_range(&self, rule: &BACnetAccessRule) -> TimeRange {
         match rule.time_range_specifier {
-            AccessRuleTimeRangeSpecifier::ALWAYS => true,
+            AccessRuleTimeRangeSpecifier::ALWAYS => TimeRange::True,
             AccessRuleTimeRangeSpecifier::SPECIFIED => rule
                 .time_range
                 .as_ref()
-                .is_some_and(|reference| self.reads_true(reference)),
-            _ => false,
+                .map_or(TimeRange::Never, |reference| {
+                    self.read_time_range(reference)
+                }),
+            _ => TimeRange::Never,
         }
     }
 
-    /// Whether the property `reference` names reads as TRUE here.
-    fn reads_true(&self, reference: &BACnetDeviceObjectPropertyReference) -> bool {
+    /// The time range the property `reference` names, read here.
+    fn read_time_range(&self, reference: &BACnetDeviceObjectPropertyReference) -> TimeRange {
         let oid = reference.object_identifier;
         if unspecified(oid, reference.device_identifier)
             || !self.is_local(reference.device_identifier)
         {
-            return false;
+            return TimeRange::Never;
         }
         let Some(object) = self.db.get(&oid) else {
-            return false;
+            return TimeRange::Never;
         };
         let property = PropertyIdentifier::from_raw(reference.property_identifier);
         let index = reference.property_array_index;
-        // ReadProperty's gate: only an array takes an index.
-        if index.is_some() && !object.is_array_property(property) {
-            return false;
+        // ReadProperty's gate: only an array takes an index. Index 0 reads
+        // the array's size, which is no time-range value.
+        if index == Some(0) || (index.is_some() && !object.is_array_property(property)) {
+            return TimeRange::Never;
         }
-        object
-            .read_property(property, index)
-            .is_ok_and(|value| truth(&value))
+        match object.read_property(property, index) {
+            Ok(value) => time_range_value(property, &value),
+            Err(_) => TimeRange::Never,
+        }
     }
 }
 
-/// A time-range value as TRUE or FALSE (Clause 12.34.9.1, and the local
+/// A time-range value read from `property` (Clause 12.34.9.1, and the local
 /// choices in the module documentation).
-fn truth(value: &PropertyValue) -> bool {
-    match *value {
+fn time_range_value(property: PropertyIdentifier, value: &PropertyValue) -> TimeRange {
+    let holds = match *value {
+        PropertyValue::Null => return TimeRange::Never,
         PropertyValue::Boolean(value) => value,
         PropertyValue::Unsigned(value) => value != 0,
         PropertyValue::Signed(value) => value > 0,
-        PropertyValue::Enumerated(raw) => raw == BinaryPV::ACTIVE.to_raw(),
+        PropertyValue::Enumerated(raw) => match ResolvedEnum::from_property(property, raw) {
+            ResolvedEnum::BinaryPV(state) => state == BinaryPV::ACTIVE,
+            // An enumeration that depends on the object, as Present_Value's
+            // does, may be a BACnetBinaryPV.
+            ResolvedEnum::Unknown(raw) => raw == BinaryPV::ACTIVE.to_raw(),
+            _ => false,
+        },
         _ => false,
+    };
+    if holds {
+        TimeRange::True
+    } else {
+        TimeRange::False
     }
 }
 
@@ -659,6 +731,10 @@ mod tests;
 #[cfg(test)]
 #[path = "rights_evaluation_term_tests.rs"]
 mod term_tests;
+
+#[cfg(test)]
+#[path = "rights_evaluation_order_tests.rs"]
+mod order_tests;
 
 #[cfg(test)]
 #[path = "rights_evaluation_scenario_tests.rs"]

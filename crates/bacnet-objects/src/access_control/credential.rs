@@ -224,8 +224,8 @@ impl AccessCredentialObject {
     /// an empty list included, and adds it to Property_List; `None` leaves it
     /// out, as a new credential does. The list is read-only over the network.
     ///
-    /// A value outside the seven named checks and the vendor range 64 to
-    /// 65535 is refused with VALUE_OUT_OF_RANGE, keeping the list set before.
+    /// A value outside the seven named checks and the vendor range 64 to 255
+    /// is refused with VALUE_OUT_OF_RANGE, keeping the list set before.
     pub fn set_authorization_exemptions(
         &mut self,
         exemptions: Option<Vec<AuthorizationExemption>>,

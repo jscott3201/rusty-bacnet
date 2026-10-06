@@ -69,7 +69,7 @@ fn authorization_exemptions_are_left_out_until_the_application_sets_them() {
         Exemption::ACCESS_RIGHTS,
         Exemption::AUTHORIZATION_DELAY,
         Exemption::from_raw(64),
-        Exemption::from_raw(65_535),
+        Exemption::from_raw(255),
     ];
     credential
         .set_authorization_exemptions(Some(exemptions.clone()))
@@ -81,7 +81,7 @@ fn authorization_exemptions_are_left_out_until_the_application_sets_them() {
     assert_listed(&credential, true);
     assert_eq!(
         credential.read_property(AE, None).unwrap(),
-        enumerations(&[0, 2, 6, 64, 65_535])
+        enumerations(&[0, 2, 6, 64, 255])
     );
     // Read-only over the network.
     assert_property_error(
@@ -113,8 +113,8 @@ fn authorization_exemptions_outside_the_production_are_refused() {
     credential
         .set_authorization_exemptions(Some(vec![Exemption::LOCKOUT]))
         .unwrap();
-    // 7 to 63 are reserved for ASHRAE; past 65535 is out of range.
-    for bad in [7, 63, 65_536] {
+    // 7 to 63 are reserved for ASHRAE, and the vendor range stops at 255.
+    for bad in [7, 63, 256, 65_535] {
         assert_property_error(
             credential.set_authorization_exemptions(Some(vec![
                 Exemption::ACCESS_RIGHTS,
