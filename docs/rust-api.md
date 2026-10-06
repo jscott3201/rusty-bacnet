@@ -3616,11 +3616,9 @@ Of the tables' optional rows, both objects serve `Audit_Level` and
 `Auditable_Operations` once `set_audit_policy` provisions them before
 registration, as on an Analog or Binary Value (#1525; see
 [Object-owned Audit policy](#object-owned-audit-policy)). Neither table has
-`Audit_Priority_Filter`, so a priority filter in the policy is left out. The
-other optional rows stay absent:
-
-- `Tags`, `Profile_Location` and `Profile_Name`: no object in this crate
-  serves them yet.
+`Audit_Priority_Filter`, so a priority filter in the policy is left out.
+`Tags`, `Profile_Location` and `Profile_Name` are served once `set_profile`
+provisions them (#1553; see [Object profile rows](#object-profile-rows)).
 
 `Value_Source` is served once `set_value_source_tracking(true)` turns tracking
 on (#1552): it names the writer of the last Present_Value write, or of the last
@@ -7095,6 +7093,37 @@ Generic §19.6.3 (printed820/PDF822) conflicts for the absent case. This bounded
 implementation follows the object-specific clauses; the 2024-04-29 errata does
 not resolve that wording and adds the commandability condition. Other object
 families and broader Audit completion remain open.
+
+### Object profile rows
+
+Most object tables list `Tags`, `Profile_Location` and `Profile_Name` as
+optional rows. `bacnet_objects::object_profile::ObjectProfile` holds the three;
+an object that carries one serves the rows its fields provision (#1553). The
+Color, Color Temperature, Lighting Output and Binary Lighting Output objects
+take one through `set_profile` before registration, which checks it first and
+refuses a bad one without changing anything. An unprovisioned object serves and
+lists none of them, so its wire behaviour, Property_List and PICS are as before.
+The rows go in table order: on the colour objects after Value_Source and the
+audit rows; on a Lighting Output between its colour links and its trims.
+
+- `Tags` is a BACnetARRAY of `bacnet_types::constructed::BACnetNameValue`, a
+  name with an optional `TagValue` (a primitive or a date and time), whose codec
+  is `bacnet_encoding::constructed::{encode_name_value, decode_name_value}`.
+  Reads return each element as `PropertyValue::ApplicationData`. Peers write it
+  whole, one element by index, or its size at index 0, which truncates or
+  appends empty semantic tags (Clause 12.1.5.1); an index past the end is
+  INVALID_ARRAY_INDEX and doesn't grow it. A name with a semicolon is
+  VALUE_OUT_OF_RANGE (Annex Y.1.4), more than `MAX_TAGS` (1024) elements is
+  NO_SPACE_TO_WRITE_PROPERTY, an element of another datatype INVALID_DATA_TYPE
+  and one that doesn't decode INVALID_DATA_ENCODING.
+- `Profile_Location` and `Profile_Name` belong to the application and are
+  read-only over the network, as their O code allows; the PICS lists them as
+  readable only. `set_profile` takes a location whose URI scheme is http, https
+  or bacnet, and a profile name that starts with a decimal vendor identifier
+  and a dash.
+
+Tags written over the network are held in memory: a restart brings back what
+the application provisioned.
 
 ### Target Device Audit recipient
 

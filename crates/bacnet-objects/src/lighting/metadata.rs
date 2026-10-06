@@ -21,10 +21,12 @@ use crate::property_metadata::{
 // omits it while required_properties keeps it. Only implemented rows are
 // described: table rows the objects do not serve (Lighting Output
 // Transition, Feedback_Value, Power, Instantaneous_Power,
-// Min/Max_Actual_Value, Value_Source family, event/intrinsic/audit/tag/
-// profile rows; Binary Lighting Output Feedback_Value, Power, Polarity,
-// Elapsed_Active_Time family, Value_Source family, event/intrinsic/audit/
-// tag/profile rows) are all optional and stay absent until dispatch exists.
+// Min/Max_Actual_Value, Value_Source family, event/intrinsic/audit rows;
+// Binary Lighting Output Feedback_Value, Power, Polarity,
+// Elapsed_Active_Time family, Value_Source family, event/intrinsic/audit
+// rows) are all optional and stay absent until dispatch exists. Tags,
+// Profile_Location and Profile_Name join once `set_profile` provisions
+// them (#1553).
 // The colour links of both objects (Color_Reference, Color_Override and
 // Override_Color_Reference, Addendum 135-2020ca part 4, #1527) and Lighting
 // Output's trims (High_End_Trim, Low_End_Trim and Trim_Fade_Time, part 5,
@@ -131,14 +133,18 @@ pub(super) fn for_lighting_output_object(
     .into_iter()
     .filter(|&(_, present, _)| present)
     .map(|(property, _, condition)| PropertyMetadata::new(property, Optional, condition, Always));
-    let rows = super::color_link::metadata(object.color_link.as_ref()).chain(trim_rows);
+    // Tags, Profile_Location and Profile_Name (#1553) come between them, as
+    // in the addendum's table.
+    let rows = super::color_link::metadata(object.color_link.as_ref())
+        .chain(object.profile.metadata())
+        .chain(trim_rows);
     with_rows(LIGHTING_OUTPUT_BASE, rows)
 }
 
 pub(super) fn for_binary_lighting_output_object(
     object: &BinaryLightingOutputObject,
 ) -> Cow<'_, [PropertyMetadata]> {
-    let rows = super::color_link::metadata(object.color_link());
+    let rows = super::color_link::metadata(object.color_link()).chain(object.profile().metadata());
     with_rows(BINARY_LIGHTING_OUTPUT_BASE, rows)
 }
 

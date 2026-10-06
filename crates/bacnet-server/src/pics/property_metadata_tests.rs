@@ -31,6 +31,7 @@ mod load_control;
 mod loop_program;
 mod network_port;
 mod schedule;
+mod tags_profile;
 mod timer;
 mod value_source;
 

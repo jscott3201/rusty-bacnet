@@ -45,6 +45,8 @@ pub use log::{
     BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord, EventLogDatum, LogData,
     LogDatum, LogValue,
 };
+mod name_value;
+pub use name_value::{BACnetNameValue, TagValue};
 mod property_access;
 pub use property_access::{AccessResult, BACnetPropertyAccessResult};
 mod property_value;

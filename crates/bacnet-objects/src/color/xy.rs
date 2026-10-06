@@ -18,6 +18,7 @@ use super::{
 use crate::audit::{AuditPolicyAuthority, ObjectAuditPolicy};
 use crate::command_source::{CommandOrigin, SingleValueSource};
 use crate::common::{self, read_identity_properties};
+use crate::object_profile::ObjectProfile;
 use crate::traits::{BACnetObject, DeadlineWaker, MonotonicClock};
 use crate::transition::Transition;
 
@@ -68,6 +69,8 @@ pub struct ColorObject {
     audit_policy: ObjectAuditPolicy,
     /// Value_Source, once tracked (#1552).
     value_source: SingleValueSource,
+    /// Tags, Profile_Location and Profile_Name, once provisioned (#1553).
+    profile: ObjectProfile,
     engine: Engine<BACnetXyColor>,
 }
 
@@ -90,6 +93,7 @@ impl ColorObject {
             transition: ColorTransition::NONE,
             audit_policy: ObjectAuditPolicy::default(),
             value_source: SingleValueSource::default(),
+            profile: ObjectProfile::default(),
             engine: Engine::new(XY_SAMPLE_STEP),
         })
     }
@@ -109,6 +113,20 @@ impl ColorObject {
 
     pub(super) fn value_source(&self) -> &SingleValueSource {
         &self.value_source
+    }
+
+    /// Provision the optional Tags, Profile_Location and Profile_Name rows
+    /// before registration (#1553; see [`ObjectProfile`]). Tags takes
+    /// writes; the profile rows are read-only over the network. A profile
+    /// that fails [`ObjectProfile::check`] is refused and changes nothing.
+    pub fn set_profile(&mut self, profile: ObjectProfile) -> Result<(), Error> {
+        profile.check()?;
+        self.profile = profile;
+        Ok(())
+    }
+
+    pub(super) fn profile(&self) -> &ObjectProfile {
+        &self.profile
     }
 
     /// Provision the optional Audit_Level and Auditable_Operations rows
@@ -249,6 +267,9 @@ impl BACnetObject for ColorObject {
         if let Some(result) = self.value_source.read(property, array_index) {
             return result;
         }
+        if let Some(result) = self.profile.read(property, array_index) {
+            return result;
+        }
         // Each read takes its own instant, so one ReadPropertyMultiple that
         // straddles a fade's end may pair a Tracking_Value just short of the
         // target with In_Progress IDLE.
@@ -289,6 +310,9 @@ impl BACnetObject for ColorObject {
             .audit_policy
             .write(property, array_index, &value, priority)
         {
+            return result;
+        }
+        if let Some(result) = self.profile.write(property, array_index, &value) {
             return result;
         }
         match property {

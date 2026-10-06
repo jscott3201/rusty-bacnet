@@ -184,6 +184,7 @@ mod reporting_options_writes;
 mod scalar_null_writes;
 mod staging_writes;
 mod state_text_count;
+mod tags_profile_rows;
 mod trend_log_multiple_options;
 mod trend_log_options;
 mod undefined_property_rows;

@@ -5,6 +5,7 @@ use bacnet_types::enums::PropertyIdentifier as P;
 
 use crate::audit::ObjectAuditPolicy;
 use crate::command_source::SingleValueSource;
+use crate::object_profile::ObjectProfile;
 use crate::property_metadata::{
     PropertyConformance::{Optional, RequiredRead, RequiredWrite},
     PropertyMetadata,
@@ -29,9 +30,11 @@ use crate::property_metadata::{
 //   once `set_audit_policy` provisions them, as on an Analog or Binary Value
 //   (#1525): the tables put them in only where the device does audit
 //   reporting. They go in table order, after Transition.
-// - Tags, Profile_Location and Profile_Name are absent: no object serves
-//   them. Color Temperature's Min_Pres_Value and Max_Pres_Value are
-//   implemented as a pair, as the table's footnote asks.
+// - Tags, Profile_Location and Profile_Name are present only once
+//   `set_profile` provisions them (#1553), after the audit rows in table
+//   order; Tags is writable, the profile rows read-only. Color
+//   Temperature's Min_Pres_Value and Max_Pres_Value are implemented as a
+//   pair, as the table's footnote asks.
 // - Presence is None on every base row, and neither object is createable at
 //   runtime (the network factory doesn't build them). Property_List is the
 //   only array; COV support is the objects' own `supports_cov`.
@@ -70,7 +73,12 @@ const COLOR_TEMPERATURE_BASE: &[PropertyMetadata] = &[
 ];
 
 pub(super) fn for_color_object(object: &ColorObject) -> Cow<'_, [PropertyMetadata]> {
-    with_optional(COLOR_BASE, object.value_source(), object.audit_policy())
+    with_optional(
+        COLOR_BASE,
+        object.value_source(),
+        object.audit_policy(),
+        object.profile(),
+    )
 }
 
 pub(super) fn for_color_temperature_object(
@@ -80,21 +88,25 @@ pub(super) fn for_color_temperature_object(
         COLOR_TEMPERATURE_BASE,
         object.value_source(),
         object.audit_policy(),
+        object.profile(),
     )
 }
 
 /// `base` with the provisioned optional rows put in before Property_List,
-/// in table order: Value_Source, then the audit rows.
+/// in table order: Value_Source, the audit rows, then Tags, Profile_Location
+/// and Profile_Name.
 fn with_optional(
     base: &'static [PropertyMetadata],
     value_source: &SingleValueSource,
     policy: &ObjectAuditPolicy,
+    profile: &ObjectProfile,
 ) -> Cow<'static, [PropertyMetadata]> {
     let audit = (*policy != ObjectAuditPolicy::default()).then(|| policy.metadata());
     let mut rows = value_source
         .metadata()
         .into_iter()
         .chain(audit.into_iter().flatten())
+        .chain(profile.metadata())
         .peekable();
     if rows.peek().is_none() {
         return Cow::Borrowed(base);

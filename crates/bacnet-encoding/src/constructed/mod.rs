@@ -60,6 +60,7 @@ mod log_fields;
 mod log_multiple_record;
 mod log_record;
 mod members;
+mod name_value;
 pub mod object_property_reference;
 pub mod port_permission;
 mod property_access_result;
@@ -125,6 +126,7 @@ pub use lighting_command::{
 };
 pub use log_multiple_record::{decode_log_multiple_record, encode_log_multiple_record};
 pub use log_record::{decode_log_record, encode_log_record};
+pub use name_value::{decode_name_value, encode_name_value};
 pub use object_property_reference::{
     decode_object_property_reference, decode_object_property_reference_at,
     decode_setpoint_reference, decode_setpoint_reference_at, encode_object_property_reference,
