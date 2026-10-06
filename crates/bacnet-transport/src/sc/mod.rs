@@ -419,8 +419,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
         let mut direct_intake = std::mem::take(&mut self.direct_intake);
         let task = tokio::spawn(async move {
             let mut primary_restore_interval =
-                tokio::time::interval(Duration::from_millis(restore_interval_ms));
-            primary_restore_interval.tick().await;
+                failover::restore_interval(Duration::from_millis(restore_interval_ms));
             // Last solicited-Advertisement send for the AB.3.2 anti-storm
             // rate policy. Kept across reconnects so a flap cannot reset
             // the budget into a storm.
@@ -697,6 +696,9 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                     debug!(%e, "SC primary restore attempt failed while failover active");
                                 }
                             }
+                            // The next attempt is one interval after this one
+                            // ended, however long its dial took (#1555).
+                            primary_restore_interval.reset();
                         }
                         _ = hb_interval.tick() => {
                             let idle_for = last_bvlc_received.elapsed();
@@ -755,6 +757,11 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                     Some((ws, hub)) => {
                         ws_clone = ws;
                         active_hub = hub;
+                        // Restore ticks are off while the primary is active
+                        // and wait out a reconnect. Restarting them here
+                        // puts the first attempt after reaching the failover
+                        // hub one interval away, not due at once (#1555).
+                        primary_restore_interval.reset();
                     }
                     None => break 'transport,
                 }

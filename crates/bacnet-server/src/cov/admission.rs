@@ -182,7 +182,7 @@ impl CovSubscriptionTable {
             timed.set_delay(context, max_notification_delay);
             // Lifetime left now, rounded up as notifications report it; an
             // expired one, which no notification reports, sizes as the longest.
-            let time_remaining = CovTimeRemaining::at(Some(expires_at), Instant::now())
+            let time_remaining = CovTimeRemaining::at(Some(expires_at), runtime_clock::now())
                 .wire_seconds()
                 .unwrap_or(u32::MAX);
             timed.set_sizing(context, subscriber_max_apdu, time_remaining);

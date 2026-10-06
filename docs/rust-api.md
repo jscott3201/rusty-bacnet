@@ -2242,10 +2242,10 @@ framing, through the shared `bacnet-encoding` codecs.
   end. Enable (property 133, `PropertyIdentifier::LOG_ENABLE`) is a BOOLEAN,
   TRUE by default, set with `set_enable` or written by peers; FALSE disables
   every rule in both arrays (Clause 12.34.8) without touching each rule's own
-  flag. The object stores and serves the rules and the flag; nothing in the
-  stack evaluates them. An object built with `with_persistence` keeps what
-  peers write to the arrays and Enable across a restart (see
-  [Access Control](#access-control-7)).
+  flag. The object stores and serves the rules and the flag, and
+  `evaluate_access_rights` checks a credential against them. An object built
+  with `with_persistence` keeps what peers write to the arrays and Enable
+  across a restart. [Access Control](#access-control-7) covers both.
 - **Access Rights Accompaniment**: the optional row (Clause 12.34.11) is one
   `BACnetDeviceObjectReference`, served only once the application sets it
   with `AccessRightsObject::set_accompaniment(Some(reference))`; until then,
@@ -2257,6 +2257,16 @@ framing, through the shared `bacnet-encoding` codecs.
   once the row is served, refuse with VALUE_OUT_OF_RANGE a device member that
   isn't a Device or any other object type (unless unspecified), keeping the
   old value. `accompaniment()` returns it. Nothing in the stack evaluates it.
+- **Access Credential Authorization_Exemptions**: the optional row (Clause
+  12.35.25, #1331) is a BACnetLIST of BACnetAuthorizationExemption, each an
+  Enumerated, served only once the application sets it with
+  `AccessCredentialObject::set_authorization_exemptions(Some(list))`, an
+  empty list included; until then, and after `None`, it is out of
+  Property_List and a read gets UNKNOWN_PROPERTY. It is read-only on the
+  network. A value that is neither one of the seven named checks nor in the
+  vendor range 64 to 255 is VALUE_OUT_OF_RANGE, keeping the old list.
+  `authorization_exemptions()` returns it. With ACCESS_RIGHTS listed,
+  `evaluate_access_rights` reports the credential exempt.
 - **Device references**: a `BACnetDeviceObjectReference` or
   `BACnetDeviceObjectPropertyReference` whose device identifier is present
   must name a Device object (Clause 21); each type's
@@ -4022,6 +4032,88 @@ UNSECURED, so an UNLOCK or a pulse reads UNSECURED until it ends. A
 Door_Status or Lock_Status of UNKNOWN or a fault makes it UNKNOWN, unless
 another input has already made it UNSECURED. Simulated values count the same
 as the device's.
+
+##### Evaluating access rights
+
+`bacnet_objects::access_control::evaluate_access_rights(db, credential,
+point)` (#1331) checks an Access Credential against the Access Rights it is
+assigned (Clause 12.34.9.2), for the Access Point where the credential was
+presented. It is pure: it borrows the `ObjectDatabase`, reads each property as
+a peer would, takes no lock and writes nothing, Access_Event included. A
+server application calls it under `server.database().read().await` and acts
+on the result after dropping the guard. It fails with OBJECT / UNKNOWN_OBJECT
+when `credential` doesn't name an Access Credential in the database, or
+`point` an Access Point.
+
+The result, an `AccessRightsEvaluation`, holds a `decision` and an
+`unresolved` list. The `AccessRightsDecision` is one of:
+
+- `Exempt`: the credential's Authorization_Exemptions lists ACCESS_RIGHTS, so
+  no rule is read.
+- `Granted { rule }`: the first positive rule that held. An
+  `AccessRulePosition` names the rule's Access Rights object, its array
+  (`AccessRuleKind`) and its one-based index.
+- `Denied { access_event, rule }`: the Access_Event value the failure
+  carries, and the rule behind it when there is one.
+
+Every enabled negative rule of every assigned object is tried before any
+positive rule. A negative rule that holds denies with
+DENIED_POINT_NO_ACCESS_RIGHTS when its location is the point, and with
+DENIED_ZONE_NO_ACCESS_RIGHTS when it is a zone. One whose location is ALL
+denies with DENIED_POINT_NO_ACCESS_RIGHTS too, since it bars this point; the
+clause leaves that case open. When no positive rule holds, the denial is
+DENIED_OUT_OF_TIME_RANGE if some enabled positive rule covered the point and
+a value read here for its time range was FALSE (the first such rule is
+named), and DENIED_NO_ACCESS_RIGHTS otherwise. `allows()`, `access_event()`
+and `rule()` read a decision.
+
+Skipped without a trace: Assigned_Access_Rights elements whose enable flag is
+FALSE, the unused marker (instance 4194303), Access Rights objects whose
+Enable is FALSE, and rules whose enable flag is FALSE. An enabled element
+naming a missing object or another object type, or an object whose rules
+don't read as rules (only an application's own object can do that), gives no
+rules, and Clause 12.35.18 has the device ignore the first two. One naming
+another device or the wildcard Device gives none either: the evaluator reads
+nothing remotely, a policy of its own. The decision ignores all of them, and
+`unresolved` lists each with its index and an `UnresolvedReason` (`Remote`,
+`WildcardDevice`, `NotAccessRights`, `Missing` or `Unreadable`), so the
+application can choose to deny.
+
+A rule holds when it is enabled, its location covers the point and its time
+range is TRUE:
+
+- **Time range.** ALWAYS is TRUE. SPECIFIED reads the referenced property
+  here, with the reference's array index. A BOOLEAN reads as itself, an
+  Unsigned as TRUE when nonzero, and an INTEGER as TRUE above zero. An
+  Enumerated reads by the property's enumeration
+  (`bacnet_types::enums::ResolvedEnum::from_property`): for a BACnetBinaryPV,
+  or any property whose type isn't known to be another enumeration (the
+  Present_Value of any object among them), ACTIVE is TRUE and any other
+  value FALSE. Those FALSE values make a rule out of its time range. A time
+  range that can't read TRUE at any moment is FALSE at every moment and never
+  makes a denial DENIED_OUT_OF_TIME_RANGE: a type that never reads TRUE
+  under these rules (REAL, Double, strings, an enumeration known to be
+  another one such as Event_State or Reliability, a whole array read without
+  an index; a local choice the clause allows), an unknown specifier,
+  SPECIFIED without a reference, an unspecified reference or one naming
+  another device or the wildcard Device, a missing object or property, a
+  failed read, NULL, and index 0, since an array's size is no time-range
+  value.
+- **Location.** ALL covers every point. An Access Point covers itself, and an
+  Access Zone the points its Entry_Points names. Anything else covers
+  nothing.
+
+A reference names this device when it has no Device member or names the
+database's own Device (`LocalDevice::is_local`), as elsewhere in the stack.
+The wildcard Device instance 4194303 names no device in particular, so a
+reference carrying it is never read, and neither is one naming another
+device. Such a reference never grants access. A negative rule whose location
+or time range names one doesn't hold, so it bars no one: Clause 12.34.9.1
+has a reference that is unspecified or can't be retrieved evaluate to FALSE.
+An application that would rather deny can act on the `unresolved` list. The
+evaluator doesn't judge accompaniment, the credential's status or
+validity window, or the other authorization checks; the documentation of
+`evaluate_access_rights` lists them.
 
 #### Transportation (3)
 
@@ -5808,10 +5900,12 @@ The server automatically dispatches:
 - SubscribeCOV, SubscribeCOVProperty, SubscribeCOVPropertyMultiple (mutation-gated)
 - CreateObject, DeleteObject (mutation-gated)
 - DeviceCommunicationControl
-- ReinitializeDevice (decoded and password-validated, then refused with
-  `SERVICES / SERVICE_REQUEST_DENIED` for every requested state until an action
-  surface exists; no reinitialization or SimpleACK, with password and decode
-  errors retaining their existing precedence)
+- ReinitializeDevice (restart, apply changes, or a Clause 19 backup or restore
+  step): decoded and password-validated, then carried out by the
+  `on_reinitialize` handler (see [The ReinitializeDevice handler](#the-reinitializedevice-handler));
+  refused with `SERVICES / SERVICE_REQUEST_DENIED` when no handler is set or
+  the state is undefined, with password and decode errors keeping their
+  precedence
 - GetEventInformation, AcknowledgeAlarm
 - GetAlarmSummary, GetEnrollmentSummary
 - ConfirmedTextMessage
@@ -5873,6 +5967,88 @@ was first sent on for its retries. While the number is unknown, an address
 naming any network is sent routed, as it is written. The server has one port,
 so the local network is that port's; a multi-port device would need the
 network attached to each port (#863).
+
+### The ReinitializeDevice handler
+
+`ServerBuilder::on_reinitialize` (also on the B/IP and SC builders, or
+`ServerConfig::on_reinitialize`) installs a `ReinitializeHandler`. The server
+calls it with a `ReinitializeContext` and the object database once a request
+has decoded, passed `reinit_password` and named a state Clause 16.4 defines.
+The context carries the requested `state`, the immediate `source_mac`, the
+routed `source_network` when there is one, the transport `provenance` (with
+`direct_sc_identity()` for a verified direct BACnet/SC peer) and the
+`invoke_id`. The struct is `#[non_exhaustive]`, and its `Debug` output shows
+address lengths rather than addresses. `ReinitializeContext::new(state,
+source_mac, source_network, provenance, invoke_id)` builds one for calling a
+handler directly, as its unit tests would; outside `bacnet-transport` only
+`TransportProvenance::unverified()` is available for the provenance.
+
+`Ok(())` sends the SimpleACK and `Err(Error::Protocol { .. })` sends that
+class and code instead. The rules:
+
+- The SimpleACK leaves only after the handler returns, so it must not restart
+  inline. Accept or refuse, prepare, and schedule the restart, backup or
+  restore step for after the reply (Clause 16.4.2).
+- Nothing yet signals when the SimpleACK has left (#1565), so any delay before
+  restarting is best effort, and on MS/TP it can need longer, since a
+  postponed reply waits for the token. `BACnetServer::stop()` seals responses
+  and aborts request tasks before joining them, so a restart path that stops
+  the server before the reply has left drops the SimpleACK.
+- An accepted WARMSTART or COLDSTART does not yet end DISABLE_INITIATION
+  in-process (Clause 16.1.2, #1567). A real process restart starts enabled
+  anyway.
+- It runs synchronously on a runtime worker with the database write-locked:
+  keep it quick and hand slow work, such as writing backup files, to a task.
+- Its edits through `&mut ObjectDatabase` are raw: they skip what
+  `BACnetServer::write_local` adds around a write (the Object_Name uniqueness
+  check, the COV fanout, the event pass, Schedule and Command follow-ups, and
+  the Audit record). Apply a change that needs those, as ACTIVATE_CHANGES work
+  on Network Port or Device properties may, through `write_local` after the
+  reply, from a task the handler schedules.
+- Without `reinit_password` any peer reaches it. The mutation policy and the
+  mutation authorizer don't cover ReinitializeDevice, so restrict sources
+  through the context; its addresses are claims, not authenticated identities.
+- Once the handler has run, the request can no longer be rejected (Clause
+  20.1.8): a returned `Error::Reject`, or any error other than `Protocol` or
+  `Structured`, is answered `SERVICES / OTHER`, and so is a panic (caught with
+  unwind builds), since the handler may have partly acted.
+
+```rust,ignore
+use bacnet_server::server::ReinitializeContext;
+use bacnet_types::enums::{ErrorClass, ErrorCode, ReinitializedState};
+
+let (restart_tx, mut restart_rx) = tokio::sync::mpsc::channel(1);
+tokio::spawn(async move {
+    if let Some(state) = restart_rx.recv().await {
+        // Best effort: nothing yet reports that the SimpleACK has left (#1565).
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        restart_device(state); // application code
+    }
+});
+let server = BACnetServer::bip_builder()
+    .database(db)
+    .reinit_password("secret")
+    .on_reinitialize(move |request: &ReinitializeContext, _db: &mut ObjectDatabase| {
+        match request.state {
+            ReinitializedState::WARMSTART | ReinitializedState::COLDSTART => {
+                // Accept now; the task above restarts after its delay.
+                restart_tx.try_send(request.state).map_err(|_| Error::Protocol {
+                    class: ErrorClass::DEVICE.to_raw() as u32,
+                    code: ErrorCode::CONFIGURATION_IN_PROGRESS.to_raw() as u32,
+                })
+            }
+            _ => Err(Error::Protocol {
+                class: ErrorClass::SERVICES.to_raw() as u32,
+                code: ErrorCode::SERVICE_REQUEST_DENIED.to_raw() as u32,
+            }),
+        }
+    })
+    .build()
+    .await?;
+```
+
+Endpoint sessions take the same handler; see
+[Endpoint ReinitializeDevice](#endpoint-reinitializedevice).
 
 ### The DeviceCommunicationControl state
 
@@ -6537,12 +6713,15 @@ no bench or on-wire conformance; timing is RB-26).
 
 Notes: the endpoint server role defaults to `ReadProperty` (+ `Reject`/`Abort`
 + segmentation-`Abort`). The explicit Device-write opt-in below adds one
-bounded WriteProperty path; full `bacnet-server` parity is out of scope.
-The responder supplies exactly RP or RP+WP service bits and exposes neither COV
+bounded WriteProperty path, and the ReinitializeDevice opt-in adds that
+service through an application handler; full `bacnet-server` parity is out of
+scope. The responder supplies exactly the service bits it executes (RP, plus
+WP and ReinitializeDevice when enabled) and exposes neither COV
 list property, even for a custom database Device. Server-role identity service
 lists must include RP and contain no unsupported bits; validation runs before
-ingress even when writes are disabled. WP opt-in accepts RP or RP+WP declarations
-and commits RP+WP only after all validation succeeds. ClientOnly creates no
+ingress even when both opt-ins are off. With an opt-in, any declaration within
+the executed set is accepted, and that set is committed only after all
+validation succeeds. ClientOnly creates no
 responder and retains its services vector as a local declaration.
 Standalone BBMD helpers (`read_bdt` / `write_bdt` / `read_fdt` / foreign
 registration) stay on `BipTransport` and on `BACnetClient` over B/IP (see
@@ -6569,10 +6748,11 @@ Startup requires a server role and a concrete built-in local Device in the
 attached database (the lowest when it holds several; see
 [Databases with several Devices](#databases-with-several-devices)). An optional
 `DeviceIdentity` must match that Device
-and contain only ReadProperty/WriteProperty service bits. Configuration
+and contain only the service bits the responder executes. Configuration
 validation precedes transport startup and any profile/source-ownership changes.
-The enabled Device and identity advertise exactly RP+WP, including sessions
-without an identity. Default sessions keep their existing RP-only responder.
+The enabled Device and identity advertise exactly RP+WP, plus ReinitializeDevice
+when that is enabled too, including sessions without an identity. Default
+sessions keep their existing RP-only responder.
 Valid priorities 1–16 are ignored for noncommandable Description. Authorized
 NULL relinquishment succeeds without changing its value. Array indices,
 out-of-range priorities and other non-string values fail; numeric priority
@@ -6587,6 +6767,26 @@ reply channels, group silence, segmentation and shutdown; a B/IP loopback test
 covers an authorized write and service-profile readback. This is not general
 endpoint mutation parity or inbound replay suppression. The source recipient extension
 is described below and in the [Device recipient contract](device-audit-recipient.md).
+
+### Endpoint ReinitializeDevice
+
+`EndpointSession::with_reinitialize(handler)` or
+`BipEndpointBuilder::reinitialize(handler)` lets the endpoint execute
+ReinitializeDevice through the same `ReinitializeHandler` signature as the
+full server (see [The ReinitializeDevice handler](#the-reinitializedevice-handler)),
+with the request's `ReinitializeContext` built from the received source,
+routing and provenance. `with_reinit_password` / `reinit_password` sets the
+password a request must carry; startup refuses a password without a handler,
+and `build_transport` refuses either one. Startup requirements match the
+Device-write opt-in (a server role and a concrete built-in local Device), and
+the Device and identity then advertise ReinitializeDevice next to RP (and WP
+when writes are on).
+
+The handler rules are the server's, with one addition: the session answers
+inbound requests on a single dispatch task, so a slow or blocking handler
+stalls every request behind it. A panic or a returned Reject is answered
+`SERVICES / OTHER` and the session keeps serving. A close that wins while the
+request waits for the database refuses it before the handler runs.
 
 ### Direct endpoint WriteProperty and source WRITE reporting
 

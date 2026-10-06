@@ -491,7 +491,7 @@ pub(super) fn spec(
     }
 }
 
-/// A context with `time_remaining` zeroed; lifetimes are checked by range.
+/// A context with `time_remaining` zeroed; [`untimed`] checks lifetimes.
 pub(super) fn context(
     peer: &Peer,
     process: u32,
@@ -511,21 +511,19 @@ pub(super) fn context(
     }
 }
 
-/// Zero every lifetime after checking it against its `(low, high)` bound.
+/// Zero every lifetime after checking it is exactly the one expected. The
+/// tests that call this run on tokio's paused clock, which COV lifetimes are
+/// measured on (#1556), so no time passes that they don't step.
 pub(super) fn untimed(
     contexts: &[BACnetCOVMultipleSubscription],
-    lifetimes: &[(u32, u32)],
+    lifetimes: &[u32],
 ) -> Vec<BACnetCOVMultipleSubscription> {
     assert_eq!(contexts.len(), lifetimes.len(), "{contexts:?}");
     contexts
         .iter()
         .zip(lifetimes)
-        .map(|(context, (low, high))| {
-            assert!(
-                (*low..=*high).contains(&context.time_remaining),
-                "{} outside {low}..={high}",
-                context.time_remaining
-            );
+        .map(|(context, lifetime)| {
+            assert_eq!(context.time_remaining, *lifetime, "{context:?}");
             BACnetCOVMultipleSubscription {
                 time_remaining: 0,
                 ..context.clone()

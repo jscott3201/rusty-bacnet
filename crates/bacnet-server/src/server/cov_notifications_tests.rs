@@ -238,7 +238,9 @@ async fn routed_segmented_complex_ack_preserves_npdu_destination() {
     }
 }
 
-#[tokio::test]
+/// Paused: COV lifetimes are measured on tokio's clock (#1556), so the
+/// notification reports exactly the 300 s the subscription was given.
+#[tokio::test(start_paused = true)]
 async fn cov_property_multiple_subscription_uses_multiple_notification_on_change() {
     let (transport, sent) = recording_transport();
     let network = Arc::new(NetworkLayer::new(transport));
@@ -271,7 +273,7 @@ async fn cov_property_multiple_subscription_uses_multiple_notification_on_change
                     subscriber_process_identifier: 7,
                     monitored_object_identifier: ao_oid,
                     issue_confirmed_notifications: false,
-                    expires_at: Some(Instant::now() + Duration::from_secs(300)),
+                    expires_at: Some(runtime_clock::now() + Duration::from_secs(300)),
                     last_notified_observation: None,
                     monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
                     monitored_property_array_index: None,
@@ -309,7 +311,7 @@ async fn cov_property_multiple_subscription_uses_multiple_notification_on_change
             );
             let notification =
                 COVNotificationMultipleRequest::decode(&req.service_request).unwrap();
-            assert!((299..=300).contains(&notification.time_remaining));
+            assert_eq!(notification.time_remaining, 300);
             assert_eq!(notification.timestamp, None);
             assert_eq!(
                 notification.list_of_cov_notifications[0].list_of_values[0].time_of_change,
@@ -383,7 +385,7 @@ async fn capture_timestamped_cov_multiple(
                     subscriber_process_identifier: 7,
                     monitored_object_identifier: ao_oid,
                     issue_confirmed_notifications: false,
-                    expires_at: Some(Instant::now() + Duration::from_secs(300)),
+                    expires_at: Some(runtime_clock::now() + Duration::from_secs(300)),
                     last_notified_observation: None,
                     monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
                     monitored_property_array_index: None,
@@ -403,7 +405,7 @@ async fn capture_timestamped_cov_multiple(
                         subscriber_process_identifier: 7,
                         monitored_object_identifier: ao_oid,
                         issue_confirmed_notifications: false,
-                        expires_at: Some(Instant::now() + Duration::from_secs(300)),
+                        expires_at: Some(runtime_clock::now() + Duration::from_secs(300)),
                         last_notified_observation: None,
                         monitored_property: Some(PropertyIdentifier::STATUS_FLAGS),
                         monitored_property_array_index: None,
@@ -443,13 +445,14 @@ async fn capture_timestamped_cov_multiple(
         .collect()
 }
 
-#[tokio::test]
+/// Paused, so the time remaining is exact (#1556).
+#[tokio::test(start_paused = true)]
 async fn timestamped_cov_multiple_uses_one_frame_and_exact_per_value_optionality() {
     let frame = fixed_clock_frame();
     let notifications = capture_timestamped_cov_multiple(Some(frame), true).await;
     assert_eq!(notifications.len(), 1);
     let notification = &notifications[0];
-    assert!((298..=300).contains(&notification.time_remaining));
+    assert_eq!(notification.time_remaining, 300);
     assert_eq!(
         notification.timestamp,
         Some((frame.local_date, frame.local_time))
@@ -517,7 +520,7 @@ async fn confirmed_cov_single_and_multiple_retries_retain_their_leases() {
                         issue_confirmed_notifications: true,
                         // A Multiple context always has a finite lifetime.
                         expires_at: (notification_kind == CovNotificationKind::Multiple)
-                            .then(|| Instant::now() + Duration::from_secs(3600)),
+                            .then(|| runtime_clock::now() + Duration::from_secs(3600)),
                         last_notified_observation: None,
                         monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
                         monitored_property_array_index: None,

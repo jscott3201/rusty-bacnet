@@ -3787,10 +3787,11 @@ the client initiates `read_property`, `read_range` and `read_property_multiple`;
 finalization only seals forcefully; always await `close()` or context exit.
 BIPv6/Ethernet have no endpoint owner; use the standalone path there.
 
-Endpoint server roles advertise their actual RP or explicitly enabled RP+WP
-profile and expose neither Device COV list property. A supplied `services` list
-must include RP and cannot claim unsupported execution; incompatible server-role
-profiles fail startup before ingress, including when Device writes are disabled.
+Python endpoint server roles execute and advertise ReadProperty only (the Rust
+Device-write and ReinitializeDevice opt-ins have no Python binding) and expose
+neither Device COV list property. A supplied `services` list must include RP and
+cannot claim unsupported execution; incompatible server-role profiles fail
+startup before ingress.
 ClientOnly has no responder and keeps its service list as a local declaration.
 
 ### Endpoint lifecycle and cancellation

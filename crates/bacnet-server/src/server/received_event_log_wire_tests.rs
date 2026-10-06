@@ -277,7 +277,8 @@ async fn every_two_records_make_one_report_that_adds_no_record() {
 
 /// A confirmed notification sent again with the same invoke ID, as a sender
 /// that missed the acknowledgment does, is acknowledged twice and logged
-/// once.
+/// once. The window that recognizes the repeat is on tokio's clock (#1556),
+/// so a runner stall between the two can't end it.
 #[tokio::test(start_paused = true)]
 async fn a_retransmitted_confirmed_notification_is_logged_once() {
     let mut h = Harness::start_with(ServerConfig::default(), |db| collecting(db, 0)).await;

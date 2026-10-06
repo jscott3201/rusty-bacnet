@@ -115,7 +115,9 @@ async fn mixed_case(initial: bool, confirmed: bool, retain_value: bool) {
         73,
     );
     a.issue_confirmed_notifications = confirmed;
-    a.expires_at = Some(Instant::now() + Duration::from_secs(100));
+    // On tokio's clock, which both callers pause, so the notification reports
+    // exactly the 100 s however long the runner stalls (#1556).
+    a.expires_at = Some(runtime_clock::now() + Duration::from_secs(100));
     let mut b = a.clone();
     b.monitored_object_identifier = second_oid;
     b.monitored_property = Some(PropertyIdentifier::OPERATION_EXPECTED);
@@ -159,7 +161,7 @@ async fn mixed_case(initial: bool, confirmed: bool, retain_value: bool) {
     if retain_value {
         tokio::time::timeout(Duration::from_secs(2), async {
             while fixture.sent.is_empty() {
-                tokio::task::yield_now().await;
+                tokio::time::sleep(Duration::from_millis(1)).await;
             }
         })
         .await
@@ -183,7 +185,7 @@ async fn mixed_case(initial: bool, confirmed: bool, retain_value: bool) {
             other => panic!("unexpected {other:?}"),
         };
         let notification = COVNotificationMultipleRequest::decode(payload).unwrap();
-        assert!((99..=100).contains(&notification.time_remaining));
+        assert_eq!(notification.time_remaining, 100);
         assert!(
             notification.timestamp.is_none(),
             "stale timestamped candidate must not control the header"
@@ -222,7 +224,7 @@ async fn mixed_case(initial: bool, confirmed: bool, retain_value: bool) {
     assert_eq!(fixture.cov_in_flight.available_permits(), 255);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn cov_lifetime_multiple_stale_success_and_current_failure_admit_nothing() {
     for initial in [false, true] {
         for confirmed in [false, true] {
@@ -231,7 +233,7 @@ async fn cov_lifetime_multiple_stale_success_and_current_failure_admit_nothing()
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn cov_lifetime_multiple_retained_values_alone_own_lifetime_companions_and_timestamps() {
     for initial in [false, true] {
         for confirmed in [false, true] {

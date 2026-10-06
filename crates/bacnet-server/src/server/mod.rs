@@ -60,8 +60,8 @@ pub use crate::cov::{CovCounters, CovPolicy};
 use crate::cov::{
     CovNotificationKind, CovSubscription, CovSubscriptionSnapshot, CovSubscriptionTable,
 };
-use crate::handlers;
 use crate::life_safety::{LifeSafetyOperationAuthorizationContext, LifeSafetyOperationAuthorizer};
+use crate::{handlers, runtime_clock};
 use confirmed_request_tracker::{
     ConfirmedRequestAdmission, ConfirmedRequestTracker, PendingConfirmedRequest,
 };
@@ -176,12 +176,6 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
     pub fn device_binding(mut self, binding: DeviceBinding) -> Result<Self, Error> {
         register_configured_binding(&mut self.configured_device_bindings, binding)?;
         Ok(self)
-    }
-
-    /// Set the password required for ReinitializeDevice requests.
-    pub fn reinit_password(mut self, password: impl Into<String>) -> Self {
-        self.config.reinit_password = Some(password.into());
-        self
     }
 
     /// Set the policy that authorizes inbound LifeSafetyOperation requests.
@@ -324,12 +318,6 @@ impl BipServerBuilder {
     pub fn device_binding(mut self, binding: DeviceBinding) -> Result<Self, Error> {
         register_configured_binding(&mut self.configured_device_bindings, binding)?;
         Ok(self)
-    }
-
-    /// Set the password required for ReinitializeDevice requests.
-    pub fn reinit_password(mut self, password: impl Into<String>) -> Self {
-        self.config.reinit_password = Some(password.into());
-        self
     }
 
     /// Set the policy that authorizes inbound LifeSafetyOperation requests.
@@ -537,7 +525,9 @@ impl BACnetServer<BipTransport> {
 
 mod clock;
 mod command_runs;
+mod reinitialize;
 mod time_sync_policy;
+pub use reinitialize::{ReinitializeContext, ReinitializeHandler};
 mod write_group;
 #[cfg(test)]
 pub(crate) use clock::clocked_test_database;
@@ -596,7 +586,6 @@ pub(crate) mod event_timestamp;
 mod handles;
 mod learned_router_cache;
 mod lifecycle;
-mod limiter_clock;
 mod local_writes;
 mod network_port;
 #[cfg(test)]

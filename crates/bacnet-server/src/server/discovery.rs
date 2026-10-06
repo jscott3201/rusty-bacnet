@@ -423,10 +423,10 @@ pub(crate) struct DiscoveryLimiter {
 
 impl DiscoveryLimiter {
     /// Every throttle and coalescing window here is measured on
-    /// [`limiter_clock::now`](super::limiter_clock::now), as its callers'
+    /// [`runtime_clock::now`](super::runtime_clock::now), as its callers'
     /// instants are.
     pub(crate) fn new(policy: DiscoveryPolicy, device_instance: Option<u32>) -> Self {
-        let now = super::limiter_clock::now();
+        let now = super::runtime_clock::now();
         let state = DiscoveryState {
             global_tokens: policy.global_burst_capacity as f64,
             global_byte_tokens: policy.max_bytes_per_sec_global as f64,
@@ -800,7 +800,7 @@ pub(crate) async fn broadcast_i_am_from<T: TransportPort + 'static>(
             false,
             &MacAddr::new(),
             None,
-            super::limiter_clock::now(),
+            super::runtime_clock::now(),
         );
     }
 
