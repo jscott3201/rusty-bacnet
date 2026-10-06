@@ -74,9 +74,13 @@ pub struct ServerConfig {
     ///
     /// The rules are on [`ReinitializeHandler`]. In short: the SimpleACK goes
     /// out only after the handler returns, so schedule any restart for after
-    /// the reply rather than restarting inline. It runs synchronously with the
+    /// the reply rather than restarting inline. Nothing yet signals when the
+    /// reply has left (#1565), so a delay is best effort, and stopping the
+    /// server before then drops the reply. It runs synchronously with the
     /// object database write-locked, so keep it quick and hand slow work to a
-    /// task. Without [`reinit_password`](Self::reinit_password) any peer
+    /// task; its database edits skip the COV, event and Audit work of
+    /// [`BACnetServer::write_local`], so apply changes that need it there
+    /// afterwards. Without [`reinit_password`](Self::reinit_password) any peer
     /// reaches it, and neither the mutation policy nor the mutation authorizer
     /// covers this service, so restrict sources through the context. Refuse
     /// with [`Error::Protocol`]: a panic or an [`Error::Reject`] is answered

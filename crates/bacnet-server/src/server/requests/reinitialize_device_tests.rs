@@ -328,9 +328,10 @@ async fn reinitialize_device_handler_reject_is_answered_services_other() {
 /// ID; its Debug output carries the address lengths, not the addresses.
 #[tokio::test(start_paused = true)]
 async fn reinitialize_device_context_names_the_requester() {
+    // Octets that appear nowhere else in the Debug output (215 and 0xd7).
     let routed = NpduAddress {
         network: 77,
-        mac_address: MacAddr::from_slice(&[0x2c]),
+        mac_address: MacAddr::from_slice(&[0xd7, 0xd7]),
     };
     for source_network in [None, Some(routed)] {
         let (config, received) = recording_config(None, || Ok(()));
@@ -352,9 +353,26 @@ async fn reinitialize_device_context_names_the_requester() {
             bacnet_transport::port::TransportProvenance::unverified()
         );
         assert!(context.direct_sc_identity().is_none());
+        assert_eq!(
+            context,
+            ReinitializeContext::new(
+                ReinitializedState::ACTIVATE_CHANGES,
+                MacAddr::from_slice(&SOURCE_MAC),
+                source_network.clone(),
+                bacnet_transport::port::TransportProvenance::unverified(),
+                42,
+            )
+        );
         let debug = format!("{context:?}");
         assert!(debug.contains("source_mac_len: 6"), "{debug}");
         assert!(!debug.contains("186"), "{debug}");
+        if source_network.is_some() {
+            assert!(debug.contains("source_network: Some((77, 2))"), "{debug}");
+        }
+        assert!(
+            !debug.contains("215") && !debug.to_lowercase().contains("d7"),
+            "{debug}"
+        );
     }
 }
 

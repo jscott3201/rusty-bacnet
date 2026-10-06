@@ -297,9 +297,11 @@ impl BipEndpointBuilder {
     ///
     /// Returns a typed [`Error::Encoding`]
     /// when BBMD-dependent controls are set without
-    /// [`enable_bbmd`](Self::enable_bbmd), or a source Audit route data
-    /// is set (it requires [`build_session`](Self::build_session), not a bare
-    /// transport that would discard the endpoint-owned configuration).
+    /// [`enable_bbmd`](Self::enable_bbmd), or when any session-owned
+    /// configuration is set, since a bare transport would discard it: a
+    /// Network Port registration, Device writes, a ReinitializeDevice handler
+    /// or password (a password alone included), or source Audit route data.
+    /// Those require [`build_session`](Self::build_session).
     pub fn build_transport(self) -> Result<BipTransport, Error> {
         if self.registered_network_port.is_some() {
             return Err(Error::Encoding(

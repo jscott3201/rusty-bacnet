@@ -22,12 +22,27 @@ use super::*;
 ///   handler returns, so it must not restart the device inline. Accept or
 ///   refuse, prepare, and schedule the restart (or the backup or restore
 ///   step) to run after the reply: Clause 16.4.2 has the device acknowledge
-///   the request before it shuts down. Nothing reports yet when the reply
-///   has left, so a scheduled restart should give it a moment.
+///   the request before it shuts down.
+/// - **No reply signal yet.** Nothing tells the application when the
+///   SimpleACK has left (#1565), so any delay before restarting is best
+///   effort, and on MS/TP it can need longer: a postponed reply waits for
+///   the token. [`BACnetServer::stop`] seals responses and aborts request
+///   tasks before joining them, so a restart path that stops the server
+///   before the reply has left drops the SimpleACK. An accepted WARMSTART or
+///   COLDSTART does not yet end DISABLE_INITIATION in-process (Clause
+///   16.1.2, #1567); a real process restart starts enabled anyway.
 /// - **Be quick.** It runs synchronously on a runtime worker with the object
 ///   database write-locked, so every other request waits for it. Hand slow
 ///   work, such as writing backup files, to a task. On an endpoint session a
 ///   blocking handler stalls the whole session.
+/// - **Database edits are raw.** On a full server, changes made through the
+///   `&mut ObjectDatabase` skip what [`BACnetServer::write_local`] adds
+///   around a write: the Object_Name uniqueness check, the COV fanout, the
+///   event pass, Schedule and Command follow-ups, and the Audit record. A
+///   change that needs them, as ACTIVATE_CHANGES work on Network Port or
+///   Device properties may, belongs in `write_local`, called after the
+///   reply from a task the handler schedules (for example by sending the
+///   change to the code that holds the server).
 /// - **Gate the requester.** Without `reinit_password` any peer reaches the
 ///   handler. [`MutationPolicy`](crate::mutation::MutationPolicy) and the
 ///   mutation authorizer don't cover ReinitializeDevice, so check the
@@ -50,6 +65,9 @@ pub type ReinitializeHandler =
 /// `source_network`; only [`direct_sc_identity`](Self::direct_sc_identity) is
 /// verified. Neither the mutation policy nor the mutation authorizer sees
 /// this service, so a handler that serves only some peers checks them here.
+///
+/// The server builds the context; [`new`](Self::new) lets a test build one
+/// to call a handler directly.
 #[derive(Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ReinitializeContext {
@@ -66,6 +84,25 @@ pub struct ReinitializeContext {
 }
 
 impl ReinitializeContext {
+    /// A context with these fields, for calling a handler outside the server,
+    /// such as in its unit tests. Outside `bacnet-transport` only
+    /// [`TransportProvenance::unverified`] can be built.
+    pub fn new(
+        state: ReinitializedState,
+        source_mac: MacAddr,
+        source_network: Option<NpduAddress>,
+        provenance: TransportProvenance,
+        invoke_id: u8,
+    ) -> Self {
+        Self {
+            state,
+            source_mac,
+            source_network,
+            provenance,
+            invoke_id,
+        }
+    }
+
     /// Original verified direct-SC leaf and incarnation, separate from claims.
     pub fn direct_sc_identity(&self) -> Option<DirectScIdentity> {
         self.provenance.direct_sc_identity()
@@ -130,13 +167,13 @@ pub(in crate::server) async fn response(
     let outcome = match handlers::handle_reinitialize_device(&request.service_request, password) {
         Ok(state) => match handler {
             Some(handler) => {
-                let context = ReinitializeContext {
+                let context = ReinitializeContext::new(
                     state,
-                    source_mac: requester.source_mac,
-                    source_network: requester.source_network,
-                    provenance: requester.provenance,
-                    invoke_id: request.invoke_id,
-                };
+                    requester.source_mac,
+                    requester.source_network,
+                    requester.provenance,
+                    request.invoke_id,
+                );
                 let mut db = db.write().await;
                 still_open().and_then(|()| invoke(handler, &context, &mut db))
             }

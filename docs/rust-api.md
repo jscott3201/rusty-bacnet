@@ -5884,17 +5884,33 @@ The context carries the requested `state`, the immediate `source_mac`, the
 routed `source_network` when there is one, the transport `provenance` (with
 `direct_sc_identity()` for a verified direct BACnet/SC peer) and the
 `invoke_id`. The struct is `#[non_exhaustive]`, and its `Debug` output shows
-address lengths rather than addresses.
+address lengths rather than addresses. `ReinitializeContext::new(state,
+source_mac, source_network, provenance, invoke_id)` builds one for calling a
+handler directly, as its unit tests would; outside `bacnet-transport` only
+`TransportProvenance::unverified()` is available for the provenance.
 
 `Ok(())` sends the SimpleACK and `Err(Error::Protocol { .. })` sends that
 class and code instead. The rules:
 
 - The SimpleACK leaves only after the handler returns, so it must not restart
   inline. Accept or refuse, prepare, and schedule the restart, backup or
-  restore step for after the reply (Clause 16.4.2). Nothing reports yet when
-  the reply has left, so a scheduled restart should give it a moment.
+  restore step for after the reply (Clause 16.4.2).
+- Nothing yet signals when the SimpleACK has left (#1565), so any delay before
+  restarting is best effort, and on MS/TP it can need longer, since a
+  postponed reply waits for the token. `BACnetServer::stop()` seals responses
+  and aborts request tasks before joining them, so a restart path that stops
+  the server before the reply has left drops the SimpleACK.
+- An accepted WARMSTART or COLDSTART does not yet end DISABLE_INITIATION
+  in-process (Clause 16.1.2, #1567). A real process restart starts enabled
+  anyway.
 - It runs synchronously on a runtime worker with the database write-locked:
   keep it quick and hand slow work, such as writing backup files, to a task.
+- Its edits through `&mut ObjectDatabase` are raw: they skip what
+  `BACnetServer::write_local` adds around a write (the Object_Name uniqueness
+  check, the COV fanout, the event pass, Schedule and Command follow-ups, and
+  the Audit record). Apply a change that needs those, as ACTIVATE_CHANGES work
+  on Network Port or Device properties may, through `write_local` after the
+  reply, from a task the handler schedules.
 - Without `reinit_password` any peer reaches it. The mutation policy and the
   mutation authorizer don't cover ReinitializeDevice, so restrict sources
   through the context; its addresses are claims, not authenticated identities.
@@ -5910,7 +5926,7 @@ use bacnet_types::enums::{ErrorClass, ErrorCode, ReinitializedState};
 let (restart_tx, mut restart_rx) = tokio::sync::mpsc::channel(1);
 tokio::spawn(async move {
     if let Some(state) = restart_rx.recv().await {
-        // Let the SimpleACK leave before the device goes down.
+        // Best effort: nothing yet reports that the SimpleACK has left (#1565).
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         restart_device(state); // application code
     }
@@ -5921,7 +5937,7 @@ let server = BACnetServer::bip_builder()
     .on_reinitialize(move |request: &ReinitializeContext, _db: &mut ObjectDatabase| {
         match request.state {
             ReinitializedState::WARMSTART | ReinitializedState::COLDSTART => {
-                // Accept now; the task above restarts once the reply is out.
+                // Accept now; the task above restarts after its delay.
                 restart_tx.try_send(request.state).map_err(|_| Error::Protocol {
                     class: ErrorClass::DEVICE.to_raw() as u32,
                     code: ErrorCode::CONFIGURATION_IN_PROGRESS.to_raw() as u32,
