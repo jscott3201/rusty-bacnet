@@ -2242,8 +2242,9 @@ framing, through the shared `bacnet-encoding` codecs.
   end. Enable (property 133, `PropertyIdentifier::LOG_ENABLE`) is a BOOLEAN,
   TRUE by default, set with `set_enable` or written by peers; FALSE disables
   every rule in both arrays (Clause 12.34.8) without touching each rule's own
-  flag. The object stores and serves the rules and the flag; nothing in the
-  stack evaluates them. An object built with `with_persistence` keeps what
+  flag. The object stores and serves the rules and the flag;
+  `evaluate_access_rights` checks a credential against them (see
+  [Access Control](#access-control-7)). An object built with `with_persistence` keeps what
   peers write to the arrays and Enable across a restart (see
   [Access Control](#access-control-7)).
 - **Access Rights Accompaniment**: the optional row (Clause 12.34.11) is one
@@ -2257,6 +2258,16 @@ framing, through the shared `bacnet-encoding` codecs.
   once the row is served, refuse with VALUE_OUT_OF_RANGE a device member that
   isn't a Device or any other object type (unless unspecified), keeping the
   old value. `accompaniment()` returns it. Nothing in the stack evaluates it.
+- **Access Credential Authorization_Exemptions**: the optional row (Clause
+  12.35.25, #1331) is a BACnetLIST of BACnetAuthorizationExemption, each an
+  Enumerated, served only once the application sets it with
+  `AccessCredentialObject::set_authorization_exemptions(Some(list))`, an
+  empty list included; until then, and after `None`, it is out of
+  Property_List and a read gets UNKNOWN_PROPERTY. It is read-only on the
+  network. A value that is neither one of the seven named checks nor in the
+  vendor range 64 to 65535 is VALUE_OUT_OF_RANGE, keeping the old list.
+  `authorization_exemptions()` returns it. With ACCESS_RIGHTS listed,
+  `evaluate_access_rights` reports the credential exempt.
 - **Device references**: a `BACnetDeviceObjectReference` or
   `BACnetDeviceObjectPropertyReference` whose device identifier is present
   must name a Device object (Clause 21); each type's
@@ -4022,6 +4033,68 @@ UNSECURED, so an UNLOCK or a pulse reads UNSECURED until it ends. A
 Door_Status or Lock_Status of UNKNOWN or a fault makes it UNKNOWN, unless
 another input has already made it UNSECURED. Simulated values count the same
 as the device's.
+
+##### Evaluating access rights
+
+`bacnet_objects::access_control::evaluate_access_rights(db, credential,
+point)` (#1331) checks an Access Credential against the Access Rights it is
+assigned (Clause 12.34.9.2), for the Access Point where the credential was
+presented. It is pure: it borrows the `ObjectDatabase`, reads each property as
+a peer would, takes no lock and writes nothing, Access_Event included. A
+server application calls it under `server.database().read().await` and acts
+on the result after dropping the guard. It fails with OBJECT / UNKNOWN_OBJECT
+when `credential` doesn't name an Access Credential in the database, or
+`point` an Access Point.
+
+The result, an `AccessRightsEvaluation`, holds a `decision` and an
+`unresolved` list. The `AccessRightsDecision` is one of:
+
+- `Exempt`: the credential's Authorization_Exemptions lists ACCESS_RIGHTS, so
+  no rule is read.
+- `Granted { rule }`: the first positive rule that held. An
+  `AccessRulePosition` names the rule's Access Rights object, its array
+  (`AccessRuleKind`) and its one-based index.
+- `Denied { access_event, rule }`: the Access_Event value the failure
+  carries, and the rule behind it when there is one.
+
+Every enabled negative rule of every assigned object is tried before any
+positive rule. A negative rule that holds denies with
+DENIED_POINT_NO_ACCESS_RIGHTS when its location is the point, and with
+DENIED_ZONE_NO_ACCESS_RIGHTS when it is a zone. One whose location is ALL
+denies with DENIED_POINT_NO_ACCESS_RIGHTS too, since it bars this point; the
+clause leaves that case open. When no positive rule holds, the denial is
+DENIED_OUT_OF_TIME_RANGE if some enabled positive rule covered the point
+outside its time range (the first such rule is named), and
+DENIED_NO_ACCESS_RIGHTS otherwise. `allows()`, `access_event()` and `rule()`
+read a decision.
+
+Skipped without a trace: Assigned_Access_Rights elements whose enable flag is
+FALSE, the unused marker (instance 4194303), Access Rights objects whose
+Enable is FALSE, and rules whose enable flag is FALSE. An enabled element
+naming another device, a missing object or another object type, or an object
+whose rules don't read as rules (only an application's own object can do
+that), gives no rules. The decision ignores it, and `unresolved` lists it with
+its index and an `UnresolvedReason`, so the application can choose to deny.
+
+A rule holds when it is enabled, its location covers the point and its time
+range is TRUE:
+
+- **Time range.** ALWAYS is TRUE. SPECIFIED reads the referenced property
+  here, with the reference's array index. A BOOLEAN reads as itself, an
+  Unsigned as TRUE when nonzero, and an INTEGER as TRUE above zero. An
+  Enumerated reads as a BACnetBinaryPV: ACTIVE is TRUE, and any other value
+  FALSE. Any other type is FALSE, a local choice the clause allows, and so are
+  NULL, a failed read, and an unspecified reference or one naming another
+  device.
+- **Location.** ALL covers every point. An Access Point covers itself, and an
+  Access Zone the points its Entry_Points names. Anything else covers
+  nothing.
+
+A reference names this device when it has no Device member, when it names the
+wildcard Device instance 4194303, or when it names the database's own Device.
+The evaluator doesn't judge accompaniment, the credential's status or
+validity window, or the other authorization checks; the documentation of
+`evaluate_access_rights` lists them.
 
 #### Transportation (3)
 

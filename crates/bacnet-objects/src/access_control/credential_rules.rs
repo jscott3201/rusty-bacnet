@@ -6,7 +6,7 @@ use bacnet_types::calendar::SpecificDate;
 use bacnet_types::constructed::{BACnetAssignedAccessRights, BACnetCredentialAuthenticationFactor};
 use bacnet_types::enums::{
     AccessAuthenticationFactorDisable, AccessCredentialDisable, AccessCredentialDisableReason,
-    AuthenticationFactorType, ObjectType,
+    AuthenticationFactorType, AuthorizationExemption, ObjectType,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, Time};
@@ -196,6 +196,19 @@ pub(super) fn check_authentication_factor(
         || VENDOR.contains(&disable);
     let format = factor.authentication_factor.format_type.to_raw();
     if disable_ok && format <= AuthenticationFactorType::USER_PASSWORD.to_raw() {
+        Ok(())
+    } else {
+        Err(common::value_out_of_range_error())
+    }
+}
+
+/// Refuse an Authorization_Exemptions value outside the named checks and the
+/// vendor range with VALUE_OUT_OF_RANGE.
+pub(super) fn check_authorization_exemption(
+    exemption: AuthorizationExemption,
+) -> Result<(), Error> {
+    let raw = exemption.to_raw();
+    if raw <= AuthorizationExemption::AUTHORIZATION_DELAY.to_raw() || VENDOR.contains(&raw) {
         Ok(())
     } else {
         Err(common::value_out_of_range_error())

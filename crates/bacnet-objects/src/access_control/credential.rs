@@ -4,7 +4,9 @@ use bacnet_encoding::constructed::{
     encode_assigned_access_rights, encode_credential_authentication_factor,
 };
 use bacnet_types::constructed::{BACnetAssignedAccessRights, BACnetCredentialAuthenticationFactor};
-use bacnet_types::enums::{AccessCredentialDisable, AccessCredentialDisableReason};
+use bacnet_types::enums::{
+    AccessCredentialDisable, AccessCredentialDisableReason, AuthorizationExemption,
+};
 use bytes::BytesMut;
 
 use super::credential_rules::{self as rules, WindowLimit};
@@ -36,6 +38,13 @@ use crate::clock::ClockReader;
 /// The network may write Global_Identifier, Credential_Disable,
 /// Activation_Time and Expiration_Time. Authentication_Factors and
 /// Assigned_Access_Rights are BACnetARRAYs the application provisions.
+///
+/// The optional Authorization_Exemptions row (Clause 12.35.25; #1331) is
+/// served once the application sets it with
+/// [`set_authorization_exemptions`](Self::set_authorization_exemptions), and
+/// is read-only over the network. With ACCESS_RIGHTS listed,
+/// [`evaluate_access_rights`] reports the credential exempt from the Access
+/// Rights check.
 pub struct AccessCredentialObject {
     oid: ObjectIdentifier,
     name: String,
@@ -48,6 +57,8 @@ pub struct AccessCredentialObject {
     expiration_time: WindowLimit,
     authentication_factors: Vec<BACnetCredentialAuthenticationFactor>,
     assigned_access_rights: Vec<BACnetAssignedAccessRights>,
+    /// Authorization_Exemptions, served only while it holds a list.
+    authorization_exemptions: Option<Vec<AuthorizationExemption>>,
     status_flags: StatusFlags,
     reliability: Reliability,
     /// The database's wall clock, the source of the current moment.
@@ -71,6 +82,7 @@ impl AccessCredentialObject {
             expiration_time: WindowLimit::OPEN,
             authentication_factors: Vec::new(),
             assigned_access_rights: Vec::new(),
+            authorization_exemptions: None,
             status_flags: StatusFlags::empty(),
             reliability: Reliability::NO_FAULT_DETECTED,
             clock: None,
@@ -206,6 +218,31 @@ impl AccessCredentialObject {
     pub fn assigned_access_rights(&self) -> &[BACnetAssignedAccessRights] {
         &self.assigned_access_rights
     }
+
+    /// Set Authorization_Exemptions (Clause 12.35.25), the authorization
+    /// checks this credential is exempt from. `Some` serves the optional row,
+    /// an empty list included, and adds it to Property_List; `None` leaves it
+    /// out, as a new credential does. The list is read-only over the network.
+    ///
+    /// A value outside the seven named checks and the vendor range 64 to
+    /// 65535 is refused with VALUE_OUT_OF_RANGE, keeping the list set before.
+    pub fn set_authorization_exemptions(
+        &mut self,
+        exemptions: Option<Vec<AuthorizationExemption>>,
+    ) -> Result<(), Error> {
+        if let Some(list) = &exemptions {
+            list.iter()
+                .copied()
+                .try_for_each(rules::check_authorization_exemption)?;
+        }
+        self.authorization_exemptions = exemptions;
+        Ok(())
+    }
+
+    /// The stored Authorization_Exemptions, `None` while the row is left out.
+    pub fn authorization_exemptions(&self) -> Option<&[AuthorizationExemption]> {
+        self.authorization_exemptions.as_deref()
+    }
 }
 
 /// Encode each element of a constructed array as its own framed value.
@@ -273,6 +310,16 @@ impl BACnetObject for AccessCredentialObject {
                 framed(&self.assigned_access_rights, encode_assigned_access_rights),
                 array_index,
             ),
+            p if p == PropertyIdentifier::AUTHORIZATION_EXEMPTIONS => {
+                match &self.authorization_exemptions {
+                    Some(list) => Ok(PropertyValue::List(
+                        list.iter()
+                            .map(|exemption| PropertyValue::Enumerated(exemption.to_raw()))
+                            .collect(),
+                    )),
+                    None => Err(common::unknown_property_error()),
+                }
+            }
             _ => Err(common::unknown_property_error()),
         }
     }

@@ -200,3 +200,39 @@ fn pics_access_rights_lists_accompaniment_once_an_object_serves_it() {
     assert_eq!(pics.supported_object_types.len(), 1);
     assert_eq!(row(&pics), Some((true, true, true)));
 }
+
+/// Authorization_Exemptions is a per-instance Table 12-40 O row (#1331): the
+/// PICS lists it, optional and read-only, once any Access Credential serves
+/// it.
+#[test]
+fn pics_access_credential_lists_authorization_exemptions_once_an_object_serves_it() {
+    let row = |pics: &Pics| {
+        pics.supported_object_types[0]
+            .supported_properties
+            .iter()
+            .find(|row| row.property_id == P::AUTHORIZATION_EXEMPTIONS)
+            .map(|row| {
+                (
+                    row.access.readable,
+                    row.access.optional,
+                    row.access.writable,
+                )
+            })
+    };
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(AccessCredentialObject::new(1, "CRED-1").unwrap()))
+        .unwrap();
+    let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default());
+    assert_eq!(row(&pics), None);
+
+    let mut credential = AccessCredentialObject::new(2, "CRED-2").unwrap();
+    credential
+        .set_authorization_exemptions(Some(vec![
+            bacnet_types::enums::AuthorizationExemption::ACCESS_RIGHTS,
+        ]))
+        .unwrap();
+    db.add(Box::new(credential)).unwrap();
+    let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default());
+    assert_eq!(pics.supported_object_types.len(), 1);
+    assert_eq!(row(&pics), Some((true, true, false)));
+}

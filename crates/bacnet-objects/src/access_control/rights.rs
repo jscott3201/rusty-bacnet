@@ -34,7 +34,9 @@ pub const MAX_ACCESS_RULES: usize = 1024;
 /// rule in both arrays counts as disabled (Clause 12.34.8). The optional
 /// Accompaniment row (#1393) is served once the application sets it with
 /// [`set_accompaniment`](Self::set_accompaniment). The object stores the
-/// rules, the flag and the accompaniment without evaluating them.
+/// rules, the flag and the accompaniment without evaluating them; the
+/// application checks a credential against the rules with
+/// [`evaluate_access_rights`] (#1331).
 ///
 /// # Restarts
 ///
@@ -287,8 +289,9 @@ pub(super) fn check_access_rule(rule: &BACnetAccessRule) -> Result<(), Error> {
 
 /// Whether a rule's reference, or Accompaniment, is unspecified: its object,
 /// and its device if it names one, both carry the reserved instance number
-/// 4194303.
-fn unspecified(object: ObjectIdentifier, device: Option<ObjectIdentifier>) -> bool {
+/// 4194303. The rights evaluation reads an unused Assigned_Access_Rights
+/// element by the same rule.
+pub(super) fn unspecified(object: ObjectIdentifier, device: Option<ObjectIdentifier>) -> bool {
     let unused = |oid: ObjectIdentifier| oid.instance_number() == ObjectIdentifier::MAX_INSTANCE;
     unused(object) && device.is_none_or(unused)
 }
