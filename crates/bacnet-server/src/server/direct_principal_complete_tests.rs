@@ -234,3 +234,57 @@ async fn direct_principal_wpm_elements_keep_admitted_snapshot_and_order() {
     );
     f.stop().await;
 }
+
+/// A ReinitializeDevice handler sees the verified direct-SC identity of the
+/// connection that admitted the request, next to its claimed sources.
+#[tokio::test]
+async fn direct_principal_reinitialize_context_carries_the_admitted_identity() {
+    use crate::server::ReinitializeContext;
+    use bacnet_services::device_mgmt::ReinitializeDeviceRequest;
+    use bacnet_types::enums::ReinitializedState;
+    let ca = TestCa::new();
+    let observed = Arc::new(StdMutex::new(Vec::<ReinitializeContext>::new()));
+    let recorded = observed.clone();
+    let config = ServerConfig {
+        on_reinitialize: Some(Arc::new(
+            move |context: &ReinitializeContext, _: &mut ObjectDatabase| {
+                recorded.lock().unwrap().push(context.clone());
+                Ok(())
+            },
+        )),
+        ..Default::default()
+    };
+    let mut f = Fixture::new(&ca, config, database(Arc::new(AtomicUsize::new(0)))).await;
+    let mut a = f.peer(ca.tls("a")).await;
+    let mut wire = BytesMut::new();
+    ReinitializeDeviceRequest {
+        reinitialized_state: ReinitializedState::WARMSTART,
+        password: None,
+    }
+    .encode(&mut wire)
+    .unwrap();
+    let request = confirmed(
+        ConfirmedServiceChoice::REINITIALIZE_DEVICE,
+        45,
+        wire.freeze(),
+    );
+    let admitted = f.capture(&mut a, &request).await;
+    let identity = admitted.provenance.direct_sc_identity().unwrap();
+    f.feed(admitted).await;
+    let response = f.response().await;
+    assert!(
+        matches!(response, Apdu::SimpleAck(ref ack) if ack.invoke_id == 45),
+        "got {response:?}"
+    );
+    let context = observed.lock().unwrap().pop().unwrap();
+    assert_eq!(context.direct_sc_identity(), Some(identity));
+    assert_eq!(context.source_mac.as_ref(), PEER_MAC);
+    assert_eq!(
+        context.source_network,
+        Some(NpduAddress {
+            network: 123,
+            mac_address: MacAddr::from_slice(&[3]),
+        })
+    );
+    f.stop().await;
+}

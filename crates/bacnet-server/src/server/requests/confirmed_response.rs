@@ -200,34 +200,6 @@ pub(super) async fn read_property_response_observed(
     }
 }
 
-/// ReinitializeDevice: the password checked, then `handler` run with the database write-locked.
-/// With no handler every request is refused with SERVICES / SERVICE_REQUEST_DENIED.
-pub(super) async fn reinitialize_response(
-    db: &RwLock<ObjectDatabase>,
-    request: &ConfirmedRequestPdu,
-    password: &Option<String>,
-    handler: Option<&ReinitializeHandler>,
-) -> Apdu {
-    let outcome = match handlers::handle_reinitialize_device(&request.service_request, password) {
-        Ok(state) => match handler {
-            Some(handler) => handler(state, &mut *db.write().await),
-            None => Err(Error::Protocol {
-                class: ErrorClass::SERVICES.to_raw() as u32,
-                code: ErrorCode::SERVICE_REQUEST_DENIED.to_raw() as u32,
-            }),
-        },
-        Err(error) => Err(error),
-    };
-
-    match outcome {
-        Ok(()) => Apdu::SimpleAck(SimpleAck {
-            invoke_id: request.invoke_id,
-            service_choice: request.service_choice,
-        }),
-        Err(error) => error_apdu_from_error(request.invoke_id, request.service_choice, &error),
-    }
-}
-
 /// The reply to a confirmed request `error` refused.
 ///
 /// An [`Error::Reject`] draws a Reject PDU with its reason, for every
@@ -239,7 +211,7 @@ pub(super) async fn reinitialize_response(
 /// production for the services that have one; that includes a decoding
 /// error met once the service is running, which is no syntax fault of the
 /// request.
-pub(super) fn error_apdu_from_error(
+pub(in crate::server) fn error_apdu_from_error(
     invoke_id: u8,
     service_choice: ConfirmedServiceChoice,
     error: &Error,

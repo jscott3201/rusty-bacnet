@@ -41,9 +41,11 @@
 //! `bacnet-server` dispatch surface (`EXECUTED_SERVICES`): advertising the
 //! full set here would be a superset flag the endpoint roles cannot honor.
 //! Explicit [`EndpointSession::with_device_writes`](crate::session::EndpointSession::with_device_writes)
-//! adds `WRITE_PROPERTY` for authorized local Device.Description writes and
-//! sets the Device and identity to that actual two-service profile at startup.
-//! This opt-in rejects any other configured identity service bits before start.
+//! adds `WRITE_PROPERTY` for authorized local Device.Description writes, and
+//! explicit [`EndpointSession::with_reinitialize`](crate::session::EndpointSession::with_reinitialize)
+//! adds `REINITIALIZE_DEVICE`; startup sets the Device and identity to the
+//! services actually executed. These opt-ins reject any other configured
+//! identity service bits before start.
 //! Deployments needing the full server surface override via
 //! [`DeviceIdentity::with_services`], but must then compose the full server —
 //! not the narrow endpoint responder — or the I-Am vs ReadProperty vs behavior
@@ -286,9 +288,10 @@ impl DeviceIdentity {
     /// Overrides the services profile (must equal what roles can do; no superset).
     ///
     /// Default `[READ_PROPERTY]` matches the narrow endpoint responder.
-    /// `EndpointSession::with_device_writes` adds `WRITE_PROPERTY` and rejects
-    /// other service bits. Server-role startup also rejects missing ReadProperty
-    /// or unsupported bits when writes are disabled, before ingress starts.
+    /// `EndpointSession::with_device_writes` adds `WRITE_PROPERTY` and
+    /// `EndpointSession::with_reinitialize` adds `REINITIALIZE_DEVICE`; other
+    /// service bits are rejected. Server-role startup also rejects missing
+    /// ReadProperty or unsupported bits with neither opt-in, before ingress starts.
     /// ClientOnly has no responder and retains this as a local declaration.
     /// Broader executing profiles require a matching full server.
     pub fn with_services(mut self, services: &[ServiceSupported]) -> Self {

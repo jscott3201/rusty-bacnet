@@ -192,11 +192,15 @@ impl BipEndpointBuilder {
         self
     }
 
-    /// Enables ReinitializeDevice. See [`EndpointSession::with_reinitialize`].
-    /// Requires `build_session()`.
+    /// Enables ReinitializeDevice. The handler must reply before restarting
+    /// and stay quick, or it stalls the session; see
+    /// [`EndpointSession::with_reinitialize`]. Requires `build_session()`.
     pub fn reinitialize<F>(mut self, handler: F) -> Self
     where
-        F: Fn(bacnet_types::enums::ReinitializedState, &mut ObjectDatabase) -> Result<(), Error>
+        F: Fn(
+                &bacnet_server::server::ReinitializeContext,
+                &mut ObjectDatabase,
+            ) -> Result<(), Error>
             + Send
             + Sync
             + 'static,
@@ -205,8 +209,9 @@ impl BipEndpointBuilder {
         self
     }
 
-    /// Sets the password a ReinitializeDevice request must carry.
-    /// See [`EndpointSession::with_reinit_password`].
+    /// Sets the password a ReinitializeDevice request must carry. Requires
+    /// [`reinitialize`](Self::reinitialize) and `build_session()`; see
+    /// [`EndpointSession::with_reinit_password`].
     pub fn reinit_password(mut self, password: impl Into<String>) -> Self {
         self.reinit_password = Some(password.into());
         self
@@ -306,9 +311,9 @@ impl BipEndpointBuilder {
                 "Device writes require build_session()".into(),
             ));
         }
-        if self.reinitialize.is_some() {
+        if self.reinitialize.is_some() || self.reinit_password.is_some() {
             return Err(Error::Encoding(
-                "ReinitializeDevice requires build_session()".into(),
+                "ReinitializeDevice and its password require build_session()".into(),
             ));
         }
         if !self.source_audit_bindings.is_empty() {

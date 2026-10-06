@@ -223,9 +223,16 @@ The server handles 20+ services including ReadProperty, WriteProperty, ReadPrope
 
 ReinitializeDevice (Clause 16.4) is how a peer asks a device to restart, to
 apply changes, or to step through a Clause 19 backup or restore. The server
-decodes it and checks the password, then passes the requested state to the
+decodes it and checks the password, then passes a `ReinitializeContext` (the
+requested state, the requester's source and provenance, the invoke ID) to the
 handler set with `on_reinitialize`, which carries it out with the object
 database write-locked; an error the handler returns is sent in place of the
 SimpleACK. Without a handler, or for a state Clause 16.4 does not define, the
 request is refused with `SERVICES / SERVICE_REQUEST_DENIED`. Password failures
-and malformed-request errors keep their precedence.
+and malformed-request errors keep their precedence. The SimpleACK leaves only
+after the handler returns, so a handler schedules any restart for after the
+reply and hands slow work to a task. The mutation policy doesn't cover this
+service; the handler restricts sources through its context. A handler panic
+or a returned Reject is answered `SERVICES / OTHER`, since by then the request
+can no longer be rejected (Clause 20.1.8). Endpoint sessions run the same
+handler through their narrow responder.

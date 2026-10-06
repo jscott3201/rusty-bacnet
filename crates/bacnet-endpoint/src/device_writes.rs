@@ -2,7 +2,8 @@
 
 use super::*;
 use bacnet_server::mutation::MutationAuthorizer;
-use bacnet_types::enums::{ReinitializedState, ServiceSupported};
+use bacnet_server::server::ReinitializeContext;
+use bacnet_types::enums::ServiceSupported;
 
 impl<T: TransportPort + 'static> EndpointSession<T> {
     /// Enables authorized writes to the local Device's `Description` and installed Audit recipient.
@@ -31,17 +32,32 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         self
     }
 
-    /// Enables ReinitializeDevice, carried out by `handler` with the database write-locked.
+    /// Enables ReinitializeDevice, carried out by `handler` with the
+    /// requester's [`ReinitializeContext`] and the database write-locked.
     ///
     /// Startup requirements and the advertised services are those of
-    /// [`with_device_writes`](Self::with_device_writes). Without a password set by
-    /// [`with_reinit_password`](Self::with_reinit_password), any peer's request reaches `handler`.
+    /// [`with_device_writes`](Self::with_device_writes). The handler follows
+    /// the rules on
+    /// [`ReinitializeHandler`](bacnet_server::server::ReinitializeHandler).
+    /// The SimpleACK goes out only after it returns, so schedule any restart
+    /// for after the reply instead of restarting inline. It runs synchronously
+    /// on the session's single dispatch task, so a slow or blocking handler
+    /// stalls the whole session: hand slow work such as backup files to a
+    /// task. Without a password set by
+    /// [`with_reinit_password`](Self::with_reinit_password) any peer reaches
+    /// it, and the Device-write authorizer doesn't cover this service, so
+    /// restrict sources through the context. Refuse with [`Error::Protocol`];
+    /// a panic or an [`Error::Reject`] is answered SERVICES / OTHER and the
+    /// session keeps serving.
     ///
     /// # Panics
     /// Panics if startup has already consumed the session configuration.
     pub fn with_reinitialize<F>(mut self, handler: F) -> Self
     where
-        F: Fn(ReinitializedState, &mut ObjectDatabase) -> Result<(), Error> + Send + Sync + 'static,
+        F: Fn(&ReinitializeContext, &mut ObjectDatabase) -> Result<(), Error>
+            + Send
+            + Sync
+            + 'static,
     {
         self.assert_configurable();
         self.reinitialize = Some(Arc::new(handler));
@@ -49,6 +65,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     }
 
     /// Sets the password a ReinitializeDevice request must carry.
+    ///
+    /// It takes effect only with [`with_reinitialize`](Self::with_reinitialize):
+    /// startup refuses a password without a handler.
     ///
     /// # Panics
     /// Panics if startup has already consumed the session configuration.
@@ -73,11 +92,19 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     pub(super) fn validate_device_execution(&mut self) -> Result<Option<ObjectIdentifier>, Error> {
         let writes = self.device_write_authorizer.is_some();
         let reinitialize = self.reinitialize.is_some();
-        // Names the capability that needs a Device, keeping the Device-writes messages as they were.
-        let (capability, subject) = if writes {
-            ("Device writes", "Device writes require")
-        } else {
-            ("ReinitializeDevice", "ReinitializeDevice requires")
+        if self.reinit_password.is_some() && !reinitialize {
+            return Err(Error::Encoding(
+                "a ReinitializeDevice password requires a ReinitializeDevice handler".into(),
+            ));
+        }
+        // Names the enabled capabilities that need the Device.
+        let (capability, subject) = match (writes, reinitialize) {
+            (true, true) => (
+                "Device writes and ReinitializeDevice",
+                "Device writes and ReinitializeDevice require",
+            ),
+            (true, false) => ("Device writes", "Device writes require"),
+            (false, _) => ("ReinitializeDevice", "ReinitializeDevice requires"),
         };
         if self.role == SessionRole::ClientOnly {
             return if writes || reinitialize {
@@ -140,7 +167,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
 
     // All fallible configuration validation (including source ownership) precedes
     // this commit. No await/callback or second copy of Device state is involved.
-    pub(super) fn commit_device_write_profile(&mut self, target: Option<ObjectIdentifier>) {
+    pub(super) fn commit_device_profile(&mut self, target: Option<ObjectIdentifier>) {
         let Some(oid) = target else { return };
         let services = self.executed_services();
         let db = Arc::get_mut(self.database.as_mut().expect("validated database"))

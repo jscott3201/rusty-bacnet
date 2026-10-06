@@ -5,7 +5,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         &mut self,
         receivers: bacnet_endpoint_core::endpoint_ingress::IngressReceivers,
         mut source_routes: Option<crate::source_audit::recipient::SourceRoutes>,
-        device_write_target: Option<ObjectIdentifier>,
+        device_target: Option<ObjectIdentifier>,
     ) -> Result<(), Error> {
         let egress = receivers.egress.clone();
         self.egress = Some(egress.clone());
@@ -70,7 +70,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                         responder.with_registered_port(oid, self.registered_port_lease.clone());
                 }
                 if let (Some(device), Some(authorizer)) =
-                    (device_write_target, self.device_write_authorizer.clone())
+                    (device_target, self.device_write_authorizer.clone())
                 {
                     responder = responder.with_device_writes(device, authorizer);
                 }

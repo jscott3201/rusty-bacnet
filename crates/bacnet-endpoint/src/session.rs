@@ -486,10 +486,10 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                 "endpoint session cannot be started more than once".into(),
             ));
         }
-        let device_write_target = self.validate_device_execution()?;
+        let device_target = self.validate_device_execution()?;
         let source_routes = self.prepare_source_audit_reporter()?;
         self.prepare_registered_port().await?;
-        self.commit_device_write_profile(device_write_target);
+        self.commit_device_profile(device_target);
         if self.lifecycle.compare_exchange(
             Lifecycle::Ready as u8,
             Lifecycle::Running as u8,
@@ -523,7 +523,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             return Err(error);
         }
         let bip_local_address = receivers.bip_local_address;
-        if let Err(error) = self.start_roles(receivers, source_routes, device_write_target) {
+        if let Err(error) = self.start_roles(receivers, source_routes, device_target) {
             // Keep cleanup ownership in self before awaiting. Cancellation leaves
             // Stopping plus intact joins; stop/Drop can still finish teardown.
             let _ = self.stop().await;

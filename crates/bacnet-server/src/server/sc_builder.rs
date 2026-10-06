@@ -151,21 +151,6 @@ impl ScServerBuilder {
         self
     }
 
-    /// Set the password required for ReinitializeDevice requests.
-    pub fn reinit_password(mut self, password: impl Into<String>) -> Self {
-        self.config.reinit_password = Some(password.into());
-        self
-    }
-
-    /// Set the ReinitializeDevice handler. See [`ServerConfig::on_reinitialize`].
-    pub fn on_reinitialize<F>(mut self, handler: F) -> Self
-    where
-        F: Fn(ReinitializedState, &mut ObjectDatabase) -> Result<(), Error> + Send + Sync + 'static,
-    {
-        self.config.on_reinitialize = Some(Arc::new(handler));
-        self
-    }
-
     /// Set the policy that authorizes inbound LifeSafetyOperation requests.
     pub fn life_safety_operation_authorizer<F>(mut self, authorizer: F) -> Self
     where

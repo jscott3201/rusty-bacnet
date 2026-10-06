@@ -44,8 +44,8 @@ use bacnet_transport::bip::BipTransport;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{
     AbortReason, ConfirmedServiceChoice, ErrorClass, ErrorCode, LifeSafetyOperation,
-    NetworkPriority, NotifyType, ObjectType, PropertyIdentifier, ReinitializedState, RejectReason,
-    Segmentation, UnconfirmedServiceChoice,
+    NetworkPriority, NotifyType, ObjectType, PropertyIdentifier, RejectReason, Segmentation,
+    UnconfirmedServiceChoice,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
@@ -134,7 +134,7 @@ pub struct TimeSyncData {
 }
 
 mod config;
-pub use config::{ReinitializeHandler, ServerConfig};
+pub use config::ServerConfig;
 mod audit_batch_queue;
 mod audit_batch_runtime;
 mod audit_context_preparation;
@@ -176,21 +176,6 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
     pub fn device_binding(mut self, binding: DeviceBinding) -> Result<Self, Error> {
         register_configured_binding(&mut self.configured_device_bindings, binding)?;
         Ok(self)
-    }
-
-    /// Set the password required for ReinitializeDevice requests.
-    pub fn reinit_password(mut self, password: impl Into<String>) -> Self {
-        self.config.reinit_password = Some(password.into());
-        self
-    }
-
-    /// Set the ReinitializeDevice handler. See [`ServerConfig::on_reinitialize`].
-    pub fn on_reinitialize<F>(mut self, handler: F) -> Self
-    where
-        F: Fn(ReinitializedState, &mut ObjectDatabase) -> Result<(), Error> + Send + Sync + 'static,
-    {
-        self.config.on_reinitialize = Some(Arc::new(handler));
-        self
     }
 
     /// Set the policy that authorizes inbound LifeSafetyOperation requests.
@@ -333,21 +318,6 @@ impl BipServerBuilder {
     pub fn device_binding(mut self, binding: DeviceBinding) -> Result<Self, Error> {
         register_configured_binding(&mut self.configured_device_bindings, binding)?;
         Ok(self)
-    }
-
-    /// Set the password required for ReinitializeDevice requests.
-    pub fn reinit_password(mut self, password: impl Into<String>) -> Self {
-        self.config.reinit_password = Some(password.into());
-        self
-    }
-
-    /// Set the ReinitializeDevice handler. See [`ServerConfig::on_reinitialize`].
-    pub fn on_reinitialize<F>(mut self, handler: F) -> Self
-    where
-        F: Fn(ReinitializedState, &mut ObjectDatabase) -> Result<(), Error> + Send + Sync + 'static,
-    {
-        self.config.on_reinitialize = Some(Arc::new(handler));
-        self
     }
 
     /// Set the policy that authorizes inbound LifeSafetyOperation requests.
@@ -555,7 +525,9 @@ impl BACnetServer<BipTransport> {
 
 mod clock;
 mod command_runs;
+mod reinitialize;
 mod time_sync_policy;
+pub use reinitialize::{ReinitializeContext, ReinitializeHandler};
 mod write_group;
 #[cfg(test)]
 pub(crate) use clock::clocked_test_database;

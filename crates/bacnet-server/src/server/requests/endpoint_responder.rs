@@ -62,8 +62,9 @@ fn device_write_target<'a>(
 
 /// Composition-visible inbound responder (narrow service scope).
 ///
-/// Handles `ReadProperty`, optionally authorized local Device Description/active recipient
-/// `WriteProperty` and optionally `ReinitializeDevice`, plus `Reject`/`Abort`. Full service parity is a later
+/// Handles `ReadProperty`, optionally authorized local Device
+/// Description/active recipient `WriteProperty`, optionally `ReinitializeDevice`
+/// through its handler, plus `Reject`/`Abort`. Full service parity is a later
 /// packet. Inbound transactions reuse the
 /// wire invoke ID directly and NEVER allocate from the shared outbound
 /// client ID pool, so equal inbound/outbound numeric IDs stay unambiguous
@@ -126,6 +127,7 @@ impl EndpointResponder {
     }
 
     /// Install the ReinitializeDevice handler and the password a request must carry.
+    /// The handler runs under the rules on [`ReinitializeHandler`].
     #[doc(hidden)]
     pub fn with_reinitialize(
         mut self,
@@ -134,6 +136,15 @@ impl EndpointResponder {
     ) -> Self {
         self.reinitialize = Some((handler, password));
         self
+    }
+
+    /// Refuses once the session owner has closed this responder.
+    fn ensure_open(&self) -> Result<(), Error> {
+        if self.open.load(Ordering::Acquire) {
+            Ok(())
+        } else {
+            Err(shutdown_error())
+        }
     }
 
     async fn write_device_property(
@@ -146,9 +157,7 @@ impl EndpointResponder {
             .map_err(Error::into_request_reject)?;
         {
             let mut db = self.db.write().await;
-            if !self.open.load(Ordering::Acquire) {
-                return Err(shutdown_error());
-            }
+            self.ensure_open()?;
             device_write_target(&mut db, *device, &write)?;
         }
         if write.property_array_index.is_some() {
@@ -190,9 +199,7 @@ impl EndpointResponder {
         }
         let mut db = self.db.write().await;
         // Close may win while this request waits for the database owner.
-        if !self.open.load(Ordering::Acquire) {
-            return Err(shutdown_error());
-        }
+        self.ensure_open()?;
         let MutationTarget::WriteProperty(write) = &context.target else {
             unreachable!("Device write context")
         };
@@ -237,9 +244,7 @@ impl EndpointResponder {
     /// execution is independent of whether its saved response authority survives.
     #[doc(hidden)]
     pub async fn handle(&self, mut received: ReceivedApdu) -> Result<bool, Error> {
-        if !self.open.load(Ordering::Acquire) {
-            return Err(shutdown_error());
-        }
+        self.ensure_open()?;
         let _registration_lease = match &self.registered_port {
             Some((_, lease)) => Some(lease.upgrade().ok_or_else(shutdown_error)?),
             None => None,
@@ -261,7 +266,7 @@ impl EndpointResponder {
         let checked_response =
             received.provenance.is_direct_peer() || received.direct_response.is_some();
         let invoke_id = request.invoke_id;
-        let reinitialize = self
+        let reinitialization = self
             .reinitialize
             .as_ref()
             .filter(|_| request.service_choice == ConfirmedServiceChoice::REINITIALIZE_DEVICE);
@@ -281,9 +286,24 @@ impl EndpointResponder {
                 self.read_work_limit,
             )
             .await
-        } else if let Some((handler, password)) = reinitialize {
-            confirmed_response::reinitialize_response(&self.db, &request, password, Some(handler))
-                .await
+        } else if let Some((handler, password)) = reinitialization {
+            let requester = reinitialize::Requester::new(
+                &received.source_mac,
+                received.source_network.as_ref(),
+                received.provenance,
+            );
+            // Close may win while the request waits for the database owner;
+            // it is refused then, before the handler runs.
+            let still_open = || self.ensure_open();
+            reinitialize::response(
+                &self.db,
+                &request,
+                password,
+                Some(handler),
+                requester,
+                still_open,
+            )
+            .await
         } else if request.service_choice == ConfirmedServiceChoice::WRITE_PROPERTY
             && self.device_writes.is_some()
         {
@@ -401,3 +421,7 @@ mod tests;
 #[cfg(test)]
 #[path = "endpoint_device_write_tests.rs"]
 mod device_write_tests;
+
+#[cfg(test)]
+#[path = "endpoint_reinitialize_tests.rs"]
+mod reinitialize_tests;

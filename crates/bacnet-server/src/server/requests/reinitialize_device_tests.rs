@@ -45,6 +45,18 @@ async fn dispatch(service_request: Bytes, password: Option<&str>, initial: DccSt
 }
 
 async fn dispatch_with(service_request: Bytes, config: ServerConfig, initial: DccState) -> Apdu {
+    dispatch_from(service_request, config, initial, None).await
+}
+
+/// The request's link source.
+const SOURCE_MAC: [u8; 6] = [127, 0, 0, 1, 0xba, 0xc0];
+
+async fn dispatch_from(
+    service_request: Bytes,
+    config: ServerConfig,
+    initial: DccState,
+    source_network: Option<NpduAddress>,
+) -> Apdu {
     let network = Arc::new(NetworkLayer::new(BipTransport::new(
         Ipv4Addr::LOCALHOST,
         0,
@@ -74,8 +86,8 @@ async fn dispatch_with(service_request: Bytes, config: ServerConfig, initial: Dc
         },
         &Arc::new(ConfirmedRequestTracker::default()),
         &Arc::new(crate::server::request_tasks::RequestTasks::default()).spawner(),
-        &[127, 0, 0, 1, 0xba, 0xc0],
-        None,
+        &SOURCE_MAC,
+        source_network,
         request,
         Some(tx),
     )
@@ -134,23 +146,22 @@ async fn reinitialize_device_password_failure_precedes_refusal() {
     }
 }
 
-/// A handler that records each state it is asked for, and refuses with `refusal` if given.
+type Received = Arc<std::sync::Mutex<Vec<ReinitializeContext>>>;
+
+/// A handler that records the context of each request it is asked to carry
+/// out, then returns what `outcome` does.
 fn recording_config(
     password: Option<&str>,
-    refusal: Option<(ErrorClass, ErrorCode)>,
-) -> (ServerConfig, Arc<std::sync::Mutex<Vec<ReinitializedState>>>) {
-    let received = Arc::new(std::sync::Mutex::new(Vec::new()));
+    outcome: impl Fn() -> Result<(), Error> + Send + Sync + 'static,
+) -> (ServerConfig, Received) {
+    let received = Received::default();
     let recorded = Arc::clone(&received);
-    let handler: ReinitializeHandler = Arc::new(move |state, _database: &mut ObjectDatabase| {
-        recorded.lock().unwrap().push(state);
-        match refusal {
-            None => Ok(()),
-            Some((class, code)) => Err(Error::Protocol {
-                class: class.to_raw() as u32,
-                code: code.to_raw() as u32,
-            }),
-        }
-    });
+    let handler: ReinitializeHandler = Arc::new(
+        move |context: &ReinitializeContext, _database: &mut ObjectDatabase| {
+            recorded.lock().unwrap().push(context.clone());
+            outcome()
+        },
+    );
     let config = ServerConfig {
         reinit_password: password.map(str::to_owned),
         on_reinitialize: Some(handler),
@@ -159,11 +170,22 @@ fn recording_config(
     (config, received)
 }
 
+fn states(received: &Received) -> Vec<ReinitializedState> {
+    received.lock().unwrap().iter().map(|c| c.state).collect()
+}
+
+fn protocol(class: ErrorClass, code: ErrorCode) -> Error {
+    Error::Protocol {
+        class: class.to_raw() as u32,
+        code: code.to_raw() as u32,
+    }
+}
+
 #[tokio::test(start_paused = true)]
 async fn reinitialize_device_passes_every_defined_state_to_the_handler() {
     for state in DEFINED_STATES {
         for initial in [DccState::Enable, DccState::DisableInitiation] {
-            let (config, received) = recording_config(Some("reinit-pw"), None);
+            let (config, received) = recording_config(Some("reinit-pw"), || Ok(()));
 
             let apdu = dispatch_with(request_data(state, Some("reinit-pw")), config, initial).await;
 
@@ -175,7 +197,7 @@ async fn reinitialize_device_passes_every_defined_state_to_the_handler() {
                 ack.service_choice,
                 ConfirmedServiceChoice::REINITIALIZE_DEVICE
             );
-            assert_eq!(*received.lock().unwrap(), vec![state]);
+            assert_eq!(states(&received), vec![state]);
         }
     }
 }
@@ -183,7 +205,7 @@ async fn reinitialize_device_passes_every_defined_state_to_the_handler() {
 #[tokio::test(start_paused = true)]
 async fn reinitialize_device_refuses_an_undefined_state_without_the_handler() {
     for state in UNDEFINED_STATES {
-        let (config, received) = recording_config(Some("reinit-pw"), None);
+        let (config, received) = recording_config(Some("reinit-pw"), || Ok(()));
 
         assert_error(
             dispatch_with(
@@ -201,10 +223,12 @@ async fn reinitialize_device_refuses_an_undefined_state_without_the_handler() {
 
 #[tokio::test(start_paused = true)]
 async fn reinitialize_device_sends_the_handlers_error() {
-    let (config, _) = recording_config(
-        None,
-        Some((ErrorClass::DEVICE, ErrorCode::CONFIGURATION_IN_PROGRESS)),
-    );
+    let (config, _) = recording_config(None, || {
+        Err(protocol(
+            ErrorClass::DEVICE,
+            ErrorCode::CONFIGURATION_IN_PROGRESS,
+        ))
+    });
 
     assert_error(
         dispatch_with(
@@ -220,7 +244,7 @@ async fn reinitialize_device_sends_the_handlers_error() {
 
 #[tokio::test(start_paused = true)]
 async fn reinitialize_device_password_failure_never_reaches_the_handler() {
-    let (config, received) = recording_config(Some("reinit-pw"), None);
+    let (config, received) = recording_config(Some("reinit-pw"), || Ok(()));
 
     assert_error(
         dispatch_with(
@@ -233,6 +257,105 @@ async fn reinitialize_device_password_failure_never_reaches_the_handler() {
         ErrorCode::PASSWORD_FAILURE,
     );
     assert!(received.lock().unwrap().is_empty());
+}
+
+/// The handler may have partly acted before it panicked, so the reply is
+/// SERVICES / OTHER: never a SimpleACK, a Reject, an Abort or silence.
+#[tokio::test(start_paused = true)]
+async fn reinitialize_device_handler_panic_is_answered_services_other() {
+    let (config, received) = recording_config(None, || panic!("reinitialize handler panic"));
+
+    assert_error(
+        dispatch_with(
+            request_data(ReinitializedState::WARMSTART, None),
+            config,
+            DccState::Enable,
+        )
+        .await,
+        ErrorClass::SERVICES,
+        ErrorCode::OTHER,
+    );
+    assert_eq!(states(&received), vec![ReinitializedState::WARMSTART]);
+}
+
+/// Once the handler has run the request may no longer be rejected (Clause
+/// 20.1.8), so a Reject, or any error with no class and code, is sent as
+/// SERVICES / OTHER, while a structured refusal keeps its class and code.
+#[tokio::test(start_paused = true)]
+async fn reinitialize_device_handler_reject_is_answered_services_other() {
+    let reject = || Error::Reject {
+        reason: RejectReason::PARAMETER_OUT_OF_RANGE.to_raw(),
+    };
+    let abort = || Error::Abort {
+        reason: AbortReason::OTHER.to_raw(),
+    };
+    let encoding = || Error::Encoding("handler failure".into());
+    for error in [reject, abort, encoding] {
+        let (config, _) = recording_config(None, move || Err(error()));
+        assert_error(
+            dispatch_with(
+                request_data(ReinitializedState::START_RESTORE, None),
+                config,
+                DccState::Enable,
+            )
+            .await,
+            ErrorClass::SERVICES,
+            ErrorCode::OTHER,
+        );
+    }
+    let (config, _) = recording_config(None, || {
+        Err(Error::Structured {
+            class: ErrorClass::DEVICE.to_raw() as u32,
+            code: ErrorCode::CONFIGURATION_IN_PROGRESS.to_raw() as u32,
+            detail: Box::new(bacnet_types::error::ErrorDetail::FirstFailedElementNumber(
+                1,
+            )),
+        })
+    });
+    assert_error(
+        dispatch_with(
+            request_data(ReinitializedState::START_RESTORE, None),
+            config,
+            DccState::Enable,
+        )
+        .await,
+        ErrorClass::DEVICE,
+        ErrorCode::CONFIGURATION_IN_PROGRESS,
+    );
+}
+
+/// The handler sees who asked, direct or routed, and the request's invoke
+/// ID; its Debug output carries the address lengths, not the addresses.
+#[tokio::test(start_paused = true)]
+async fn reinitialize_device_context_names_the_requester() {
+    let routed = NpduAddress {
+        network: 77,
+        mac_address: MacAddr::from_slice(&[0x2c]),
+    };
+    for source_network in [None, Some(routed)] {
+        let (config, received) = recording_config(None, || Ok(()));
+        let apdu = dispatch_from(
+            request_data(ReinitializedState::ACTIVATE_CHANGES, None),
+            config,
+            DccState::Enable,
+            source_network.clone(),
+        )
+        .await;
+        assert!(matches!(apdu, Apdu::SimpleAck(_)), "got {apdu:?}");
+        let context = received.lock().unwrap().pop().unwrap();
+        assert_eq!(context.state, ReinitializedState::ACTIVATE_CHANGES);
+        assert_eq!(context.source_mac.as_slice(), &SOURCE_MAC);
+        assert_eq!(context.source_network, source_network);
+        assert_eq!(context.invoke_id, 42);
+        assert_eq!(
+            context.provenance,
+            bacnet_transport::port::TransportProvenance::unverified()
+        );
+        assert!(context.direct_sc_identity().is_none());
+        let debug = format!("{context:?}");
+        assert!(debug.contains("source_mac_len: 6"), "{debug}");
+        assert!(!debug.contains("186"), "{debug}");
+    }
 }
 
 #[tokio::test(start_paused = true)]

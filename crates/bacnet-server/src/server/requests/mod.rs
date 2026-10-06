@@ -297,13 +297,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 .await
             }
             s if s == ConfirmedServiceChoice::REINITIALIZE_DEVICE => {
-                confirmed_response::reinitialize_response(
-                    db,
-                    &req,
-                    &config.reinit_password,
-                    config.on_reinitialize.as_ref(),
-                )
-                .await
+                let requester =
+                    reinitialize::Requester::new(source_mac, source_network.as_ref(), provenance);
+                let (password, handler) = (&config.reinit_password, &config.on_reinitialize);
+                reinitialize::response(db, &req, password, handler.as_ref(), requester, || Ok(()))
+                    .await
             }
             s if s == ConfirmedServiceChoice::GET_EVENT_INFORMATION => {
                 event_information::response(

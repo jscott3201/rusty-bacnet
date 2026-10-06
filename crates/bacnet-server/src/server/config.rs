@@ -1,11 +1,6 @@
 use super::*;
 use crate::mutation::{MutationAuthorizationContext, MutationAuthorizer, MutationPolicy};
 
-/// Carries out a ReinitializeDevice request for the requested state, with the object database
-/// write-locked. An `Err` is sent back in place of the SimpleACK.
-pub type ReinitializeHandler =
-    Arc<dyn Fn(ReinitializedState, &mut ObjectDatabase) -> Result<(), Error> + Send + Sync>;
-
 /// Server configuration.
 #[derive(Clone)]
 pub struct ServerConfig {
@@ -72,8 +67,20 @@ pub struct ServerConfig {
     /// A panic is caught (with unwind builds); the change stands and ingress
     /// continues. This callback cannot authorize or roll back synchronization.
     pub on_time_sync: Option<Arc<dyn Fn(TimeSyncData) + Send + Sync>>,
-    /// Optional ReinitializeDevice handler. Without it every request is refused with
+    /// Optional ReinitializeDevice handler, called with the requester's
+    /// [`ReinitializeContext`] once the request passes its password and state
+    /// checks. Without it every such request is refused with
     /// SERVICES / SERVICE_REQUEST_DENIED.
+    ///
+    /// The rules are on [`ReinitializeHandler`]. In short: the SimpleACK goes
+    /// out only after the handler returns, so schedule any restart for after
+    /// the reply rather than restarting inline. It runs synchronously with the
+    /// object database write-locked, so keep it quick and hand slow work to a
+    /// task. Without [`reinit_password`](Self::reinit_password) any peer
+    /// reaches it, and neither the mutation policy nor the mutation authorizer
+    /// covers this service, so restrict sources through the context. Refuse
+    /// with [`Error::Protocol`]: a panic or an [`Error::Reject`] is answered
+    /// SERVICES / OTHER.
     pub on_reinitialize: Option<ReinitializeHandler>,
     /// Local mutation authorization mode (default: permissive). SC mTLS channel/peer
     /// authentication is not service authorization; addresses here are claimed,
