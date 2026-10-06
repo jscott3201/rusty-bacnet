@@ -255,7 +255,7 @@ const I: Duration = Duration::from_millis(50);
 /// Wait for a turn to A and record when it came; hold the request open
 /// until `held_for` has passed.
 async fn send_after(
-    pacer: &RequestPacer,
+    pacer: &Arc<RequestPacer>,
     sent: &StdMutex<Vec<Duration>>,
     start: Instant,
     held_for: Duration,
@@ -279,7 +279,7 @@ fn assert_spaced(sent: &StdMutex<Vec<Duration>>) {
 /// back.
 #[tokio::test(start_paused = true)]
 async fn waiters_that_wake_late_together_still_go_an_interval_apart() {
-    let pacer = RequestPacer::new(I);
+    let pacer = Arc::new(RequestPacer::new(I));
     let start = Instant::now();
     let sent = StdMutex::new(vec![Duration::ZERO]);
     let _out = pacer.wait(local(A)).await;
@@ -295,7 +295,7 @@ async fn waiters_that_wake_late_together_still_go_an_interval_apart() {
 /// Waiters released together go one at a time, the interval apart.
 #[tokio::test(start_paused = true)]
 async fn waiters_released_together_go_an_interval_apart() {
-    let pacer = RequestPacer::new(I);
+    let pacer = Arc::new(RequestPacer::new(I));
     let start = Instant::now();
     let sent = StdMutex::new(Vec::new());
     let first = pacer.wait(local(A)).await;
@@ -322,7 +322,7 @@ async fn waiters_released_together_go_an_interval_apart() {
 /// A waiter given up leaves the destination as it was.
 #[tokio::test(start_paused = true)]
 async fn a_waiter_given_up_leaves_nothing_behind() {
-    let pacer = RequestPacer::new(I);
+    let pacer = Arc::new(RequestPacer::new(I));
     let _out = pacer.wait(local(A)).await;
     let before = pacer.latest(&local(A));
     let given_up = tokio::time::timeout(Duration::from_millis(10), pacer.wait(local(A))).await;
@@ -335,7 +335,7 @@ async fn a_waiter_given_up_leaves_nothing_behind() {
 /// doesn't push the next request back.
 #[tokio::test(start_paused = true)]
 async fn an_earlier_finish_is_ignored() {
-    let pacer = RequestPacer::new(I);
+    let pacer = Arc::new(RequestPacer::new(I));
     let start = Instant::now();
     let a = pacer.wait(local(A)).await; // out from 0
     let b = pacer.wait(local(A)).await; // goes at 50, stays out
@@ -398,7 +398,7 @@ async fn a_stale_guard_leaves_a_destination_made_again_alone() {
 
 #[tokio::test(start_paused = true)]
 async fn the_pacer_forgets_idle_destinations_and_stays_bounded() {
-    let pacer = RequestPacer::new(Duration::from_millis(10));
+    let pacer = Arc::new(RequestPacer::new(Duration::from_millis(10)));
     // Routed and local destinations with the same MAC are different devices.
     let routed = PaceKey::of(ConfirmedTarget::Routed {
         router_mac: B,

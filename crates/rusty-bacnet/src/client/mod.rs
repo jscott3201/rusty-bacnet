@@ -57,6 +57,19 @@ fn validate_write_priority(priority: Option<u8>) -> PyResult<()> {
         .map_err(|error| PyValueError::new_err(error.to_string()))
 }
 
+/// The `min_request_interval_ms` keyword, as `BACnetClient` and the endpoint
+/// owners take it (#1535, #1542): more than an hour raises `ValueError` at
+/// construction, before any I/O.
+pub(crate) fn parse_min_request_interval_ms(interval_ms: u64) -> PyResult<u64> {
+    if interval_ms > client::MAX_MIN_REQUEST_INTERVAL_MS {
+        return Err(PyValueError::new_err(format!(
+            "min_request_interval_ms must be 0..={}, got {interval_ms}",
+            client::MAX_MIN_REQUEST_INTERVAL_MS
+        )));
+    }
+    Ok(interval_ms)
+}
+
 /// The Who-Is or Who-Has range the `low_limit` and `high_limit` keywords
 /// give: both or neither, each from 0 to 4194303 (Clauses 16.9 and 16.10).
 /// One alone, a low limit above the high one, or a limit past 4194303 raises

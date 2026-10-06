@@ -95,18 +95,21 @@ class EndpointStubParityTests(unittest.TestCase):
                            "network_port_instance", "max_apdu", "segmentation",
                            "services", "device_uuid", "queue_capacity",
                            "apdu_timeout_ms", "apdu_retries", "registered_network_port",
-                           "read_work_limit", "share_port_by_address"]),
+                           "read_work_limit", "share_port_by_address",
+                           "min_request_interval_ms"]),
             (ScEndpoint, ["device_instance", "sc_hub", "sc_vmac", "sc_ca_cert",
                           "sc_client_cert", "sc_client_key", "sc_device_uuid",
                           "device_name", "vendor_id", "sc_heartbeat_interval_ms",
                           "sc_heartbeat_timeout_ms", "network_number",
                           "network_port_instance", "max_apdu", "segmentation",
-                          "services", "queue_capacity", "read_work_limit"]),
+                          "services", "queue_capacity", "read_work_limit",
+                          "min_request_interval_ms"]),
             (MstpEndpoint, ["device_instance", "serial_port", "device_name", "vendor_id",
                             "mstp_baud", "mstp_mac", "mstp_max_master",
                             "mstp_max_info_frames", "max_apdu", "segmentation",
                             "services", "device_uuid", "queue_capacity",
-                            "apdu_timeout_ms", "apdu_retries", "read_work_limit"]),
+                            "apdu_timeout_ms", "apdu_retries", "read_work_limit",
+                            "min_request_interval_ms"]),
         ]
         for cls, expected in cases:
             with self.subTest(cls=cls.__name__):
@@ -117,10 +120,11 @@ class EndpointStubParityTests(unittest.TestCase):
                 # Kinds too: a parameter that turns keyword-only (or stops
                 # being so) on either side fails here.
                 self.assertEqual(runtime_arg_kinds(cls), stub_arg_kinds(method))
-                self.assertEqual(
-                    inspect.signature(cls).parameters["read_work_limit"].kind,
-                    inspect.Parameter.KEYWORD_ONLY,
-                )
+                for keyword in ("read_work_limit", "min_request_interval_ms"):
+                    self.assertEqual(
+                        inspect.signature(cls).parameters[keyword].kind,
+                        inspect.Parameter.KEYWORD_ONLY,
+                    )
 
     def test_role_and_owner_methods_match_stub(self):
         tree = installed_stub()

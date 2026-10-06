@@ -15,9 +15,13 @@
 //! there a request waiting for the lease goes as soon as the lease frees: the
 //! pause after a reply holds for requests made one after another, not for
 //! concurrent ones.
+//!
+//! The endpoint client paces through this same type (#1542), before it
+//! reserves an invoke ID, so a request waiting for its turn holds nothing
+//! from the device's shared pool.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
@@ -34,7 +38,7 @@ const MAX_PACED_DESTINATIONS: usize = 4_096;
 pub const MAX_MIN_REQUEST_INTERVAL_MS: u64 = 3_600_000;
 
 /// Refuse an interval past [`MAX_MIN_REQUEST_INTERVAL_MS`].
-pub(super) fn validate_interval_ms(interval_ms: u64) -> Result<(), Error> {
+pub(crate) fn validate_interval_ms(interval_ms: u64) -> Result<(), Error> {
     if interval_ms > MAX_MIN_REQUEST_INTERVAL_MS {
         return Err(Error::Encoding(format!(
             "invalid min-request-interval {interval_ms} ms; expected 0..={MAX_MIN_REQUEST_INTERVAL_MS}"
@@ -46,26 +50,30 @@ pub(super) fn validate_interval_ms(interval_ms: u64) -> Result<(), Error> {
 /// The device a confirmed request goes to: its network, `None` for this
 /// one, and its MAC.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(super) struct PaceKey {
+pub(crate) struct PaceKey {
     network: Option<u16>,
     mac: MacAddr,
 }
 
 impl PaceKey {
+    /// The device at `mac` on `network`, `None` for this one. Name a station
+    /// on this network as a local one, as each client does once it has
+    /// localized the destination, so both spellings share one lane.
+    pub(crate) fn new(network: Option<u16>, mac: &[u8]) -> Self {
+        Self {
+            network,
+            mac: MacAddr::from_slice(mac),
+        }
+    }
+
     pub(super) fn of(target: ConfirmedTarget<'_>) -> Self {
         match target {
-            ConfirmedTarget::Local { mac } => Self {
-                network: None,
-                mac: MacAddr::from_slice(mac),
-            },
+            ConfirmedTarget::Local { mac } => Self::new(None, mac),
             ConfirmedTarget::Routed {
                 dest_network,
                 dest_mac,
                 ..
-            } => Self {
-                network: Some(dest_network),
-                mac: MacAddr::from_slice(dest_mac),
-            },
+            } => Self::new(Some(dest_network), dest_mac),
         }
     }
 }
@@ -103,27 +111,29 @@ struct Lanes {
 
 /// Spaces the confirmed requests to each destination by a fixed interval.
 #[derive(Debug)]
-pub(super) struct RequestPacer {
+pub(crate) struct RequestPacer {
     interval: Duration,
     capacity: usize,
     lanes: Mutex<Lanes>,
 }
 
 /// Held for the life of a request that went; dropping it, when the request
-/// finishes or its caller gives up, starts the interval for the next.
+/// finishes or its caller gives up, starts the interval for the next. It
+/// keeps its pacer alive, so a request handed to a task of its own, as an
+/// audited endpoint request is, takes its guard along.
 #[must_use = "the request counts as finished when the guard drops"]
-pub(super) struct PaceGuard<'a> {
-    pacer: &'a RequestPacer,
-    /// The destination, the lane's generation and the request's ticket.
-    sent: Option<(PaceKey, u64, u64)>,
+pub(crate) struct PaceGuard {
+    /// The pacer, the destination, the lane's generation and the request's
+    /// ticket; `None` when the pacer doesn't pace.
+    sent: Option<(Arc<RequestPacer>, PaceKey, u64, u64)>,
 }
 
-impl Drop for PaceGuard<'_> {
+impl Drop for PaceGuard {
     fn drop(&mut self) {
-        let Some((key, generation, ticket)) = self.sent.take() else {
+        let Some((pacer, key, generation, ticket)) = self.sent.take() else {
             return;
         };
-        let mut lanes = self.pacer.lock();
+        let mut lanes = pacer.lock();
         if let Some(lane) = lanes.by_destination.get_mut(&key) {
             // Only the latest request's finish moves the next one; an
             // earlier request finishing late, or one from a lane forgotten
@@ -136,7 +146,7 @@ impl Drop for PaceGuard<'_> {
 }
 
 impl RequestPacer {
-    pub(super) fn new(interval: Duration) -> Self {
+    pub(crate) fn new(interval: Duration) -> Self {
         Self::with_capacity(interval, MAX_PACED_DESTINATIONS)
     }
 
@@ -180,12 +190,9 @@ impl RequestPacer {
     /// The check and the claim happen under one lock, so two requests that
     /// wake together can't both go: the second sees the first and sleeps
     /// again. The lock is never held while sleeping.
-    pub(super) async fn wait(&self, key: PaceKey) -> PaceGuard<'_> {
+    pub(crate) async fn wait(self: &Arc<Self>, key: PaceKey) -> PaceGuard {
         if self.interval.is_zero() {
-            return PaceGuard {
-                pacer: self,
-                sent: None,
-            };
+            return PaceGuard { sent: None };
         }
         let interval = self.interval;
         loop {
@@ -199,10 +206,9 @@ impl RequestPacer {
                 {
                     Some(due) if due > now => due,
                     _ => {
-                        let sent = self.claim(&mut lanes, &key, now);
+                        let (key, generation, ticket) = self.claim(&mut lanes, &key, now);
                         return PaceGuard {
-                            pacer: self,
-                            sent: Some(sent),
+                            sent: Some((Arc::clone(self), key, generation, ticket)),
                         };
                     }
                 }
@@ -235,13 +241,13 @@ impl RequestPacer {
     }
 
     #[cfg(test)]
-    pub(super) fn remembered(&self) -> usize {
+    pub(crate) fn remembered(&self) -> usize {
         self.lock().by_destination.len()
     }
 
     /// The destination's latest request: when it was sent and finished.
     #[cfg(test)]
-    pub(super) fn latest(&self, key: &PaceKey) -> Option<(Instant, Option<Instant>)> {
+    pub(crate) fn latest(&self, key: &PaceKey) -> Option<(Instant, Option<Instant>)> {
         self.lock()
             .by_destination
             .get(key)
@@ -250,6 +256,6 @@ impl RequestPacer {
 }
 
 #[cfg(test)]
-pub(super) fn with_capacity(interval: Duration, capacity: usize) -> RequestPacer {
-    RequestPacer::with_capacity(interval, capacity)
+pub(super) fn with_capacity(interval: Duration, capacity: usize) -> Arc<RequestPacer> {
+    Arc::new(RequestPacer::with_capacity(interval, capacity))
 }

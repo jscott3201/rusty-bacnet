@@ -5096,7 +5096,7 @@ save_checkpoint(cursor); // resume from it later for the records logged since
 
 The endpoint client has the same `read_log_page`, and
 `bacnet_client::log_reader::read_log_page` runs over any `LogRequester`. The
-endpoint client isn't paced: its pages go back to back.
+endpoint session's `min_request_interval_ms` paces its pages as below.
 
 ### Pacing
 
@@ -5113,10 +5113,24 @@ alike, so a slow device can serve its other clients between them; requests to
 different destinations don't wait on each other. Pacing runs before a routed
 request takes its path lease, which every device on that network behind that
 router shares, so there the pause after a reply holds for requests made one
-after another, not for concurrent ones. The endpoint client has no pacing.
+after another, not for concurrent ones.
+
+The endpoint client takes the same setting (#1542): `SessionConfig`'s
+`min_request_interval_ms`, or `min_request_interval_ms` on `BipEndpointBuilder`,
+`ScEndpointBuilder` and `MstpEndpointBuilder`, with the same default and cap
+(more than an hour fails `EndpointSession::new`). It uses the same pacer, so
+the interval is measured and a destination is keyed (network plus MAC) as
+above. A request waits before it reserves an invoke ID, so a waiting request
+holds none of the session's shared pool, and an audited request waits before
+its record is stamped. On either client only new confirmed requests wait: a
+retry or a segment of a request already sent keeps its turn, and replies,
+notifications and unconfirmed requests go at once.
 
 ```rust
 let client = BACnetClient::bip_builder().min_request_interval_ms(50).build().await?;
+let session = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
+    .min_request_interval_ms(50)
+    .build_session()?;
 ```
 
 ### List Manipulation

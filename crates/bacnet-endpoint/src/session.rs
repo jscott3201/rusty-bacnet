@@ -120,9 +120,9 @@ pub enum SessionRole {
 /// limit).
 ///
 /// Typed at the public boundary: every field is validated where it matters
-/// (`queue_capacity == 0` or `read_work_limit == 0` fails
-/// [`EndpointSession::new`]; APDU/timer values flow into the client role
-/// config unchanged).
+/// (`queue_capacity == 0`, `read_work_limit == 0` or a
+/// `min_request_interval_ms` past an hour fails [`EndpointSession::new`];
+/// APDU/timer values flow into the client role config unchanged).
 ///
 /// ```
 /// use bacnet_endpoint::session::SessionConfig;
@@ -131,6 +131,7 @@ pub enum SessionRole {
 /// assert!(config.queue_capacity > 0);
 /// assert_eq!(config.max_apdu_length, 480);
 /// assert_eq!(config.read_work_limit, 256);
+/// assert_eq!(config.min_request_interval_ms, 0);
 /// ```
 #[derive(Clone, Debug)]
 pub struct SessionConfig {
@@ -164,6 +165,16 @@ pub struct SessionConfig {
     /// Must be greater than zero; [`EndpointSession::new`] returns
     /// [`Error::Encoding`] otherwise.
     pub read_work_limit: usize,
+    /// Least time, in milliseconds, between the client role's confirmed
+    /// requests to one destination (default 0: no pacing), measured as
+    /// [`ClientConfig::min_request_interval_ms`] says for `BACnetClient`
+    /// (#1542).
+    ///
+    /// Only new confirmed requests wait: a retry keeps its request's turn,
+    /// and replies, notifications and unconfirmed requests go at once. At
+    /// most [`MAX_MIN_REQUEST_INTERVAL_MS`](bacnet_client::client::MAX_MIN_REQUEST_INTERVAL_MS),
+    /// an hour; [`EndpointSession::new`] returns [`Error::Encoding`] past it.
+    pub min_request_interval_ms: u64,
 }
 
 impl Default for SessionConfig {
@@ -175,6 +186,7 @@ impl Default for SessionConfig {
             max_apdu_length: 480,
             read_work_limit: bacnet_server::server::ReadPropertyMultipleBudget::default()
                 .max_result_elements,
+            min_request_interval_ms: 0,
         }
     }
 }
@@ -288,7 +300,8 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// Creates a session owning `transport` (not yet started).
     ///
     /// Returns [`Error::Encoding`] when `config.queue_capacity` or
-    /// `config.read_work_limit` is zero. Normally built via
+    /// `config.read_work_limit` is zero, or `config.min_request_interval_ms`
+    /// is more than an hour. Normally built via
     /// [`BipEndpointBuilder`](crate::bip::BipEndpointBuilder),
     /// [`ScEndpointBuilder`](crate::sc::ScEndpointBuilder), or
     /// [`MstpEndpointBuilder`](crate::mstp::MstpEndpointBuilder) instead of
@@ -316,12 +329,20 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                 "endpoint session read work limit must be greater than zero".into(),
             ));
         }
+        let interval = config.min_request_interval_ms;
+        if interval > bacnet_client::client::MAX_MIN_REQUEST_INTERVAL_MS {
+            return Err(Error::Encoding(format!(
+                "endpoint session min-request-interval {interval} ms is more than {} ms",
+                bacnet_client::client::MAX_MIN_REQUEST_INTERVAL_MS
+            )));
+        }
         let coordinator = Arc::new(OutboundTransactionCoordinator::new());
         let token = SessionToken::new(Arc::clone(&coordinator));
         let client_config = ClientConfig {
             apdu_timeout_ms: config.apdu_timeout_ms,
             apdu_retries: config.apdu_retries,
             max_apdu_length: config.max_apdu_length,
+            min_request_interval_ms: interval,
             ..ClientConfig::default()
         };
         Ok(Self {
@@ -990,3 +1011,7 @@ mod local_network_tests;
 #[cfg(test)]
 #[path = "read_work_limit_tests.rs"]
 mod read_work_limit_tests;
+
+#[cfg(test)]
+#[path = "client_pacing_tests.rs"]
+mod client_pacing_tests;

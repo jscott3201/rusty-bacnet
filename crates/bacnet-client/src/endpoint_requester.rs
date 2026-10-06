@@ -22,6 +22,7 @@ use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::MacAddr;
 use bytes::BytesMut;
 
+use crate::client::pacing::{self, PaceGuard, PaceKey, RequestPacer};
 use crate::client::{
     check_routed_unicast, confirmed_response_result, new_coordinated_tsm, ClientConfig,
     TransactionPeer,
@@ -30,7 +31,7 @@ use crate::client::{
 mod operation;
 #[path = "endpoint_operation_request.rs"]
 mod operation_request;
-pub use operation::{EndpointOperationOutcome, PreparedEndpointOperation};
+pub use operation::{EndpointOperationOutcome, PacedEndpointOperation, PreparedEndpointOperation};
 pub use operation_request::{EndpointOperationAck, EndpointOperationRequest};
 #[path = "endpoint_read_request.rs"]
 mod read_request;
@@ -62,6 +63,27 @@ fn outbound_tsm_peer(destination: &EndpointApduDestination) -> TransactionPeer {
         | EndpointApduDestination::RemoteBroadcast { .. }
         | EndpointApduDestination::GlobalBroadcast => CanonicalPeer::direct(&[]),
     })
+}
+
+/// The pacing lane of a checked, localized destination: network plus MAC,
+/// as the standalone client keys its own (#1542).
+fn pace_key(destination: &EndpointApduDestination) -> PaceKey {
+    match destination {
+        EndpointApduDestination::Direct { destination_mac } => PaceKey::new(None, destination_mac),
+        EndpointApduDestination::Routed {
+            destination_network,
+            destination_mac,
+            ..
+        }
+        | EndpointApduDestination::RoutedViaLocalBroadcast {
+            destination_network,
+            destination_mac,
+        } => PaceKey::new(Some(*destination_network), destination_mac),
+        // Refused before pacing: a confirmed request names one device.
+        EndpointApduDestination::LocalBroadcast
+        | EndpointApduDestination::RemoteBroadcast { .. }
+        | EndpointApduDestination::GlobalBroadcast => PaceKey::new(None, &[]),
+    }
 }
 
 fn reply_destination_for(received: &ReceivedApdu) -> EndpointApduDestination {
@@ -105,6 +127,9 @@ struct EndpointRequesterInner {
     timeout: Duration,
     retries: u8,
     max_apdu_length: u16,
+    /// The minimum interval between confirmed requests to one destination,
+    /// measured as the standalone client measures it (#1542).
+    pacer: Arc<RequestPacer>,
 }
 
 impl Drop for EndpointRequesterInner {
@@ -125,6 +150,11 @@ pub struct EndpointRequester {
 
 impl EndpointRequester {
     /// Attaches requester state to endpoint egress and a device-wide coordinator.
+    ///
+    /// `config.min_request_interval_ms` paces confirmed requests to each
+    /// destination as [`ClientConfig::min_request_interval_ms`] says; past
+    /// [`MAX_MIN_REQUEST_INTERVAL_MS`](crate::client::MAX_MIN_REQUEST_INTERVAL_MS)
+    /// fails here.
     #[doc(hidden)]
     pub fn new(
         egress: EndpointEgress,
@@ -132,6 +162,10 @@ impl EndpointRequester {
         config: ClientConfig,
     ) -> Result<Self, Error> {
         validate_max_apdu_length(config.max_apdu_length)?;
+        pacing::validate_interval_ms(config.min_request_interval_ms)?;
+        let pacer = Arc::new(RequestPacer::new(Duration::from_millis(
+            config.min_request_interval_ms,
+        )));
         let timeout = Duration::from_millis(config.apdu_timeout_ms);
         let retries = config.apdu_retries;
         let max_apdu_length = config.max_apdu_length;
@@ -144,6 +178,7 @@ impl EndpointRequester {
                 timeout,
                 retries,
                 max_apdu_length,
+                pacer,
             }),
         })
     }
@@ -192,17 +227,19 @@ impl EndpointRequester {
             object_identifier,
             property_identifier,
             property_array_index,
-        )?
+        )
+        .await?
         .execute()
         .await
         .result?
         .into_property()
     }
 
-    /// Validate and reserve the exact transaction before transferring ownership.
-    /// Dropping the prepared operation releases only its own requester lease.
+    /// Validate, pace and reserve the exact transaction before transferring
+    /// ownership. Dropping the prepared operation releases only its own
+    /// requester lease.
     #[doc(hidden)]
-    pub fn prepare_read_property(
+    pub async fn prepare_read_property(
         &self,
         destination: EndpointApduDestination,
         data_attributes: Vec<DataAttribute>,
@@ -219,11 +256,13 @@ impl EndpointRequester {
                 property_array_index,
             }),
         )
+        .await
     }
 
-    /// Validate/encode before reserving a lease for the supported read services.
+    /// Validate/encode, pace, then reserve a lease for the supported read
+    /// services.
     #[doc(hidden)]
-    pub fn prepare_read(
+    pub async fn prepare_read(
         &self,
         destination: EndpointApduDestination,
         data_attributes: Vec<DataAttribute>,
@@ -234,11 +273,12 @@ impl EndpointRequester {
             data_attributes,
             EndpointOperationRequest::Read(request),
         )
+        .await
     }
 
     /// Prepare one WriteProperty on the same requester and lease pool.
     #[doc(hidden)]
-    pub fn prepare_write(
+    pub async fn prepare_write(
         &self,
         destination: EndpointApduDestination,
         data_attributes: Vec<DataAttribute>,
@@ -249,16 +289,55 @@ impl EndpointRequester {
             data_attributes,
             EndpointOperationRequest::Write(request),
         )
+        .await
     }
 
-    /// Validate the complete request before reserving any transaction resources.
+    /// [`Self::pace_operation`], then [`PacedEndpointOperation::prepare`].
     #[doc(hidden)]
-    pub fn prepare_operation(
+    pub async fn prepare_operation(
         &self,
         destination: EndpointApduDestination,
         data_attributes: Vec<DataAttribute>,
         request: EndpointOperationRequest,
     ) -> Result<PreparedEndpointOperation, Error> {
+        self.pace_operation(destination, data_attributes, request)
+            .await?
+            .prepare()
+    }
+
+    /// Validate the complete request, then wait until its destination's
+    /// minimum interval lets a new confirmed request go (#1542).
+    ///
+    /// Nothing is reserved while it waits, so a caller that gives up then
+    /// leaves no trace, and a waiting request holds no invoke ID from the
+    /// device's shared pool. [`PacedEndpointOperation::prepare`] reserves
+    /// the transaction. Retries of the prepared request reuse its turn.
+    #[doc(hidden)]
+    pub async fn pace_operation(
+        &self,
+        destination: EndpointApduDestination,
+        data_attributes: Vec<DataAttribute>,
+        request: EndpointOperationRequest,
+    ) -> Result<PacedEndpointOperation, Error> {
+        let destination = self.checked_destination(destination)?;
+        let service_data = self.encode_operation(&request)?;
+        let pace = self.inner.pacer.wait(pace_key(&destination)).await;
+        Ok(PacedEndpointOperation {
+            inner: Arc::clone(&self.inner),
+            destination,
+            data_attributes,
+            request,
+            service_data,
+            pace,
+        })
+    }
+
+    /// The destination a confirmed request goes to once it passes the
+    /// one-device checks, localized to this endpoint's network.
+    fn checked_destination(
+        &self,
+        destination: EndpointApduDestination,
+    ) -> Result<EndpointApduDestination, Error> {
         if !self.inner.open.load(Ordering::Acquire) {
             return Err(shutdown_error());
         }
@@ -308,64 +387,7 @@ impl EndpointRequester {
                 ));
             }
         }
-
-        let service_data = self.encode_operation(&request)?;
-        let service = request.service();
-
-        let TransactionPeer {
-            tsm_mac,
-            canonical: peer,
-        } = outbound_tsm_peer(&destination);
-        let (invoke_id, registration) = {
-            let mut tsm = self
-                .inner
-                .tsm
-                .lock()
-                .map_err(|_| Error::Encoding("endpoint requester state is poisoned".into()))?;
-            if !self.inner.open.load(Ordering::Acquire) {
-                return Err(shutdown_error());
-            }
-            tsm.register_coordinated_transaction_with_policy(
-                tsm_mac.clone(),
-                peer,
-                service,
-                false,
-                request.terminal_policy(),
-            )
-            .map_err(|error| Error::Encoding(error.to_string()))?
-        };
-
-        let owner = registration.owner.clone();
-        let guard = EndpointRequestGuard {
-            inner: Arc::clone(&self.inner),
-            destination: tsm_mac.clone(),
-            invoke_id,
-            owner,
-            active: true,
-        };
-        let pdu = Apdu::ConfirmedRequest(ConfirmedRequestPdu {
-            segmented: false,
-            more_follows: false,
-            segmented_response_accepted: false,
-            max_segments: None,
-            max_apdu_length: self.inner.max_apdu_length,
-            invoke_id,
-            sequence_number: None,
-            proposed_window_size: None,
-            service_choice: service,
-            service_request: service_data.freeze(),
-        });
-        let mut encoded = BytesMut::new();
-        encode_apdu(&mut encoded, &pdu)?;
-        let encoded = encoded.to_vec();
-        Ok(PreparedEndpointOperation {
-            guard,
-            destination,
-            data_attributes,
-            request,
-            encoded,
-            response: registration.response,
-        })
+        Ok(destination)
     }
 
     /// Preflight without reserving a lease or submitting traffic.
@@ -399,7 +421,8 @@ impl EndpointRequester {
             destination,
             data_attributes,
             EndpointReadRequest::Range(request, validation),
-        )?
+        )
+        .await?
         .execute()
         .await
         .result?
