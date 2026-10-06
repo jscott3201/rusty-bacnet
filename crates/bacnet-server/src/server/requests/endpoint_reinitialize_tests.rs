@@ -163,7 +163,7 @@ async fn endpoint_reinitialize_panic_is_answered_and_the_responder_keeps_serving
 #[tokio::test]
 async fn endpoint_reinitialize_close_while_waiting_for_database_never_runs_the_handler() {
     let (responder, mut ingress, calls) = fixture(|| Ok(())).await;
-    let held = responder.db.write().await;
+    let held = responder.db().write().await;
     let mut received = reinitialize(ReinitializedState::WARMSTART);
     let (tx, rx) = oneshot::channel();
     received.reply_tx = Some(tx);

@@ -198,3 +198,6 @@ mod recipient;
 
 #[path = "durable_drop_tests.rs"]
 mod durable_drop;
+
+#[path = "source_pacing_tests.rs"]
+mod pacing;

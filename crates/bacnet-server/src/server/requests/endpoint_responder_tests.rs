@@ -226,7 +226,7 @@ async fn responder_ignores_write_group_and_leaves_its_channels_alone() {
             .unwrap());
         assert!(reply_rx.await.is_err(), "WriteGroup is answered");
     }
-    let db = responder.db.read().await;
+    let db = responder.db().read().await;
     let channel = db.get(&ch).unwrap();
     assert_eq!(
         channel

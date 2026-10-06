@@ -179,7 +179,9 @@ pub struct SessionConfig {
     /// (#1542).
     ///
     /// Only new confirmed requests wait: a retry keeps its request's turn,
-    /// and replies, notifications and unconfirmed requests go at once. At
+    /// and replies, notifications and unconfirmed requests go at once.
+    /// Stopping or dropping the session ends a wait at once with the
+    /// shutdown error. At
     /// most [`MAX_MIN_REQUEST_INTERVAL_MS`](bacnet_client::client::MAX_MIN_REQUEST_INTERVAL_MS),
     /// an hour; [`EndpointSession::new`] returns [`Error::Encoding`] past it.
     pub min_request_interval_ms: u64,

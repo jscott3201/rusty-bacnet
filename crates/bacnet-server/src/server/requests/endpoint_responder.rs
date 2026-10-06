@@ -71,7 +71,8 @@ fn device_write_target<'a>(
 /// via the ingress classifier + coordinator admission.
 #[doc(hidden)]
 pub struct EndpointResponder {
-    db: Arc<RwLock<ObjectDatabase>>,
+    /// `Some` until the responder drops; see [`Self::db`].
+    db: Option<Arc<RwLock<ObjectDatabase>>>,
     egress: EndpointEgress,
     open: AtomicBool,
     device_writes: Option<(ObjectIdentifier, MutationAuthorizer)>,
@@ -86,9 +87,9 @@ impl Drop for EndpointResponder {
     /// whichever role handle or dispatch task drops the responder last, in
     /// async code it never drops the objects on a runtime worker (#1561).
     fn drop(&mut self) {
-        drop(crate::server::drop_database_off_runtime(std::mem::take(
-            &mut self.db,
-        )));
+        if let Some(db) = self.db.take() {
+            drop(crate::server::drop_database_off_runtime(db));
+        }
     }
 }
 
@@ -96,7 +97,7 @@ impl EndpointResponder {
     #[doc(hidden)]
     pub fn new(db: Arc<RwLock<ObjectDatabase>>, egress: EndpointEgress) -> Self {
         Self {
-            db,
+            db: Some(db),
             egress,
             open: AtomicBool::new(true),
             device_writes: None,
@@ -114,6 +115,11 @@ impl EndpointResponder {
     pub fn with_read_work_limit(mut self, limit: usize) -> Self {
         self.read_work_limit = limit;
         self
+    }
+
+    /// The database, held until the responder drops.
+    fn db(&self) -> &Arc<RwLock<ObjectDatabase>> {
+        self.db.as_ref().expect("held until the responder drops")
     }
 
     /// Receiving-port identity selected by this owner, never inferred from DB rows.
@@ -168,7 +174,7 @@ impl EndpointResponder {
         let write = WritePropertyRequest::decode(&request.service_request)
             .map_err(Error::into_request_reject)?;
         {
-            let mut db = self.db.write().await;
+            let mut db = self.db().write().await;
             self.ensure_open()?;
             device_write_target(&mut db, *device, &write)?;
         }
@@ -209,7 +215,7 @@ impl EndpointResponder {
         if !super::audit_notification::fail_closed_authorize(|| authorizer(&context)) {
             return Err(super::audit_notification::request_denied());
         }
-        let mut db = self.db.write().await;
+        let mut db = self.db().write().await;
         // Close may win while this request waits for the database owner.
         self.ensure_open()?;
         let MutationTarget::WriteProperty(write) = &context.target else {
@@ -290,7 +296,7 @@ impl EndpointResponder {
             })
         } else if request.service_choice == ConfirmedServiceChoice::READ_PROPERTY {
             confirmed_response::read_property_response(
-                &self.db,
+                self.db(),
                 &request,
                 self.device_writes.is_some(),
                 self.reinitialize.is_some(),
@@ -308,7 +314,7 @@ impl EndpointResponder {
             // it is refused then, before the handler runs.
             let still_open = || self.ensure_open();
             reinitialize::response(
-                &self.db,
+                self.db(),
                 &request,
                 password,
                 Some(handler),

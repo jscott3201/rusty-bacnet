@@ -130,6 +130,9 @@ struct EndpointRequesterInner {
     /// The minimum interval between confirmed requests to one destination,
     /// measured as the standalone client measures it (#1542).
     pacer: Arc<RequestPacer>,
+    /// Becomes true when the requester closes, ending every pacing wait at
+    /// once.
+    closed: tokio::sync::watch::Sender<bool>,
 }
 
 impl Drop for EndpointRequesterInner {
@@ -179,6 +182,7 @@ impl EndpointRequester {
                 retries,
                 max_apdu_length,
                 pacer,
+                closed: tokio::sync::watch::channel(false).0,
             }),
         })
     }
@@ -312,6 +316,9 @@ impl EndpointRequester {
     /// leaves no trace, and a waiting request holds no invoke ID from the
     /// device's shared pool. [`PacedEndpointOperation::prepare`] reserves
     /// the transaction. Retries of the prepared request reuse its turn.
+    /// Closing the requester ends the wait at once with the shutdown error,
+    /// claiming no turn, so a waiting caller holds nothing of a stopped or
+    /// dropped session (an audited one, its database) until its turn.
     #[doc(hidden)]
     pub async fn pace_operation(
         &self,
@@ -321,7 +328,14 @@ impl EndpointRequester {
     ) -> Result<PacedEndpointOperation, Error> {
         let destination = self.checked_destination(destination)?;
         let service_data = self.encode_operation(&request)?;
-        let pace = self.inner.pacer.wait(pace_key(&destination)).await;
+        // Two futures, neither holding a lock across its await: the pacer
+        // takes its std mutex only between polls.
+        let mut closed = self.inner.closed.subscribe();
+        let pace = tokio::select! {
+            biased;
+            _ = closed.wait_for(|closed| *closed) => return Err(shutdown_error()),
+            pace = self.inner.pacer.wait(pace_key(&destination)) => pace,
+        };
         Ok(PacedEndpointOperation {
             inner: Arc::clone(&self.inner),
             destination,
@@ -531,12 +545,14 @@ impl EndpointRequester {
         }
     }
 
-    /// Cancels exact pending leases and rejects later requester work.
+    /// Cancels exact pending leases, ends pacing waits and rejects later
+    /// requester work.
     #[doc(hidden)]
     pub fn close(&self) {
         if !self.inner.open.swap(false, Ordering::AcqRel) {
             return;
         }
+        self.inner.closed.send_replace(true);
         if let Ok(mut tsm) = self.inner.tsm.lock() {
             tsm.cancel_all_transactions();
         }

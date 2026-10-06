@@ -5122,9 +5122,11 @@ The endpoint client takes the same setting (#1542): `SessionConfig`'s
 the interval is measured and a destination is keyed (network plus MAC) as
 above. A request waits before it reserves an invoke ID, so a waiting request
 holds none of the session's shared pool, and an audited request waits before
-its record is stamped. On either client only new confirmed requests wait: a
-retry or a segment of a request already sent keeps its turn, and replies,
-notifications and unconfirmed requests go at once.
+its record is stamped. A session that stops or drops ends every wait at once
+with the shutdown error, so a waiting caller holds nothing of it. On either
+client only new confirmed requests wait: a retry keeps its request's turn (as
+does a segment of one `BACnetClient` sent; the endpoint client doesn't
+segment), and replies, notifications and unconfirmed requests go at once.
 
 ```rust
 let client = BACnetClient::bip_builder().min_request_interval_ms(50).build().await?;

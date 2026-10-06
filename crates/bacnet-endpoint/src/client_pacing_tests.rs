@@ -155,14 +155,16 @@ async fn paced(
     (session, sends)
 }
 
-async fn read(session: &EndpointSession<Devices>, mac: &[u8]) {
+async fn try_read(client: &ClientRoleHandle, mac: &[u8]) -> Result<(), Error> {
     let analog = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-    session
-        .client()
-        .unwrap()
+    client
         .read_property(mac, analog, PropertyIdentifier::PRESENT_VALUE, None)
         .await
-        .unwrap();
+        .map(drop)
+}
+
+async fn read(session: &EndpointSession<Devices>, mac: &[u8]) {
+    try_read(session.client().unwrap(), mac).await.unwrap();
 }
 
 /// When each request to `mac` left, relative to `start`.
@@ -237,6 +239,45 @@ async fn an_endpoint_retry_is_not_held_back_by_the_interval() {
     read(&session, A).await;
     assert_eq!(sent_to(&sends, A, start), ms(&[0, 100, 600]));
     session.stop().await.unwrap();
+}
+
+/// A caller that gives up on a request it sent finishes it then: the next
+/// request waits the interval from that moment. Giving up while still
+/// waiting leaves nothing behind.
+#[tokio::test(start_paused = true)]
+async fn an_endpoint_request_given_up_counts_as_finished_when_given_up() {
+    let (mut session, sends) = paced(50, 0, 1, Duration::ZERO).await;
+    let client = session.cloned_client_handle().unwrap();
+    let start = Instant::now();
+    // Sent at 0, never answered, given up at 20.
+    let abandoned = tokio::time::timeout(Duration::from_millis(20), try_read(&client, A)).await;
+    assert!(abandoned.is_err());
+    // Due at 70; given up while waiting, at 30.
+    let waiting = tokio::time::timeout(Duration::from_millis(10), try_read(&client, A)).await;
+    assert!(waiting.is_err());
+    read(&session, A).await;
+    assert_eq!(sent_to(&sends, A, start), ms(&[0, 70]));
+    session.stop().await.unwrap();
+}
+
+/// A request waiting for its turn when the session stops fails at once
+/// with the shutdown error, rather than at its turn minutes later.
+#[tokio::test(start_paused = true)]
+async fn a_waiting_endpoint_request_fails_at_once_when_the_session_stops() {
+    let (mut session, sends) = paced(300_000, 0, 0, Duration::ZERO).await;
+    let client = session.cloned_client_handle().unwrap();
+    read(&session, A).await;
+    let waiting = tokio::spawn(async move { try_read(&client, A).await });
+    // Run until idle: the read is waiting for its turn.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    session.stop().await.unwrap();
+    let ended = tokio::time::timeout(Duration::from_secs(1), waiting).await;
+    let error = ended.expect("ended at once").unwrap().unwrap_err();
+    assert!(
+        matches!(&error, Error::Encoding(message) if message == "endpoint shutdown"),
+        "{error:?}"
+    );
+    assert_eq!(sends.lock().unwrap().len(), 1);
 }
 
 /// More than an hour is refused when the session is made, as

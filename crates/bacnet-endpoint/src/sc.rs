@@ -117,7 +117,8 @@ impl ScEndpointBuilder {
     /// Least time between the client role's confirmed requests to one
     /// destination (default 0: no pacing). See
     /// [`SessionConfig::min_request_interval_ms`]; more than an hour fails
-    /// the session builds via [`EndpointSession::new`].
+    /// [`build_loopback_session`](Self::build_loopback_session) and
+    /// `build_hub_session`.
     pub fn min_request_interval_ms(mut self, ms: u64) -> Self {
         self.session.min_request_interval_ms = ms;
         self
