@@ -67,6 +67,25 @@ pub struct ServerConfig {
     /// A panic is caught (with unwind builds); the change stands and ingress
     /// continues. This callback cannot authorize or roll back synchronization.
     pub on_time_sync: Option<Arc<dyn Fn(TimeSyncData) + Send + Sync>>,
+    /// Optional ReinitializeDevice handler, called with the requester's
+    /// [`ReinitializeContext`] once the request passes its password and state
+    /// checks. Without it every such request is refused with
+    /// SERVICES / SERVICE_REQUEST_DENIED.
+    ///
+    /// The rules are on [`ReinitializeHandler`]. In short: the SimpleACK goes
+    /// out only after the handler returns, so schedule any restart for after
+    /// the reply rather than restarting inline. Nothing yet signals when the
+    /// reply has left (#1565), so a delay is best effort, and stopping the
+    /// server before then drops the reply. It runs synchronously with the
+    /// object database write-locked, so keep it quick and hand slow work to a
+    /// task; its database edits skip the COV, event and Audit work of
+    /// [`BACnetServer::write_local`], so apply changes that need it there
+    /// afterwards. Without [`reinit_password`](Self::reinit_password) any peer
+    /// reaches it, and neither the mutation policy nor the mutation authorizer
+    /// covers this service, so restrict sources through the context. Refuse
+    /// with [`Error::Protocol`]: a panic or an [`Error::Reject`] is answered
+    /// SERVICES / OTHER.
+    pub on_reinitialize: Option<ReinitializeHandler>,
     /// Local mutation authorization mode (default: permissive). SC mTLS channel/peer
     /// authentication is not service authorization; addresses here are claimed,
     /// never certificate principals. See [`MutationPolicy`]. Each decision also
@@ -201,6 +220,10 @@ impl std::fmt::Debug for ServerConfig {
                 &self.on_time_sync.as_ref().map(|_| "<callback>"),
             )
             .field(
+                "on_reinitialize",
+                &self.on_reinitialize.as_ref().map(|_| "<callback>"),
+            )
+            .field(
                 "mutation_authorizer",
                 &self.mutation_authorizer.as_ref().map(|_| "<callback>"),
             )
@@ -269,6 +292,7 @@ impl Default for ServerConfig {
             cov_retry_timeout_ms: 3000,
             time_sync_policy: TimeSyncPolicy::default(),
             on_time_sync: None,
+            on_reinitialize: None,
             mutation_policy: MutationPolicy::default(),
             mutation_authorizer: None,
             life_safety_operation_authorizer: None,

@@ -4,19 +4,23 @@ use crate::device_view::{DeviceExecution, DeviceReadContext};
 use bacnet_services::read_property::ReadPropertyRequest;
 use bacnet_types::error::ErrorDetail;
 
-/// ReadProperty under the narrow responder's actual RP[/WP] execution profile,
-/// within the responder's configured read work limit.
+/// ReadProperty under the narrow responder's actual RP[/WP/ReinitializeDevice] execution
+/// profile, within the responder's configured read work limit.
 pub(super) async fn read_property_response(
     db: &RwLock<ObjectDatabase>,
     request: &ConfirmedRequestPdu,
     writes: bool,
+    reinitialize: bool,
     registered_port: Option<ObjectIdentifier>,
     work_limit: usize,
 ) -> Apdu {
     read_property_response_observed(
         db,
         None,
-        DeviceExecution::Endpoint { writes },
+        DeviceExecution::Endpoint {
+            writes,
+            reinitialize,
+        },
         registered_port,
         work_limit,
         request,
@@ -207,7 +211,7 @@ pub(super) async fn read_property_response_observed(
 /// production for the services that have one; that includes a decoding
 /// error met once the service is running, which is no syntax fault of the
 /// request.
-pub(super) fn error_apdu_from_error(
+pub(in crate::server) fn error_apdu_from_error(
     invoke_id: u8,
     service_choice: ConfirmedServiceChoice,
     error: &Error,

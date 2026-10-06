@@ -5806,10 +5806,12 @@ The server automatically dispatches:
 - SubscribeCOV, SubscribeCOVProperty, SubscribeCOVPropertyMultiple (mutation-gated)
 - CreateObject, DeleteObject (mutation-gated)
 - DeviceCommunicationControl
-- ReinitializeDevice (decoded and password-validated, then refused with
-  `SERVICES / SERVICE_REQUEST_DENIED` for every requested state until an action
-  surface exists; no reinitialization or SimpleACK, with password and decode
-  errors retaining their existing precedence)
+- ReinitializeDevice (restart, apply changes, or a Clause 19 backup or restore
+  step): decoded and password-validated, then carried out by the
+  `on_reinitialize` handler (see [The ReinitializeDevice handler](#the-reinitializedevice-handler));
+  refused with `SERVICES / SERVICE_REQUEST_DENIED` when no handler is set or
+  the state is undefined, with password and decode errors keeping their
+  precedence
 - GetEventInformation, AcknowledgeAlarm
 - GetAlarmSummary, GetEnrollmentSummary
 - ConfirmedTextMessage
@@ -5871,6 +5873,88 @@ was first sent on for its retries. While the number is unknown, an address
 naming any network is sent routed, as it is written. The server has one port,
 so the local network is that port's; a multi-port device would need the
 network attached to each port (#863).
+
+### The ReinitializeDevice handler
+
+`ServerBuilder::on_reinitialize` (also on the B/IP and SC builders, or
+`ServerConfig::on_reinitialize`) installs a `ReinitializeHandler`. The server
+calls it with a `ReinitializeContext` and the object database once a request
+has decoded, passed `reinit_password` and named a state Clause 16.4 defines.
+The context carries the requested `state`, the immediate `source_mac`, the
+routed `source_network` when there is one, the transport `provenance` (with
+`direct_sc_identity()` for a verified direct BACnet/SC peer) and the
+`invoke_id`. The struct is `#[non_exhaustive]`, and its `Debug` output shows
+address lengths rather than addresses. `ReinitializeContext::new(state,
+source_mac, source_network, provenance, invoke_id)` builds one for calling a
+handler directly, as its unit tests would; outside `bacnet-transport` only
+`TransportProvenance::unverified()` is available for the provenance.
+
+`Ok(())` sends the SimpleACK and `Err(Error::Protocol { .. })` sends that
+class and code instead. The rules:
+
+- The SimpleACK leaves only after the handler returns, so it must not restart
+  inline. Accept or refuse, prepare, and schedule the restart, backup or
+  restore step for after the reply (Clause 16.4.2).
+- Nothing yet signals when the SimpleACK has left (#1565), so any delay before
+  restarting is best effort, and on MS/TP it can need longer, since a
+  postponed reply waits for the token. `BACnetServer::stop()` seals responses
+  and aborts request tasks before joining them, so a restart path that stops
+  the server before the reply has left drops the SimpleACK.
+- An accepted WARMSTART or COLDSTART does not yet end DISABLE_INITIATION
+  in-process (Clause 16.1.2, #1567). A real process restart starts enabled
+  anyway.
+- It runs synchronously on a runtime worker with the database write-locked:
+  keep it quick and hand slow work, such as writing backup files, to a task.
+- Its edits through `&mut ObjectDatabase` are raw: they skip what
+  `BACnetServer::write_local` adds around a write (the Object_Name uniqueness
+  check, the COV fanout, the event pass, Schedule and Command follow-ups, and
+  the Audit record). Apply a change that needs those, as ACTIVATE_CHANGES work
+  on Network Port or Device properties may, through `write_local` after the
+  reply, from a task the handler schedules.
+- Without `reinit_password` any peer reaches it. The mutation policy and the
+  mutation authorizer don't cover ReinitializeDevice, so restrict sources
+  through the context; its addresses are claims, not authenticated identities.
+- Once the handler has run, the request can no longer be rejected (Clause
+  20.1.8): a returned `Error::Reject`, or any error other than `Protocol` or
+  `Structured`, is answered `SERVICES / OTHER`, and so is a panic (caught with
+  unwind builds), since the handler may have partly acted.
+
+```rust,ignore
+use bacnet_server::server::ReinitializeContext;
+use bacnet_types::enums::{ErrorClass, ErrorCode, ReinitializedState};
+
+let (restart_tx, mut restart_rx) = tokio::sync::mpsc::channel(1);
+tokio::spawn(async move {
+    if let Some(state) = restart_rx.recv().await {
+        // Best effort: nothing yet reports that the SimpleACK has left (#1565).
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        restart_device(state); // application code
+    }
+});
+let server = BACnetServer::bip_builder()
+    .database(db)
+    .reinit_password("secret")
+    .on_reinitialize(move |request: &ReinitializeContext, _db: &mut ObjectDatabase| {
+        match request.state {
+            ReinitializedState::WARMSTART | ReinitializedState::COLDSTART => {
+                // Accept now; the task above restarts after its delay.
+                restart_tx.try_send(request.state).map_err(|_| Error::Protocol {
+                    class: ErrorClass::DEVICE.to_raw() as u32,
+                    code: ErrorCode::CONFIGURATION_IN_PROGRESS.to_raw() as u32,
+                })
+            }
+            _ => Err(Error::Protocol {
+                class: ErrorClass::SERVICES.to_raw() as u32,
+                code: ErrorCode::SERVICE_REQUEST_DENIED.to_raw() as u32,
+            }),
+        }
+    })
+    .build()
+    .await?;
+```
+
+Endpoint sessions take the same handler; see
+[Endpoint ReinitializeDevice](#endpoint-reinitializedevice).
 
 ### The DeviceCommunicationControl state
 
@@ -6521,12 +6605,15 @@ no bench or on-wire conformance; timing is RB-26).
 
 Notes: the endpoint server role defaults to `ReadProperty` (+ `Reject`/`Abort`
 + segmentation-`Abort`). The explicit Device-write opt-in below adds one
-bounded WriteProperty path; full `bacnet-server` parity is out of scope.
-The responder supplies exactly RP or RP+WP service bits and exposes neither COV
+bounded WriteProperty path, and the ReinitializeDevice opt-in adds that
+service through an application handler; full `bacnet-server` parity is out of
+scope. The responder supplies exactly the service bits it executes (RP, plus
+WP and ReinitializeDevice when enabled) and exposes neither COV
 list property, even for a custom database Device. Server-role identity service
 lists must include RP and contain no unsupported bits; validation runs before
-ingress even when writes are disabled. WP opt-in accepts RP or RP+WP declarations
-and commits RP+WP only after all validation succeeds. ClientOnly creates no
+ingress even when both opt-ins are off. With an opt-in, any declaration within
+the executed set is accepted, and that set is committed only after all
+validation succeeds. ClientOnly creates no
 responder and retains its services vector as a local declaration.
 Standalone BBMD helpers (`read_bdt` / `write_bdt` / `read_fdt` / foreign
 registration) stay on `BipTransport` and on `BACnetClient` over B/IP (see
@@ -6553,10 +6640,11 @@ Startup requires a server role and a concrete built-in local Device in the
 attached database (the lowest when it holds several; see
 [Databases with several Devices](#databases-with-several-devices)). An optional
 `DeviceIdentity` must match that Device
-and contain only ReadProperty/WriteProperty service bits. Configuration
+and contain only the service bits the responder executes. Configuration
 validation precedes transport startup and any profile/source-ownership changes.
-The enabled Device and identity advertise exactly RP+WP, including sessions
-without an identity. Default sessions keep their existing RP-only responder.
+The enabled Device and identity advertise exactly RP+WP, plus ReinitializeDevice
+when that is enabled too, including sessions without an identity. Default
+sessions keep their existing RP-only responder.
 Valid priorities 1–16 are ignored for noncommandable Description. Authorized
 NULL relinquishment succeeds without changing its value. Array indices,
 out-of-range priorities and other non-string values fail; numeric priority
@@ -6571,6 +6659,26 @@ reply channels, group silence, segmentation and shutdown; a B/IP loopback test
 covers an authorized write and service-profile readback. This is not general
 endpoint mutation parity or inbound replay suppression. The source recipient extension
 is described below and in the [Device recipient contract](device-audit-recipient.md).
+
+### Endpoint ReinitializeDevice
+
+`EndpointSession::with_reinitialize(handler)` or
+`BipEndpointBuilder::reinitialize(handler)` lets the endpoint execute
+ReinitializeDevice through the same `ReinitializeHandler` signature as the
+full server (see [The ReinitializeDevice handler](#the-reinitializedevice-handler)),
+with the request's `ReinitializeContext` built from the received source,
+routing and provenance. `with_reinit_password` / `reinit_password` sets the
+password a request must carry; startup refuses a password without a handler,
+and `build_transport` refuses either one. Startup requirements match the
+Device-write opt-in (a server role and a concrete built-in local Device), and
+the Device and identity then advertise ReinitializeDevice next to RP (and WP
+when writes are on).
+
+The handler rules are the server's, with one addition: the session answers
+inbound requests on a single dispatch task, so a slow or blocking handler
+stalls every request behind it. A panic or a returned Reject is answered
+`SERVICES / OTHER` and the session keeps serving. A close that wins while the
+request waits for the database refuses it before the handler runs.
 
 ### Direct endpoint WriteProperty and source WRITE reporting
 
