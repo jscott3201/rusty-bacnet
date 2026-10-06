@@ -55,7 +55,9 @@
 //!   (+ `Reject`/`Abort` + segmentation-`Abort`). Explicit
 //!   [`EndpointSession::with_device_writes`](session::EndpointSession::with_device_writes)
 //!   enables authorized writes to the one local Device's Description and its
-//!   installed source Audit recipient, with
+//!   installed source Audit recipient, and explicit
+//!   [`EndpointSession::with_reinitialize`](session::EndpointSession::with_reinitialize)
+//!   enables ReinitializeDevice through an application handler, each with
 //!   deterministic and real B/IP loopback tests. Full `bacnet-server`
 //!   dispatch parity is out of scope. Accepted-direct replies preserve the original
 //!   sealed response capability through the bounded endpoint queue, before any

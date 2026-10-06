@@ -68,6 +68,8 @@ pub struct BipEndpointBuilder {
     registered_network_port: Option<ObjectIdentifier>,
     identity: Option<crate::identity::DeviceIdentity>,
     device_write_authorizer: Option<bacnet_server::mutation::MutationAuthorizer>,
+    reinitialize: Option<bacnet_server::server::ReinitializeHandler>,
+    reinit_password: Option<String>,
     source_audit_bindings: Vec<(ObjectIdentifier, SocketAddrV4)>,
     bbmd_bdt: Option<Vec<BdtEntry>>,
     foreign_policy: Option<ForeignDevicePolicy>,
@@ -96,6 +98,8 @@ impl BipEndpointBuilder {
             registered_network_port: None,
             identity: None,
             device_write_authorizer: None,
+            reinitialize: None,
+            reinit_password: None,
             source_audit_bindings: Vec::new(),
             bbmd_bdt: None,
             foreign_policy: None,
@@ -188,6 +192,31 @@ impl BipEndpointBuilder {
         self
     }
 
+    /// Enables ReinitializeDevice. The handler must reply before restarting
+    /// and stay quick, or it stalls the session; see
+    /// [`EndpointSession::with_reinitialize`]. Requires `build_session()`.
+    pub fn reinitialize<F>(mut self, handler: F) -> Self
+    where
+        F: Fn(
+                &bacnet_server::server::ReinitializeContext,
+                &mut ObjectDatabase,
+            ) -> Result<(), Error>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.reinitialize = Some(std::sync::Arc::new(handler));
+        self
+    }
+
+    /// Sets the password a ReinitializeDevice request must carry. Requires
+    /// [`reinitialize`](Self::reinitialize) and `build_session()`; see
+    /// [`EndpointSession::with_reinit_password`].
+    pub fn reinit_password(mut self, password: impl Into<String>) -> Self {
+        self.reinit_password = Some(password.into());
+        self
+    }
+
     /// Register one trusted direct IPv4 B/IP route for source Audit delivery.
     /// This is route data only; provision the recipient on the actual Device.
     /// Multiple entries may resolve old/new Device choices. Duplicate keys,
@@ -268,9 +297,11 @@ impl BipEndpointBuilder {
     ///
     /// Returns a typed [`Error::Encoding`]
     /// when BBMD-dependent controls are set without
-    /// [`enable_bbmd`](Self::enable_bbmd), or a source Audit route data
-    /// is set (it requires [`build_session`](Self::build_session), not a bare
-    /// transport that would discard the endpoint-owned configuration).
+    /// [`enable_bbmd`](Self::enable_bbmd), or when any session-owned
+    /// configuration is set, since a bare transport would discard it: a
+    /// Network Port registration, Device writes, a ReinitializeDevice handler
+    /// or password (a password alone included), or source Audit route data.
+    /// Those require [`build_session`](Self::build_session).
     pub fn build_transport(self) -> Result<BipTransport, Error> {
         if self.registered_network_port.is_some() {
             return Err(Error::Encoding(
@@ -280,6 +311,11 @@ impl BipEndpointBuilder {
         if self.device_write_authorizer.is_some() {
             return Err(Error::Encoding(
                 "Device writes require build_session()".into(),
+            ));
+        }
+        if self.reinitialize.is_some() || self.reinit_password.is_some() {
+            return Err(Error::Encoding(
+                "ReinitializeDevice and its password require build_session()".into(),
             ));
         }
         if !self.source_audit_bindings.is_empty() {
@@ -335,6 +371,8 @@ impl BipEndpointBuilder {
     /// plus real-socket corroboration (single nonzero local MAC/port).
     pub fn build_session(mut self) -> Result<EndpointSession<BipTransport>, Error> {
         let device_write_authorizer = self.device_write_authorizer.take();
+        let reinitialize = self.reinitialize.take();
+        let reinit_password = self.reinit_password.take();
         let bindings = std::mem::take(&mut self.source_audit_bindings);
         crate::source_audit::recipient::SourceRoutes::new(
             &bindings,
@@ -359,6 +397,8 @@ impl BipEndpointBuilder {
         if let Some(oid) = registered_network_port {
             endpoint = endpoint.with_registered_network_port(oid);
         }
+        endpoint.reinitialize = reinitialize;
+        endpoint.reinit_password = reinit_password;
         endpoint.source_audit_bindings = bindings;
         Ok(endpoint)
     }
