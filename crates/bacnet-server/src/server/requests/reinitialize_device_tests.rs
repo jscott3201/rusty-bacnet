@@ -57,6 +57,12 @@ async fn dispatch_from(
     initial: DccState,
     source_network: Option<NpduAddress>,
 ) -> Apdu {
+    let restart = ReinitializeDeviceRequest::decode(&service_request).is_ok_and(|request| {
+        matches!(
+            request.reinitialized_state,
+            ReinitializedState::WARMSTART | ReinitializedState::COLDSTART
+        )
+    });
     let network = Arc::new(NetworkLayer::new(BipTransport::new(
         Ipv4Addr::LOCALHOST,
         0,
@@ -92,10 +98,16 @@ async fn dispatch_from(
         Some(tx),
     )
     .await;
-    assert_eq!(comm_state.get(), initial);
     assert!(dcc_timer.lock().await.is_none());
     let npdu = decode_npdu(rx.await.unwrap()).unwrap();
-    decode_apdu(npdu.payload).unwrap()
+    let reply = decode_apdu(npdu.payload).unwrap();
+    let expected = if restart && matches!(&reply, Apdu::SimpleAck(_)) {
+        DccState::Enable
+    } else {
+        initial
+    };
+    assert_eq!(comm_state.get(), expected);
+    reply
 }
 
 fn assert_error(apdu: Apdu, class: ErrorClass, code: ErrorCode) {
@@ -402,3 +414,6 @@ async fn reinitialize_device_malformed_request_precedes_password_and_refusal() {
         }
     }
 }
+
+#[path = "reinitialize_dcc_tests.rs"]
+mod dcc;

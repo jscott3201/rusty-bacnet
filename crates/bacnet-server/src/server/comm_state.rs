@@ -1,8 +1,8 @@
 //! The server's DeviceCommunicationControl state (Clause 16.1).
 //!
-//! This module sits under `dcc_timer`, so only an accepted DCC request and its
-//! revert timer can change the state. Everything else holding a [`CommState`]
-//! reads it.
+//! This module sits under `dcc_timer`, which owns changes from accepted DCC
+//! requests, timer expiry and accepted WARMSTART/COLDSTART. Everything else
+//! holding a [`CommState`] reads it.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -75,7 +75,7 @@ impl CommState {
     }
 
     /// Commit a new state. Only `dcc_timer` calls this: when a DCC request is
-    /// accepted, and when its timer runs out.
+    /// accepted, when its timer runs out, or when a restart is accepted.
     pub(super) fn set(&self, state: DccState) {
         self.initiation_restricted
             .store(state.initiation_restricted(), Ordering::Release);
