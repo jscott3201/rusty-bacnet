@@ -359,11 +359,20 @@ async fn bvlc_encode_and_send_errors_release_slot_without_fabricated_timeouts() 
         transport.write_bdt(&target, &entries).await,
         Err(Error::Encoding(_))
     ));
-    let invalid_port = encode_bip_mac(Ipv4Addr::LOCALHOST.octets(), 0);
-    assert!(matches!(
-        transport.read_bdt(&invalid_port).await,
-        Err(Error::Transport(_))
-    ));
+    // A broadcast without socket permission fails locally; UDP port zero
+    // does not provide the same send-error behavior on every platform.
+    transport
+        .socket
+        .as_ref()
+        .unwrap()
+        .set_broadcast(false)
+        .unwrap();
+    let denied_broadcast = encode_bip_mac(
+        Ipv4Addr::BROADCAST.octets(),
+        peer.local_addr().unwrap().port(),
+    );
+    let error = transport.read_bdt(&denied_broadcast).await.unwrap_err();
+    assert!(matches!(error, Error::Transport(_)), "{error:?}");
     {
         let request = transport.read_bdt(&target);
         tokio::pin!(request);
