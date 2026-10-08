@@ -289,12 +289,13 @@ pub(super) fn initial_state(
 ) -> (SegmentedRequestState, Option<SegmentAckPdu>) {
     let actual_window_size = request.proposed_window_size.unwrap_or(0);
     let should_ack = !request.more_follows || actual_window_size <= 1;
+    let now = runtime_clock::now();
     let state = SegmentedRequestState {
         payload,
         provenance,
         direct_response,
-        last_activity: Instant::now(),
-        last_progress: Instant::now(),
+        last_activity: now,
+        last_progress: now,
         expected_seq: 1,
         initial_sequence_number: 0,
         duplicate_count: 0,

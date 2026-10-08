@@ -6,12 +6,15 @@
 //!   budget and the received-event-log allowances;
 //! - how long a device binding learned from an I-Am stays fresh;
 //! - COV subscription lifetimes;
+//! - incoming segmented-request activity and saved-payload progress;
+//! - elapsed time since Device clock synchronization;
 //! - how long a completed LifeSafetyOperation response is kept for replay;
 //! - how long a received ConfirmedEventNotification is remembered, so a
 //!   retransmission isn't forwarded twice.
 //!
 //! The forwarding-cap warning throttle still reads the system clock: it only
 //! picks the level of a log line.
+//! An unsynchronized Device clock still reads wall time from `SystemTime`.
 
 use std::time::Instant;
 
