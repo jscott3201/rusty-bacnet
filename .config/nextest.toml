@@ -65,9 +65,7 @@ filter = '''
       | test(=client::routed_path_limit_tests::routed_sizing_uses_conservative_and_configured_forwarded_envelopes)
     ))
   | (binary_id(bacnet-server) & (
-        test(=server::segmentation_tests::request_progress::request_progress_new_in_order_saves_sustain_transfer_beyond_16_seconds)
-      | test(=server::segmentation_tests::request_progress::request_progress_reclaims_128_stalled_slots_before_admission)
-      | test(=server::audit_reporter_tests::lifecycle::audit_reporter_unassigned_create_failures_never_invent_an_oid)
+        test(=server::audit_reporter_tests::lifecycle::audit_reporter_unassigned_create_failures_never_invent_an_oid)
       | test(=server::audit_reporter_tests::read::range_file::boundary::audit_reporter_range_file_guard_release_precedes_admission_not_delivery)
       | test(=server::audit_reporter_tests::read::boundary::audit_reporter_read_admission_waits_for_read_guard_release_not_delivery)
     ))

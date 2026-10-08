@@ -188,7 +188,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     },
                     else => break,
                 };
-                let now = Instant::now();
+                let now = runtime_clock::now();
                 super::segmented_receive::expire_segmented_requests(&mut seg_receivers, now);
 
                 match apdu::decode_apdu(received.apdu.clone()) {
@@ -333,7 +333,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                     // for accepted, duplicate and
                                     // out-of-order segments alike, so the
                                     // refresh precedes the ordering checks.
-                                    state.last_activity = Instant::now();
+                                    state.last_activity = runtime_clock::now();
                                     if seq != state.expected_seq {
                                         ack_to_send =
                                             super::segmented_receive::classify_non_next_segment(
@@ -397,7 +397,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                             .await;
                                             continue;
                                         }
-                                        state.last_progress = Instant::now();
+                                        state.last_progress = runtime_clock::now();
                                         state.accepted_segments += 1;
                                         state.expected_seq = seq.wrapping_add(1);
                                         state.last_acked_seq = seq;

@@ -7,9 +7,9 @@
 //! loopback tests play the client in lockstep (window size 1, one ack awaited
 //! per segment — also what keeps the loopback channels from filling).
 //!
-//! Wall-clock discipline: every test must finish well inside the 4 s
-//! reassembly reaper, which would otherwise evict the session mid-test and
-//! satisfy "the session is gone" assertions for the wrong reason.
+//! Fixtures using a running clock keep transfers inside the existing receive
+//! activity budget, so expiry cannot make an unrelated cleanup assertion pass.
+//! The paused request-progress fixtures instead advance after dispatch replies.
 
 use super::*;
 use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
