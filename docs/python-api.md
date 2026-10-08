@@ -390,6 +390,18 @@ its octets.
 | any | Value_Source_Array; Value_Source (one value) | `"value_source"` | `None` (none), an `ObjectIdentifier` or `(device, object)` (an object), or an `AuditRecipientAddress` mapping, `{"kind": "address", "network_number", "mac_address"}` (an address) | none |
 | Accumulator | Scale (one value) | `"scale"` | a `float` for a float scale, an `int` for a power-of-ten scale | `add_accumulator(scale=...)` |
 | Accumulator | Prescale (one value) | `"prescale"` | `(multiplier, modulo_divide)` | `add_accumulator(prescale=...)` |
+| any object serving Tags | Tags | `"name_value"` | `{"name": str, "value": None or PropertyValue}` | no new constructor; read values can be written back |
+
+Tags reads use the same form through client RP/RPM, endpoint client roles,
+batch reads and the shared local-read decoder. A whole read is a `list` of
+name/value mappings; an indexed element is a `name_value`, and index zero is
+an `unsigned` count. A semantic tag's value is `None`; a valued NULL carries
+`PropertyValue.null()`, so they remain distinct. Date and Time remain separate
+primitive `PropertyValue` values. The corrected NameValue grammar refuses a
+combined pair. Each element retains its original bytes, including through
+pickling and `PropertyValue.list` reassembly. A failed typed decode leaves the
+complete value to the existing raw fallback; it never returns a typed prefix.
+Broken framing retains the existing RP error and RPM raw-byte fallback rules.
 
 A date in these forms is a `(year, month, day, day_of_week)` tuple as
 [Dates](#dates) gives it: the full year, and 255 in any field left

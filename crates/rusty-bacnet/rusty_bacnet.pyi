@@ -1463,7 +1463,12 @@ class PropertyValue:
       ``mac_address``), Value_Source and Value_Source_Array
       (``"value_source"``), and an Accumulator's Scale (``"scale"``: a
       ``float`` or an ``int``) and Prescale (``"prescale"``: ``(multiplier,
-      modulo_divide)``). Each element keeps its octets, so the value
+      modulo_divide)``). Tags elements are ``"name_value"`` mappings with
+      ``"name": str`` and ``"value": None | PropertyValue``. Semantic tags
+      have ``None``; valued NULL is ``PropertyValue.null()``. Date and Time
+      are separate primitive values, not a combined pair. Whole Tags reads
+      are lists, indexed reads one element, and index zero an unsigned count.
+      Each element keeps its octets, so the value
       writes back unchanged. A value that isn't those elements, to the last
       octet, follows the rules below.
     - Other context-tagged content (a Load Control's shed levels, an Event

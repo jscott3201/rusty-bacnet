@@ -247,6 +247,15 @@ bacnet read-range 192.168.1.100 trend-log:1 --all --count 100            # the w
 bacnet --min-interval-ms 50 read-range 192.168.1.100 trend-log:1 --all --sequence 1201
 ```
 
+`read` and `readm` interpret Tags as named values: a whole array looks like
+`["exhaust", "floor"=3]`, an indexed element like `"floor"=3`, and index zero
+prints the count. An empty array prints `[]`. Names and text values are quoted
+and escaped; a semantic tag has no equals sign, while a valued NULL prints
+`"name"=null`. Invalid Tags bytes produce one `[invalid Tags; raw: ...]`
+marker for the complete payload. JSON keeps the existing `object`, `property`
+and string `value` fields, with an array index included in the property name.
+Other properties and `read-range` retain their existing formatting.
+
 `--position`, `--sequence` and `--time` pick the range, each with `--count`
 (default 100; negative reads backward). `--time` takes the device's local time
 as `YYYY-MM-DDTHH:MM[:SS[.hh]]`. The heading shows the result flags

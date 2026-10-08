@@ -4542,6 +4542,19 @@ conservative.
 
 ### Property Access
 
+For Tags values returned by RP or successful RPM rows, pass the echoed array
+index and raw value bytes to `bacnet_client::tags::decode_tags_read`. Its
+`TagsRead` result distinguishes `Whole(Vec<BACnetNameValue>)`, `Element` and
+`Size(u32)`. Whole reads preserve order and accept an empty array; an indexed
+read requires exactly one element, and index zero requires one Unsigned count.
+Invalid or trailing data returns an error without a partial typed result.
+Semantic tags have `value: None`, while a valued NULL is
+`Some(PropertyValue::Null)`. Date and Time are valid separately; their combined
+pair is invalid under the corrected NameValue grammar. Raw RP/RPM return types
+and per-property errors are unchanged. This decoder does not apply the bundled
+server's local provisioning limits or naming policy to remote data.
+
+
 ```rust
 // ReadProperty
 let ack = client.read_property(&mac, oid, PropertyIdentifier::PRESENT_VALUE, None).await?;
