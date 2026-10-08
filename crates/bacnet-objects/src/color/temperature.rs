@@ -18,7 +18,7 @@ use super::{
 use crate::audit::{AuditPolicyAuthority, ObjectAuditPolicy};
 use crate::command_source::{CommandOrigin, SingleValueSource};
 use crate::common::{self, read_identity_properties};
-use crate::object_profile::ObjectProfile;
+use crate::object_profile::{ObjectProfile, ProfileState, TagsPersistence};
 use crate::traits::{BACnetObject, DeadlineWaker, MonotonicClock};
 use crate::transition::Transition;
 
@@ -52,6 +52,10 @@ const KELVIN_SAMPLE_STEP: f64 = 10.0;
 ///
 /// Fades and ramps run on the monotonic clock the database binds, as a
 /// Color object's fades do.
+///
+/// Cloning copies served state into an in-memory object. Tags persistence and
+/// pending saves remain solely with the original; cloning or dropping the copy
+/// never saves, corrects, settles, or waits on the original writer.
 #[derive(Clone)]
 pub struct ColorTemperatureObject {
     oid: ObjectIdentifier,
@@ -80,7 +84,7 @@ pub struct ColorTemperatureObject {
     /// Value_Source, once tracked (#1552).
     value_source: SingleValueSource,
     /// Tags, Profile_Location and Profile_Name, once provisioned (#1553).
-    profile: ObjectProfile,
+    profile: ProfileState,
     engine: Engine<u32>,
 }
 
@@ -109,7 +113,7 @@ impl ColorTemperatureObject {
             max_pres_value: *command::KELVIN.end(),
             audit_policy: ObjectAuditPolicy::default(),
             value_source: SingleValueSource::default(),
-            profile: ObjectProfile::default(),
+            profile: ProfileState::default(),
             engine: Engine::new(KELVIN_SAMPLE_STEP),
         })
     }
@@ -126,18 +130,35 @@ impl ColorTemperatureObject {
         &self.value_source
     }
 
+    /// Build with application-owned Tags storage. Saved Tags override configured
+    /// Tags only while `set_profile` provisions the row. Loaded data must satisfy
+    /// the normal Tags rules and the opt-in 1 MiB snapshot limit.
+    pub fn with_tags_persistence(
+        instance: u32,
+        name: impl Into<String>,
+        persistence: Arc<dyn TagsPersistence>,
+    ) -> Result<Self, Error> {
+        let mut object = Self::new(instance, name)?;
+        object.profile = ProfileState::persistent(object.oid, persistence)?;
+        Ok(object)
+    }
+
+    /// Wait for queued save attempts to finish. This is not a success receipt;
+    /// writes report their own save outcomes. Unstaged local writes block.
+    pub fn wait_for_tag_saves(&self) {
+        self.profile.wait_for_saves();
+    }
+
     /// Provision the optional Tags, Profile_Location and Profile_Name rows
     /// before registration (#1553; see [`ObjectProfile`]). Tags takes
     /// writes; the profile rows are read-only over the network. A profile
     /// that fails [`ObjectProfile::check`] is refused and changes nothing.
     pub fn set_profile(&mut self, profile: ObjectProfile) -> Result<(), Error> {
-        profile.check()?;
-        self.profile = profile;
-        Ok(())
+        self.profile.provision(profile)
     }
 
     pub(super) fn profile(&self) -> &ObjectProfile {
-        &self.profile
+        self.profile.profile()
     }
 
     /// Provision the optional Audit_Level and Auditable_Operations rows
@@ -467,6 +488,10 @@ impl BACnetObject for ColorTemperatureObject {
         metadata::for_color_temperature_object(self)
     }
 
+    fn durable_writes_internal(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
+        self.profile.capability()
+    }
+
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
@@ -496,6 +521,7 @@ impl BACnetObject for ColorTemperatureObject {
     }
 
     fn advance_monotonic_time_internal(&mut self, now: Duration) -> bool {
+        self.profile.expire(now);
         self.engine.advance_to(now)
     }
 
