@@ -254,7 +254,6 @@ impl Wire {
     }
 
     pub(super) async fn start_with_devices(config: ServerConfig, instances: &[u32]) -> Self {
-        let (tx, rx) = mpsc::channel(16);
         let mut db = ObjectDatabase::new();
         for &instance in instances {
             db.add(Box::new(
@@ -272,6 +271,11 @@ impl Wire {
         db.add(Box::new(first)).unwrap();
         db.add(Box::new(AnalogValueObject::new(2, "AV-2", 62).unwrap()))
             .unwrap();
+        Self::start_with_database(config, db).await
+    }
+
+    pub(super) async fn start_with_database(config: ServerConfig, db: ObjectDatabase) -> Self {
+        let (tx, rx) = mpsc::channel(16);
         let transport = TestTransport::builder()
             .local_mac(&[0x0A, 0, 0, 2, 0xBA, 0xC0])
             .inbound(rx)

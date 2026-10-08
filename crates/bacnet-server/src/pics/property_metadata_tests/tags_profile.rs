@@ -413,3 +413,50 @@ fn output_profile_masks_and_saved_empty_are_independent_of_out_of_service() {
         }
     }
 }
+
+#[test]
+fn device_profile_masks_and_saved_empty_retain_optional_pics_rows() {
+    use bacnet_objects::device::{DeviceConfig, DeviceObject};
+    for mask in 0..8 {
+        let configured = ObjectProfile {
+            tags: (mask & 1 != 0).then(|| vec![BACnetNameValue::semantic("configured")]),
+            profile_location: (mask & 2 != 0).then(|| "https://example.com/p.xdd".into()),
+            profile_name: (mask & 4 != 0).then(|| "555-device".into()),
+        };
+        let mut object =
+            DeviceObject::with_tags_persistence(DeviceConfig::default(), Arc::new(SavedEmpty))
+                .unwrap();
+        object.set_profile(configured.clone()).unwrap();
+        object.set_profile(ObjectProfile::default()).unwrap();
+        object.set_profile(configured).unwrap();
+        if mask & 1 != 0 {
+            assert_eq!(
+                object.read_property(P::TAGS, Some(0)).unwrap(),
+                bacnet_types::primitives::PropertyValue::Unsigned(0)
+            );
+        }
+        let mut db = ObjectDatabase::new();
+        db.add(Box::new(object)).unwrap();
+        let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default());
+        let device = pics
+            .supported_object_types
+            .iter()
+            .find(|o| o.object_type == ObjectType::DEVICE)
+            .unwrap();
+        for (bit, p) in [(1, P::TAGS), (2, P::PROFILE_LOCATION), (4, P::PROFILE_NAME)] {
+            let row = device
+                .supported_properties
+                .iter()
+                .find(|r| r.property_id == p);
+            assert_eq!(row.is_some(), mask & bit != 0);
+            if let Some(row) = row {
+                assert!(row.access.optional && row.access.readable);
+                assert_eq!(row.access.writable, p == P::TAGS);
+            }
+        }
+        assert!(!device
+            .supported_properties
+            .iter()
+            .any(|r| r.property_id == P::DEPLOYED_PROFILE_LOCATION));
+    }
+}

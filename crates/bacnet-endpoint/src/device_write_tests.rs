@@ -536,3 +536,6 @@ mod execution;
 
 #[path = "reinitialize_tests.rs"]
 mod reinitialize;
+
+#[path = "device_profile_tests.rs"]
+mod device_profiles;

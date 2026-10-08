@@ -114,7 +114,8 @@ fn may_save(oid: ObjectIdentifier, property: PropertyIdentifier) -> bool {
         | ObjectType::MULTI_STATE_INPUT
         | ObjectType::ANALOG_OUTPUT
         | ObjectType::BINARY_OUTPUT
-        | ObjectType::MULTI_STATE_OUTPUT => property == PropertyIdentifier::TAGS,
+        | ObjectType::MULTI_STATE_OUTPUT
+        | ObjectType::DEVICE => property == PropertyIdentifier::TAGS,
         ObjectType::ACCESS_RIGHTS => matches!(
             property,
             PropertyIdentifier::POSITIVE_ACCESS_RULES

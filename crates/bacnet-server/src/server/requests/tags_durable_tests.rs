@@ -47,7 +47,8 @@ const fn case(kind: ObjectType, access: Access) -> Case {
     Case { kind, access }
 }
 const COLOR: Case = case(ObjectType::COLOR, Access::Commandable);
-// `access` is used only by Values; Inputs retain OOS and Outputs command ownership.
+// `access` is used only by Values; Inputs/Outputs retain their PV ownership,
+// and Device has no Present_Value.
 const INPUTS: [Case; 3] = [
     case(ObjectType::ANALOG_INPUT, Access::ReadOnly),
     case(ObjectType::BINARY_INPUT, Access::ReadOnly),
@@ -58,7 +59,8 @@ const OUTPUTS: [Case; 3] = [
     case(ObjectType::BINARY_OUTPUT, Access::Commandable),
     case(ObjectType::MULTI_STATE_OUTPUT, Access::Commandable),
 ];
-const KINDS: [Case; 19] = [
+const KINDS: [Case; 20] = [
+    case(ObjectType::DEVICE, Access::ReadOnly),
     OUTPUTS[0],
     OUTPUTS[1],
     OUTPUTS[2],
@@ -116,6 +118,13 @@ fn object(kind: Case, storage: &Arc<Storage>) -> Box<dyn BACnetObject> {
         }};
     }
     match kind.kind {
+        ObjectType::DEVICE => {
+            let mut object =
+                DeviceObject::with_tags_persistence(DeviceConfig::default(), storage.clone())
+                    .unwrap();
+            object.set_profile(profile).unwrap();
+            Box::new(object)
+        }
         ObjectType::ANALOG_OUTPUT => build!(AnalogOutputObject, 95),
         ObjectType::BINARY_OUTPUT => build!(BinaryOutputObject),
         ObjectType::MULTI_STATE_OUTPUT => build!(MultiStateOutputObject, 3),
@@ -418,6 +427,12 @@ async fn server(
     ))
     .unwrap();
     db.add(object(kind, storage)).unwrap();
+    if kind.kind == ObjectType::DEVICE {
+        assert_eq!(
+            db.selected_device(),
+            Some(ObjectIdentifier::new(ObjectType::DEVICE, 1).unwrap())
+        );
+    }
     let server = BACnetServer::generic_builder()
         .transport(transport)
         .database(db)
