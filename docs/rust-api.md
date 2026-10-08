@@ -7265,16 +7265,24 @@ optional rows. `bacnet_objects::object_profile::ObjectProfile` holds the three;
 an object that carries one serves the rows its fields provision (#1553). The
 Color, Color Temperature, Lighting Output, Binary Lighting Output, Analog Value,
 Binary Value, Multi-state Value, Analog Input, Binary Input, Multi-state Input,
-Analog Output, Binary Output and Multi-state Output objects take one through `set_profile` before registration, which checks it first and
+Analog Output, Binary Output, Multi-state Output and Device objects take one through
+`set_profile` before registration, which checks it first and
 refuses a bad one without changing anything. An unprovisioned object serves and
 lists none of them, so its wire behaviour, Property_List and PICS are as before.
-The three rows retain their relative order: Tags, Profile_Location, Profile_Name.
+Standalone objects append the rows in table order: Tags, Profile_Location,
+Profile_Name. A running Device view sorts its complete property list by identifier.
 They are independent of a Value object's Present_Value access and source tracking,
 and of an Input object's Out_Of_Service state. Input Present_Value simulation
 writes and internal application updates retain their existing ownership rules.
 Output profiles also remain independent of command priorities, Value_Source,
 command timestamps and feedback; attaching Tags storage does not persist commands.
-Existing descriptor order is preserved when the optional rows are added.
+Device profiles preserve the clock, segmentation, identity, Audit recipient and
+executor-owned COV/service/binding views. Full servers accept Device Tags writes
+through the ordinary durable path. Endpoint responders retain their narrower
+Device write allowlist: even with Device writes enabled, Tags is refused before
+authorization or saving. Their default RP-only and optional RP/WP service sets
+stay unchanged; metadata describes the object's ordinary capability, not an
+expansion of endpoint admission. Existing standalone descriptor order is preserved.
 
 - `Tags` is a BACnetARRAY of `bacnet_types::constructed::BACnetNameValue`, a
   name with an optional primitive `PropertyValue`, whose codec
@@ -7315,6 +7323,9 @@ The Output constructors likewise preserve their normal arguments:
 - Analog Output: `with_tags_persistence(instance, name, units, storage)`.
 - Binary Output: `with_tags_persistence(instance, name, storage)`.
 - Multi-state Output: `with_tags_persistence(instance, name, number_of_states, storage)`.
+
+Device accepts `DeviceObject::with_tags_persistence(config, storage)`; the existing
+`DeviceConfig` and `DeviceObject::new(config)` keep their defaults.
 
 For example, construct a writable Analog Value with
 `AnalogValueObject::with_tags_persistence(1, "Temperature", 62, PresentValueAccess::Writable, storage)?`,

@@ -614,3 +614,6 @@ fn output_profiles_read_with_exact_wire_bytes_in_either_oos_state() {
         }
     }
 }
+
+#[path = "device_profile_rows.rs"]
+mod device_profile_rows;

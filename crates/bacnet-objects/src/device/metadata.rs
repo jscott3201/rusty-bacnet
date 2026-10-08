@@ -120,5 +120,8 @@ pub(super) fn for_object(object: &DeviceObject) -> Cow<'_, [PropertyMetadata]> {
             Always,
         ));
     }
+    for row in object.profile.metadata() {
+        rows.to_mut().push(row);
+    }
     rows
 }

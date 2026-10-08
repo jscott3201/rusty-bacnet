@@ -7,10 +7,12 @@
 //! exactly as before. The Color, Color Temperature, Lighting Output and
 //! Binary Lighting Output, Analog Value, Binary Value, Multi-state Value, Analog
 //! Input, Binary Input, Multi-state Input, Analog Output, Binary Output and
-//! Multi-state Output objects carry one (`set_profile`
+//! Multi-state Output and Device objects carry one (`set_profile`
 //! on each). Value profile rows are independent of Present_Value access and
 //! source tracking; input profiles are independent of Out_Of_Service, and output
-//! profiles are independent of command priorities, sources and feedback.
+//! profiles are independent of command priorities, sources and feedback. Device
+//! profiles preserve identity, clock, service declarations and Audit ownership.
+//! Endpoint responders retain their separate, narrow Device write admission.
 //!
 //! - Tags is a BACnetARRAY of BACnetNameValue that peers may write: whole, an
 //!   element by index, or its size at index 0, which truncates or appends
@@ -290,3 +292,6 @@ mod input_tests;
 
 #[cfg(test)]
 mod output_tests;
+
+#[cfg(test)]
+mod device_tests;
