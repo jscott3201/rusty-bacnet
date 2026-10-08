@@ -318,9 +318,21 @@ With tracking on and no local Device identity, a Schedule's or Command's write
 to such an object falls back to a context-free write, which is refused: it fails
 closed, as it does for a commandable object.
 
-A noncommandable object's Value_Source COV doesn't yet follow Table 13-1a-2: the
-bundled report above is served for the six commandable families only, and the
-noncommandable case is tracked in #1582.
+With source tracking enabled, Single and Multiple `Value_Source` subscriptions
+on noncommandable Analog, Binary and Multi-state Value objects report
+`Present_Value`, `Status_Flags`, and `Value_Source` together (Table 13-1a-2).
+Initial and renewal reports include all three, including an initial NONE source
+before Present_Value has been written (IC 135-2020-32). Notifications follow the
+object's Present_Value criterion, any Status_Flags change, or any Value_Source
+change. Analog uses its own `COV_Increment`, irrespective of the Value_Source
+subscription's increment. A combined PV write and source correction reports the
+final corrected source. The same capture and delivery fences described above
+apply; command-only fields remain absent.
+
+Color and Color Temperature retain their existing property-COV behavior. Their
+Value_Source companion/trigger contract remains unresolved under #1582 because
+the inspected object tables do not define the Status_Flags companion required
+by Table 13-1a-2's fallback.
 
 ### APDU Types
 

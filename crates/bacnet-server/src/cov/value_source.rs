@@ -1,4 +1,4 @@
-//! Table 13-1a-2 commandable Value_Source capture, shared by Single and Multiple.
+//! Table 13-1a-2 Value_Source capture, shared by Single and Multiple.
 use super::{flags::PreparedFlags, prepare::PreparedCovValue, CovObservation, CovSample};
 use bacnet_encoding::{constructed::decode_value_source, primitives::decode_timestamp_choice};
 use bacnet_objects::traits::BACnetObject;
@@ -9,7 +9,7 @@ use bacnet_types::{
     primitives::PropertyValue as V,
 };
 
-const FIELDS: [P; 5] = [
+const COMMANDABLE_FIELDS: [P; 5] = [
     P::PRESENT_VALUE,
     P::STATUS_FLAGS,
     P::VALUE_SOURCE,
@@ -17,30 +17,39 @@ const FIELDS: [P; 5] = [
     P::CURRENT_COMMAND_PRIORITY,
 ];
 
+const NONCOMMANDABLE_FIELDS: [P; 3] = [P::PRESENT_VALUE, P::STATUS_FLAGS, P::VALUE_SOURCE];
+
 pub(crate) fn applies(object: &dyn BACnetObject, property: P) -> bool {
-    property == P::VALUE_SOURCE
-        && matches!(
-            object.object_identifier().object_type(),
-            O::ANALOG_OUTPUT
-                | O::ANALOG_VALUE
-                | O::BINARY_OUTPUT
-                | O::BINARY_VALUE
-                | O::MULTI_STATE_OUTPUT
-                | O::MULTI_STATE_VALUE
-        )
-        && object.property_list().contains(&P::PRIORITY_ARRAY)
+    if property != P::VALUE_SOURCE {
+        return false;
+    }
+    let properties = object.property_list();
+    let commandable = properties.contains(&P::PRIORITY_ARRAY);
+    match object.object_identifier().object_type() {
+        O::ANALOG_OUTPUT | O::BINARY_OUTPUT | O::MULTI_STATE_OUTPUT => commandable,
+        O::ANALOG_VALUE | O::BINARY_VALUE | O::MULTI_STATE_VALUE => {
+            commandable || properties.contains(&P::VALUE_SOURCE)
+        }
+        _ => false,
+    }
 }
 
 /// Owns the complete validated report and baseline from one object borrow. Other
 /// Multiple selectors reuse these captured values, never read a second version.
 pub(crate) struct PreparedValueSource {
+    properties: &'static [P],
     fields: Vec<PreparedCovValue>,
     pub observation: CovObservation,
 }
 impl PreparedValueSource {
     pub fn read(object: &dyn BACnetObject, flags: &PreparedFlags) -> Result<Self, Error> {
-        let mut fields = Vec::with_capacity(FIELDS.len());
-        for property in FIELDS {
+        let properties: &'static [P] = if object.property_list().contains(&P::PRIORITY_ARRAY) {
+            &COMMANDABLE_FIELDS
+        } else {
+            &NONCOMMANDABLE_FIELDS
+        };
+        let mut fields = Vec::with_capacity(properties.len());
+        for &property in properties {
             let value = if property == P::STATUS_FLAGS {
                 flags.value.clone().ok_or_else(invalid)?
             } else {
@@ -63,14 +72,18 @@ impl PreparedValueSource {
         }
         let observation = flags
             .observation(fields[2].sample.clone())
-            .with_command(fields[0].sample.clone(), fields[4].sample.clone());
+            .with_source_companions(
+                fields[0].sample.clone(),
+                fields.get(4).map(|field| field.sample.clone()),
+            );
         Ok(Self {
+            properties,
             fields,
             observation,
         })
     }
     pub fn value(&self, property: P) -> Option<&V> {
-        FIELDS
+        self.properties
             .iter()
             .position(|p| *p == property)
             .map(|i| self.fields[i].sample.value())
@@ -79,17 +92,18 @@ impl PreparedValueSource {
         let Some(previous) = previous else {
             return true;
         };
-        let Some((pv, priority)) = previous.command() else {
+        let Some((pv, priority)) = previous.source_companions() else {
             return true;
         };
         self.fields[0].reports(Some(pv))
             || self.observation.flags_changed(Some(previous))
             || self.observation.sample() != previous.sample()
-            || &self.fields[4].sample != priority
+            || self.fields.get(4).map(|field| &field.sample) != priority.as_ref()
     }
     pub fn values(&self) -> Vec<BACnetPropertyValue> {
-        FIELDS
-            .into_iter()
+        self.properties
+            .iter()
+            .copied()
             .zip(&self.fields)
             .map(|(property_identifier, field)| BACnetPropertyValue {
                 property_identifier,
@@ -101,7 +115,7 @@ impl PreparedValueSource {
     }
 }
 fn invalid() -> Error {
-    Error::Encoding("Invalid commandable Value_Source COV companion".into())
+    Error::Encoding("Invalid Value_Source COV companion".into())
 }
 fn validate(object: O, property: P, value: &V) -> Result<(), Error> {
     let valid = match property {
