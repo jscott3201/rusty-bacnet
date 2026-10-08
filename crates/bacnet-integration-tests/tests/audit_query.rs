@@ -259,6 +259,7 @@ fn database() -> ObjectDatabase {
     let device_object = DeviceObject::new(DeviceConfig {
         instance: 4321,
         name: "Audit E2E Device".into(),
+        segmentation_supported: Segmentation::BOTH,
         ..DeviceConfig::default()
     })
     .unwrap();

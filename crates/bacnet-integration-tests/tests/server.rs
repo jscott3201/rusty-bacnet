@@ -37,6 +37,7 @@ async fn make_server_with_dcc_policy(
         name: "Integration Test Device".into(),
         vendor_name: "Rusty BACnet".into(),
         vendor_id: 555,
+        segmentation_supported: Segmentation::BOTH,
         ..DeviceConfig::default()
     })
     .unwrap();
