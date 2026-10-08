@@ -128,7 +128,9 @@ pub(crate) fn element(
         | (O::ACCESS_USER, P::CREDENTIALS | P::MEMBERS | P::MEMBER_OF)
         | (O::LIFE_SAFETY_POINT | O::LIFE_SAFETY_ZONE, P::MEMBER_OF)
         | (O::LIFE_SAFETY_ZONE, P::ZONE_MEMBERS) => (Element::DeviceObjectReference, Collection),
-        (O::ACCESS_RIGHTS, P::ACCOMPANIMENT) => (Element::DeviceObjectReference, Single),
+        (O::ACCESS_RIGHTS, P::ACCOMPANIMENT)
+        | (O::ACCESS_POINT, P::ACCESS_EVENT_CREDENTIAL)
+        | (O::LIFT | O::ESCALATOR, P::ENERGY_METER_REF) => (Element::DeviceObjectReference, Single),
         (O::CREDENTIAL_DATA_INPUT, P::SUPPORTED_FORMATS) => {
             (Element::AuthenticationFactorFormat, Collection)
         }
@@ -143,6 +145,10 @@ pub(crate) fn element(
         | (O::SCHEDULE | O::CHANNEL, P::LIST_OF_OBJECT_PROPERTY_REFERENCES)
         | (O::TREND_LOG_MULTIPLE, P::LOG_DEVICE_OBJECT_PROPERTY) => {
             (Element::DeviceObjectPropertyReference, Collection)
+        }
+        (O::TREND_LOG, P::LOG_DEVICE_OBJECT_PROPERTY)
+        | (O::AVERAGING | O::EVENT_ENROLLMENT, P::OBJECT_PROPERTY_REFERENCE) => {
+            (Element::DeviceObjectPropertyReference, Single)
         }
         (O::GLOBAL_GROUP, P::PRESENT_VALUE) => (Element::PropertyAccessResult, Collection),
         (O::DEVICE, P::AUDIT_NOTIFICATION_RECIPIENT) => (Element::Recipient, Single),
@@ -460,3 +466,7 @@ mod scale_tests;
 #[cfg(test)]
 #[path = "constructed_read_tags_tests.rs"]
 mod tags_tests;
+
+#[cfg(test)]
+#[path = "constructed_read_reference_tests.rs"]
+mod reference_tests;
