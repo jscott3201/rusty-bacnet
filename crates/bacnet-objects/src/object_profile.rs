@@ -5,9 +5,10 @@
 //! registration, as an [`ObjectAuditPolicy`](crate::audit::ObjectAuditPolicy)
 //! provisions the audit rows; an object that provisions none serves none,
 //! exactly as before. The Color, Color Temperature, Lighting Output and
-//! Binary Lighting Output, Analog Value, Binary Value and Multi-state Value
-//! objects carry one (`set_profile` on each). Value profile rows are
-//! independent of Present_Value access and source tracking.
+//! Binary Lighting Output, Analog Value, Binary Value, Multi-state Value, Analog
+//! Input, Binary Input and Multi-state Input objects carry one (`set_profile`
+//! on each). Value profile rows are independent of Present_Value access and
+//! source tracking; input profiles are independent of Out_Of_Service.
 //!
 //! - Tags is a BACnetARRAY of BACnetNameValue that peers may write: whole, an
 //!   element by index, or its size at index 0, which truncates or appends
@@ -281,3 +282,6 @@ mod test_support;
 
 #[cfg(test)]
 mod value_tests;
+
+#[cfg(test)]
+mod input_tests;

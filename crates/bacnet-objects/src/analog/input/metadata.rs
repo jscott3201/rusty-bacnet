@@ -141,5 +141,8 @@ pub(super) fn for_object(object: &AnalogInputObject) -> Cow<'_, [PropertyMetadat
             ReadOnly,
         ));
     }
+    if object.profile.metadata().next().is_some() {
+        rows.to_mut().extend(object.profile.metadata());
+    }
     rows
 }

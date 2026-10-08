@@ -8,12 +8,12 @@ use super::mutation_list_wire_tests::wire;
 use super::mutation_tests::{apdu, wpm, Fixture};
 use super::*;
 use crate::server::test_transport::TestTransport;
-use bacnet_objects::analog::AnalogValueObject;
-use bacnet_objects::binary::BinaryValueObject;
+use bacnet_objects::analog::{AnalogInputObject, AnalogValueObject};
+use bacnet_objects::binary::{BinaryInputObject, BinaryValueObject};
 use bacnet_objects::color::{ColorObject, ColorTemperatureObject};
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::lighting::{BinaryLightingOutputObject, LightingOutputObject};
-use bacnet_objects::multistate::MultiStateValueObject;
+use bacnet_objects::multistate::{MultiStateInputObject, MultiStateValueObject};
 use bacnet_objects::object_profile::{ObjectProfile, TagsPersistence, TagsSnapshot};
 use bacnet_objects::present_value_access::PresentValueAccess as Access;
 use bacnet_objects::traits::BACnetObject;
@@ -35,7 +35,16 @@ const fn case(kind: ObjectType, access: Access) -> Case {
     Case { kind, access }
 }
 const COLOR: Case = case(ObjectType::COLOR, Access::Commandable);
-const KINDS: [Case; 13] = [
+// `access` is used only by the Value constructors; Inputs retain their OOS contract.
+const INPUTS: [Case; 3] = [
+    case(ObjectType::ANALOG_INPUT, Access::ReadOnly),
+    case(ObjectType::BINARY_INPUT, Access::ReadOnly),
+    case(ObjectType::MULTI_STATE_INPUT, Access::ReadOnly),
+];
+const KINDS: [Case; 16] = [
+    INPUTS[0],
+    INPUTS[1],
+    INPUTS[2],
     COLOR,
     case(ObjectType::COLOR_TEMPERATURE, Access::Commandable),
     case(ObjectType::LIGHTING_OUTPUT, Access::Commandable),
@@ -72,8 +81,8 @@ fn object(kind: Case, storage: &Arc<Storage>) -> Box<dyn BACnetObject> {
         ..ObjectProfile::default()
     };
     macro_rules! build {
-        ($ty:ty) => {{
-            let mut object = <$ty>::with_tags_persistence(1, "tags", storage.clone()).unwrap();
+        ($ty:ty $(, $extra:expr)?) => {{
+            let mut object = <$ty>::with_tags_persistence(1, "tags", $($extra,)? storage.clone()).unwrap();
             object.set_profile(profile).unwrap();
             Box::new(object)
         }};
@@ -86,6 +95,9 @@ fn object(kind: Case, storage: &Arc<Storage>) -> Box<dyn BACnetObject> {
         }};
     }
     match kind.kind {
+        ObjectType::ANALOG_INPUT => build!(AnalogInputObject, 95),
+        ObjectType::BINARY_INPUT => build!(BinaryInputObject),
+        ObjectType::MULTI_STATE_INPUT => build!(MultiStateInputObject, 3),
         ObjectType::ANALOG_VALUE => value!(AnalogValueObject, 95),
         ObjectType::BINARY_VALUE => value!(BinaryValueObject),
         ObjectType::MULTI_STATE_VALUE => value!(MultiStateValueObject, 3),
@@ -462,5 +474,69 @@ async fn write_local_waits_off_the_database_lock_and_survives_rebuild() {
         drop(server);
         let (rebuilt, oid) = served_by(kind, &storage).await;
         assert_eq!(read_wire(&rebuilt, oid, None).await, FLOOR);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn input_tags_save_while_out_of_service_without_persisting_simulation_state() {
+    for kind in INPUTS {
+        let storage = Arc::new(Storage::default());
+        let (fixture, oid) = served_by(kind, &storage).await;
+        let mut bytes = BytesMut::new();
+        WritePropertyRequest {
+            object_identifier: oid,
+            property_identifier: PropertyIdentifier::OUT_OF_SERVICE,
+            property_array_index: None,
+            property_value: vec![0x11], // independently encoded application Boolean TRUE
+            priority: None,
+        }
+        .encode(&mut bytes)
+        .unwrap();
+        assert_eq!(
+            wire(
+                &fixture,
+                ConfirmedServiceChoice::WRITE_PROPERTY,
+                bytes.freeze()
+            )
+            .await,
+            SIMPLE_ACK_WRITE
+        );
+        assert_eq!(storage.saves.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            wire(
+                &fixture,
+                ConfirmedServiceChoice::WRITE_PROPERTY,
+                request(oid, None, FLOOR)
+            )
+            .await,
+            SIMPLE_ACK_WRITE
+        );
+        assert_eq!(read_wire(&fixture, oid, None).await, FLOOR);
+        assert_eq!(
+            fixture
+                .db
+                .read()
+                .await
+                .get(&oid)
+                .unwrap()
+                .read_property(PropertyIdentifier::OUT_OF_SERVICE, None)
+                .unwrap(),
+            PropertyValue::Boolean(true)
+        );
+        drop(fixture);
+        let (rebuilt, oid) = served_by(kind, &storage).await;
+        assert_eq!(read_wire(&rebuilt, oid, None).await, FLOOR);
+        assert_eq!(
+            rebuilt
+                .db
+                .read()
+                .await
+                .get(&oid)
+                .unwrap()
+                .read_property(PropertyIdentifier::OUT_OF_SERVICE, None)
+                .unwrap(),
+            PropertyValue::Boolean(false)
+        );
+        assert_eq!(storage.saves.load(Ordering::SeqCst), 1);
     }
 }
