@@ -4397,8 +4397,12 @@ let registration = client.transport().bvlc_client_snapshot().foreign_registratio
 Add `renewal_interval: None` to existing `ForeignDeviceConfig` literals to use
 the default of half the advertised TTL, including 500 ms for TTL 1. Automatic
 mode requires a positive TTL and a positive interval shorter than that TTL;
-invalid settings fail before transport I/O. The requested TTL stays unchanged
-on the wire. The automatic worker waits at most the smaller of the interval
+invalid settings fail before transport I/O. Positive intervals below 100 ms
+use 100 ms instead, limiting automatic attempts to ten per second even when
+a manual request owns the slot or local sends fail immediately. This is a
+local pacing policy; the requested TTL stays unchanged on the wire. The
+effective interval also drives `next_attempt_in` and response waiting.
+The automatic worker waits at most the smaller of the effective interval
 and three seconds for each result, then schedules another attempt; busy manual
 requests cause a locally counted busy refusal and a retry on the next interval.
 There is no catch-up burst after a delayed attempt. One-shot

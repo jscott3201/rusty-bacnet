@@ -22,8 +22,10 @@ pub struct ForeignDeviceConfig {
     /// Advertised time-to-live in seconds; must be positive for automatic mode.
     /// The one-shot registration helper separately permits zero-TTL requests.
     pub ttl: u16,
-    /// Local attempt interval, strictly positive and shorter than `ttl`.
+    /// Requested local attempt interval, positive and shorter than `ttl`.
     /// `None` uses half the TTL, including 500 ms for a one-second TTL.
+    /// Positive values below 100 ms use 100 ms to bound local retry frequency.
+    /// This pacing floor is local policy and does not change the wire TTL.
     pub renewal_interval: Option<Duration>,
 }
 
@@ -36,7 +38,9 @@ impl ForeignDeviceConfig {
                 "foreign-device mode needs TTL > 0 and a renewal interval > 0 and < TTL".into(),
             ));
         }
-        Ok(interval)
+        // Limit fast replies, busy slots and local failures to ten attempts per
+        // second. This remains below half of the smallest positive wire TTL.
+        Ok(interval.max(Duration::from_millis(100)))
     }
 }
 

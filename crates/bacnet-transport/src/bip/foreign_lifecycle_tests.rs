@@ -224,3 +224,129 @@ async fn foreign_stop_during_pending_request_resets_status_and_drop_aborts_worke
     .await
     .unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn foreign_tiny_interval_silent_peer_has_bounded_attempts() {
+    check_tiny_interval_pacing(false, false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn foreign_tiny_interval_busy_slot_has_bounded_attempts() {
+    check_tiny_interval_pacing(true, false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn foreign_tiny_interval_local_errors_have_bounded_attempts() {
+    check_tiny_interval_pacing(false, true).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn foreign_tiny_interval_countdown_tracks_the_effective_schedule() {
+    let (peer, mut transport) = peer_and_transport().await;
+    transport.foreign_device.as_mut().unwrap().renewal_interval = Some(Duration::from_nanos(1));
+    let _rx = transport.start().await.unwrap();
+    let (guard, _response) = transport
+        .client_management
+        .begin(
+            (
+                Ipv4Addr::LOCALHOST.octets(),
+                peer.local_addr().unwrap().port(),
+            ),
+            BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE,
+            BvlcResponseKind::ReadBroadcastDistributionTableAck,
+            None,
+        )
+        .unwrap();
+    tokio::task::yield_now().await;
+    let first = transport.bvlc_client_snapshot();
+    assert_eq!(first.register_foreign_device.busy, 1);
+    assert_eq!(
+        first.foreign_registration.next_attempt_in,
+        Some(Duration::from_millis(100))
+    );
+    tokio::time::advance(Duration::from_millis(99)).await;
+    tokio::task::yield_now().await;
+    let waiting = transport.bvlc_client_snapshot();
+    assert_eq!(waiting.register_foreign_device.busy, 1);
+    assert_eq!(
+        waiting.foreign_registration.next_attempt_in,
+        Some(Duration::from_millis(1))
+    );
+    tokio::time::advance(Duration::from_millis(1)).await;
+    tokio::task::yield_now().await;
+    let second = transport.bvlc_client_snapshot();
+    assert_eq!(second.register_foreign_device.busy, 2);
+    assert_eq!(
+        second.foreign_registration.next_attempt_in,
+        Some(Duration::from_millis(100))
+    );
+    drop(guard);
+    transport.stop().await.unwrap();
+}
+
+async fn check_tiny_interval_pacing(busy: bool, local_error: bool) {
+    let peer = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    // This socket deliberately lacks broadcast permission for the local-error case.
+    let socket = Arc::new(BipSocket::new(
+        UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap(),
+        None,
+    ));
+    let management = Arc::new(client_management::ManagementClient::default());
+    management.start();
+    let config = ForeignDeviceConfig {
+        bbmd_ip: if local_error {
+            Ipv4Addr::BROADCAST
+        } else {
+            Ipv4Addr::LOCALHOST
+        },
+        bbmd_port: peer.local_addr().unwrap().port(),
+        ttl: 2,
+        renewal_interval: Some(Duration::from_nanos(1)),
+    };
+    let held_request = busy.then(|| {
+        management
+            .begin(
+                (Ipv4Addr::LOCALHOST.octets(), config.bbmd_port),
+                BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE,
+                BvlcResponseKind::ReadBroadcastDistributionTableAck,
+                None,
+            )
+            .unwrap()
+    });
+    let interval = config.interval().unwrap();
+    let started = tokio::time::Instant::now();
+    let worker = tokio::spawn(foreign_device::run(
+        socket,
+        management.clone(),
+        config,
+        interval,
+    ));
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    worker.abort();
+    assert!(worker.await.unwrap_err().is_cancelled());
+    let elapsed = started.elapsed();
+    let snapshot = management.snapshot();
+    let counters = snapshot.register_foreign_device;
+    let attempts = counters.sent + counters.busy + counters.local_errors;
+    eprintln!("tiny interval busy={busy} local_error={local_error}: {attempts} attempts in {elapsed:?}; counters={counters:?}");
+    assert!(attempts > 0, "worker must make progress");
+    let limit = elapsed.as_millis() / 100 + 1;
+    assert!(
+        u128::from(attempts) <= limit,
+        "local pacing allows at most one attempt per 100 ms, with one immediate initial attempt"
+    );
+    assert_eq!(snapshot.foreign_registration.accepted, 0);
+    if busy {
+        assert_eq!(counters.sent, 0);
+        assert_eq!(attempts, counters.busy);
+    } else if local_error {
+        assert_eq!(counters.sent, 0);
+        assert_eq!(attempts, counters.local_errors);
+    } else {
+        assert!(counters.timeouts > 0);
+        let mut packet = [0; 64];
+        let (len, _) = peer.try_recv_from(&mut packet).unwrap();
+        assert_eq!(&packet[..len], &[0x81, 5, 0, 6, 0, 2]);
+    }
+    drop(held_request);
+}
