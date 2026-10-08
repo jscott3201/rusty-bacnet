@@ -24,7 +24,7 @@ pub(crate) struct PreparedReference {
 }
 
 /// Per-object reads shared by every reference in one preparation. Each object's
-/// Status_Flags and commandable Value_Source report are read once, so sibling
+/// Status_Flags and specialized Value_Source report are read once, so sibling
 /// selectors never observe two versions of the same object.
 #[derive(Default)]
 pub(crate) struct MultipleReads {
