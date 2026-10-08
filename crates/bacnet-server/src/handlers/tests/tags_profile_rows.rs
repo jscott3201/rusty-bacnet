@@ -455,3 +455,162 @@ fn input_profiles_read_with_exact_wire_bytes_in_either_oos_state() {
         }
     }
 }
+
+// Check independent expected vectors against both RP and RPM in the output test.
+fn read_output_at(
+    db: &ObjectDatabase,
+    oid: ObjectIdentifier,
+    property: PropertyIdentifier,
+    index: Option<u32>,
+) -> Result<Vec<u8>, Error> {
+    use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
+    let value = read_at(db, oid, property, index)?;
+    let mut request = BytesMut::new();
+    ReadPropertyMultipleRequest {
+        list_of_read_access_specs: vec![ReadAccessSpecification {
+            object_identifier: oid,
+            list_of_property_references: vec![PropertyReference {
+                property_identifier: property,
+                property_array_index: index,
+            }],
+        }],
+    }
+    .encode(&mut request)
+    .unwrap();
+    let mut reply = BytesMut::new();
+    handle_read_property_multiple(db, &request, &mut reply)?;
+    let reply = ReadPropertyMultipleACK::decode(&reply).unwrap();
+    assert_eq!(reply.list_of_read_access_results.len(), 1);
+    let result = &reply.list_of_read_access_results[0];
+    assert_eq!(result.object_identifier, oid);
+    assert_eq!(result.list_of_results.len(), 1);
+    let row = &result.list_of_results[0];
+    assert_eq!(row.property_identifier, property);
+    assert_eq!(row.property_array_index, index);
+    assert_eq!(row.error, None);
+    assert_eq!(row.property_value, Some(value.clone()));
+    Ok(value)
+}
+
+#[test]
+fn output_profiles_read_with_exact_wire_bytes_in_either_oos_state() {
+    use bacnet_objects::analog::AnalogOutputObject;
+    use bacnet_objects::binary::BinaryOutputObject;
+    use bacnet_objects::multistate::MultiStateOutputObject;
+    for out_of_service in [false, true] {
+        let profile = ObjectProfile {
+            tags: Some(vec![
+                BACnetNameValue::semantic("exhaust"),
+                BACnetNameValue::valued("floor", PropertyValue::Unsigned(3)),
+            ]),
+            profile_location: Some(LOCATION.into()),
+            profile_name: Some(NAME.into()),
+        };
+        macro_rules! build {
+            ($object:expr) => {{
+                let mut object = $object.unwrap();
+                for property in [
+                    TAGS,
+                    PropertyIdentifier::PROFILE_LOCATION,
+                    PropertyIdentifier::PROFILE_NAME,
+                ] {
+                    assert_refused(
+                        object.read_property(property, None).map(|_| ()),
+                        ErrorCode::UNKNOWN_PROPERTY,
+                    );
+                    assert_refused(
+                        object.write_property(property, None, PropertyValue::Null, None),
+                        ErrorCode::UNKNOWN_PROPERTY,
+                    );
+                    assert!(!object.property_list().contains(&property));
+                }
+                object.set_profile(profile.clone()).unwrap();
+                object
+                    .write_property(
+                        PropertyIdentifier::OUT_OF_SERVICE,
+                        None,
+                        PropertyValue::Boolean(out_of_service),
+                        None,
+                    )
+                    .unwrap();
+                Box::new(object) as Box<dyn bacnet_objects::traits::BACnetObject>
+            }};
+        }
+        for object in [
+            build!(AnalogOutputObject::new(1, "AO", 95)),
+            build!(BinaryOutputObject::new(1, "BO")),
+            build!(MultiStateOutputObject::new(1, "MSO", 3)),
+        ] {
+            let (mut db, oid) = db_with(object);
+            assert_eq!(
+                read_output_at(&db, oid, TAGS, None).unwrap(),
+                [EXHAUST, FLOOR].concat()
+            );
+            assert_eq!(read_output_at(&db, oid, TAGS, Some(0)).unwrap(), [0x21, 2]);
+            assert_eq!(read_output_at(&db, oid, TAGS, Some(2)).unwrap(), FLOOR);
+            assert_refused(
+                read_output_at(&db, oid, TAGS, Some(3)).map(|_| ()),
+                ErrorCode::INVALID_ARRAY_INDEX,
+            );
+            for (property, expected) in [
+                (PropertyIdentifier::PROFILE_LOCATION, LOCATION),
+                (PropertyIdentifier::PROFILE_NAME, NAME),
+            ] {
+                assert_eq!(
+                    read_output_at(&db, oid, property, None).unwrap(),
+                    text(expected)
+                );
+                assert_refused(
+                    read_output_at(&db, oid, property, Some(0)).map(|_| ()),
+                    ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
+                );
+                assert_refused(
+                    write_at(&mut db, oid, property, None, &text("555-other")),
+                    ErrorCode::WRITE_ACCESS_DENIED,
+                );
+                assert_refused(
+                    write_at(&mut db, oid, property, Some(1), &text("555-other")),
+                    ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
+                );
+            }
+            let list = read_wire(&db, oid, PropertyIdentifier::PROPERTY_LIST);
+            assert!(list.ends_with(&[0x92, 0x01, 0xE6, 0x92, 0x01, 0xE5, 0x91, 0xA8]));
+            let pair = [0x0A, 0, b'a', 0xA4, 126, 10, 8, 4, 0xB4, 12, 34, 56, 7];
+            assert_refused(
+                write_at(&mut db, oid, TAGS, None, &pair),
+                ErrorCode::INVALID_DATA_ENCODING,
+            );
+            for (bytes, code) in [
+                (vec![0x0b, 0, b'a', b';'], ErrorCode::VALUE_OUT_OF_RANGE),
+                (
+                    [EXHAUST.as_slice(), &[0x21, 3, 0x21, 4]].concat(),
+                    ErrorCode::INVALID_DATA_ENCODING,
+                ),
+            ] {
+                assert_refused(write_at(&mut db, oid, TAGS, None, &bytes), code);
+            }
+            // Broken application framing is rejected by the outer service parser.
+            assert!(matches!(
+                write_at(&mut db, oid, TAGS, None, &[0xff]),
+                Err(Error::Reject { reason }) if reason == RejectReason::INVALID_TAG.to_raw()
+            ));
+            let count = write_at(&mut db, oid, TAGS, Some(0), &[0x22, 4, 1]);
+            assert!(
+                matches!(count, Err(Error::Protocol { class, code }) if class == ErrorClass::RESOURCES.to_raw() as u32 && code == ErrorCode::NO_SPACE_TO_WRITE_PROPERTY.to_raw() as u32)
+            );
+            assert_eq!(read_wire(&db, oid, TAGS), [EXHAUST, FLOOR].concat());
+            write_at(&mut db, oid, TAGS, None, &FLOOR).unwrap();
+            assert_eq!(read_wire(&db, oid, TAGS), FLOOR);
+            write_at(&mut db, oid, TAGS, Some(0), &[0x21, 2]).unwrap();
+            assert_eq!(read_output_at(&db, oid, TAGS, Some(2)).unwrap(), [0x09, 0]);
+            write_at(&mut db, oid, TAGS, Some(2), &EXHAUST).unwrap();
+            assert_eq!(read_wire(&db, oid, TAGS), [FLOOR, EXHAUST].concat());
+            write_at(&mut db, oid, TAGS, None, &[]).unwrap();
+            assert_eq!(
+                read_output_at(&db, oid, TAGS, None).unwrap(),
+                Vec::<u8>::new()
+            );
+            assert_eq!(read_output_at(&db, oid, TAGS, Some(0)).unwrap(), [0x21, 0]);
+        }
+    }
+}

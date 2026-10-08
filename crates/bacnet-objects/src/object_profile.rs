@@ -6,9 +6,11 @@
 //! provisions the audit rows; an object that provisions none serves none,
 //! exactly as before. The Color, Color Temperature, Lighting Output and
 //! Binary Lighting Output, Analog Value, Binary Value, Multi-state Value, Analog
-//! Input, Binary Input and Multi-state Input objects carry one (`set_profile`
+//! Input, Binary Input, Multi-state Input, Analog Output, Binary Output and
+//! Multi-state Output objects carry one (`set_profile`
 //! on each). Value profile rows are independent of Present_Value access and
-//! source tracking; input profiles are independent of Out_Of_Service.
+//! source tracking; input profiles are independent of Out_Of_Service, and output
+//! profiles are independent of command priorities, sources and feedback.
 //!
 //! - Tags is a BACnetARRAY of BACnetNameValue that peers may write: whole, an
 //!   element by index, or its size at index 0, which truncates or appends
@@ -285,3 +287,6 @@ mod value_tests;
 
 #[cfg(test)]
 mod input_tests;
+
+#[cfg(test)]
+mod output_tests;

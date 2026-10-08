@@ -119,9 +119,13 @@ const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
-pub(super) fn for_object(_object: &BinaryOutputObject) -> Cow<'_, [PropertyMetadata]> {
+pub(super) fn for_object(object: &BinaryOutputObject) -> Cow<'_, [PropertyMetadata]> {
     // This binary implementation has no instance-conditional bounds.
-    Cow::Borrowed(BASE)
+    let mut rows = Cow::Borrowed(BASE);
+    for row in object.profile.metadata() {
+        rows.to_mut().push(row);
+    }
+    rows
 }
 
 #[cfg(test)]

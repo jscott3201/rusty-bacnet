@@ -153,5 +153,8 @@ pub(super) fn for_object(object: &AnalogOutputObject) -> Cow<'_, [PropertyMetada
             ReadOnly,
         ));
     }
+    for row in object.profile.metadata() {
+        rows.to_mut().push(row);
+    }
     rows
 }
