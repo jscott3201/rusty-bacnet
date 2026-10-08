@@ -24,16 +24,16 @@ pub enum DccState {
     /// Communication is enabled: ENABLE. The state at every start.
     #[default]
     Enable,
-    /// DISABLE_INITIATION: the server still executes and answers requests, but
-    /// starts nothing of its own except the I-Am that answers a Who-Is and
-    /// audit notifications.
+    /// DISABLE_INITIATION restricts independent message initiation. The server
+    /// continues executing requests; I-Am replies to Who-Is, matching I-Have
+    /// replies to Who-Has, and audit notifications remain permitted.
     DisableInitiation,
 }
 
 impl DccState {
-    /// Whether the server holds back the messages it would start on its own:
-    /// COV and event notifications, I-Have, unsolicited I-Am, remote writes
-    /// and their Who-Is.
+    /// Whether independent initiation is restricted, including COV and event
+    /// notifications, unsolicited I-Am, remote writes and their Who-Is.
+    /// Solicited discovery replies and audit notifications remain eligible.
     pub const fn initiation_restricted(self) -> bool {
         matches!(self, Self::DisableInitiation)
     }

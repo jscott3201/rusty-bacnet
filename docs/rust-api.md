@@ -6248,16 +6248,21 @@ A write a Command or Channel makes in another device follows the same rule
 
 ### Discovery under DeviceCommunicationControl
 
-Of the discovery messages, Clause 16.1 lets a device whose initiation is
-disabled send only the I-Am that answers a Who-Is (#1388). Under
-DISABLE_INITIATION the server therefore still answers Who-Is, but a Who-Has
-gets no I-Have, and an I-Am announcement through `broadcast_i_am()` or an
-`IAmBroadcaster` sends nothing and returns `SERVICES` /
-`COMMUNICATION_DISABLED`. The state is read just before the I-Have would go
-out, ahead of the discovery limiter, so a held-back Who-Has costs no rate
-budget and leaves nothing to coalesce: the same request is answered once
-initiation is enabled again. Network-layer messages, such as a
-Network-Number-Is answer, are not application services and go out as usual.
+During DISABLE_INITIATION the full server answers matching Who-Has requests
+with I-Have, alongside its existing Who-Is/I-Am responses (#1590). This adopts
+the optional interoperability allowance described in
+[ASHRAE IC 135-2020-22](https://www.ashrae.org/file%20library/technical%20resources/standards%20and%20guidelines/standards%20intepretations/ic-135-2020-22.pdf).
+Object names, identifiers and device-instance ranges still determine whether
+a Who-Has matches. Replies use the existing routing and discovery limiter:
+an admitted I-Have consumes response budget and establishes a coalescing
+entry, which survives an ENABLE request or DCC timer expiry.
+
+Independent I-Am announcements remain restricted (#1388). Calling
+`broadcast_i_am()` or an `IAmBroadcaster` during DISABLE_INITIATION sends
+nothing and returns `SERVICES` / `COMMUNICATION_DISABLED`. The solicited
+I-Have allowance does not enable unsolicited announcements. Network-layer
+messages, such as a Network-Number-Is answer, are not application services
+and go out as usual.
 
 ### Notification forwarding
 
