@@ -470,7 +470,7 @@ async fn network_number_real_owner_stop_cancel_joins_control_and_keeps_socket_le
     }
 }
 #[tokio::test]
-async fn network_number_held_database_does_not_block_shutdown() {
+async fn network_number_held_database_cancels_control_before_endpoint_settlement() {
     for full in [true, false] {
         let mut f = Fixture::start(full, true, 0).await;
         let db = f.database();
@@ -484,9 +484,25 @@ async fn network_number_held_database_does_not_block_shutdown() {
         })
         .await
         .unwrap();
-        tokio::time::timeout(Duration::from_secs(1), f.stop())
-            .await
-            .unwrap();
+        if full {
+            tokio::time::timeout(Duration::from_secs(1), f.stop())
+                .await
+                .unwrap();
+        } else {
+            // Endpoint stop now waits for the database's durable settlement,
+            // but first aborts and joins the queued Number control task.
+            assert!(tokio::time::timeout(Duration::from_millis(20), f.stop())
+                .await
+                .is_err());
+            let Owner::Endpoint(endpoint) = &f.owner else {
+                unreachable!()
+            };
+            assert!(endpoint.network_number_task.is_none());
+            assert_eq!(
+                endpoint.lifecycle.load(Ordering::Acquire),
+                Lifecycle::Stopping as u8
+            );
+        }
         assert_eq!(
             guard
                 .get(&selected())
@@ -499,6 +515,11 @@ async fn network_number_held_database_does_not_block_shutdown() {
             PropertyValue::Unsigned(0)
         );
         drop(guard);
+        if !full {
+            tokio::time::timeout(Duration::from_secs(1), f.stop())
+                .await
+                .unwrap();
+        }
         assert!(db.write().await.remove(&selected()).unwrap().is_some());
     }
 }

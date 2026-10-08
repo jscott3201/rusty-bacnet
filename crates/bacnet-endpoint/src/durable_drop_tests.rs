@@ -22,6 +22,9 @@ use std::sync::mpsc as std_mpsc;
 use std::sync::{Mutex as StdMutex, Weak};
 use std::thread::ThreadId;
 
+#[path = "durable_stop_tests.rs"]
+mod durable_stop;
+
 const WAIT: Duration = Duration::from_secs(1);
 
 fn destination(instance: u32) -> BACnetDestination {
@@ -59,6 +62,8 @@ fn snapshot(list: &[BACnetDestination]) -> NotificationClassSnapshot {
 struct Storage {
     saved: StdMutex<Option<NotificationClassSnapshot>>,
     hold: StdMutex<Option<(std_mpsc::Sender<()>, std_mpsc::Receiver<()>)>>,
+    attempts: std::sync::atomic::AtomicUsize,
+    fail_on: std::sync::atomic::AtomicUsize,
 }
 
 impl Storage {
@@ -97,6 +102,10 @@ impl NotificationClassPersistence for Reporting {
         if let Some((started, go)) = &*self.storage.hold.lock().unwrap() {
             let _ = started.send(());
             let _ = go.recv();
+        }
+        let attempt = self.storage.attempts.fetch_add(1, Ordering::SeqCst) + 1;
+        if self.storage.fail_on.load(Ordering::SeqCst) == attempt {
+            return Err(Error::Encoding("injected durable save failure".into()));
         }
         *self.storage.saved.lock().unwrap() = Some(saved.clone());
         Ok(())
@@ -240,15 +249,17 @@ async fn a_session_dropped_last_lets_its_database_go_off_the_runtime() {
         let storage = Storage::holding();
         let (class, dropped_on) = reporting_class(&storage);
         let mut endpoint = started_with(SessionRole::ClientOnly, class).await;
+        if stop_first {
+            bounded(endpoint.session.stop()).await.unwrap();
+        }
         let db = database(&endpoint);
+        // For the stopped case, stage only after graceful settlement so this
+        // fixture still makes Drop encounter an unfinished save.
         let go = stage_held_save(&db, &storage).await;
         let weak = Arc::downgrade(&db);
         drop(db);
         // The session keeps its handle through stop(); nothing else holds
         // one, so it is the last either way.
-        if stop_first {
-            bounded(endpoint.session.stop()).await.unwrap();
-        }
         let (progress, watchdog) = watchdog(go);
         drop(endpoint);
         assert!(
@@ -265,14 +276,6 @@ async fn a_responder_let_go_of_last_drops_the_database_off_the_runtime() {
         let storage = Storage::holding();
         let (class, dropped_on) = reporting_class(&storage);
         let mut endpoint = started_with(SessionRole::ServerOnly, class).await;
-        let db = database(&endpoint);
-        let go = stage_held_save(&db, &storage).await;
-        let weak = Arc::downgrade(&db);
-        drop(db);
-        // A cloned server role handle keeps the responder past a stopped
-        // session's drop. Without stop(), the drop aborts the dispatch task,
-        // which lets its responder go only once the runtime cancels it,
-        // after the session's own handle has gone.
         let handle = if by_handle {
             let handle = endpoint.session.cloned_server_handle().unwrap();
             bounded(endpoint.session.stop()).await.unwrap();
@@ -280,6 +283,16 @@ async fn a_responder_let_go_of_last_drops_the_database_off_the_runtime() {
         } else {
             None
         };
+        let db = database(&endpoint);
+        // Keep an unfinished save for the final holder's Drop, including
+        // when the retained role outlives an already stopped session.
+        let go = stage_held_save(&db, &storage).await;
+        let weak = Arc::downgrade(&db);
+        drop(db);
+        // A cloned server role handle keeps the responder past a stopped
+        // session's drop. Without stop(), the drop aborts the dispatch task,
+        // which lets its responder go only once the runtime cancels it,
+        // after the session's own handle has gone.
         let (progress, watchdog) = watchdog(go);
         drop(endpoint);
         drop(handle);

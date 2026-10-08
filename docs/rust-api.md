@@ -6876,15 +6876,30 @@ do not expect identical administration across data links.
 
 ### Endpoint shutdown and the object database
 
-An `EndpointSession` keeps its object database through `stop()` and lets go
-of it when it drops. Every endpoint holder of the database lets go through
+`EndpointSession::stop()` joins its request owners, removes source membership,
+then settles forgotten staged writes and waits for queued durable save attempts,
+including any correction that restores the state the object serves (#1581).
+This applies to every session role with an attached database. It awaits the
+database lock, so release application-held guards to let shutdown progress;
+the guard is released before waiting for storage. A stalled backend keeps
+shutdown pending and produces periodic warnings. Completion means those save
+attempts finished, not that the backend succeeded or the data survived power loss.
+Application work that continues independently of the session is not joined.
+
+Canceling `stop()` retains its original dispatch or ingress outcome and one
+settlement task. Call it again to finish waiting. The session stays stopping
+until settlement completes, then returns the saved outcome. It keeps its object
+database through `stop()` and lets go of it when it drops.
+
+Every endpoint holder of the database lets go through
 `bacnet_server::server::drop_database_off_runtime` (#1561): the session, the
 server role's responder (which a cloned `ServerRoleHandle` or the dispatch task
 may hold last), the source Audit runtime (which an audited request in flight
-may hold last) and the session's Number task. So whichever goes last, in async
+may hold last), the session's Number task and its settlement task. So whichever goes last, in async
 code a durable object's final saves run on Tokio's blocking pool, not on a
-runtime worker. Nothing waits for those saves: storage may still change after
-the drop returns.
+runtime worker. Dropping a session aborts its settlement task without awaiting
+it; storage may still change after drop returns. Await `stop()` for the joined
+settlement boundary.
 
 
 ### Authorized endpoint Device writes

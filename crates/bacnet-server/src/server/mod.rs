@@ -567,6 +567,8 @@ pub(crate) use discovery::{DiscoveryLimiter, PreCheckDecision, WhoHasTarget};
 mod audit_log_purge;
 mod dispatch;
 mod durable_writes;
+#[doc(hidden)]
+pub use durable_writes::settle_endpoint as __endpoint_settle_durable_writes;
 mod event_delivery;
 mod event_enrollment_lifecycle;
 mod event_forwarding;

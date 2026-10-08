@@ -18,6 +18,9 @@
 //! ownership before egress admission, so dropping their caller does not cancel
 //! admitted work. `stop()` seals admission, closes roles, joins dispatch and owned
 //! workers, then stops ingress. Undelivered audit records may be lost on shutdown.
+//! Before reporting termination, it settles forgotten durable writes and awaits
+//! queued save attempts with the database guard released. Canceling this wait
+//! preserves one settlement task for the next `stop()` call to join.
 //! Cloned role handles keep working until shutdown, then fail closed; after
 //! the session drops, [`Weak`](std::sync::Weak) upgrade fails and every role
 //! call reports shutdown.
@@ -89,7 +92,8 @@ use crate::roles::{
 };
 use bacnet_server::server::{
     __endpoint_EndpointResponder as EndpointResponder,
-    __endpoint_NotificationTransactions as NotificationTransactions, drop_database_off_runtime,
+    __endpoint_NotificationTransactions as NotificationTransactions,
+    __endpoint_settle_durable_writes as settle_durable_writes, drop_database_off_runtime,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -281,6 +285,7 @@ pub struct EndpointSession<T: TransportPort + 'static> {
     pub(crate) source_audit_bindings: Vec<(ObjectIdentifier, std::net::SocketAddrV4)>,
     source_recipient: Option<Arc<crate::source_audit::recipient::SourceRecipient>>,
     stop_exit: Option<Result<SessionExit, Error>>,
+    durable_settlement: Option<JoinHandle<()>>,
     ingress_stopped: bool,
     identity: Option<crate::identity::DeviceIdentity>,
     bip_local_address: Option<std::net::SocketAddrV4>,
@@ -386,6 +391,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             source_audit_bindings: Vec::new(),
             source_recipient: None,
             stop_exit: None,
+            durable_settlement: None,
             ingress_stopped: false,
             identity: None,
             bip_local_address: None,
@@ -572,6 +578,12 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// [`Error::Encoding`]. Takes
     /// `&mut self` so only the owner can stop; cloned role handles observe
     /// shutdown and fail closed.
+    ///
+    /// With an attached database, waits for its lock and for queued durable save
+    /// attempts, including corrections for abandoned staged writes. Release any
+    /// application-held database guard so shutdown can progress. A stalled backend
+    /// keeps this call pending; completion does not certify backend success or
+    /// power-loss durability. The database remains attached after termination.
     pub async fn stop(&mut self) -> Result<SessionExit, Error> {
         let state = self.lifecycle.load(Ordering::Acquire);
         if state != Lifecycle::Running as u8 && state != Lifecycle::Stopping as u8 {
@@ -644,6 +656,19 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         self.responder.take();
         self.client_handle = None;
         self.server_handle = None;
+        if self.durable_settlement.is_none() {
+            if let Some(db) = &self.database {
+                self.durable_settlement = Some(tokio::spawn(settle_durable_writes(Arc::clone(db))));
+            }
+        }
+        if let Some(task) = self.durable_settlement.as_mut() {
+            // Keep the one settlement owner across canceled stop waiters.
+            let result = task.await;
+            self.durable_settlement = None;
+            result.map_err(|error| {
+                Error::Encoding(format!("endpoint durable settlement failed: {error}"))
+            })?;
+        }
         self.lifecycle
             .store(Lifecycle::Stopped as u8, Ordering::Release);
         self.stop_exit.take().expect("joined dispatch")
@@ -806,6 +831,9 @@ impl<T: TransportPort + 'static> Drop for EndpointSession<T> {
             let _ = cancel.send(());
         }
         if let Some(task) = self.dispatch_task.take() {
+            task.abort();
+        }
+        if let Some(task) = self.durable_settlement.take() {
             task.abort();
         }
         // The session's own handle, kept through stop(), goes off the
