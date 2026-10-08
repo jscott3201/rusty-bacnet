@@ -401,9 +401,11 @@ always includes `object_identifier`, `property_identifier`,
 `None`. Reserved instance 4194303 stays an explicit `ObjectIdentifier`, including
 unset references. These values retain the complete original octets through
 copying, pickling and existing property writes where the property is writable.
-A malformed reference follows the existing raw fallback; an indexed read of a
-single reference does not acquire a typed form. Trend Log Multiple remains a
-collection, including empty and one-element reads.
+A framed value that fails reference decoding follows existing generic/raw
+behavior. Broken framing remains a read error; an RPM service envelope may be
+rejected before per-value conversion. An indexed read of a single reference
+does not acquire a typed form. Trend Log Multiple remains a collection, including
+empty and one-element reads.
 
 Tags reads use the same form through client RP/RPM, endpoint client roles,
 batch reads and the shared local-read decoder. A whole read is a `list` of
