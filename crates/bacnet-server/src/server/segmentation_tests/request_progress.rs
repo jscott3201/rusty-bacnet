@@ -1,6 +1,5 @@
 //! Private defensive no-progress cleanup (#527), not a SegmentTimer transition.
-//! These tests preserve current expiry policy; receive-timer conformance is
-//! tracked separately in #1593.
+//! SegmentTimer expiry is separate from this inclusive local retention cap.
 
 use super::*;
 use request_peer_quota::{assert_positive_ack, next_routed_apdu};
@@ -65,6 +64,26 @@ async fn request_progress_reclaims_128_stalled_slots_before_admission() {
         assert_eq!(started.elapsed(), Duration::from_secs(15));
         advance(Duration::from_secs(2)).await;
 
+        // Quiet dispatch proactively retires all 128, each with a local OTHER
+        // Abort. HashMap order is unspecified; validate original routes by ID.
+        wait_for_sent_len(&sent, index + 128).await;
+        let mut retired = std::collections::HashSet::new();
+        for _ in 0..128 {
+            let (npdu, mac) = request_reassembly::sent_routed_frame(&sent, index);
+            index += 1;
+            let Apdu::Abort(abort) = decode_apdu(npdu.payload).unwrap() else {
+                panic!("expected local retention Abort");
+            };
+            assert!(abort.sent_by_server);
+            assert_eq!(abort.abort_reason, AbortReason::OTHER);
+            assert_eq!(mac, router);
+            assert_eq!(
+                npdu.destination,
+                Some(routed_address(400, abort.invoke_id / 16))
+            );
+            assert!(retired.insert(abort.invoke_id));
+        }
+
         // Protocol activity is only two seconds old. Under the old activity-only
         // policy all 128 slots are still occupied and this gets BUFFER_OVERFLOW.
         // The real dispatch loop performs cleanup before admitting this request.
@@ -76,7 +95,7 @@ async fn request_progress_reclaims_128_stalled_slots_before_admission() {
         );
         assert_eq!(present_value(&server).await, initial_value);
 
-        // Cleanup itself emits nothing. A current noninitial segment still gets
+        // After the policy Abort, a current noninitial segment still gets
         // the existing invalid-state Abort, rather than resurrecting old data.
         inject_routed_segment(&incoming, &router, &remote, 0, 1, false, &discarded[1]).await;
         match next_routed_apdu(&sent, &mut index, &router, &remote).await {

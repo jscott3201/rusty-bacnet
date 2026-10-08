@@ -210,6 +210,8 @@ impl Default for SegmentedSendOptions {
 }
 
 pub(crate) struct SegmentedRequestState {
+    pub(crate) source_mac: MacAddr,
+    pub(crate) source_network: Option<NpduAddress>,
     pub(crate) payload: RequestPayload,
     /// Provenance snapshot at session open (RB-07). Compared by value on
     /// every later segment; conflicting contexts fail closed.

@@ -50,6 +50,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         super::audit_forwarder::initialize(&db, &config, &device_bindings, &transport);
         super::network_port::validate_apdu_capacity(&mut config, &transport)?;
         crate::local_device::validate_apdu_declaration(&db, config.max_apdu_length)?;
+        let receive_timeout = super::segmented_receive::validate_segment_timeout(&config, &db)?;
         // Settled now: every owner from here on shares it (#1521).
         let config = Arc::new(config);
         let request_tasks = super::request_tasks::RequestTasks::for_server(&config)?;
@@ -166,7 +167,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             let mut ingress_open = true;
 
             loop {
+                // Drain all selected ownership before the first asynchronous Abort.
+                Self::reap_expired_requests(
+                    &network_dispatch,
+                    &mut seg_receivers,
+                    runtime_clock::now(),
+                    receive_timeout,
+                )
+                .await;
                 let received = tokio::select! {
+                    () = super::segmented_receive::wait_receive_deadline(&seg_receivers, receive_timeout), if !seg_receivers.is_empty() => continue,
                     result = notification_transactions_dispatch.join_next(), if notifications_open => {
                         notifications_open = result.is_some();
                         NotificationTransactions::observe(result);
@@ -188,8 +198,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     },
                     else => break,
                 };
-                let now = runtime_clock::now();
-                super::segmented_receive::expire_segmented_requests(&mut seg_receivers, now);
+                // Input and the timer can become ready together. Apply expiry
+                // before interpreting this segment in either scheduling order.
+                Self::reap_expired_requests(
+                    &network_dispatch,
+                    &mut seg_receivers,
+                    runtime_clock::now(),
+                    receive_timeout,
+                )
+                .await;
 
                 match apdu::decode_apdu(received.apdu.clone()) {
                     Ok(decoded) => {
@@ -238,20 +255,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         // Provenance snapshot for this ingress (RB-07, by value).
                         let provenance = received.provenance;
                         let route = received.response_route();
-                        if let Apdu::Abort(ref abt) = decoded {
-                            if !abt.sent_by_server {
-                                let abort_key = segmented_receive_key(
-                                    source_mac.as_slice(),
-                                    source_network.as_ref(),
-                                    abt.invoke_id,
-                                    provenance,
-                                );
-                                super::segmented_receive::remove_matching_reassemblies(
-                                    &mut seg_receivers,
-                                    &abort_key,
-                                );
-                            }
-                        }
+                        super::segmented_receive::remove_peer_aborted_request(
+                            &mut seg_receivers,
+                            &received,
+                            &decoded,
+                        );
 
                         let mut received = Some(received);
                         let handled = if let Apdu::ConfirmedRequest(ref req) = decoded {
@@ -495,6 +503,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                             received
                                                 .as_ref()
                                                 .and_then(|r| r.direct_response.clone()),
+                                            source_mac.clone(),
+                                            source_network.clone(),
                                             req,
                                         );
                                     ack_to_send = initial_ack;

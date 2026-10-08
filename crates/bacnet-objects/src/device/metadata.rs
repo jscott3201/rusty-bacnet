@@ -12,6 +12,7 @@ use crate::property_metadata::{
 // The full implemented set, ordered by raw identifier. Conditional rows keep
 // their optional base code; effective sets below select only readable rows.
 const BASE: &[PropertyMetadata] = &[
+    PropertyMetadata::new(P::APDU_SEGMENT_TIMEOUT, Optional, None, ReadOnly),
     PropertyMetadata::new(P::APDU_TIMEOUT, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(
         P::APPLICATION_SOFTWARE_VERSION,
@@ -74,7 +75,7 @@ const fn effective<const N: usize>(clock: bool, segments: bool) -> [PropertyMeta
             property,
             P::LOCAL_DATE | P::LOCAL_TIME | P::UTC_OFFSET | P::DAYLIGHT_SAVINGS_STATUS
         );
-        let segment_row = matches!(property, P::MAX_SEGMENTS_ACCEPTED);
+        let segment_row = matches!(property, P::MAX_SEGMENTS_ACCEPTED | P::APDU_SEGMENT_TIMEOUT);
         if (!clock_row || clock) && (!segment_row || segments) {
             rows[target] = BASE[source];
             target += 1;
@@ -86,7 +87,7 @@ const fn effective<const N: usize>(clock: bool, segments: bool) -> [PropertyMeta
 }
 
 const CLOCKLESS: &[PropertyMetadata] = &effective::<26>(false, false);
-const CLOCKLESS_SEGMENTED: &[PropertyMetadata] = &effective::<27>(false, true);
+const CLOCKLESS_SEGMENTED: &[PropertyMetadata] = &effective::<28>(false, true);
 const CLOCKED: &[PropertyMetadata] = &effective::<30>(true, false);
 
 pub(super) fn for_object(object: &DeviceObject) -> Cow<'_, [PropertyMetadata]> {

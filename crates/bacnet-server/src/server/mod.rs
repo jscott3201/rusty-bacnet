@@ -100,9 +100,6 @@ const MAX_REQUEST_SEGMENTS: usize = 256;
 /// Maximum number of concurrent segmented response send sessions.
 const MAX_SEG_SENDERS: usize = 128;
 
-/// Timeout for idle segmented reassembly sessions.
-const SEG_RECEIVER_TIMEOUT: Duration = Duration::from_secs(4);
-
 /// Maximum negative SegmentAck retries during segmented response send.
 const MAX_NEG_SEGMENT_ACK_RETRIES: u8 = 3;
 

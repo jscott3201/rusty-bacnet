@@ -47,6 +47,12 @@ impl ScServerBuilder {
         self
     }
 
+    /// Sets the segment timeout in milliseconds for receive and response transfers.
+    pub fn apdu_segment_timeout_ms(mut self, timeout_ms: u64) -> Self {
+        self.config.apdu_segment_timeout_ms = timeout_ms;
+        self
+    }
+
     /// Set the segmentation support this device advertises and enforces.
     pub fn segmentation_supported(mut self, segmentation: Segmentation) -> Self {
         self.config.segmentation_supported = segmentation;
@@ -252,6 +258,7 @@ impl ScServerBuilder {
         self.config.read_range_budget.validate()?;
         self.config.get_event_information_budget.validate()?;
         self.config.cov_policy.validate()?;
+        super::segmented_receive::validate_segment_timeout(&self.config, &self.db)?;
 
         let ws = bacnet_transport::sc_tls::TlsWebSocket::connect(&self.hub_url, tls_config.clone())
             .await?;

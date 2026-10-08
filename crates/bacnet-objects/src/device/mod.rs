@@ -126,6 +126,8 @@ pub struct DeviceConfig {
     pub max_apdu_length: u32,
     /// Segmentation support level.
     pub segmentation_supported: Segmentation,
+    /// Segment timeout in milliseconds, exposed when segmentation is supported.
+    pub apdu_segment_timeout: u64,
     /// APDU timeout in milliseconds.
     pub apdu_timeout: u32,
     /// Number of APDU retries.
@@ -144,6 +146,7 @@ impl Default for DeviceConfig {
             application_software_version: "0.1.0".into(),
             max_apdu_length: 1476,
             segmentation_supported: Segmentation::NONE,
+            apdu_segment_timeout: 5000,
             apdu_timeout: 6000,
             apdu_retries: 3,
         }
@@ -262,6 +265,15 @@ impl DeviceObject {
 
         // Max_Segments_Accepted — only included when segmentation is supported.
         if config.segmentation_supported != Segmentation::NONE {
+            if config.apdu_segment_timeout == 0 {
+                return Err(Error::Encoding(
+                    "APDU_Segment_Timeout must be positive when segmentation is supported".into(),
+                ));
+            }
+            properties.insert(
+                PropertyIdentifier::APDU_SEGMENT_TIMEOUT,
+                PropertyValue::Unsigned(config.apdu_segment_timeout),
+            );
             let max_segments_accepted = if config.segmentation_supported == Segmentation::TRANSMIT {
                 1
             } else {

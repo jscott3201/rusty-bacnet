@@ -317,4 +317,7 @@ mod request_peer_quota_state;
 mod request_progress;
 mod request_progress_expiry;
 mod request_reassembly;
+mod request_receive_timeout;
 mod routing_overlap;
+
+mod segment_timeout_config;

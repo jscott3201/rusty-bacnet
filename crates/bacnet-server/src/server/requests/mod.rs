@@ -661,6 +661,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         },
                         ack.service_ack.clone(),
                         pending,
+                        Duration::from_millis(config.apdu_segment_timeout_ms),
                     );
                 }
 
