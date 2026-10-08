@@ -61,7 +61,7 @@ fn test_ctx(
         bbmd: bbmd.map(|s| Arc::new(std::sync::Mutex::new(s))),
         broadcast_addr: Ipv4Addr::LOCALHOST,
         broadcast_port: local_port,
-        pending_bvlc_response: Arc::new(Mutex::new(None)),
+        client_management: Arc::default(),
         management_limiter,
         fanout: None,
         force_dbtn_forward_failure: false,

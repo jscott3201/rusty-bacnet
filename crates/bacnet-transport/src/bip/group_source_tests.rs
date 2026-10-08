@@ -79,7 +79,7 @@ async fn context(
         bbmd: bbmd.map(|state| Arc::new(std::sync::Mutex::new(state))),
         broadcast_addr: SUBNET_BROADCAST,
         broadcast_port,
-        pending_bvlc_response: Arc::new(Mutex::new(None)),
+        client_management: Arc::default(),
         management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
         fanout: None,
         group_sources: GroupSources::new(

@@ -33,7 +33,7 @@ async fn context(broadcast_addr: Ipv4Addr) -> (RecvContext, mpsc::Receiver<Recei
         bbmd: None,
         broadcast_addr,
         broadcast_port: 0xBAC0,
-        pending_bvlc_response: Arc::new(Mutex::new(None)),
+        client_management: Arc::default(),
         management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
         fanout: None,
         force_dbtn_forward_failure: false,

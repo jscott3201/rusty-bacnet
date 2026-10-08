@@ -128,6 +128,7 @@ async fn foreign_device_reports_its_bbmd_and_lifetime() {
     foreign.register_as_foreign_device(ForeignDeviceConfig {
         bbmd_ip: Ipv4Addr::new(10, 0, 0, 1),
         bbmd_port: 47809,
+        renewal_interval: None,
         ttl: 60,
     });
     assert!(foreign.supports_local_nonrouter_number_controls());
@@ -155,6 +156,7 @@ fn a_bbmd_that_also_registers_as_a_foreign_device_has_no_single_mode() {
     both.register_as_foreign_device(ForeignDeviceConfig {
         bbmd_ip: Ipv4Addr::new(10, 0, 0, 1),
         bbmd_port: 47808,
+        renewal_interval: None,
         ttl: 60,
     });
     assert!(both.bip_port().is_none());

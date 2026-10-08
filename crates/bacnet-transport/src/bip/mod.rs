@@ -11,7 +11,9 @@ use std::time::Duration;
 use bytes::BytesMut;
 #[cfg(test)]
 use tokio::net::UdpSocket;
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::mpsc;
+#[cfg(test)]
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
@@ -31,6 +33,14 @@ use bacnet_types::error::Error;
 mod access;
 mod bbmd_start;
 mod bvlc_response;
+mod client_management;
+mod client_snapshot;
+mod foreign_device;
+pub use client_snapshot::{
+    BvlcClientSnapshot, BvlcRequestCounters, ForeignRegistrationOutcome,
+    ForeignRegistrationSnapshot,
+};
+pub use foreign_device::ForeignDeviceConfig;
 mod fanout;
 mod groups;
 mod socket;
@@ -40,7 +50,6 @@ use bbmd_start::{
 };
 use bvlc_response::{
     bvlc_result_error, decode_bvlc_result_code, expect_bvlc_function, BvlcResponseKind,
-    PendingBvlcResponse,
 };
 use socket::BipSocket;
 mod ingress;
@@ -56,24 +65,13 @@ use ingress::{broadcast_is_own_address, receive_loop, IngressAddresses, Listener
 use ingress::{handle_datagram, Arrival};
 #[cfg(test)]
 use io::handle_bvll_message;
-use io::{send_register_foreign_device, RecvContext};
+use io::RecvContext;
 use own_broadcast::OwnBroadcastForwarder;
 pub use rate_limit::ManagementCounters;
 use rate_limit::ManagementRateLimiter;
 
 /// Default BACnet/IP port (0xBAC0 = 47808).
 pub const DEFAULT_BACNET_PORT: u16 = 0xBAC0;
-
-/// Configuration for foreign device registration.
-#[derive(Debug, Clone)]
-pub struct ForeignDeviceConfig {
-    /// BBMD IP address to register with.
-    pub bbmd_ip: Ipv4Addr,
-    /// BBMD port.
-    pub bbmd_port: u16,
-    /// Time-to-live in seconds.
-    pub ttl: u16,
-}
 
 /// BACnet/IP transport over UDP.
 pub struct BipTransport {
@@ -100,8 +98,8 @@ pub struct BipTransport {
     foreign_device: Option<ForeignDeviceConfig>,
     /// Re-registration timer task.
     registration_task: Option<JoinHandle<()>>,
-    /// Pending BVLC management response, including the expected sender and response kind.
-    pending_bvlc_response: Arc<Mutex<Option<PendingBvlcResponse>>>,
+    /// Own outgoing management exchanges, shared with registration and receive.
+    client_management: Arc<client_management::ManagementClient>,
     /// Optional path for loading an externally provisioned persisted BDT
     /// (wire format, 10 bytes per entry) at startup. Inbound Write-BDT does
     /// not update this file.
@@ -166,7 +164,7 @@ impl BipTransport {
             bbmd_fdt_purge_task: None,
             foreign_device: None,
             registration_task: None,
-            pending_bvlc_response: Arc::new(Mutex::new(None)),
+            client_management: Arc::default(),
             bdt_persist_path: None,
             management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
             fanout_policy,
@@ -267,7 +265,9 @@ impl BipTransport {
     }
 
     /// Configure this transport as a foreign device.
-    /// Must be called before `start()`.
+    /// Call before `start()`, which validates the TTL/renewal settings before
+    /// I/O and starts an automatic worker. Startup is local readiness, not a
+    /// BBMD receipt; use [`Self::bvlc_client_snapshot`] to observe outcomes.
     pub fn register_as_foreign_device(&mut self, config: ForeignDeviceConfig) {
         self.foreign_device = Some(config);
     }
@@ -395,6 +395,7 @@ impl BipTransport {
     }
 
     fn abort_background_tasks(&mut self) -> Vec<JoinHandle<()>> {
+        self.client_management.stop();
         let mut tasks = Vec::new();
         if let Some(task) = self.registration_task.take() {
             task.abort();
@@ -425,38 +426,25 @@ impl BipTransport {
         expected_response: BvlcResponseKind,
         payload: &[u8],
     ) -> Result<BvllMessage, Error> {
-        let socket = self.require_socket()?;
-        let (ip, port) = decode_bip_mac(target)?;
-        let dest = SocketAddrV4::new(Ipv4Addr::from(ip), port);
+        self.client_management
+            .request(
+                self.require_socket()?,
+                target,
+                function,
+                expected_response,
+                payload,
+                Self::BVLC_RESPONSE_TIMEOUT,
+            )
+            .await
+    }
 
-        let (tx, rx) = oneshot::channel();
-        {
-            let mut slot = self.pending_bvlc_response.lock().await;
-            if slot.is_some() {
-                return Err(Error::Encoding(
-                    "BVLC management request already in flight".into(),
-                ));
-            }
-            *slot = Some(PendingBvlcResponse {
-                target: (ip, port),
-                expected: expected_response,
-                tx,
-            });
-        }
-
-        let mut buf = BytesMut::with_capacity(4 + payload.len());
-        encode_bvll(&mut buf, function, payload)?;
-        socket.send_to(&buf, dest).await.map_err(Error::Transport)?;
-
-        match tokio::time::timeout(Self::BVLC_RESPONSE_TIMEOUT, rx).await {
-            Ok(Ok(msg)) => Ok(msg),
-            Ok(Err(_)) => Err(Error::Encoding("BVLC response channel dropped".to_string())),
-            Err(_) => {
-                let mut slot = self.pending_bvlc_response.lock().await;
-                *slot = None;
-                Err(Error::Timeout(Self::BVLC_RESPONSE_TIMEOUT))
-            }
-        }
+    /// Snapshot this transport's own manual BVLC and automatic foreign-device
+    /// exchanges. Counts are cumulative per instance; registration status and
+    /// its next-attempt countdown reset on stop/start. This neither polls a
+    /// BBMD nor proves a current remote lease. See [`BvlcClientSnapshot`] for
+    /// matching limits and the meaning of each observation.
+    pub fn bvlc_client_snapshot(&self) -> BvlcClientSnapshot {
+        self.client_management.snapshot()
     }
 
     /// Send Read-Broadcast-Distribution-Table and return the response entries.
@@ -541,6 +529,8 @@ impl BipTransport {
     /// This is a low-level BVLC management operation. It does NOT configure this
     /// transport as a foreign device for broadcast behavior (use
     /// [`register_as_foreign_device`](Self::register_as_foreign_device) before `start()` for that).
+    /// A zero TTL is passed through for a one-shot removal request; automatic
+    /// mode's positive-TTL validation does not apply to this helper.
     pub async fn register_foreign_device_bvlc(
         &self,
         target: &[u8],
@@ -624,6 +614,13 @@ impl TransportPort for BipTransport {
             )));
         }
 
+        // Validate before probing interfaces, binding sockets or sending bytes.
+        let renewal_interval = self
+            .foreign_device
+            .as_ref()
+            .map(ForeignDeviceConfig::interval)
+            .transpose()?;
+
         socket::probe_interface(self.interface)?;
         // A wildcard socket, or in per-address mode one bound to the interface
         // address plus, on Unix, broadcast listeners: see socket.rs (#1538).
@@ -689,6 +686,7 @@ impl TransportPort for BipTransport {
         self.port = local_port;
         self.local_mac = encode_bip_mac(local_ip.octets(), local_port);
         self.socket = Some(Arc::clone(&socket));
+        self.client_management.start();
 
         /// NPDU receive channel capacity for high-throughput UDP transports.
         const NPDU_CHANNEL_CAPACITY: usize = 256;
@@ -721,7 +719,7 @@ impl TransportPort for BipTransport {
             bbmd: self.bbmd.clone(),
             broadcast_addr: self.broadcast_address,
             broadcast_port: self.port,
-            pending_bvlc_response: self.pending_bvlc_response.clone(),
+            client_management: self.client_management.clone(),
             management_limiter: Arc::clone(&self.management_limiter),
             fanout: Some(fanout_dispatcher),
             group_sources: self.group_sources(),
@@ -742,24 +740,13 @@ impl TransportPort for BipTransport {
             self.bbmd_fdt_purge_task = Some(Self::spawn_bbmd_fdt_purge_task(bbmd));
         }
 
-        if let Some(fd) = &self.foreign_device {
-            let bbmd_addr = SocketAddrV4::new(fd.bbmd_ip, fd.bbmd_port);
-            let ttl = fd.ttl;
-            let sock = self.socket.as_ref().unwrap().clone();
-
-            send_register_foreign_device(&sock, bbmd_addr, ttl).await;
-
-            // Re-register at TTL/2 interval
-            let interval = std::time::Duration::from_secs(((ttl as u64) / 2).max(30));
-            let reg_task = tokio::spawn(async move {
-                let mut ticker = tokio::time::interval(interval);
-                ticker.tick().await; // Skip the first immediate tick
-                loop {
-                    ticker.tick().await;
-                    send_register_foreign_device(&sock, bbmd_addr, ttl).await;
-                }
-            });
-            self.registration_task = Some(reg_task);
+        if let Some(fd) = self.foreign_device.clone() {
+            self.registration_task = Some(tokio::spawn(foreign_device::run(
+                socket,
+                self.client_management.clone(),
+                fd,
+                renewal_interval.expect("validated foreign-device interval"),
+            )));
         }
 
         Ok(rx)
@@ -908,5 +895,9 @@ mod tests;
 #[cfg(test)]
 mod wildcard_ingress_tests;
 
+#[cfg(test)]
+mod client_management_tests;
+#[cfg(test)]
+mod foreign_lifecycle_tests;
 #[cfg(test)]
 mod registration_tests;

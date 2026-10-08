@@ -47,6 +47,7 @@ async fn registered_port_invalid_selection_profile_and_identity_fail_before_publ
                 .register_as_foreign_device(bacnet_transport::bip::ForeignDeviceConfig {
                     bbmd_ip: Ipv4Addr::LOCALHOST,
                     bbmd_port: 47808,
+                    renewal_interval: None,
                     ttl: 60,
                 }),
             2 => builder.identity(id),
@@ -107,6 +108,7 @@ async fn registered_port_publishes_the_bbmd_or_foreign_mode() {
             builder.register_as_foreign_device(bacnet_transport::bip::ForeignDeviceConfig {
                 bbmd_ip: Ipv4Addr::LOCALHOST,
                 bbmd_port: stand_in.local_addr().unwrap().port(),
+                renewal_interval: None,
                 ttl: 60,
             })
         };

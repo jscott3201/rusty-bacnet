@@ -141,6 +141,7 @@ async fn a_foreign_device_transport_publishes_its_bbmd_and_lifetime() {
     transport.register_as_foreign_device(ForeignDeviceConfig {
         bbmd_ip: Ipv4Addr::LOCALHOST,
         bbmd_port,
+        renewal_interval: None,
         ttl: 120,
     });
     let mut server = BACnetServer::start(registered(), database(), transport)
@@ -171,6 +172,7 @@ async fn a_bbmd_that_also_registers_as_a_foreign_device_fails_to_start() {
     transport.register_as_foreign_device(ForeignDeviceConfig {
         bbmd_ip: Ipv4Addr::LOCALHOST,
         bbmd_port: 47808,
+        renewal_interval: None,
         ttl: 120,
     });
     let error = match BACnetServer::start(registered(), database(), transport).await {

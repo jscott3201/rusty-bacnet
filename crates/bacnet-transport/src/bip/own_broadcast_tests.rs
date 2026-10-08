@@ -360,6 +360,7 @@ async fn plain_and_foreign_device_modes_do_not_forward_own_broadcasts() {
     foreign.register_as_foreign_device(ForeignDeviceConfig {
         bbmd_ip: Ipv4Addr::LOCALHOST,
         bbmd_port: port_of(&bbmd),
+        renewal_interval: None,
         ttl: 60,
     });
     let _foreign_rx = foreign.start().await.unwrap();
