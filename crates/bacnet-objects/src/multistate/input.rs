@@ -1,5 +1,7 @@
 use super::*;
+use crate::object_profile::{ObjectProfile, ProfileState, TagsPersistence};
 use crate::property_metadata::PropertyMetadata;
+use std::sync::Arc;
 
 mod metadata;
 
@@ -12,6 +14,7 @@ mod metadata;
 /// Read-only multi-state point. Present_Value is writable only when out-of-service.
 /// Present_Value is Unsigned, range 1..=number_of_states.
 pub struct MultiStateInputObject {
+    profile: ProfileState,
     oid: ObjectIdentifier,
     name: String,
     description: String,
@@ -43,6 +46,7 @@ impl MultiStateInputObject {
         let oid = ObjectIdentifier::new(ObjectType::MULTI_STATE_INPUT, instance)?;
         require_nonzero_states(number_of_states)?;
         Ok(Self {
+            profile: ProfileState::default(),
             oid,
             name: name.into(),
             description: String::new(),
@@ -69,6 +73,34 @@ impl MultiStateInputObject {
     /// (#1429), this takes any state.
     pub fn set_alarm_values(&mut self, values: Vec<u32>) {
         self.event_detector.alarm_values = values;
+    }
+
+    /// Build with application-owned Tags storage. Saved Tags override configured
+    /// Tags only while [`Self::set_profile`] provisions the row. Loaded data must
+    /// satisfy the shared Tags rules and opt-in 1 MiB snapshot limit.
+    pub fn with_tags_persistence(
+        instance: u32,
+        name: impl Into<String>,
+        number_of_states: u32,
+        persistence: Arc<dyn TagsPersistence>,
+    ) -> Result<Self, Error> {
+        let mut object = Self::new(instance, name, number_of_states)?;
+        object.profile = ProfileState::persistent(object.oid, persistence)?;
+        Ok(object)
+    }
+
+    /// Provision independent optional Tags, Profile_Location and Profile_Name
+    /// rows before registration. Tags is writable in either Out_Of_Service state;
+    /// the text rows are network read-only. Invalid configuration leaves the
+    /// previous profile and its attached storage unchanged.
+    pub fn set_profile(&mut self, profile: ObjectProfile) -> Result<(), Error> {
+        self.profile.provision(profile)
+    }
+
+    /// Wait for queued save attempts to finish; writes report their own outcomes.
+    /// This is not a success receipt. Unstaged synchronous writes block their caller.
+    pub fn wait_for_tag_saves(&self) {
+        self.profile.wait_for_saves();
     }
 
     /// Mutate `Present_Value` on an unattached or otherwise application-owned object.
@@ -206,6 +238,9 @@ impl BACnetObject for MultiStateInputObject {
         if let Some(result) = self.event_history.read(property, array_index) {
             return result;
         }
+        if let Some(result) = self.profile.read(property, array_index) {
+            return result;
+        }
         match property {
             p if p == PropertyIdentifier::OBJECT_TYPE => Ok(PropertyValue::Enumerated(
                 ObjectType::MULTI_STATE_INPUT.to_raw(),
@@ -252,6 +287,9 @@ impl BACnetObject for MultiStateInputObject {
                 return Err(common::write_access_denied_error());
             }
             return self.apply_present_value(value);
+        }
+        if let Some(result) = self.profile.write(property, array_index, &value) {
+            return result;
         }
         if property == PropertyIdentifier::STATE_TEXT {
             // Written whole, State_Text sets Number_Of_States too (#1443).
@@ -341,6 +379,15 @@ impl BACnetObject for MultiStateInputObject {
             property,
             array_index,
         ))
+    }
+
+    fn durable_writes_internal(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
+        self.profile.capability()
+    }
+
+    fn advance_monotonic_time_internal(&mut self, now: std::time::Duration) -> bool {
+        self.profile.expire(now);
+        false
     }
 
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {

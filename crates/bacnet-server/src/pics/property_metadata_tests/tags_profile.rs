@@ -241,3 +241,89 @@ fn value_profile_masks_and_saved_empty_are_independent_of_present_value_mode() {
         }
     }
 }
+
+#[test]
+fn input_profile_masks_and_saved_empty_are_independent_of_out_of_service() {
+    use bacnet_objects::analog::AnalogInputObject;
+    use bacnet_objects::binary::BinaryInputObject;
+    use bacnet_objects::multistate::MultiStateInputObject;
+    for out_of_service in [false, true] {
+        for mask in 0..8 {
+            let configured = ObjectProfile {
+                tags: (mask & 1 != 0).then(|| vec![BACnetNameValue::semantic("configured")]),
+                profile_location: (mask & 2 != 0).then(|| "https://example.com/p.xdd".into()),
+                profile_name: (mask & 4 != 0).then(|| "555-input".into()),
+            };
+            macro_rules! build {
+                ($ctor:expr) => {{
+                    let mut object = $ctor.unwrap();
+                    object.set_profile(configured.clone()).unwrap();
+                    object.set_profile(ObjectProfile::default()).unwrap();
+                    object.set_profile(configured.clone()).unwrap();
+                    object
+                        .write_property(
+                            P::OUT_OF_SERVICE,
+                            None,
+                            PropertyValue::Boolean(out_of_service),
+                            None,
+                        )
+                        .unwrap();
+                    Box::new(object) as Box<dyn BACnetObject>
+                }};
+            }
+            let mut db = ObjectDatabase::new();
+            for object in [
+                build!(AnalogInputObject::with_tags_persistence(
+                    1,
+                    "AI",
+                    95,
+                    Arc::new(SavedEmpty)
+                )),
+                build!(BinaryInputObject::with_tags_persistence(
+                    1,
+                    "BI",
+                    Arc::new(SavedEmpty)
+                )),
+                build!(MultiStateInputObject::with_tags_persistence(
+                    1,
+                    "MSI",
+                    3,
+                    Arc::new(SavedEmpty)
+                )),
+            ] {
+                for (bit, property) in
+                    [(1, P::TAGS), (2, P::PROFILE_LOCATION), (4, P::PROFILE_NAME)]
+                {
+                    assert_eq!(object.property_list().contains(&property), mask & bit != 0);
+                    let read = object.read_property(property, None);
+                    if mask & bit == 0 {
+                        assert!(
+                            matches!(read, Err(bacnet_types::error::Error::Protocol { code, .. }) if code == bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32)
+                        );
+                    } else if property == P::TAGS {
+                        assert_eq!(read.unwrap(), PropertyValue::List(vec![]));
+                    }
+                }
+                db.add(object).unwrap();
+            }
+            let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default());
+            assert_eq!(pics.supported_object_types.len(), 3);
+            for support in &pics.supported_object_types {
+                for (bit, property) in
+                    [(1, P::TAGS), (2, P::PROFILE_LOCATION), (4, P::PROFILE_NAME)]
+                {
+                    let rows: Vec<_> = support
+                        .supported_properties
+                        .iter()
+                        .filter(|row| row.property_id == property)
+                        .collect();
+                    assert_eq!(rows.len(), usize::from(mask & bit != 0));
+                    if let Some(row) = rows.first() {
+                        assert!(row.access.optional && row.access.readable);
+                        assert_eq!(row.access.writable, property == P::TAGS);
+                    }
+                }
+            }
+        }
+    }
+}
