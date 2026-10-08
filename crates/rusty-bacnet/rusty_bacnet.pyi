@@ -2896,6 +2896,11 @@ class BACnetServer:
     lifetime. No generation, persistence, change detection, or version/variant
     enforcement is provided. Non-SC transports ignore this option.
 
+    Segmentation defaults to NONE. When enabled, apdu_segment_timeout_ms must
+    be positive; it supplies Device APDU_SEGMENT_TIMEOUT, response SegmentACK
+    waits, and the 4*Tseg receive inactivity timer. A separate 16-second
+    no-progress resource limit aborts abandoned request transfers with OTHER.
+
     Usage::
 
         server = BACnetServer(device_instance=1234, device_name="My Device")
@@ -2959,6 +2964,8 @@ class BACnetServer:
         cov_policy: CovPolicy | None = None,
         time_sync_policy: TimeSyncPolicy | None = None,
         share_port_by_address: bool = False,
+        segmentation_supported: Segmentation = Segmentation.NONE,
+        apdu_segment_timeout_ms: int = 5000,
     ) -> None:
         """``share_port_by_address`` (B/IP only, default False): bind the
         interface address itself, so devices on other addresses of this host

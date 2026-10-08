@@ -59,7 +59,7 @@ pub(super) async fn start_routed_reassembly_server() -> (
     (server, incoming, sent)
 }
 
-async fn inject_routed_apdu(
+pub(super) async fn inject_routed_apdu(
     incoming: &mpsc::Sender<ReceivedNpdu>,
     router_mac: &MacAddr,
     routed_source: &NpduAddress,
@@ -135,6 +135,17 @@ pub(super) async fn start_reassembly_server(
     LoopbackTransport,
     mpsc::Receiver<bacnet_transport::port::ReceivedNpdu>,
 ) {
+    start_reassembly_server_with_timeout(segmentation, 5000).await
+}
+
+pub(super) async fn start_reassembly_server_with_timeout(
+    segmentation: Segmentation,
+    timeout_ms: u64,
+) -> (
+    BACnetServer<LoopbackTransport>,
+    LoopbackTransport,
+    mpsc::Receiver<bacnet_transport::port::ReceivedNpdu>,
+) {
     let (server_transport, mut client_transport) =
         LoopbackTransport::pair(SERVER_MAC.to_vec(), CLIENT_MAC.to_vec());
     let client_rx = client_transport.start().await.unwrap();
@@ -147,6 +158,7 @@ pub(super) async fn start_reassembly_server(
 
     let config = ServerConfig {
         segmentation_supported: segmentation,
+        apdu_segment_timeout_ms: timeout_ms,
         ..ServerConfig::default()
     };
     let server = BACnetServer::start(config, db, server_transport)

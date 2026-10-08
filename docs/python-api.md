@@ -1832,6 +1832,8 @@ server = BACnetServer(
     broadcast_address="255.255.255.255",
     transport="bip",             # "bip", "ipv6", or "sc"
     share_port_by_address=False, # keyword-only; B/IP, see "Sharing a port by address"
+    segmentation_supported=Segmentation.NONE, # keyword-only; full-server capabilities
+    apdu_segment_timeout_ms=5000, # keyword-only; shared Device/runtime segment timeout
     # SC options same as BACnetClient
     mutation_policy="permissive", # keyword-only; "deny_all" denies covered network mutations
     dcc_password=None,           # password alone does not enable DCC
@@ -1843,6 +1845,13 @@ server = BACnetServer(
     time_sync_policy=None,       # keyword-only dict of clock limits; see Time synchronization policy below
 )
 ```
+
+`segmentation_supported` accepts `Segmentation.NONE`, `TRANSMIT`, `RECEIVE` or
+`BOTH`. When active, `apdu_segment_timeout_ms` must be positive and appears as
+the Device's `APDU_Segment_Timeout`. Incoming inactivity uses `4 * Tseg`;
+outgoing SegmentACK waits use Tseg. The independent 16-second no-progress cap
+ends an incoming transfer with a local `OTHER` Abort. See [server timing](server-segmentation.md)
+for startup validation, equality, resource limits and endpoint restrictions.
 
 `dcc_disable_rate_limit` is keyword-only and defaults OFF. When configured, one
 global native-server bucket charges only authorized DISABLE_INITIATION requests;

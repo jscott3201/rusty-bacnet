@@ -411,7 +411,8 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// [`DeviceIdentity`](crate::identity::DeviceIdentity) is also composed,
     /// build the database from that same identity (see
     /// [`DeviceIdentity::build_database`](crate::identity::DeviceIdentity::build_database))
-    /// so Device readback agrees with I-Am.
+    /// so Device readback agrees with I-Am. The selected Device must declare
+    /// segmentation NONE, matching the narrow endpoint roles.
     /// The session retains ownership even in `ClientOnly` mode and shares this
     /// same database with the responder in `Both` mode.
     ///
@@ -523,6 +524,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                 "endpoint session cannot be started more than once".into(),
             ));
         }
+        self.validate_segmentation().await?;
         let device_target = self.validate_device_execution()?;
         let source_routes = self.prepare_source_audit_reporter()?;
         self.prepare_registered_port().await?;

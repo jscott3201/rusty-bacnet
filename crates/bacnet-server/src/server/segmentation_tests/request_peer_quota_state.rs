@@ -24,6 +24,8 @@ fn saved_state(invoke_id: u8, now: Instant) -> SegmentedRequestState {
         .save_new(0, first_req.service_request.clone(), Some(0))
         .unwrap();
     SegmentedRequestState {
+        source_mac: MacAddr::new(),
+        source_network: None,
         direct_response: None,
         payload,
         provenance: TransportProvenance::unverified(),
@@ -167,7 +169,13 @@ fn request_peer_quota_expiry_releases_slot_at_idle_and_progress_boundaries() {
     let start = Instant::now();
     let mac = test_mac(1);
     for (elapsed, progress_expiry) in [(4, false), (16, true)] {
-        let now = start + Duration::from_secs(elapsed);
+        let now = start
+            + Duration::from_secs(elapsed)
+            + if progress_expiry {
+                Duration::ZERO
+            } else {
+                Duration::from_nanos(1)
+            };
         let recent = now - Duration::from_secs(1);
         let mut receivers = HashMap::new();
         for invoke_id in 0..16 {
@@ -184,16 +192,20 @@ fn request_peer_quota_expiry_releases_slot_at_idle_and_progress_boundaries() {
             stale.last_activity = start;
         }
         let query = segmented_receive_key(&mac, None, 200, TransportProvenance::unverified());
-        expire_segmented_requests(&mut receivers, now - Duration::from_nanos(1));
+        expire_segmented_requests(
+            &mut receivers,
+            now - Duration::from_nanos(1),
+            Duration::from_secs(4),
+        );
         assert_eq!(
             segmented_request_admission_error(&receivers, &query),
             Some(AbortReason::OUT_OF_RESOURCES)
         );
-        expire_segmented_requests(&mut receivers, now);
+        expire_segmented_requests(&mut receivers, now, Duration::from_secs(4));
         assert!(!receivers.contains_key(&stale_key));
         assert_eq!(receivers.len(), 15);
         assert_eq!(segmented_request_admission_error(&receivers, &query), None);
-        expire_segmented_requests(&mut receivers, now);
+        expire_segmented_requests(&mut receivers, now, Duration::from_secs(4));
         assert_eq!(receivers.len(), 15);
         receivers.insert(query, saved_state(200, now));
         assert_eq!(

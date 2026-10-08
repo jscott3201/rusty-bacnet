@@ -33,7 +33,9 @@ impl BACnetServer {
                 audit_configuration::pending_audit_log_index(&pending, object.object_identifier())?;
             }
         }
-        let mut builder = server::BACnetServer::generic_builder();
+        let mut builder = server::BACnetServer::generic_builder()
+            .segmentation_supported(self.segmentation_supported)
+            .apdu_segment_timeout_ms(self.apdu_segment_timeout_ms);
         if let Some(instance) = self.registered_network_port {
             let oid = bacnet_types::primitives::ObjectIdentifier::new(
                 bacnet_types::enums::ObjectType::NETWORK_PORT,
@@ -82,6 +84,8 @@ impl BACnetServer {
         let inner = self.inner.clone();
         let started = self.started.clone();
         let device_instance = self.device_instance;
+        let segmentation_supported = self.segmentation_supported;
+        let apdu_segment_timeout_ms = self.apdu_segment_timeout_ms;
         let audit_recipient = recipient_input.take();
         let device_name = self.device_name.clone();
         let transport_type = self.transport_type.clone();
@@ -174,11 +178,11 @@ impl BACnetServer {
                 };
 
             // Validate the generated Device and entire pending DB before SC I/O.
-            let mut device = DeviceObject::new(generated_device_config(
-                device_instance,
-                device_name,
-                local_capacity,
-            ))
+            let mut device = DeviceObject::new(DeviceConfig {
+                segmentation_supported,
+                apdu_segment_timeout: apdu_segment_timeout_ms,
+                ..generated_device_config(device_instance, device_name, local_capacity)
+            })
             .map_err(to_py_err)?;
             if let Some(recipient) = audit_recipient {
                 device

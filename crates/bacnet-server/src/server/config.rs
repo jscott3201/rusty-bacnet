@@ -54,6 +54,10 @@ pub struct ServerConfig {
     /// traffic in both directions — set this to what the device should
     /// actually honor.
     pub segmentation_supported: Segmentation,
+    /// Segment timeout (Tseg) in milliseconds; shared by request receive
+    /// (4 * Tseg) and response SegmentACK waits. Default: 5000 ms. When
+    /// segmentation is active it must be positive and match the selected Device.
+    pub apdu_segment_timeout_ms: u64,
     /// Vendor identifier.
     pub vendor_id: u16,
     /// APDU timeout in ms of confirmed COV and event notifications and of the
@@ -213,6 +217,7 @@ impl std::fmt::Debug for ServerConfig {
             .field("share_port_by_address", &self.share_port_by_address)
             .field("max_apdu_length", &self.max_apdu_length)
             .field("segmentation_supported", &self.segmentation_supported)
+            .field("apdu_segment_timeout_ms", &self.apdu_segment_timeout_ms)
             .field("vendor_id", &self.vendor_id)
             .field("cov_retry_timeout_ms", &self.cov_retry_timeout_ms)
             .field("time_sync_policy", &self.time_sync_policy)
@@ -290,6 +295,7 @@ impl Default for ServerConfig {
             share_port_by_address: false,
             max_apdu_length: 1476,
             segmentation_supported: Segmentation::NONE,
+            apdu_segment_timeout_ms: 5000,
             vendor_id: 0,
             cov_retry_timeout_ms: 3000,
             time_sync_policy: TimeSyncPolicy::default(),
@@ -394,6 +400,22 @@ impl ScServerBuilder {
         F: Fn(&MutationAuthorizationContext) -> bool + Send + Sync + 'static,
     {
         self.config.mutation_authorizer = Some(Arc::new(authorizer));
+        self
+    }
+}
+
+impl<T: TransportPort + 'static> ServerBuilder<T> {
+    /// Sets the segment timeout in milliseconds for receive and response transfers.
+    pub fn apdu_segment_timeout_ms(mut self, timeout_ms: u64) -> Self {
+        self.config.apdu_segment_timeout_ms = timeout_ms;
+        self
+    }
+}
+
+impl BipServerBuilder {
+    /// Sets the segment timeout in milliseconds for receive and response transfers.
+    pub fn apdu_segment_timeout_ms(mut self, timeout_ms: u64) -> Self {
+        self.config.apdu_segment_timeout_ms = timeout_ms;
         self
     }
 }

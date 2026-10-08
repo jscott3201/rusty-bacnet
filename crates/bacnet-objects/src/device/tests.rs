@@ -159,6 +159,26 @@ fn mode_derived_max_segments_accepted() {
 }
 
 #[test]
+fn segment_timeout_is_present_for_segmented_devices() {
+    for segmentation in [
+        Segmentation::TRANSMIT,
+        Segmentation::RECEIVE,
+        Segmentation::BOTH,
+    ] {
+        let dev = DeviceObject::new(DeviceConfig {
+            segmentation_supported: segmentation,
+            ..DeviceConfig::default()
+        })
+        .unwrap();
+        assert_eq!(
+            dev.read_property(PropertyIdentifier::APDU_SEGMENT_TIMEOUT, None)
+                .unwrap(),
+            PropertyValue::Unsigned(5000)
+        );
+    }
+}
+
+#[test]
 fn read_unknown_property_fails() {
     let dev = make_device();
     // Use a property that Device doesn't have
@@ -656,5 +676,60 @@ fn device_property_metadata_preserves_dynamic_list_and_write_dispatch() {
                 assert_eq!(device.read_property(p, None).unwrap(), before);
             }
         }
+    }
+}
+
+#[test]
+fn segment_timeout_absence_custom_value_and_zero_validation() {
+    let none = DeviceObject::new(DeviceConfig {
+        apdu_segment_timeout: 0,
+        ..Default::default()
+    })
+    .unwrap();
+    assert!(
+        matches!(none.read_property(PropertyIdentifier::APDU_SEGMENT_TIMEOUT, None),
+        Err(Error::Protocol { code, .. }) if code == ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32)
+    );
+    assert!(!none
+        .property_list()
+        .contains(&PropertyIdentifier::APDU_SEGMENT_TIMEOUT));
+    for mode in [
+        Segmentation::TRANSMIT,
+        Segmentation::RECEIVE,
+        Segmentation::BOTH,
+    ] {
+        assert!(DeviceObject::new(DeviceConfig {
+            segmentation_supported: mode,
+            apdu_segment_timeout: 0,
+            ..Default::default()
+        })
+        .is_err());
+        let device = DeviceObject::new(DeviceConfig {
+            segmentation_supported: mode,
+            apdu_segment_timeout: 7300,
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(
+            device
+                .read_property(PropertyIdentifier::APDU_SEGMENT_TIMEOUT, None)
+                .unwrap(),
+            PropertyValue::Unsigned(7300)
+        );
+        assert_eq!(
+            device
+                .read_property(PropertyIdentifier::APDU_TIMEOUT, None)
+                .unwrap(),
+            PropertyValue::Unsigned(6000)
+        );
+        assert_eq!(
+            device
+                .read_property(PropertyIdentifier::NUMBER_OF_APDU_RETRIES, None)
+                .unwrap(),
+            PropertyValue::Unsigned(3)
+        );
+        assert!(device
+            .property_list()
+            .contains(&PropertyIdentifier::APDU_SEGMENT_TIMEOUT));
     }
 }

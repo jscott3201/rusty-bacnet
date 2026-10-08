@@ -87,6 +87,8 @@ use audit_configuration::AuditNotificationSink;
 pub struct BACnetServer {
     inner: Arc<Mutex<Option<server::BACnetServer<AnyTransport<crate::mstp_py::PySerial>>>>>,
     device_instance: u32,
+    segmentation_supported: bacnet_types::enums::Segmentation,
+    apdu_segment_timeout_ms: u64,
     device_name: String,
     transport_type: String,
     // BIP config
@@ -202,6 +204,7 @@ mod server_methods {
     mod audit_log_methods;
     mod averaging_methods;
     mod channel_methods;
+    mod constructor;
     mod constructor_budgets;
     mod cov_counters;
     mod cov_policy;

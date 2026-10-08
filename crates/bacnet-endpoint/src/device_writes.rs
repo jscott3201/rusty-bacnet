@@ -89,6 +89,36 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         services
     }
 
+    pub(super) async fn validate_segmentation(&self) -> Result<(), Error> {
+        if self.identity.as_ref().is_some_and(|identity| {
+            identity.segmentation() != bacnet_types::enums::Segmentation::NONE
+        }) {
+            return Err(Error::Encoding(
+                "EndpointSession roles require segmentation NONE".into(),
+            ));
+        }
+        if let Some(database) = self.database.as_ref() {
+            let database = database.read().await;
+            if let Some(oid) = database.selected_device() {
+                let device = database
+                    .get(&oid)
+                    .expect("selected under same database guard");
+                let mode =
+                    device.read_property(PropertyIdentifier::SEGMENTATION_SUPPORTED, None)?;
+                if mode
+                    != PropertyValue::Enumerated(u32::from(
+                        bacnet_types::enums::Segmentation::NONE.to_raw(),
+                    ))
+                {
+                    return Err(Error::Encoding(
+                        "EndpointSession selected Device requires segmentation NONE".into(),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn validate_device_execution(&mut self) -> Result<Option<ObjectIdentifier>, Error> {
         let writes = self.device_write_authorizer.is_some();
         let reinitialize = self.reinitialize.is_some();

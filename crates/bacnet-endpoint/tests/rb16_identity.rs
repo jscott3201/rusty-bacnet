@@ -610,3 +610,108 @@ fn configured_bip_entry_admission_rejects_divergent_mac_and_preserves_both_build
         );
     }
 }
+
+#[test]
+fn identity_maps_its_segment_timeout_to_both_database_builders_and_full_server() {
+    for timeout in [6000, 7300] {
+        let mut identity = DeviceIdentity::new(42, 7)
+            .unwrap()
+            .with_segmentation(Segmentation::BOTH);
+        if timeout != 6000 {
+            identity = identity.with_apdu_segment_timeout_ms(timeout);
+        }
+        assert_eq!(identity.server_config().apdu_segment_timeout_ms, timeout);
+        for db in [
+            identity.build_database().unwrap(),
+            build_database_with_extra(&identity, vec![analog(1, 1.0)]).unwrap(),
+        ] {
+            let device = db.get(&object_id(ObjectType::DEVICE, 42)).unwrap();
+            assert_eq!(
+                device
+                    .read_property(PropertyIdentifier::APDU_SEGMENT_TIMEOUT, None)
+                    .unwrap(),
+                PropertyValue::Unsigned(timeout)
+            );
+        }
+    }
+    let identity = DeviceIdentity::new(42, 7).unwrap();
+    let db = identity.build_database().unwrap();
+    assert!(!db
+        .get(&object_id(ObjectType::DEVICE, 42))
+        .unwrap()
+        .property_list()
+        .contains(&PropertyIdentifier::APDU_SEGMENT_TIMEOUT));
+    let mut client = bacnet_client::client::ClientConfig {
+        apdu_timeout_ms: 1234,
+        ..Default::default()
+    };
+    identity.apply_to_client_config(&mut client);
+    assert_eq!(
+        client.apdu_timeout_ms, 1234,
+        "client timing remains caller-owned"
+    );
+}
+
+#[tokio::test]
+async fn endpoint_roles_reject_non_none_identity_before_consuming_transport() {
+    for role in [
+        SessionRole::ClientOnly,
+        SessionRole::ServerOnly,
+        SessionRole::Both,
+    ] {
+        for mode in [
+            Segmentation::TRANSMIT,
+            Segmentation::RECEIVE,
+            Segmentation::BOTH,
+            Segmentation::from_raw(64),
+        ] {
+            let identity = DeviceIdentity::new(42, 7).unwrap();
+            let (transport, _peer) = LoopbackTransport::pair(vec![1], vec![2]);
+            let mut endpoint = EndpointSession::new(transport, role, session_config())
+                .unwrap()
+                .with_database(identity.build_database().unwrap())
+                .with_identity(identity.clone().with_segmentation(mode));
+            let error = endpoint
+                .start()
+                .await
+                .expect_err("narrow role cannot claim segmentation");
+            assert!(error.to_string().contains("segmentation NONE"));
+            // Failed validation leaves configuration and the unstarted transport
+            // reusable. A valid identity can start the exact same session.
+            let mut endpoint = endpoint.with_identity(identity);
+            endpoint.start().await.unwrap();
+            endpoint.stop().await.unwrap();
+        }
+    }
+}
+
+#[tokio::test]
+async fn endpoint_roles_reject_segmented_database_without_identity_and_allow_correction() {
+    for role in [
+        SessionRole::ClientOnly,
+        SessionRole::ServerOnly,
+        SessionRole::Both,
+    ] {
+        let identity = DeviceIdentity::new(42, 7).unwrap();
+        let (transport, _peer) = LoopbackTransport::pair(vec![1], vec![2]);
+        let mut endpoint = EndpointSession::new(transport, role, session_config())
+            .unwrap()
+            .with_database(
+                identity
+                    .clone()
+                    .with_segmentation(Segmentation::BOTH)
+                    .build_database()
+                    .unwrap(),
+            );
+        let error = endpoint
+            .start()
+            .await
+            .expect_err("database cannot claim unsupported segmentation");
+        assert!(error
+            .to_string()
+            .contains("selected Device requires segmentation NONE"));
+        let mut endpoint = endpoint.with_database(identity.build_database().unwrap());
+        endpoint.start().await.unwrap();
+        endpoint.stop().await.unwrap();
+    }
+}

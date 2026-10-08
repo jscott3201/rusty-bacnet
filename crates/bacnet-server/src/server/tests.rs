@@ -396,8 +396,13 @@ fn default_apdu_retries_constant() {
 }
 
 #[test]
-fn seg_receiver_timeout_is_4s() {
-    assert_eq!(SEG_RECEIVER_TIMEOUT, Duration::from_secs(4));
+fn seg_receiver_timeout_is_four_times_configured_tseg() {
+    let timeout = super::segmented_receive::validate_segment_timeout(
+        &ServerConfig::default(),
+        &ObjectDatabase::new(),
+    )
+    .unwrap();
+    assert_eq!(timeout, Duration::from_secs(20));
 }
 
 #[test]

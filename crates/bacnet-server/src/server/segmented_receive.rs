@@ -1,6 +1,28 @@
 use super::*;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
+    pub(super) async fn reap_expired_requests(
+        network: &Arc<NetworkLayer<T>>,
+        receivers: &mut HashMap<SegRecvKey, SegmentedRequestState>,
+        now: Instant,
+        receive_timeout: Duration,
+    ) {
+        // All selected states and payload charges are gone before any I/O.
+        // This future belongs to dispatch, including cancellation on shutdown.
+        let expired = expire_segmented_requests(receivers, now, receive_timeout);
+        for expired in expired {
+            Self::send_server_abort(
+                network,
+                &expired.source_mac,
+                expired.source_network.as_ref(),
+                &expired.route,
+                expired.invoke_id,
+                AbortReason::OTHER,
+            )
+            .await;
+        }
+    }
+
     /// Send a `'server' = TRUE` Abort back along the request's path.
     ///
     /// Split from `lifecycle.rs` to keep the 700-LOC file cap; no behavior
@@ -203,16 +225,121 @@ pub(super) fn remove_matching_reassemblies(
     }
 }
 
-/// Drop stale incarnations and all their retained payload ownership before input.
-/// Cleanup is silent and synchronous; idle or blocked dispatch is not reclaimed.
+/// Validate the active timing/declaration contract before starting network I/O.
+pub(super) fn validate_segment_timeout(
+    config: &ServerConfig,
+    db: &ObjectDatabase,
+) -> Result<Duration, Error> {
+    if config.segmentation_supported.to_raw() > Segmentation::NONE.to_raw() {
+        return Err(Error::Encoding(
+            "invalid server segmentation support".into(),
+        ));
+    }
+    let active = config.segmentation_supported != Segmentation::NONE;
+    if active && config.apdu_segment_timeout_ms == 0 {
+        return Err(Error::Encoding(
+            "APDU segment timeout must be positive".into(),
+        ));
+    }
+    let milliseconds = config
+        .apdu_segment_timeout_ms
+        .checked_mul(4)
+        .ok_or_else(|| Error::Encoding("receive segment timeout overflows milliseconds".into()))?;
+    let receive_timeout = Duration::from_millis(milliseconds);
+    runtime_clock::now()
+        .checked_add(receive_timeout)
+        .and_then(|deadline| deadline.checked_add(Duration::from_nanos(1)))
+        .ok_or_else(|| Error::Encoding("receive segment deadline is not representable".into()))?;
+    if let Some(oid) = db.selected_device() {
+        let device = db.get(&oid).expect("selected under same database guard");
+        let declared = device.read_property(PropertyIdentifier::SEGMENTATION_SUPPORTED, None)?;
+        if declared != PropertyValue::Enumerated(u32::from(config.segmentation_supported.to_raw()))
+        {
+            return Err(Error::Encoding(
+                "selected Device Segmentation_Supported must match server configuration".into(),
+            ));
+        }
+        if active
+            && device.read_property(PropertyIdentifier::APDU_SEGMENT_TIMEOUT, None)?
+                != PropertyValue::Unsigned(config.apdu_segment_timeout_ms)
+        {
+            return Err(Error::Encoding(
+                "selected Device APDU_Segment_Timeout must match server configuration".into(),
+            ));
+        }
+    }
+    Ok(receive_timeout)
+}
+
+/// An expired local-policy response retains no reassembly payload or quota charge.
+pub(super) struct ExpiredRequest {
+    pub(super) source_mac: MacAddr,
+    pub(super) source_network: Option<NpduAddress>,
+    pub(super) route: bacnet_network::response_route::ResponseRoute,
+    pub(super) invoke_id: u8,
+}
+
+/// Remove every due state before any response can await. Protocol expiry is
+/// silent and wins if both conditions are already due when dispatch observes
+/// them. At exact 4*Tseg equality the protocol timer is live, so a coincident
+/// inclusive local progress deadline still produces OTHER.
 pub(super) fn expire_segmented_requests(
     receivers: &mut HashMap<SegRecvKey, SegmentedRequestState>,
     now: Instant,
-) {
-    receivers.retain(|_key, state| {
-        now.duration_since(state.last_activity) < SEG_RECEIVER_TIMEOUT
-            && now.duration_since(state.last_progress) < SEG_RECEIVER_PROGRESS_TIMEOUT
+    receive_timeout: Duration,
+) -> Vec<ExpiredRequest> {
+    let mut expired = Vec::new();
+    receivers.retain(|key, state| {
+        if now.duration_since(state.last_activity) > receive_timeout {
+            return false;
+        }
+        if now.duration_since(state.last_progress) >= SEG_RECEIVER_PROGRESS_TIMEOUT {
+            expired.push(ExpiredRequest {
+                source_mac: state.source_mac.clone(),
+                source_network: state.source_network.clone(),
+                route: bacnet_network::response_route::ResponseRoute::new(
+                    state.provenance,
+                    state.direct_response.clone(),
+                ),
+                invoke_id: key.2,
+            });
+            return false;
+        }
+        true
     });
+    expired
+}
+
+/// A fresh scan of at most 128 entries avoids stale deadlines after activity,
+/// completion or removal. Strict protocol expiry wakes one representable tick
+/// beyond equality; tokio may round this up to its timer resolution.
+pub(super) fn next_receive_deadline(
+    receivers: &HashMap<SegRecvKey, SegmentedRequestState>,
+    receive_timeout: Duration,
+) -> Option<Instant> {
+    receivers
+        .values()
+        .flat_map(|state| {
+            let protocol = state
+                .last_activity
+                .checked_add(receive_timeout)
+                .and_then(|deadline| deadline.checked_add(Duration::from_nanos(1)));
+            let progress = state
+                .last_progress
+                .checked_add(SEG_RECEIVER_PROGRESS_TIMEOUT);
+            [protocol, progress].into_iter().flatten()
+        })
+        .min()
+}
+
+pub(super) async fn wait_receive_deadline(
+    receivers: &HashMap<SegRecvKey, SegmentedRequestState>,
+    receive_timeout: Duration,
+) {
+    match next_receive_deadline(receivers, receive_timeout) {
+        Some(deadline) => tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await,
+        None => std::future::pending().await,
+    }
 }
 
 pub(super) fn reassembled_confirmed_request(
@@ -285,12 +412,16 @@ pub(super) fn initial_state(
     payload: RequestPayload,
     provenance: bacnet_transport::port::TransportProvenance,
     direct_response: Option<bacnet_transport::port::DirectResponse>,
+    source_mac: MacAddr,
+    source_network: Option<NpduAddress>,
     request: &ConfirmedRequestPdu,
 ) -> (SegmentedRequestState, Option<SegmentAckPdu>) {
     let actual_window_size = request.proposed_window_size.unwrap_or(0);
     let should_ack = !request.more_follows || actual_window_size <= 1;
     let now = runtime_clock::now();
     let state = SegmentedRequestState {
+        source_mac,
+        source_network,
         payload,
         provenance,
         direct_response,
@@ -312,4 +443,23 @@ pub(super) fn initial_state(
         actual_window_size,
     });
     (state, ack)
+}
+
+/// A client Abort retires only its matching active reassembly.
+pub(super) fn remove_peer_aborted_request(
+    receivers: &mut HashMap<SegRecvKey, SegmentedRequestState>,
+    received: &bacnet_network::layer::ReceivedApdu,
+    decoded: &Apdu,
+) {
+    if let Apdu::Abort(abort) = decoded {
+        if !abort.sent_by_server {
+            let key = segmented_receive_key(
+                &received.source_mac,
+                received.source_network.as_ref(),
+                abort.invoke_id,
+                received.provenance,
+            );
+            remove_matching_reassemblies(receivers, &key);
+        }
+    }
 }

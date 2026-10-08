@@ -108,7 +108,18 @@ impl BACnetObject for CustomDevice {
             PropertyIdentifier::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS,
         ])
     }
-    fn read_property(&self, _: PropertyIdentifier, _: Option<u32>) -> Result<PropertyValue, Error> {
+    fn read_property(
+        &self,
+        property: PropertyIdentifier,
+        _: Option<u32>,
+    ) -> Result<PropertyValue, Error> {
+        // Startup validates the ordinary Device declaration. Execution-owned
+        // service/COV properties below must still bypass the custom reader.
+        if property == PropertyIdentifier::SEGMENTATION_SUPPORTED {
+            return Ok(PropertyValue::Enumerated(
+                bacnet_types::enums::Segmentation::NONE.to_raw().into(),
+            ));
+        }
         panic!("execution-owned reads must not enter custom reader")
     }
     fn write_property(

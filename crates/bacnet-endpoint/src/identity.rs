@@ -234,6 +234,7 @@ pub struct DeviceIdentity {
     vendor_id: u16,
     max_apdu_length: u16,
     segmentation_supported: Segmentation,
+    apdu_segment_timeout_ms: u64,
     services: Vec<ServiceSupported>,
     network_ports: Vec<NetworkPortEntry>,
     device_uuid: [u8; 16],
@@ -256,6 +257,7 @@ impl DeviceIdentity {
             vendor_id,
             max_apdu_length: 1476,
             segmentation_supported: Segmentation::NONE,
+            apdu_segment_timeout_ms: 6000,
             services: vec![ServiceSupported::READ_PROPERTY],
             network_ports: Vec::new(),
             device_uuid: [0; 16],
@@ -275,13 +277,20 @@ impl DeviceIdentity {
         Ok(self)
     }
 
-    /// Overrides segmentation support (endpoint proofs use NONE).
+    /// Overrides segmentation support for a matching full server.
     ///
-    /// The endpoint roles answer segmentation-`Abort`; advertising support
-    /// beyond what the composed roles honor breaks the I-Am vs behavior
-    /// matrix.
+    /// Narrow EndpointSession roles require NONE and reject any other identity
+    /// before ingress starts. A full server uses this declaration with the
+    /// segment timeout supplied by this identity.
     pub fn with_segmentation(mut self, segmentation: Segmentation) -> Self {
         self.segmentation_supported = segmentation;
+        self
+    }
+
+    /// Sets the Device and full-server segment timeout. EndpointSession roles
+    /// require segmentation NONE; client timers remain caller-owned.
+    pub fn with_apdu_segment_timeout_ms(mut self, timeout_ms: u64) -> Self {
+        self.apdu_segment_timeout_ms = timeout_ms;
         self
     }
 
@@ -501,6 +510,7 @@ impl DeviceIdentity {
             application_software_version: env!("CARGO_PKG_VERSION").into(),
             max_apdu_length: u32::from(self.max_apdu_length),
             segmentation_supported: self.segmentation_supported,
+            apdu_segment_timeout: self.apdu_segment_timeout_ms,
             apdu_timeout: 6000,
             apdu_retries: 3,
         })?;
@@ -535,7 +545,7 @@ impl DeviceIdentity {
         config.max_apdu_length = self.max_apdu_length;
     }
 
-    /// Applies identity to a server config (max-apdu + segmentation + vendor).
+    /// Applies identity to a server config (max-APDU, segmentation, Tseg and vendor).
     ///
     /// This is the discovery-alignment bridge: a `ServerConfig` derived here
     /// makes `broadcast_i_am_from` emit bytes identical to
@@ -543,6 +553,7 @@ impl DeviceIdentity {
     pub fn apply_to_server_config(&self, config: &mut bacnet_server::server::ServerConfig) {
         config.max_apdu_length = u32::from(self.max_apdu_length);
         config.segmentation_supported = self.segmentation_supported;
+        config.apdu_segment_timeout_ms = self.apdu_segment_timeout_ms;
         config.vendor_id = self.vendor_id;
     }
 
@@ -593,6 +604,7 @@ pub fn build_database_with_extra(
         application_software_version: env!("CARGO_PKG_VERSION").into(),
         max_apdu_length: u32::from(identity.max_apdu_length),
         segmentation_supported: identity.segmentation_supported,
+        apdu_segment_timeout: identity.apdu_segment_timeout_ms,
         apdu_timeout: 6000,
         apdu_retries: 3,
     })?;

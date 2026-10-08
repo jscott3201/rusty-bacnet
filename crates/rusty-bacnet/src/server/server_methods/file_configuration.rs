@@ -183,6 +183,8 @@ mod tests {
             registered_network_port: None,
             inner: Arc::new(Mutex::new(None)),
             device_instance: 1,
+            segmentation_supported: bacnet_types::enums::Segmentation::NONE,
+            apdu_segment_timeout_ms: 5000,
             device_name: "Test Device".into(),
             transport_type: "bip".into(),
             interface: "0.0.0.0".into(),
