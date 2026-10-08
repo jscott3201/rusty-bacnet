@@ -28,9 +28,9 @@ use super::*;
 ///   effort, and on MS/TP it can need longer: a postponed reply waits for
 ///   the token. [`BACnetServer::stop`] seals responses and aborts request
 ///   tasks before joining them, so a restart path that stops the server
-///   before the reply has left drops the SimpleACK. An accepted WARMSTART or
-///   COLDSTART does not yet end DISABLE_INITIATION in-process (Clause
-///   16.1.2, #1567); a real process restart starts enabled anyway.
+///   before the reply has left drops the SimpleACK. On a full server, accepted
+///   WARMSTART/COLDSTART ends DISABLE_INITIATION immediately (Clause 16.1.2),
+///   cancels its timer and resumes held COV, even if the reply later fails.
 /// - **Be quick.** It runs synchronously on a runtime worker with the object
 ///   database write-locked, so every other request waits for it. Hand slow
 ///   work, such as writing backup files, to a task. On an endpoint session a
@@ -155,7 +155,8 @@ impl Requester {
 ///
 /// `still_open` runs once the write lock is held, so an owner that closed
 /// while the request waited refuses it before the handler runs. The guard is
-/// released before the reply is returned.
+/// released before `on_accepted` runs. That callback runs synchronously on
+/// success, before reply construction and with no intervening suspension.
 pub(in crate::server) async fn response(
     db: &RwLock<ObjectDatabase>,
     request: &ConfirmedRequestPdu,
@@ -163,6 +164,7 @@ pub(in crate::server) async fn response(
     handler: Option<&ReinitializeHandler>,
     requester: Requester,
     still_open: impl FnOnce() -> Result<(), Error>,
+    on_accepted: impl FnOnce(ReinitializedState),
 ) -> Apdu {
     let outcome = match handlers::handle_reinitialize_device(&request.service_request, password) {
         Ok(state) => match handler {
@@ -175,19 +177,60 @@ pub(in crate::server) async fn response(
                     request.invoke_id,
                 );
                 let mut db = db.write().await;
-                still_open().and_then(|()| invoke(handler, &context, &mut db))
+                still_open()
+                    .and_then(|()| invoke(handler, &context, &mut db))
+                    .map(|()| state)
             }
             None => Err(services_error(ErrorCode::SERVICE_REQUEST_DENIED)),
         },
         Err(error) => Err(error),
     };
     match outcome {
-        Ok(()) => Apdu::SimpleAck(SimpleAck {
-            invoke_id: request.invoke_id,
-            service_choice: request.service_choice,
-        }),
+        Ok(state) => {
+            on_accepted(state);
+            Apdu::SimpleAck(SimpleAck {
+                invoke_id: request.invoke_id,
+                service_choice: request.service_choice,
+            })
+        }
         Err(error) => error_apdu_from_error(request.invoke_id, request.service_choice, &error),
     }
+}
+
+/// Full-server acceptance also owns the DCC restart transition. Acquire the
+/// timer slot before the handler's database lock, as DCC replacement/expiry do.
+pub(in crate::server) async fn server_response<T: TransportPort + 'static>(
+    services: &super::request_services::RequestServices<T>,
+    request: &ConfirmedRequestPdu,
+    requester: Requester,
+) -> Apdu {
+    let cov_resume = services.cov_table.read().await.timed().clone();
+    let mut slot = services.dcc_timer.lock().await;
+    let mut restart_accepted = false;
+    let reply = response(
+        &services.db,
+        request,
+        &services.config.reinit_password,
+        services.config.on_reinitialize.as_ref(),
+        requester,
+        || Ok(()),
+        |state| {
+            if matches!(
+                state,
+                ReinitializedState::WARMSTART | ReinitializedState::COLDSTART
+            ) {
+                super::dcc_timer::enable_for_restart(&slot, &services.comm_state, &cov_resume);
+                restart_accepted = true;
+            }
+        },
+    )
+    .await;
+    if restart_accepted {
+        // The commit already happened. Cancellation during this borrowed join
+        // retains the aborted handle for later replacement/shutdown cleanup.
+        super::dcc_timer::cancel(&mut slot).await;
+    }
+    reply
 }
 
 /// Run `handler` under a panic guard. Execution has begun once it is called,

@@ -320,6 +320,7 @@ impl EndpointResponder {
                 Some(handler),
                 requester,
                 still_open,
+                |_| {}, // Endpoint sessions have no server DCC state.
             )
             .await
         } else if request.service_choice == ConfirmedServiceChoice::WRITE_PROPERTY

@@ -6065,9 +6065,9 @@ class and code instead. The rules:
   postponed reply waits for the token. `BACnetServer::stop()` seals responses
   and aborts request tasks before joining them, so a restart path that stops
   the server before the reply has left drops the SimpleACK.
-- An accepted WARMSTART or COLDSTART does not yet end DISABLE_INITIATION
-  in-process (Clause 16.1.2, #1567). A real process restart starts enabled
-  anyway.
+- On a full server, an accepted WARMSTART or COLDSTART immediately ends
+  DISABLE_INITIATION, cancels its timer and resumes held COV (Clause 16.1.2),
+  even if the reply later fails.
 - It runs synchronously on a runtime worker with the database write-locked:
   keep it quick and hand slow work, such as writing backup files, to a task.
 - Its edits through `&mut ObjectDatabase` are raw: they skip what

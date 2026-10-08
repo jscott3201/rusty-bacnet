@@ -39,6 +39,22 @@ pub(super) async fn cancel(slot: &mut Option<JoinHandle<()>>) {
     *slot = None;
 }
 
+/// Commit accepted WARMSTART/COLDSTART while the caller holds the timer slot.
+/// Abort first so the old deadline cannot outlive this transition. Joining
+/// remains a separate cancellable cleanup step; acceptance must enable now.
+/// This is not a DCC request or timer expiry and records neither outcome/Audit.
+pub(super) fn enable_for_restart(
+    slot: &Option<JoinHandle<()>>,
+    comm: &CommState,
+    cov_resume: &crate::cov::timed::TimedStore,
+) {
+    if let Some(task) = slot {
+        task.abort();
+    }
+    comm.set(DccState::Enable);
+    cov_resume.rearm();
+}
+
 /// One DeviceCommunicationControl request and where it came from.
 pub(super) struct DccRequest<'a> {
     pub(super) service_data: &'a [u8],
