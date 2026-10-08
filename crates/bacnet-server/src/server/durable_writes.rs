@@ -455,6 +455,44 @@ pub(super) async fn settle_forgotten(db: &Arc<RwLock<ObjectDatabase>>) {
     }
 }
 
+/// Strict endpoint shutdown settlement after its request owners have joined.
+/// Both passes wait asynchronously for the database, then release its guard
+/// before waiting for queued saves. Completion describes finished attempts;
+/// it does not report backend success or establish power-loss durability.
+///
+/// The endpoint retains one task running this future across stop cancellation.
+/// Its database owner is installed before the future can be spawned or dropped.
+pub fn settle_endpoint(
+    db: Arc<RwLock<ObjectDatabase>>,
+) -> impl std::future::Future<Output = ()> + Send + 'static {
+    let owner = EndpointSettlementDatabase(Some(db));
+    async move {
+        let db = owner.0.as_ref().expect("settlement database");
+        for _ in 0..2 {
+            let waits = {
+                let mut guard = db.write().await;
+                settle_all(&mut guard)
+            };
+            if waits.is_empty() {
+                return;
+            }
+            wait_for_saves(db, &waits).await;
+        }
+    }
+}
+
+/// Cancellation can make this task the final database holder, even before
+/// its first poll. Preserve the endpoint's off-runtime destruction policy.
+struct EndpointSettlementDatabase(Option<Arc<RwLock<ObjectDatabase>>>);
+
+impl Drop for EndpointSettlementDatabase {
+    fn drop(&mut self) {
+        if let Some(db) = self.0.take() {
+            drop(super::drop_database_off_runtime(db));
+        }
+    }
+}
+
 /// Settle `db`'s objects from a task once the application lets go of it.
 /// Nothing waits for their saves; a runtime that shuts down first drops the
 /// task, which is logged, and the objects then put storage back as they drop.
