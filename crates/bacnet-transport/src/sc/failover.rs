@@ -1,5 +1,7 @@
 //! BACnet/SC primary/failover hub switching helpers.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{atomic::AtomicU16, Arc, Mutex as StdMutex};
 use std::time::Duration;
 
@@ -38,71 +40,83 @@ pub(super) fn restore_interval(period: Duration) -> Interval {
     interval
 }
 
-/// Borrowed state a primary-restore attempt reads and updates.
+/// A candidate has no authority over the live connection. Its future is
+/// owned by one receive-loop connection epoch and cancellation drops its I/O.
+pub(super) struct PrimaryCandidate<W> {
+    socket: Result<Arc<W>, Error>,
+    connection: ScConnection,
+}
+
+pub(super) type PrimaryAttempt<W> = Pin<Box<dyn Future<Output = PrimaryCandidate<W>> + Send>>;
+
+pub(super) async fn prepare_primary_restore<W: WebSocketPort>(
+    primary_ws: Option<Arc<W>>,
+    primary_connector: Option<WebSocketConnector<W>>,
+    probe: ScConnection,
+    connect_timeout_ms: u64,
+) -> PrimaryCandidate<W> {
+    let socket = if let Some(connector) = primary_connector {
+        dial_connector(&connector, connect_timeout_ms)
+            .await
+            .map(Arc::new)
+    } else {
+        primary_ws
+            .ok_or_else(|| Error::Encoding("SC retired primary requires a fresh connector".into()))
+    };
+    let probe = Arc::new(Mutex::new(probe));
+    let socket = match socket {
+        Ok(ws) => perform_handshake(&*ws, &probe, None, connect_timeout_ms)
+            .await
+            .map(|()| ws),
+        Err(e) => Err(e),
+    };
+    let connection = probe.lock().await.clone();
+    PrimaryCandidate { socket, connection }
+}
+
+/// Live publication belongs exclusively to the receive loop.
 pub(super) struct PrimaryRestoreContext<'a, W> {
-    /// Retired primary socket, when it can be reused as-is.
-    pub(super) primary_ws: Option<&'a Arc<W>>,
-    /// Connector used to dial a fresh primary socket.
-    pub(super) primary_connector: Option<&'a WebSocketConnector<W>>,
-    /// Socket slot shared with the send path.
     pub(super) active_ws: &'a Arc<Mutex<Arc<W>>>,
-    /// Shared connection state machine.
     pub(super) conn: &'a Arc<Mutex<ScConnection>>,
-    /// Slot holding the in-flight disconnect of the replaced failover socket.
     pub(super) restore_disconnect_task: &'a Arc<StdMutex<Option<JoinHandle<()>>>>,
-    /// Connection-state publisher.
     pub(super) state_tx: &'a watch::Sender<ScConnectionState>,
-    /// Connect and handshake timeout in milliseconds.
     pub(super) connect_timeout_ms: u64,
-    /// Published effective maximum APDU length.
     pub(super) effective_max_apdu_length: &'a AtomicU16,
 }
 
-pub(super) async fn attempt_primary_restore<W: WebSocketPort>(
+pub(super) async fn publish_primary_restore<W: WebSocketPort>(
     ctx: &PrimaryRestoreContext<'_, W>,
     current_ws: &Arc<W>,
-) -> Result<Arc<W>, Error> {
-    let PrimaryRestoreContext {
-        primary_ws,
-        primary_connector,
-        active_ws,
-        conn,
-        restore_disconnect_task,
-        state_tx,
-        connect_timeout_ms,
-        effective_max_apdu_length,
-    } = *ctx;
-    let restored_ws = if let Some(connector) = primary_connector {
-        Arc::new(dial_connector(connector, connect_timeout_ms).await?)
-    } else if let Some(primary_ws) = primary_ws {
-        primary_ws.clone()
-    } else {
-        return Err(Error::Encoding(
-            "SC retired primary requires a fresh connector".into(),
-        ));
-    };
-    let probe_conn = Arc::new(Mutex::new(primary_probe_connection(conn).await));
-    if let Err(e) = perform_handshake(&*restored_ws, &probe_conn, None, connect_timeout_ms).await {
-        absorb_failed_probe(conn, &probe_conn).await;
-        return Err(e);
+    candidate: PrimaryCandidate<W>,
+) -> Result<Option<Arc<W>>, Error> {
+    let mut current = ctx.active_ws.lock().await;
+    let mut c = ctx.conn.lock().await;
+    // Stop can seal the live state while a candidate is finishing. Never
+    // publish its success or failed-probe retry metadata after that boundary.
+    if c.state != ScConnectionState::Connected || !Arc::ptr_eq(&current, current_ws) {
+        return Ok(None);
     }
-
-    let disconnect_msg = disconnect_request_from(conn).await;
-    let restored = probe_conn.lock().await.clone();
-    let mut current = active_ws.lock().await;
-    let mut c = conn.lock().await;
-    *c = restored;
+    let restored_ws = match candidate.socket {
+        Ok(ws) => ws,
+        Err(e) => {
+            c.absorb_failed_probe(&candidate.connection);
+            return Err(e);
+        }
+    };
+    let disconnect_msg = c.clone().build_disconnect_request().ok();
+    *c = candidate.connection;
     *current = restored_ws.clone();
-    publish_effective_max_apdu_length(effective_max_apdu_length, &c);
-    state_tx.send_replace(c.state);
+    publish_effective_max_apdu_length(ctx.effective_max_apdu_length, &c);
+    ctx.state_tx.send_replace(c.state);
     drop(c);
     drop(current);
 
     let disconnect_ws = current_ws.clone();
+    let timeout = ctx.connect_timeout_ms;
     let task = tokio::spawn(async move {
-        send_disconnect_request(&*disconnect_ws, disconnect_msg, connect_timeout_ms).await;
+        send_disconnect_request(&*disconnect_ws, disconnect_msg, timeout).await;
     });
-    match restore_disconnect_task.lock() {
+    match ctx.restore_disconnect_task.lock() {
         Ok(mut slot) => {
             if let Some(previous) = slot.replace(task) {
                 previous.abort();
@@ -110,27 +124,7 @@ pub(super) async fn attempt_primary_restore<W: WebSocketPort>(
         }
         Err(_) => task.abort(),
     }
-    Ok(restored_ws)
-}
-
-async fn primary_probe_connection(conn: &Arc<Mutex<ScConnection>>) -> ScConnection {
-    let c = conn.lock().await;
-    c.connect_probe()
-}
-
-async fn absorb_failed_probe(
-    conn: &Arc<Mutex<ScConnection>>,
-    probe_conn: &Arc<Mutex<ScConnection>>,
-) {
-    let probe = probe_conn.lock().await;
-    let mut c = conn.lock().await;
-    c.absorb_failed_probe(&probe);
-}
-
-async fn disconnect_request_from(conn: &Arc<Mutex<ScConnection>>) -> Option<ScMessage> {
-    let c = conn.lock().await;
-    let mut snapshot = c.clone();
-    snapshot.build_disconnect_request().ok()
+    Ok(Some(restored_ws))
 }
 
 async fn send_disconnect_request<W: WebSocketPort>(
@@ -149,6 +143,69 @@ async fn send_disconnect_request<W: WebSocketPort>(
             Err(_) => {
                 warn!("BACnet/SC failover disconnect request timed out during primary restore");
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sc::LoopbackWebSocket;
+
+    /// Stop marks the connection Disconnecting before its best-effort send.
+    /// A restore already ready in that window must not resurrect it, and a
+    /// failed probe must not apply its VMAC/retry metadata to that connection.
+    #[tokio::test]
+    async fn primary_restore_completion_after_shutdown_cannot_publish() {
+        for success in [true, false] {
+            let (live, _hub) = LoopbackWebSocket::pair();
+            let live = Arc::new(live);
+            let active = Arc::new(Mutex::new(live.clone()));
+            let mut connection = ScConnection::new([1; 6], [1; 16]);
+            connection.state = ScConnectionState::Connected;
+            connection.hub_vmac = Some([0x20; 6]);
+            connection.build_disconnect_request().unwrap();
+            let conn = Arc::new(Mutex::new(connection));
+            let (state, _) = watch::channel(ScConnectionState::Disconnecting);
+            let disconnect = Arc::new(StdMutex::new(None));
+            let effective = AtomicU16::new(1000);
+            let mut probe = ScConnection::new([2; 6], [1; 16]);
+            probe.state = ScConnectionState::Connected;
+            probe.hub_vmac = Some([0x10; 6]);
+            probe.connect_retry_allowed = false;
+            let (candidate, _primary_hub) = LoopbackWebSocket::pair();
+            let candidate = PrimaryCandidate {
+                socket: if success {
+                    Ok(Arc::new(candidate))
+                } else {
+                    Err(Error::Encoding("refused probe".into()))
+                },
+                connection: probe,
+            };
+            let result = publish_primary_restore(
+                &PrimaryRestoreContext {
+                    active_ws: &active,
+                    conn: &conn,
+                    restore_disconnect_task: &disconnect,
+                    state_tx: &state,
+                    connect_timeout_ms: 500,
+                    effective_max_apdu_length: &effective,
+                },
+                &live,
+                candidate,
+            )
+            .await
+            .unwrap();
+            assert!(result.is_none());
+            let c = conn.lock().await;
+            assert_eq!(c.state, ScConnectionState::Disconnecting);
+            assert_eq!(c.local_vmac, [1; 6]);
+            assert_eq!(c.hub_vmac, Some([0x20; 6]));
+            assert!(c.connect_retry_allowed);
+            assert!(Arc::ptr_eq(&*active.lock().await, &live));
+            assert_eq!(*state.borrow(), ScConnectionState::Disconnecting);
+            assert_eq!(effective.load(std::sync::atomic::Ordering::Relaxed), 1000);
+            assert!(disconnect.lock().unwrap().is_none());
         }
     }
 }
