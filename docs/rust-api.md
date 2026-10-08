@@ -2463,7 +2463,10 @@ are absent from these modes' projected metadata, and so is Value_Source unless
 `set_value_source_tracking(true)` provisions it (see
 [Source of a noncommandable Present_Value](#source-of-a-noncommandable-present_value)).
 This does not disable the remaining supported AV/BV target Audit policy or add
-MSV target Audit reporting.
+MSV target Audit reporting. Each Value type also accepts `set_profile(ObjectProfile)`
+for optional Tags and profile text rows in all three modes; Present_Value access
+does not control those rows. See [Object profile rows](#object-profile-rows) for
+the access-explicit Tags persistence constructors.
 
 `BACnetServer::set_present_value_local` supplies a logical application value to
 Analog/Binary/Multi-state Inputs, noncommandable Values, Loop (the control
@@ -7260,12 +7263,13 @@ families and broader Audit completion remain open.
 Most object tables list `Tags`, `Profile_Location` and `Profile_Name` as
 optional rows. `bacnet_objects::object_profile::ObjectProfile` holds the three;
 an object that carries one serves the rows its fields provision (#1553). The
-Color, Color Temperature, Lighting Output and Binary Lighting Output objects
-take one through `set_profile` before registration, which checks it first and
+Color, Color Temperature, Lighting Output, Binary Lighting Output, Analog Value,
+Binary Value and Multi-state Value objects take one through `set_profile` before registration, which checks it first and
 refuses a bad one without changing anything. An unprovisioned object serves and
 lists none of them, so its wire behaviour, Property_List and PICS are as before.
-The rows go in table order: on the colour objects after Value_Source and the
-audit rows; on a Lighting Output between its colour links and its trims.
+The three rows retain their relative order: Tags, Profile_Location, Profile_Name.
+They are independent of a Value object's Present_Value access and source tracking.
+Existing descriptor order is preserved when the optional rows are added.
 
 - `Tags` is a BACnetARRAY of `bacnet_types::constructed::BACnetNameValue`, a
   name with an optional primitive `PropertyValue`, whose codec
@@ -7286,9 +7290,19 @@ audit rows; on a Lighting Output between its colour links and its trims.
   is http, https or bacnet, and a profile name that starts with a decimal vendor
   identifier and a dash.
 
-Objects built with `new` keep Tags in memory. Color, Color Temperature,
-Lighting Output and Binary Lighting Output also provide
-`with_tags_persistence(instance, name, Arc<dyn TagsPersistence>)`. The shared
+Objects built with `new` or `with_access` keep Tags in memory. Color, Color
+Temperature, Lighting Output and Binary Lighting Output also provide
+`with_tags_persistence(instance, name, Arc<dyn TagsPersistence>)`. The Value
+constructors accept an explicit `PresentValueAccess` before the storage argument:
+
+- Analog Value: `with_tags_persistence(instance, name, units, access, storage)`.
+- Binary Value: `with_tags_persistence(instance, name, access, storage)`.
+- Multi-state Value: `with_tags_persistence(instance, name, number_of_states, access, storage)`.
+
+For example, construct a writable Analog Value with
+`AnalogValueObject::with_tags_persistence(1, "Temperature", 62, PresentValueAccess::Writable, storage)?`,
+then call `set_profile` to provision the desired rows. `storage` is an
+`Arc<dyn TagsPersistence>` supplied by the application. The shared
 `bacnet_objects::object_profile::{TagsPersistence, TagsSnapshot,
 FileTagsPersistence}` contract attaches application-owned storage to those
 objects. This is an opt-in product durability feature; optional Tags rows do
@@ -7335,11 +7349,13 @@ best effort and logged on failure. A successful save or local file round trip
 does not qualify power-loss survival; the backend's actual guarantees apply.
 The file backend does not coordinate competing owners or processes at one path.
 
-Cloning any of these four objects copies its served data into a memory-only
-object. Application clones and COV snapshots do not inherit persistence,
+Cloning a Color, Color Temperature, Lighting Output or Binary Lighting Output
+object copies its served data into a memory-only object. Application clones and COV snapshots do not inherit persistence,
 pending writes or saved-override authority; clone/drop neither saves nor corrects,
 settles or waits on the source writer. Changes to a clone remain local to it.
-More object types and a typed decode of remote Tags remain separate work (#1584).
+Typed remote Tags decoding is available through the Rust client helper, Python
+reads and CLI reads. Other object families remain separate work
+(#1584); this Rust provisioning surface adds no Python server provisioning API.
 
 ### Target Device Audit recipient
 

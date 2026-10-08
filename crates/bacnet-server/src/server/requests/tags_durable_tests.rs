@@ -1,4 +1,4 @@
-//! Durable Tags through actual confirmed dispatch for all four profile objects.
+//! Durable Tags through actual confirmed dispatch for all profile objects and PV modes.
 
 use super::durable_stop_tests::{send, stop_then_release};
 use super::durable_write_wire_tests::{
@@ -8,10 +8,14 @@ use super::mutation_list_wire_tests::wire;
 use super::mutation_tests::{apdu, wpm, Fixture};
 use super::*;
 use crate::server::test_transport::TestTransport;
+use bacnet_objects::analog::AnalogValueObject;
+use bacnet_objects::binary::BinaryValueObject;
 use bacnet_objects::color::{ColorObject, ColorTemperatureObject};
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::lighting::{BinaryLightingOutputObject, LightingOutputObject};
+use bacnet_objects::multistate::MultiStateValueObject;
 use bacnet_objects::object_profile::{ObjectProfile, TagsPersistence, TagsSnapshot};
+use bacnet_objects::present_value_access::PresentValueAccess as Access;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
@@ -22,11 +26,29 @@ use std::sync::atomic::Ordering;
 
 type Storage = HeldStorage<TagsSnapshot>;
 const TAGS: PropertyIdentifier = PropertyIdentifier::TAGS;
-const KINDS: [ObjectType; 4] = [
-    ObjectType::COLOR,
-    ObjectType::COLOR_TEMPERATURE,
-    ObjectType::LIGHTING_OUTPUT,
-    ObjectType::BINARY_LIGHTING_OUTPUT,
+#[derive(Clone, Copy, Debug)]
+struct Case {
+    kind: ObjectType,
+    access: Access,
+}
+const fn case(kind: ObjectType, access: Access) -> Case {
+    Case { kind, access }
+}
+const COLOR: Case = case(ObjectType::COLOR, Access::Commandable);
+const KINDS: [Case; 13] = [
+    COLOR,
+    case(ObjectType::COLOR_TEMPERATURE, Access::Commandable),
+    case(ObjectType::LIGHTING_OUTPUT, Access::Commandable),
+    case(ObjectType::BINARY_LIGHTING_OUTPUT, Access::Commandable),
+    case(ObjectType::ANALOG_VALUE, Access::Commandable),
+    case(ObjectType::ANALOG_VALUE, Access::Writable),
+    case(ObjectType::ANALOG_VALUE, Access::ReadOnly),
+    case(ObjectType::BINARY_VALUE, Access::Commandable),
+    case(ObjectType::BINARY_VALUE, Access::Writable),
+    case(ObjectType::BINARY_VALUE, Access::ReadOnly),
+    case(ObjectType::MULTI_STATE_VALUE, Access::Commandable),
+    case(ObjectType::MULTI_STATE_VALUE, Access::Writable),
+    case(ObjectType::MULTI_STATE_VALUE, Access::ReadOnly),
 ];
 // Independently authored BACnetNameValue vectors: semantic exhaust and floor=3.
 const EXHAUST: &[u8] = &[0x0d, 8, 0, b'e', b'x', b'h', b'a', b'u', b's', b't'];
@@ -44,7 +66,7 @@ impl TagsPersistence for Storage {
     }
 }
 
-fn object(kind: ObjectType, storage: &Arc<Storage>) -> Box<dyn BACnetObject> {
+fn object(kind: Case, storage: &Arc<Storage>) -> Box<dyn BACnetObject> {
     let profile = ObjectProfile {
         tags: Some(vec![BACnetNameValue::semantic("exhaust")]),
         ..ObjectProfile::default()
@@ -56,7 +78,17 @@ fn object(kind: ObjectType, storage: &Arc<Storage>) -> Box<dyn BACnetObject> {
             Box::new(object)
         }};
     }
-    match kind {
+    macro_rules! value {
+        ($ty:ty $(, $extra:expr)?) => {{
+            let mut object = <$ty>::with_tags_persistence(1, "tags", $($extra,)? kind.access, storage.clone()).unwrap();
+            object.set_profile(profile).unwrap();
+            Box::new(object)
+        }};
+    }
+    match kind.kind {
+        ObjectType::ANALOG_VALUE => value!(AnalogValueObject, 95),
+        ObjectType::BINARY_VALUE => value!(BinaryValueObject),
+        ObjectType::MULTI_STATE_VALUE => value!(MultiStateValueObject, 3),
         ObjectType::COLOR => build!(ColorObject),
         ObjectType::COLOR_TEMPERATURE => build!(ColorTemperatureObject),
         ObjectType::LIGHTING_OUTPUT => build!(LightingOutputObject),
@@ -65,7 +97,7 @@ fn object(kind: ObjectType, storage: &Arc<Storage>) -> Box<dyn BACnetObject> {
     }
 }
 
-async fn served_by(kind: ObjectType, storage: &Arc<Storage>) -> (Arc<Fixture>, ObjectIdentifier) {
+async fn served_by(kind: Case, storage: &Arc<Storage>) -> (Arc<Fixture>, ObjectIdentifier) {
     let fixture = Arc::new(Fixture::new(None));
     let object = object(kind, storage);
     let oid = object.object_identifier();
@@ -129,7 +161,7 @@ async fn read_wire(fixture: &Fixture, oid: ObjectIdentifier, index: Option<u32>)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn all_four_whole_resize_and_element_writes_survive_reconstruction() {
+async fn all_profile_objects_whole_resize_and_element_writes_survive_reconstruction() {
     for kind in KINDS {
         for (index, input, expected) in [
             (None, FLOOR.to_vec(), FLOOR.to_vec()),
@@ -174,7 +206,7 @@ async fn all_four_whole_resize_and_element_writes_survive_reconstruction() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn all_four_combined_datetime_wire_writes_leave_served_and_saved_tags_unchanged() {
+async fn all_profile_objects_combined_datetime_wire_writes_leave_served_and_saved_tags_unchanged() {
     let pair = [DATE_TAG, &TIME_TAG[3..]].concat();
     for kind in KINDS {
         let storage = Arc::new(Storage::default());
@@ -200,7 +232,7 @@ async fn all_four_combined_datetime_wire_writes_leave_served_and_saved_tags_unch
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn all_four_wpm_folds_ordered_indices_into_one_final_save() {
+async fn all_profile_objects_wpm_folds_ordered_indices_into_one_final_save() {
     for kind in KINDS {
         let storage = Arc::new(Storage::default());
         let (fixture, oid) = served_by(kind, &storage).await;
@@ -236,41 +268,43 @@ async fn all_four_wpm_folds_ordered_indices_into_one_final_save() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn wpm_invalid_middle_and_unrelated_failure_preserve_successful_prefix() {
-    for unrelated in [false, true] {
-        let storage = Arc::new(Storage::default());
-        let (fixture, oid) = served_by(ObjectType::COLOR, &storage).await;
-        let mut refused = attempt(Some(9), FLOOR);
-        if unrelated {
-            refused.property_identifier = PropertyIdentifier::PROFILE_NAME;
-            refused.property_array_index = None;
+    for kind in KINDS {
+        for unrelated in [false, true] {
+            let storage = Arc::new(Storage::default());
+            let (fixture, oid) = served_by(kind, &storage).await;
+            let mut refused = attempt(Some(9), FLOOR);
+            if unrelated {
+                refused.property_identifier = PropertyIdentifier::PROFILE_NAME;
+                refused.property_array_index = None;
+            }
+            let response = wire(
+                &fixture,
+                ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE,
+                multiple(
+                    oid,
+                    vec![attempt(None, FLOOR), refused, attempt(None, EXHAUST)],
+                ),
+            )
+            .await;
+            assert_eq!(response[0], 0x50);
+            let wait = fixture
+                .db
+                .write()
+                .await
+                .get_mut(&oid)
+                .unwrap()
+                .durable_writes_internal()
+                .unwrap()
+                .settle_forgotten_writes()
+                .unwrap();
+            tokio::task::spawn_blocking(move || wait.block())
+                .await
+                .unwrap();
+            assert_eq!(read_wire(&fixture, oid, None).await, FLOOR);
+            drop(fixture);
+            let (rebuilt, oid) = served_by(kind, &storage).await;
+            assert_eq!(read_wire(&rebuilt, oid, None).await, FLOOR);
         }
-        let response = wire(
-            &fixture,
-            ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE,
-            multiple(
-                oid,
-                vec![attempt(None, FLOOR), refused, attempt(None, EXHAUST)],
-            ),
-        )
-        .await;
-        assert_eq!(response[0], 0x50);
-        let wait = fixture
-            .db
-            .write()
-            .await
-            .get_mut(&oid)
-            .unwrap()
-            .durable_writes_internal()
-            .unwrap()
-            .settle_forgotten_writes()
-            .unwrap();
-        tokio::task::spawn_blocking(move || wait.block())
-            .await
-            .unwrap();
-        assert_eq!(read_wire(&fixture, oid, None).await, FLOOR);
-        drop(fixture);
-        let (rebuilt, oid) = served_by(ObjectType::COLOR, &storage).await;
-        assert_eq!(read_wire(&rebuilt, oid, None).await, FLOOR);
     }
 }
 
@@ -278,6 +312,10 @@ async fn wpm_invalid_middle_and_unrelated_failure_preserve_successful_prefix() {
 async fn failed_save_refuses_wire_write_without_publishing_or_replacing_storage() {
     for kind in KINDS {
         let storage = Arc::new(Storage::default());
+        let old = TagsSnapshot {
+            tags: Some(vec![BACnetNameValue::semantic("exhaust")]),
+        };
+        *storage.saved.lock().unwrap() = Some(old.clone());
         let (fixture, oid) = served_by(kind, &storage).await;
         storage.fail.store(true, Ordering::SeqCst);
         let response = wire(
@@ -288,43 +326,45 @@ async fn failed_save_refuses_wire_write_without_publishing_or_replacing_storage(
         .await;
         assert_eq!(response, [0x50, 5, 15, 0x91, 0, 0x91, 25]);
         assert_eq!(read_wire(&fixture, oid, None).await, EXHAUST);
-        assert_eq!(storage.load_saved(), None);
+        assert_eq!(storage.load_saved(), Some(old));
     }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unrelated_confirmed_read_completes_while_tags_save_and_ack_are_held() {
-    let storage = Arc::new(Storage::default());
-    let (fixture, oid) = served_by(ObjectType::COLOR, &storage).await;
-    let (started, go) = storage.hold();
-    let writing = tokio::spawn({
-        let fixture = fixture.clone();
-        async move {
-            wire(
-                &fixture,
-                ConfirmedServiceChoice::WRITE_PROPERTY,
-                request(oid, None, FLOOR),
-            )
+    for kind in KINDS {
+        let storage = Arc::new(Storage::default());
+        let (fixture, oid) = served_by(kind, &storage).await;
+        let (started, go) = storage.hold();
+        let writing = tokio::spawn({
+            let fixture = fixture.clone();
+            async move {
+                wire(
+                    &fixture,
+                    ConfirmedServiceChoice::WRITE_PROPERTY,
+                    request(oid, None, FLOOR),
+                )
+                .await
+            }
+        });
+        tokio::task::spawn_blocking(move || started.recv_timeout(WAIT))
             .await
-        }
-    });
-    tokio::task::spawn_blocking(move || started.recv_timeout(WAIT))
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(!writing.is_finished());
-    let before = tokio::time::timeout(WAIT, read_wire(&fixture, oid, None))
-        .await
-        .unwrap();
-    assert_eq!(before, EXHAUST);
-    assert!(!writing.is_finished());
-    drop(go);
-    assert_eq!(writing.await.unwrap(), SIMPLE_ACK_WRITE);
-    assert_eq!(read_wire(&fixture, oid, None).await, FLOOR);
+            .unwrap()
+            .unwrap();
+        assert!(!writing.is_finished());
+        let before = tokio::time::timeout(WAIT, read_wire(&fixture, oid, None))
+            .await
+            .unwrap();
+        assert_eq!(before, EXHAUST);
+        assert!(!writing.is_finished());
+        drop(go);
+        assert_eq!(writing.await.unwrap(), SIMPLE_ACK_WRITE);
+        assert_eq!(read_wire(&fixture, oid, None).await, FLOOR);
+    }
 }
 
 async fn server(
-    kind: ObjectType,
+    kind: Case,
     storage: &Arc<Storage>,
 ) -> (
     BACnetServer<TestTransport>,
@@ -353,7 +393,7 @@ async fn server(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn all_four_stop_cancels_held_write_and_waits_for_successful_correction() {
+async fn all_profile_objects_stop_cancels_held_write_and_waits_for_successful_correction() {
     for kind in KINDS {
         let storage = Arc::new(Storage::default());
         let served = TagsSnapshot {
@@ -364,7 +404,7 @@ async fn all_four_stop_cancels_held_write_and_waits_for_successful_correction() 
         };
         *storage.saved.lock().unwrap() = Some(served.clone());
         let (server, inbound) = server(kind, &storage).await;
-        let oid = ObjectIdentifier::new(kind, 1).unwrap();
+        let oid = ObjectIdentifier::new(kind.kind, 1).unwrap();
         let (started, go) = storage.hold();
         send(
             &inbound,
@@ -387,38 +427,40 @@ async fn all_four_stop_cancels_held_write_and_waits_for_successful_correction() 
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn write_local_waits_off_the_database_lock_and_survives_rebuild() {
-    let storage = Arc::new(Storage::default());
-    let (server, _inbound) = server(ObjectType::COLOR, &storage).await;
-    let server = Arc::new(server);
-    let oid = ObjectIdentifier::new(ObjectType::COLOR, 1).unwrap();
-    let (started, go) = storage.hold();
-    let writing = tokio::spawn({
-        let server = server.clone();
-        async move {
-            server
-                .write_local(
-                    &oid,
-                    TAGS,
-                    None,
-                    PropertyValue::ApplicationData(FLOOR.to_vec()),
-                    None,
-                    crate::LocalCommandSource::ServerDevice,
-                )
-                .await
-        }
-    });
-    tokio::task::spawn_blocking(move || started.recv_timeout(WAIT))
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(tokio::time::timeout(WAIT, server.database().write())
-        .await
-        .is_ok());
-    drop(go);
-    writing.await.unwrap().unwrap();
-    let mut server = Arc::into_inner(server).expect("writer released server");
-    server.stop().await.unwrap();
-    drop(server);
-    let (rebuilt, oid) = served_by(ObjectType::COLOR, &storage).await;
-    assert_eq!(read_wire(&rebuilt, oid, None).await, FLOOR);
+    for kind in KINDS {
+        let storage = Arc::new(Storage::default());
+        let (server, _inbound) = server(kind, &storage).await;
+        let server = Arc::new(server);
+        let oid = ObjectIdentifier::new(kind.kind, 1).unwrap();
+        let (started, go) = storage.hold();
+        let writing = tokio::spawn({
+            let server = server.clone();
+            async move {
+                server
+                    .write_local(
+                        &oid,
+                        TAGS,
+                        None,
+                        PropertyValue::ApplicationData(FLOOR.to_vec()),
+                        None,
+                        crate::LocalCommandSource::ServerDevice,
+                    )
+                    .await
+            }
+        });
+        tokio::task::spawn_blocking(move || started.recv_timeout(WAIT))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(tokio::time::timeout(WAIT, server.database().write())
+            .await
+            .is_ok());
+        drop(go);
+        writing.await.unwrap().unwrap();
+        let mut server = Arc::into_inner(server).expect("writer released server");
+        server.stop().await.unwrap();
+        drop(server);
+        let (rebuilt, oid) = served_by(kind, &storage).await;
+        assert_eq!(read_wire(&rebuilt, oid, None).await, FLOOR);
+    }
 }

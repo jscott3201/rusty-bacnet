@@ -105,7 +105,10 @@ fn may_save(oid: ObjectIdentifier, property: PropertyIdentifier) -> bool {
         ObjectType::COLOR
         | ObjectType::COLOR_TEMPERATURE
         | ObjectType::LIGHTING_OUTPUT
-        | ObjectType::BINARY_LIGHTING_OUTPUT => property == PropertyIdentifier::TAGS,
+        | ObjectType::BINARY_LIGHTING_OUTPUT
+        | ObjectType::ANALOG_VALUE
+        | ObjectType::BINARY_VALUE
+        | ObjectType::MULTI_STATE_VALUE => property == PropertyIdentifier::TAGS,
         ObjectType::ACCESS_RIGHTS => matches!(
             property,
             PropertyIdentifier::POSITIVE_ACCESS_RULES

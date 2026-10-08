@@ -186,5 +186,8 @@ fn rows(object: &AnalogValueObject) -> Cow<'_, [PropertyMetadata]> {
             ReadOnly,
         ));
     }
+    if object.profile.metadata().next().is_some() {
+        rows.to_mut().extend(object.profile.metadata());
+    }
     rows
 }

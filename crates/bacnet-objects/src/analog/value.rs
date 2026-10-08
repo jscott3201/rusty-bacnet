@@ -3,8 +3,10 @@ use crate::common::{
     read_analog_event_properties, read_generic_event_properties, write_analog_event_properties,
     write_generic_event_properties,
 };
+use crate::object_profile::{ObjectProfile, ProfileState, TagsPersistence};
 use crate::present_value_access::PresentValueAccess;
 use crate::property_metadata::PropertyMetadata;
+use std::sync::Arc;
 
 mod metadata;
 #[cfg(test)]
@@ -16,6 +18,7 @@ mod nonfinite_tests;
 
 /// BACnet Analog Value object.
 pub struct AnalogValueObject {
+    profile: ProfileState,
     audit_policy: crate::audit::ObjectAuditPolicy,
     oid: ObjectIdentifier,
     name: String,
@@ -72,6 +75,7 @@ impl AnalogValueObject {
     ) -> Result<Self, Error> {
         let oid = ObjectIdentifier::new(ObjectType::ANALOG_VALUE, instance)?;
         Ok(Self {
+            profile: ProfileState::default(),
             audit_policy: crate::audit::ObjectAuditPolicy::default(),
             oid,
             name: name.into(),
@@ -96,6 +100,36 @@ impl AnalogValueObject {
             value_source: crate::command_source::ValueSourceTracking::default(),
             write_source: crate::command_source::SingleValueSource::default(),
         })
+    }
+
+    /// Build with application-owned Tags storage and the requested Present_Value access.
+    /// Saved Tags override configured Tags only while [`Self::set_profile`]
+    /// provisions the row. Loaded data must satisfy the shared Tags rules and
+    /// the opt-in 1 MiB snapshot limit.
+    pub fn with_tags_persistence(
+        instance: u32,
+        name: impl Into<String>,
+        units: u32,
+        access: PresentValueAccess,
+        persistence: Arc<dyn TagsPersistence>,
+    ) -> Result<Self, Error> {
+        let mut object = Self::with_access(instance, name, units, access)?;
+        object.profile = ProfileState::persistent(object.oid, persistence)?;
+        Ok(object)
+    }
+
+    /// Provision independent optional Tags, Profile_Location and Profile_Name
+    /// rows before registration, in every Present_Value access mode. Tags is
+    /// writable; the text rows are network read-only. Invalid configuration
+    /// leaves the previous profile and its attached storage unchanged.
+    pub fn set_profile(&mut self, profile: ObjectProfile) -> Result<(), Error> {
+        self.profile.provision(profile)
+    }
+
+    /// Wait for queued save attempts to finish; writes report their own outcomes.
+    /// This is not a success receipt. Unstaged synchronous writes block their caller.
+    pub fn wait_for_tag_saves(&self) {
+        self.profile.wait_for_saves();
     }
 
     /// Track the source of a noncommandable Present_Value (Clause 19.5,
@@ -226,6 +260,9 @@ impl BACnetObject for AnalogValueObject {
         if let Some(result) = source {
             return result;
         }
+        if let Some(result) = self.profile.read(property, array_index) {
+            return result;
+        }
 
         if let Some(result) = self.audit_policy.read(property, array_index) {
             return result;
@@ -350,6 +387,9 @@ impl BACnetObject for AnalogValueObject {
         if metadata::excludes(self, property) {
             return Err(common::unknown_property_error());
         }
+        if let Some(result) = self.profile.write(property, array_index, &value) {
+            return result;
+        }
         if let Some(result) = self
             .audit_policy
             .write(property, array_index, &value, priority)
@@ -446,6 +486,15 @@ impl BACnetObject for AnalogValueObject {
             property,
             array_index,
         ))
+    }
+
+    fn durable_writes_internal(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
+        self.profile.capability()
+    }
+
+    fn advance_monotonic_time_internal(&mut self, now: std::time::Duration) -> bool {
+        self.profile.expire(now);
+        false
     }
 
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {

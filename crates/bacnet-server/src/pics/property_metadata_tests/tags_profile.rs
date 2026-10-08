@@ -158,3 +158,86 @@ fn saved_tags_do_not_provision_rows_and_each_profile_row_remains_independent() {
         }
     }
 }
+
+#[test]
+fn value_profile_masks_and_saved_empty_are_independent_of_present_value_mode() {
+    use bacnet_objects::analog::AnalogValueObject;
+    use bacnet_objects::binary::BinaryValueObject;
+    use bacnet_objects::multistate::MultiStateValueObject;
+    use bacnet_objects::present_value_access::PresentValueAccess as Access;
+    for access in [Access::Commandable, Access::Writable, Access::ReadOnly] {
+        for mask in 0..8 {
+            let configured = ObjectProfile {
+                tags: (mask & 1 != 0).then(|| vec![BACnetNameValue::semantic("configured")]),
+                profile_location: (mask & 2 != 0).then(|| "https://example.com/p.xdd".into()),
+                profile_name: (mask & 4 != 0).then(|| "555-value".into()),
+            };
+            macro_rules! build {
+                ($ctor:expr) => {{
+                    let mut object = $ctor.unwrap();
+                    object.set_profile(configured.clone()).unwrap();
+                    object.set_profile(ObjectProfile::default()).unwrap();
+                    object.set_profile(configured.clone()).unwrap();
+                    Box::new(object) as Box<dyn BACnetObject>
+                }};
+            }
+            // Separate PICS per mode prevents type-level union from hiding a gap.
+            let mut db = ObjectDatabase::new();
+            for object in [
+                build!(AnalogValueObject::with_tags_persistence(
+                    1,
+                    "AV",
+                    95,
+                    access,
+                    Arc::new(SavedEmpty)
+                )),
+                build!(BinaryValueObject::with_tags_persistence(
+                    1,
+                    "BV",
+                    access,
+                    Arc::new(SavedEmpty)
+                )),
+                build!(MultiStateValueObject::with_tags_persistence(
+                    1,
+                    "MSV",
+                    3,
+                    access,
+                    Arc::new(SavedEmpty)
+                )),
+            ] {
+                for (bit, property) in
+                    [(1, P::TAGS), (2, P::PROFILE_LOCATION), (4, P::PROFILE_NAME)]
+                {
+                    assert_eq!(object.property_list().contains(&property), mask & bit != 0);
+                    let read = object.read_property(property, None);
+                    if mask & bit == 0 {
+                        assert!(
+                            matches!(read, Err(bacnet_types::error::Error::Protocol { code, .. }) if code == bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32)
+                        );
+                    } else if property == P::TAGS {
+                        assert_eq!(read.unwrap(), PropertyValue::List(vec![]));
+                    }
+                }
+                db.add(object).unwrap();
+            }
+            let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default());
+            assert_eq!(pics.supported_object_types.len(), 3);
+            for support in &pics.supported_object_types {
+                for (bit, property) in
+                    [(1, P::TAGS), (2, P::PROFILE_LOCATION), (4, P::PROFILE_NAME)]
+                {
+                    let rows: Vec<_> = support
+                        .supported_properties
+                        .iter()
+                        .filter(|row| row.property_id == property)
+                        .collect();
+                    assert_eq!(rows.len(), usize::from(mask & bit != 0));
+                    if let Some(row) = rows.first() {
+                        assert!(row.access.optional && row.access.readable);
+                        assert_eq!(row.access.writable, property == P::TAGS);
+                    }
+                }
+            }
+        }
+    }
+}

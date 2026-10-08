@@ -146,6 +146,9 @@ fn rows(object: &BinaryValueObject) -> Cow<'_, [PropertyMetadata]> {
     if object.audit_policy != crate::audit::ObjectAuditPolicy::default() {
         rows.to_mut().extend(object.audit_policy.metadata());
     }
+    if object.profile.metadata().next().is_some() {
+        rows.to_mut().extend(object.profile.metadata());
+    }
     rows
 }
 
