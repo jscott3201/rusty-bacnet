@@ -95,7 +95,13 @@ fn load_errors_and_invalid_custom_snapshots_fail_before_a_writer_runs() {
         TagsSnapshot {
             tags: Some(vec![BACnetNameValue::valued(
                 "array",
-                TagValue::Primitive(PropertyValue::List(vec![])),
+                PropertyValue::List(vec![]),
+            )]),
+        },
+        TagsSnapshot {
+            tags: Some(vec![BACnetNameValue::valued(
+                "raw",
+                PropertyValue::ApplicationData(vec![0xa4, 126, 10, 6, 2, 0xb4, 12, 30, 0, 0]),
             )]),
         },
     ] {
@@ -103,6 +109,28 @@ fn load_errors_and_invalid_custom_snapshots_fail_before_a_writer_runs() {
         assert!(ProfileState::persistent(oid(), store.clone()).is_err());
     }
     assert_eq!(store.attempts(), 0);
+}
+
+#[test]
+fn combined_datetime_is_refused_before_direct_or_staged_save() {
+    let store = Arc::new(Memory::default());
+    let mut state = state(&store);
+    let pair = vec![0x0a, 0, b'a', 0xa4, 126, 10, 6, 2, 0xb4, 12, 30, 0, 0];
+    for index in [None, Some(1)] {
+        let invalid = write(index, PropertyValue::ApplicationData(pair.clone()));
+        assert!(matches!(
+            state.stage_writes(std::slice::from_ref(&invalid)),
+            StageStep::Skip
+        ));
+        assert_code(
+            apply(&mut state, &invalid),
+            ErrorCode::INVALID_DATA_ENCODING,
+        );
+        state.wait_for_saves();
+        assert_eq!(state.profile().tags, Some(tags("configured")));
+        assert_eq!(store.saved(), None);
+        assert_eq!(store.attempts(), 0);
+    }
 }
 
 #[test]

@@ -30,6 +30,60 @@ impl Drop for FileCase {
     }
 }
 
+// Context-0 name "a", then a Date and a Time. Errata 2024-04-29 item 37
+// permits either primitive alone, but not their pair as one NameValue.
+const DATE_TIME_TAG: &[u8] = &[0x0a, 0, b'a', 0xa4, 126, 10, 6, 2, 0xb4, 12, 30, 0, 0];
+
+fn assert_pair_write_refused(index: Option<u32>) {
+    let case = FileCase::new();
+    case.store.save(oid(), &snapshot("old")).unwrap();
+    let original = std::fs::read(case.store.path()).unwrap();
+    let mut state =
+        ProfileState::persistent(oid(), std::sync::Arc::new(case.store.clone())).unwrap();
+    state.provision(profile("configured")).unwrap();
+    // A valid first tag must not publish when a later tag is invalid.
+    let bytes = if index.is_none() {
+        [&[0x0a, 0, b'b'][..], DATE_TIME_TAG].concat()
+    } else {
+        DATE_TIME_TAG.to_vec()
+    };
+    assert_code(
+        apply(
+            &mut state,
+            &write(index, PropertyValue::ApplicationData(bytes)),
+        ),
+        ErrorCode::INVALID_DATA_ENCODING,
+    );
+    state.wait_for_saves();
+    assert_eq!(state.profile().tags, Some(tags("old")));
+    assert_eq!(std::fs::read(case.store.path()).unwrap(), original);
+    assert_eq!(case.store.load(oid()).unwrap(), Some(snapshot("old")));
+}
+
+#[test]
+fn combined_datetime_whole_write_is_refused_without_replacing_file_or_served_tags() {
+    assert_pair_write_refused(None);
+}
+
+#[test]
+fn combined_datetime_indexed_write_is_refused_without_replacing_file_or_served_tags() {
+    assert_pair_write_refused(Some(1));
+}
+
+#[test]
+fn combined_datetime_file_load_is_refused_without_truncating_file() {
+    let case = FileCase::new();
+    let original = [
+        b"RBNTAG01".as_slice(),
+        &[0x0f, 0xc0, 0, 1, 1],
+        DATE_TIME_TAG,
+    ]
+    .concat();
+    std::fs::write(case.store.path(), &original).unwrap();
+    assert!(case.store.load(oid()).is_err());
+    assert_eq!(std::fs::read(case.store.path()).unwrap(), original);
+}
+
 #[test]
 fn file_snapshot_presence_identity_and_independent_bytes() {
     let case = FileCase::new();
@@ -56,33 +110,78 @@ fn file_snapshot_presence_identity_and_independent_bytes() {
 }
 
 #[test]
-fn semantic_primitive_and_datetime_tags_round_trip_without_reinterpretation() {
+fn semantic_null_date_and_time_tags_round_trip_without_reinterpretation() {
     let case = FileCase::new();
     let saved = TagsSnapshot {
         tags: Some(vec![
-            BACnetNameValue::semantic("exhaust"),
-            BACnetNameValue::valued("floor", TagValue::Primitive(PropertyValue::Unsigned(3))),
+            BACnetNameValue::semantic("a"),
+            BACnetNameValue::valued("a", PropertyValue::Null),
             BACnetNameValue::valued(
-                "when",
-                TagValue::DateTime {
-                    date: Date {
-                        year: 126,
-                        month: 10,
-                        day: 8,
-                        day_of_week: 4,
-                    },
-                    time: Time {
-                        hour: 12,
-                        minute: 34,
-                        second: 56,
-                        hundredths: 7,
-                    },
-                },
+                "a",
+                PropertyValue::Date(Date {
+                    year: 126,
+                    month: 10,
+                    day: 6,
+                    day_of_week: 2,
+                }),
+            ),
+            BACnetNameValue::valued(
+                "a",
+                PropertyValue::Time(Time {
+                    hour: 12,
+                    minute: 30,
+                    second: 0,
+                    hundredths: 0,
+                }),
             ),
         ]),
     };
     case.store.save(oid(), &saved).unwrap();
+    // Independently authored body; absent value and explicit NULL differ.
+    let expected = [
+        1, 0x0a, 0, b'a', 0x0a, 0, b'a', 0, 0x0a, 0, b'a', 0xa4, 126, 10, 6, 2, 0x0a, 0, b'a',
+        0xb4, 12, 30, 0, 0,
+    ];
+    assert_eq!(std::fs::read(case.store.path()).unwrap()[12..], expected);
+    assert_eq!(case.store.load(oid()).unwrap(), Some(saved.clone()));
+    let mut state =
+        ProfileState::persistent(oid(), std::sync::Arc::new(case.store.clone())).unwrap();
+    state.provision(profile("configured")).unwrap();
+    apply(
+        &mut state,
+        &write(None, PropertyValue::ApplicationData(expected[1..].to_vec())),
+    )
+    .unwrap();
+    assert_eq!(state.profile().tags, saved.tags);
+    // Indexed primitive Date and Time writes preserve their distinct types.
+    for (index, bytes) in [(3, &expected[8..16]), (4, &expected[16..])] {
+        apply(
+            &mut state,
+            &write(Some(index), PropertyValue::ApplicationData(bytes.to_vec())),
+        )
+        .unwrap();
+    }
     assert_eq!(case.store.load(oid()).unwrap(), Some(saved));
+}
+
+#[test]
+fn nonprimitive_file_saves_leave_existing_bytes_intact() {
+    let case = FileCase::new();
+    case.store.save(oid(), &snapshot("old")).unwrap();
+    let original = std::fs::read(case.store.path()).unwrap();
+    for value in [
+        PropertyValue::List(vec![]),
+        PropertyValue::ApplicationData(DATE_TIME_TAG.to_vec()),
+    ] {
+        let invalid = TagsSnapshot {
+            tags: Some(vec![BACnetNameValue::valued("a", value)]),
+        };
+        assert_code(
+            case.store.save(oid(), &invalid),
+            ErrorCode::INVALID_DATA_TYPE,
+        );
+        assert_eq!(std::fs::read(case.store.path()).unwrap(), original);
+    }
 }
 
 #[test]

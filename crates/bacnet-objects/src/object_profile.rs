@@ -25,7 +25,7 @@
 
 use bacnet_encoding::constructed::{decode_name_value, encode_name_value};
 use bacnet_encoding::tags::Tag;
-use bacnet_types::constructed::{BACnetNameValue, TagValue};
+use bacnet_types::constructed::BACnetNameValue;
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier as P};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
@@ -233,7 +233,7 @@ fn check_tags(tags: &[BACnetNameValue]) -> Result<(), Error> {
 
 /// Annex Y.1.4 keeps semicolons out of tag names, so names can be joined.
 fn check_tag(tag: &BACnetNameValue) -> Result<(), Error> {
-    if let Some(TagValue::Primitive(value)) = &tag.value {
+    if let Some(value) = &tag.value {
         if !value.is_primitive() {
             return Err(common::invalid_data_type_error());
         }

@@ -1,10 +1,10 @@
 //! BACnetNameValue (Clause 21, #1553): the name as a CharacterString under
 //! primitive context tag 0 (`09`..`0D`, a UTF-8 charset octet first), then an
-//! optional application-tagged primitive or a BACnetDateTime (application
-//! Date `A4`, then Time `B4`). The vectors are worked by hand from Clause 20.2,
-//! not produced by the codec.
+//! optional application-tagged primitive. Date and Time are separate choices
+//! under errata 2024-04-29 item 37. Vectors are worked by hand from Clause
+//! 20.2, not produced by the codec.
 use crate::constructed::{decode_name_value, encode_name_value};
-use bacnet_types::constructed::{BACnetNameValue, TagValue};
+use bacnet_types::constructed::BACnetNameValue;
 use bacnet_types::enums::ObjectType;
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, Time};
 use bytes::BytesMut;
@@ -26,7 +26,7 @@ const TIME: Time = Time {
 };
 
 fn valued(name: &str, value: PropertyValue) -> BACnetNameValue {
-    BACnetNameValue::valued(name, TagValue::Primitive(value))
+    BACnetNameValue::valued(name, value)
 }
 
 fn vectors() -> Vec<(BACnetNameValue, Vec<u8>)> {
@@ -44,17 +44,8 @@ fn vectors() -> Vec<(BACnetNameValue, Vec<u8>)> {
             vec![0x0C, 0x00, 0x66, 0x61, 0x6E, 0x44, 0x44, 0x80, 0xC0, 0x00],
         ),
         (
-            BACnetNameValue::valued(
-                "due",
-                TagValue::DateTime {
-                    date: DATE,
-                    time: TIME,
-                },
-            ),
-            vec![
-                0x0C, 0x00, 0x64, 0x75, 0x65, 0xA4, 0x7E, 0x0A, 0x06, 0x02, 0xB4, 0x0C, 0x1E, 0x00,
-                0x00,
-            ],
+            valued("a", PropertyValue::Time(TIME)),
+            vec![0x0A, 0x00, 0x61, 0xB4, 0x0C, 0x1E, 0x00, 0x00],
         ),
         // A Date with no Time after it is a Date.
         (
@@ -125,7 +116,7 @@ fn name_value_elements_decode_back_to_back() {
 
 #[test]
 fn name_value_refuses_malformed_octets_without_panicking() {
-    let malformed: [&[u8]; 11] = [
+    let malformed: [&[u8]; 13] = [
         &[],
         // The name as an application CharacterString, or a constructed [0].
         &[0x72, 0x00, 0x61],
@@ -142,7 +133,11 @@ fn name_value_refuses_malformed_octets_without_panicking() {
         &[0x0A, 0x00, 0x61, 0x43, 0x44, 0x80, 0xC0],
         // Application tag 13 is reserved.
         &[0x0A, 0x00, 0x61, 0xD1, 0x00],
-        // A BACnetDateTime whose Time runs past the data.
+        // A Date followed by a second primitive, complete or truncated.
+        &[
+            0x0A, 0x00, 0x61, 0xA4, 0x7E, 0x0A, 0x06, 0x02, 0xB4, 12, 30, 0, 0,
+        ],
+        &[0x0A, 0x00, 0x61, 0x21, 1, 0x00],
         &[0x0A, 0x00, 0x61, 0xA4, 0x7E, 0x0A, 0x06, 0x02, 0xB4, 0x0C],
     ];
     for octets in malformed {

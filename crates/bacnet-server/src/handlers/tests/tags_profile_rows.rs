@@ -12,7 +12,7 @@ use bacnet_objects::color::ColorObject;
 use bacnet_objects::lighting::BinaryLightingOutputObject;
 use bacnet_objects::object_profile::ObjectProfile;
 use bacnet_objects::object_profile::{TagsPersistence, TagsSnapshot};
-use bacnet_types::constructed::{BACnetNameValue, TagValue};
+use bacnet_types::constructed::BACnetNameValue;
 use std::sync::{Arc, Mutex};
 
 const TAGS: PropertyIdentifier = PropertyIdentifier::TAGS;
@@ -27,7 +27,7 @@ fn provisioned_color() -> (ObjectDatabase, ObjectIdentifier) {
         .set_profile(ObjectProfile {
             tags: Some(vec![
                 BACnetNameValue::semantic("exhaust"),
-                BACnetNameValue::valued("floor", TagValue::Primitive(PropertyValue::Unsigned(3))),
+                BACnetNameValue::valued("floor", PropertyValue::Unsigned(3)),
             ]),
             profile_location: Some(LOCATION.into()),
             profile_name: Some(NAME.into()),

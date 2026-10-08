@@ -7255,8 +7255,11 @@ The rows go in table order: on the colour objects after Value_Source and the
 audit rows; on a Lighting Output between its colour links and its trims.
 
 - `Tags` is a BACnetARRAY of `bacnet_types::constructed::BACnetNameValue`, a
-  name with an optional `TagValue` (a primitive or a date and time), whose codec
+  name with an optional primitive `PropertyValue`, whose codec
   is `bacnet_encoding::constructed::{encode_name_value, decode_name_value}`.
+  The 2024-04-29 errata restricts each value to one primitive: Date and Time
+  are allowed separately, but their pair is refused. `None` is a semantic tag;
+  `Some(PropertyValue::Null)` is a valued tag.
   Reads return each element as `PropertyValue::ApplicationData`. Peers write it
   whole, one element by index, or its size at index 0, which truncates or
   appends empty semantic tags (Clause 12.1.5.1); an index past the end is

@@ -17,7 +17,7 @@ use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_services::wpm::WriteAccessSpecification;
 use bacnet_services::write_property::WritePropertyRequest;
-use bacnet_types::constructed::{BACnetNameValue, TagValue};
+use bacnet_types::constructed::BACnetNameValue;
 use std::sync::atomic::Ordering;
 
 type Storage = HeldStorage<TagsSnapshot>;
@@ -32,6 +32,8 @@ const KINDS: [ObjectType; 4] = [
 const EXHAUST: &[u8] = &[0x0d, 8, 0, b'e', b'x', b'h', b'a', b'u', b's', b't'];
 const FLOOR: &[u8] = &[0x0d, 6, 0, b'f', b'l', b'o', b'o', b'r', 0x21, 3];
 const EMPTY_TAG: &[u8] = &[0x09, 0];
+const DATE_TAG: &[u8] = &[0x0a, 0, b'a', 0xa4, 126, 10, 6, 2];
+const TIME_TAG: &[u8] = &[0x0a, 0, b'a', 0xb4, 12, 30, 0, 0];
 
 impl TagsPersistence for Storage {
     fn load(&self, _: ObjectIdentifier) -> Result<Option<TagsSnapshot>, Error> {
@@ -133,6 +135,8 @@ async fn all_four_whole_resize_and_element_writes_survive_reconstruction() {
             (None, FLOOR.to_vec(), FLOOR.to_vec()),
             (Some(0), vec![0x21, 2], [EXHAUST, EMPTY_TAG].concat()),
             (Some(1), FLOOR.to_vec(), FLOOR.to_vec()),
+            (None, DATE_TAG.to_vec(), DATE_TAG.to_vec()),
+            (Some(1), TIME_TAG.to_vec(), TIME_TAG.to_vec()),
             (None, vec![], vec![]),
         ] {
             let storage = Arc::new(Storage::default());
@@ -165,6 +169,32 @@ async fn all_four_whole_resize_and_element_writes_survive_reconstruction() {
                     }
                 ]
             );
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn all_four_combined_datetime_wire_writes_leave_served_and_saved_tags_unchanged() {
+    let pair = [DATE_TAG, &TIME_TAG[3..]].concat();
+    for kind in KINDS {
+        let storage = Arc::new(Storage::default());
+        let saved = TagsSnapshot {
+            tags: Some(vec![BACnetNameValue::semantic("exhaust")]),
+        };
+        *storage.saved.lock().unwrap() = Some(saved.clone());
+        let (fixture, oid) = served_by(kind, &storage).await;
+        for (index, input) in [(None, [FLOOR, &pair].concat()), (Some(1), pair.clone())] {
+            let response = wire(
+                &fixture,
+                ConfirmedServiceChoice::WRITE_PROPERTY,
+                request(oid, index, &input),
+            )
+            .await;
+            // Error, invoke 5, WriteProperty: PROPERTY / INVALID_DATA_ENCODING.
+            assert_eq!(response, [0x50, 5, 15, 0x91, 2, 0x91, 142]);
+            assert_eq!(read_wire(&fixture, oid, None).await, EXHAUST);
+            assert_eq!(storage.load_saved(), Some(saved.clone()));
+            assert_eq!(storage.saves.load(Ordering::SeqCst), 0);
         }
     }
 }
@@ -329,7 +359,7 @@ async fn all_four_stop_cancels_held_write_and_waits_for_successful_correction() 
         let served = TagsSnapshot {
             tags: Some(vec![BACnetNameValue::valued(
                 "floor",
-                TagValue::Primitive(PropertyValue::Unsigned(3)),
+                PropertyValue::Unsigned(3),
             )]),
         };
         *storage.saved.lock().unwrap() = Some(served.clone());
