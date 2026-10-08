@@ -4329,6 +4329,7 @@ tokio::spawn(async move {
 let drops = sc_client.transport().npdu_drop_counts();
 
 // B/IP (bip_builder): counter snapshots to poll, and the BBMD state if any.
+let outgoing = bip_client.transport().bvlc_client_snapshot();
 let management = bip_client.transport().management_counters();
 let fanout = bip_client.transport().fanout_counters();
 let fdt = bip_client.transport().fdt_counters(); // None unless a BBMD
@@ -4353,6 +4354,67 @@ BBMD (ACKs sent, registrations admitted, broadcasts forwarded). A client from
 `bip_builder()` is never a BBMD, so its counters stay at zero; a client built
 with `generic_builder()` over a BBMD-mode `BipTransport` reports live values.
 
+`bvlc_client_snapshot()` instead describes this transport's own outgoing
+Read-BDT, Write-BDT, Read-FDT, Delete-FDT and Register-FD exchanges, including
+automatic registration. Each function reports successful local UDP sends,
+valid matched ACKs, matched result counts and the latest result code, response
+timeouts, local errors, malformed replies, and calls refused because the
+single management slot was busy. Sending a datagram is not a BBMD receipt.
+The snapshot uses fixed-size counters and a short synchronous lock; polling it
+does not send traffic. Totals belong to this transport instance and survive
+stop/start; last-result fields clear. BBMD-side counters keep their existing meanings.
+
+Response matching checks the peer address and the operation. Read requests
+accept their typed ACK or their own NAK; requests answered by a Result accept
+success or that operation's NAK. Unknown codes and unrelated results remain
+visible as unclassified observations and do not complete a request. Malformed
+Results leave it pending. A malformed typed ACK returns the payload decode
+error and does not count as a successful ACK. BVLC has no transaction ID, so
+a delayed same-peer, same-kind response can still be confused with a later
+attempt. These counters describe local correlations, not certain attribution
+after a timeout. Encoding/send errors, cancellation and stop release the
+pending slot without inventing a timeout.
+
+The Rust B/IP client builder can configure automatic foreign-device mode:
+
+```rust
+use bacnet_client::client::BACnetClient;
+use bacnet_transport::bip::ForeignDeviceConfig;
+use std::{net::Ipv4Addr, time::Duration};
+
+let client = BACnetClient::bip_builder()
+    .port(0)
+    .foreign_device(ForeignDeviceConfig {
+        bbmd_ip: Ipv4Addr::new(192, 0, 2, 10),
+        bbmd_port: 47808,
+        ttl: 60,
+        renewal_interval: Some(Duration::from_secs(20)),
+    })
+    .build().await?;
+let registration = client.transport().bvlc_client_snapshot().foreign_registration;
+```
+
+Add `renewal_interval: None` to existing `ForeignDeviceConfig` literals to use
+the default of half the advertised TTL, including 500 ms for TTL 1. Automatic
+mode requires a positive TTL and a positive interval shorter than that TTL;
+invalid settings fail before transport I/O. The requested TTL stays unchanged
+on the wire. The automatic worker waits at most the smaller of the interval
+and three seconds for each result, then schedules another attempt; busy manual
+requests cause a locally counted busy refusal and a retry on the next interval.
+There is no catch-up burst after a delayed attempt. One-shot
+`register_foreign_device_bvlc` calls retain their three-second response wait
+and permit zero-TTL requests; they do not switch broadcast mode.
+
+`build()` means the client is running locally. Poll `last_outcome` for a
+matched acceptance or refusal; a send failure or timeout leaves the remote
+outcome unknown. A registration NAK rejects that attempt and does not prove
+an earlier accepted entry disappeared. The `next_attempt_in` countdown is the
+worker's scheduled attempt, not a remote lease expiry. Annex J.5.2's BBMD
+expiry includes its grace period; the earlier local renewal is a scheduling
+choice. Last-attempt status and countdown clear on stop/restart while totals
+remain. Foreign-mode broadcasts use DBTN toward the configured BBMD even
+before acceptance or after a rejected attempt.
+
 The BBMD helpers (`read_bdt`, `write_bdt`, `read_fdt`, `delete_fdt_entry`,
 `register_foreign_device_bvlc`) work on any client whose transport implements
 `AsBip`: a client over `BipTransport`, or one over `AnyTransport` whose variant
@@ -4367,7 +4429,7 @@ let client = BACnetClient::generic_builder()
     .build()
     .await?;
 let bdt = client.read_bdt(&bbmd_mac).await?;
-let counters = client.transport().as_bip()?.management_counters();
+let counters = client.transport().as_bip()?.bvlc_client_snapshot();
 ```
 
 ### Routed Confirmed-Request Limits

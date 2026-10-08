@@ -99,17 +99,17 @@ async fn pending_bvlc_response_requires_sender_and_expected_function() {
         None,
     ));
     let (npdu_tx, _npdu_rx) = mpsc::channel(1);
-    let pending_bvlc_response = Arc::new(Mutex::new(None));
-    let (tx, mut rx) = oneshot::channel();
-
-    {
-        let mut slot = pending_bvlc_response.lock().await;
-        *slot = Some(PendingBvlcResponse {
-            target: ([127, 0, 0, 1], 47808),
-            expected: BvlcResponseKind::ReadBroadcastDistributionTableAck,
-            tx,
-        });
-    }
+    let management = Arc::new(client_management::ManagementClient::default());
+    management.start();
+    let (guard, mut rx) = management
+        .begin(
+            ([127, 0, 0, 1], 47808),
+            BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE,
+            BvlcResponseKind::ReadBroadcastDistributionTableAck,
+            None,
+        )
+        .unwrap();
+    guard.sent(Duration::from_secs(3));
 
     let ctx = RecvContext {
         local_mac: [0; 6],
@@ -118,7 +118,7 @@ async fn pending_bvlc_response_requires_sender_and_expected_function() {
         bbmd: None,
         broadcast_addr: Ipv4Addr::BROADCAST,
         broadcast_port: 47808,
-        pending_bvlc_response: pending_bvlc_response.clone(),
+        client_management: management.clone(),
         management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
         fanout: None,
         force_dbtn_forward_failure: false,
@@ -127,12 +127,10 @@ async fn pending_bvlc_response_requires_sender_and_expected_function() {
 
     let result = test_bvll_message(BvlcFunction::BVLC_RESULT, &[0x00, 0x00]);
     handle_bvll_message(&result, ([127, 0, 0, 2], 47808), Delivery::Unicast, &ctx).await;
-    assert!(pending_bvlc_response.lock().await.is_some());
     assert!(rx.try_recv().is_err());
 
     let wrong_ack = test_bvll_message(BvlcFunction::READ_FOREIGN_DEVICE_TABLE_ACK, &[]);
     handle_bvll_message(&wrong_ack, ([127, 0, 0, 1], 47808), Delivery::Unicast, &ctx).await;
-    assert!(pending_bvlc_response.lock().await.is_some());
     assert!(rx.try_recv().is_err());
 
     let expected_ack = test_bvll_message(BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE_ACK, &[]);
@@ -143,7 +141,7 @@ async fn pending_bvlc_response_requires_sender_and_expected_function() {
         &ctx,
     )
     .await;
-    assert!(pending_bvlc_response.lock().await.is_none());
+    assert_eq!(management.snapshot().read_bdt.acknowledgements, 1);
     assert_eq!(
         rx.await.unwrap().function,
         BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE_ACK
@@ -205,6 +203,7 @@ async fn bbmd_register_foreign_device() {
     fd_transport.register_as_foreign_device(ForeignDeviceConfig {
         bbmd_ip: Ipv4Addr::from(bbmd_ip),
         bbmd_port,
+        renewal_interval: None,
         ttl: 60,
     });
     let _fd_rx = fd_transport.start().await.unwrap();
@@ -270,6 +269,7 @@ async fn read_fdt_from_bbmd() {
     fd_transport.register_as_foreign_device(ForeignDeviceConfig {
         bbmd_ip: Ipv4Addr::from(bbmd_ip),
         bbmd_port,
+        renewal_interval: None,
         ttl: 120,
     });
     let _fd_rx = fd_transport.start().await.unwrap();
@@ -682,6 +682,7 @@ async fn foreign_device_broadcast_via_bbmd() {
     fd_transport.register_as_foreign_device(ForeignDeviceConfig {
         bbmd_ip: Ipv4Addr::from(bbmd_ip),
         bbmd_port,
+        renewal_interval: None,
         ttl: 60,
     });
     let _fd_rx = fd_transport.start().await.unwrap();
@@ -755,17 +756,17 @@ async fn bvlc_request_rejects_concurrent_calls() {
     let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     let _rx = transport.start().await.unwrap();
 
-    // Manually install a pending sender to simulate an in-flight request
-    {
-        let (tx, _rx) = oneshot::channel();
-        let (ip, port) = decode_bip_mac(transport.local_mac()).unwrap();
-        let mut slot = transport.pending_bvlc_response.lock().await;
-        *slot = Some(PendingBvlcResponse {
-            target: (ip, port),
-            expected: BvlcResponseKind::ReadBroadcastDistributionTableAck,
-            tx,
-        });
-    }
+    // Admit and retain the first request to exercise the shared slot owner.
+    let target = decode_bip_mac(transport.local_mac()).unwrap();
+    let (_guard, _rx) = transport
+        .client_management
+        .begin(
+            target,
+            BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE,
+            BvlcResponseKind::ReadBroadcastDistributionTableAck,
+            None,
+        )
+        .unwrap();
 
     // A second request should fail immediately
     let fake_target = transport.local_mac().to_vec();

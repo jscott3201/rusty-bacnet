@@ -173,6 +173,7 @@ async fn a_bbmd_and_a_foreign_device_share_a_port_on_two_addresses() {
             t.register_as_foreign_device(ForeignDeviceConfig {
                 bbmd_ip,
                 bbmd_port: port,
+                renewal_interval: None,
                 ttl: 60,
             });
         }

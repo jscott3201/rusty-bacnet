@@ -53,6 +53,7 @@ pub async fn run(duration_secs: u64, steps: &[u64]) -> Vec<DegradationPoint> {
             fd.register_as_foreign_device(ForeignDeviceConfig {
                 bbmd_ip: Ipv4Addr::from(bbmd_ip),
                 bbmd_port,
+                renewal_interval: None,
                 ttl: 600,
             });
             match fd.start().await {

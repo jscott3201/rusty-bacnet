@@ -31,7 +31,7 @@ use bacnet_encoding::npdu::{encode_npdu, Npdu, NpduAddress};
 use bacnet_endpoint_core::coordinator::{CanonicalPeer, OutboundTransactionCoordinator};
 use bacnet_network::layer::NetworkLayer;
 use bacnet_services::cov::COVNotificationRequest;
-use bacnet_transport::bip::BipTransport;
+use bacnet_transport::bip::{BipTransport, ForeignDeviceConfig};
 #[cfg(feature = "ipv6")]
 use bacnet_transport::bip6::Bip6Transport;
 use bacnet_transport::port::{TransportPort, TransportProvenance};
@@ -280,9 +280,38 @@ impl<T: TransportPort + 'static> ClientBuilder<T> {
 pub struct BipClientBuilder {
     config: ClientConfig,
     options: ClientOptions,
+    foreign_device: Option<ForeignDeviceConfig>,
 }
 
 impl BipClientBuilder {
+    /// Enable automatic foreign-device registration and DBTN broadcasts to
+    /// this BBMD. `build()` starts locally; it does not wait for BBMD acceptance.
+    /// Poll `client.transport().bvlc_client_snapshot()` for matched outcomes.
+    /// Invalid TTL/renewal settings fail before transport I/O.
+    ///
+    /// ```no_run
+    /// use bacnet_client::client::BACnetClient;
+    /// use bacnet_transport::bip::ForeignDeviceConfig;
+    /// use std::{net::Ipv4Addr, time::Duration};
+    /// # async fn example() -> Result<(), bacnet_types::error::Error> {
+    /// let mut client = BACnetClient::bip_builder()
+    ///     .port(0)
+    ///     .foreign_device(ForeignDeviceConfig {
+    ///         bbmd_ip: Ipv4Addr::new(192, 0, 2, 10), bbmd_port: 47808,
+    ///         ttl: 60, renewal_interval: Some(Duration::from_secs(20)),
+    ///     })
+    ///     .build().await?;
+    /// let observed = client.transport().bvlc_client_snapshot();
+    /// // A successful local start alone does not establish registration.
+    /// let last_attempt = observed.foreign_registration.last_outcome;
+    /// client.stop().await?;
+    /// # Ok(()) }
+    /// ```
+    pub fn foreign_device(mut self, config: ForeignDeviceConfig) -> Self {
+        self.foreign_device = Some(config);
+        self
+    }
+
     /// Set the local interface IP.
     pub fn interface(mut self, ip: Ipv4Addr) -> Self {
         self.config.interface = ip;
@@ -336,6 +365,9 @@ impl BipClientBuilder {
         let mut transport =
             BipTransport::new(config.interface, config.port, config.broadcast_address);
         transport.set_share_port_by_address(config.share_port_by_address);
+        if let Some(foreign) = self.foreign_device {
+            transport.register_as_foreign_device(foreign);
+        }
         BACnetClient::start_with_options(self.config, transport, self.options).await
     }
 }
@@ -526,6 +558,7 @@ impl BACnetClient<BipTransport> {
         BipClientBuilder {
             config: ClientConfig::default(),
             options: ClientOptions::default(),
+            foreign_device: None,
         }
     }
 }

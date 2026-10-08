@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use bytes::BytesMut;
 use tokio::net::UdpSocket;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
 use bacnet_types::enums::{BvlcFunction, BvlcResultCode};
@@ -13,30 +13,10 @@ use crate::bbmd::{self, BbmdState};
 use crate::bvll::{self, encode_bip_mac, encode_bvll, encode_bvll_forwarded};
 use crate::port::{ReceivedNpdu, TransportProvenance};
 
+use super::decode_bvlc_result_code;
 use super::fanout::FanoutDispatcher;
 use super::ingress::Delivery;
 use super::rate_limit::{is_covered_management_request, ManagementRateLimiter};
-use super::{decode_bvlc_result_code, PendingBvlcResponse};
-
-/// Ask the BBMD at `bbmd_addr` to register us as a foreign device
-/// (Register-Foreign-Device).
-pub(super) async fn send_register_foreign_device(
-    socket: &UdpSocket,
-    bbmd_addr: SocketAddrV4,
-    ttl: u16,
-) {
-    let payload = ttl.to_be_bytes().to_vec();
-    let mut buf = BytesMut::with_capacity(6);
-    if let Err(e) = encode_bvll(&mut buf, BvlcFunction::REGISTER_FOREIGN_DEVICE, &payload) {
-        warn!(error = %e, "Failed to encode Register-Foreign-Device");
-        return;
-    }
-    if let Err(e) = socket.send_to(&buf, bbmd_addr).await {
-        warn!(error = %e, "Failed to send Register-Foreign-Device");
-    } else {
-        debug!(bbmd = %bbmd_addr, ttl = ttl, "Sent Register-Foreign-Device");
-    }
-}
 
 /// Context for the BIP receive loop — holds all shared state needed to
 /// process incoming BVLL messages.
@@ -47,7 +27,7 @@ pub(super) struct RecvContext {
     pub(super) bbmd: Option<Arc<std::sync::Mutex<BbmdState>>>,
     pub(super) broadcast_addr: Ipv4Addr,
     pub(super) broadcast_port: u16,
-    pub(super) pending_bvlc_response: Arc<Mutex<Option<PendingBvlcResponse>>>,
+    pub(super) client_management: Arc<super::client_management::ManagementClient>,
     pub(super) management_limiter: Arc<std::sync::Mutex<ManagementRateLimiter>>,
     pub(super) fanout: Option<FanoutDispatcher>,
     /// Refuses a UDP source (#1504) or a Forwarded-NPDU origin (#1493)
@@ -57,22 +37,12 @@ pub(super) struct RecvContext {
     pub(super) force_dbtn_forward_failure: bool,
 }
 
-async fn complete_pending_bvlc_response(
+fn complete_pending_bvlc_response(
     msg: &bvll::BvllMessage,
     sender: ([u8; 4], u16),
     ctx: &RecvContext,
 ) -> bool {
-    let mut slot = ctx.pending_bvlc_response.lock().await;
-    if slot
-        .as_ref()
-        .is_some_and(|pending| pending.matches(sender, msg.function))
-    {
-        let pending = slot.take().expect("pending response exists");
-        let _ = pending.tx.send(msg.clone());
-        true
-    } else {
-        false
-    }
+    ctx.client_management.complete(msg, sender)
 }
 
 /// Handle a decoded BVLL message in the recv loop. `delivery` says how its
@@ -564,24 +534,10 @@ pub(super) async fn handle_bvll_message(
         }
 
         f if f == BvlcFunction::BVLC_RESULT => {
-            if !complete_pending_bvlc_response(msg, sender, ctx).await {
+            if !complete_pending_bvlc_response(msg, sender, ctx) {
                 match decode_bvlc_result_code(msg) {
-                    Ok(BvlcResultCode::SUCCESSFUL_COMPLETION) => {
-                        debug!("Received BVLC-Result: successful");
-                    }
-                    Ok(BvlcResultCode::REGISTER_FOREIGN_DEVICE_NAK) => {
-                        tracing::error!(
-                            "BVLC-Result NAK: foreign device registration rejected by BBMD"
-                        );
-                    }
-                    Ok(BvlcResultCode::DISTRIBUTE_BROADCAST_TO_NETWORK_NAK) => {
-                        tracing::error!(
-                            "BVLC-Result NAK: broadcast distribution rejected - \
-                             foreign device registration may have failed or expired"
-                        );
-                    }
                     Ok(code) => {
-                        warn!(code = ?code, "Received BVLC-Result NAK");
+                        debug!(code = ?code, "Received unmatched BVLC-Result");
                     }
                     Err(err) => {
                         warn!(error = %err, "Received malformed BVLC-Result");
@@ -591,13 +547,13 @@ pub(super) async fn handle_bvll_message(
         }
 
         f if f == BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE_ACK => {
-            if !complete_pending_bvlc_response(msg, sender, ctx).await {
+            if !complete_pending_bvlc_response(msg, sender, ctx) {
                 debug!("Received Read-BDT-ACK with no pending request");
             }
         }
 
         f if f == BvlcFunction::READ_FOREIGN_DEVICE_TABLE_ACK => {
-            if !complete_pending_bvlc_response(msg, sender, ctx).await {
+            if !complete_pending_bvlc_response(msg, sender, ctx) {
                 debug!("Received Read-FDT-ACK with no pending request");
             }
         }

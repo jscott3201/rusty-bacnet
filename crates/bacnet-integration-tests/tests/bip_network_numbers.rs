@@ -18,6 +18,7 @@ async fn foreign(gates: Option<std::sync::Arc<Gates>>) -> (Server, SocketAddrV4,
     transport.register_as_foreign_device(ForeignDeviceConfig {
         bbmd_ip: Ipv4Addr::LOCALHOST,
         bbmd_port: address(&bbmd).port(),
+        renewal_interval: None,
         ttl: 60,
     });
     let (server, local) = start(transport, gates).await;

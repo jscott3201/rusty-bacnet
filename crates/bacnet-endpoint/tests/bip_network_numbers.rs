@@ -22,6 +22,7 @@ async fn foreign() -> (Endpoint, SocketAddrV4, UdpSocket) {
             .register_as_foreign_device(ForeignDeviceConfig {
                 bbmd_ip: Ipv4Addr::LOCALHOST,
                 bbmd_port: address(&bbmd).port(),
+                renewal_interval: None,
                 ttl: 60,
             }),
     )

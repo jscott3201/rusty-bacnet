@@ -482,7 +482,7 @@ async fn dbtn_delivers_local_subnet_broadcast_under_tight_fanout_budget() {
         bbmd: Some(Arc::new(std::sync::Mutex::new(state))),
         broadcast_addr: Ipv4Addr::LOCALHOST,
         broadcast_port: local_broadcast_port,
-        pending_bvlc_response: Arc::new(Mutex::new(None)),
+        client_management: Arc::default(),
         management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
         fanout: Some(fanout_dispatcher),
         force_dbtn_forward_failure: false,

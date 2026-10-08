@@ -32,6 +32,7 @@ fn bip_builder_applies_bbmd_controls_concretely() {
         .register_as_foreign_device(ForeignDeviceConfig {
             bbmd_ip: Ipv4Addr::LOCALHOST,
             bbmd_port: 47808,
+            renewal_interval: None,
             ttl: 60,
         });
     // Concrete transport builds without generic erasure; BBMD config is
