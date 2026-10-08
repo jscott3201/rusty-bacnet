@@ -8,12 +8,14 @@ use super::mutation_list_wire_tests::wire;
 use super::mutation_tests::{apdu, wpm, Fixture};
 use super::*;
 use crate::server::test_transport::TestTransport;
-use bacnet_objects::analog::{AnalogInputObject, AnalogValueObject};
-use bacnet_objects::binary::{BinaryInputObject, BinaryValueObject};
+use bacnet_objects::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
+use bacnet_objects::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
 use bacnet_objects::color::{ColorObject, ColorTemperatureObject};
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::lighting::{BinaryLightingOutputObject, LightingOutputObject};
-use bacnet_objects::multistate::{MultiStateInputObject, MultiStateValueObject};
+use bacnet_objects::multistate::{
+    MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject,
+};
 use bacnet_objects::object_profile::{ObjectProfile, TagsPersistence, TagsSnapshot};
 use bacnet_objects::present_value_access::PresentValueAccess as Access;
 use bacnet_objects::traits::BACnetObject;
@@ -24,7 +26,17 @@ use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::constructed::BACnetNameValue;
 use std::sync::atomic::Ordering;
 
-type Storage = HeldStorage<TagsSnapshot>;
+#[derive(Default)]
+struct Storage {
+    inner: HeldStorage<TagsSnapshot>,
+    attempts: std::sync::atomic::AtomicUsize,
+}
+impl std::ops::Deref for Storage {
+    type Target = HeldStorage<TagsSnapshot>;
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
 const TAGS: PropertyIdentifier = PropertyIdentifier::TAGS;
 #[derive(Clone, Copy, Debug)]
 struct Case {
@@ -35,13 +47,21 @@ const fn case(kind: ObjectType, access: Access) -> Case {
     Case { kind, access }
 }
 const COLOR: Case = case(ObjectType::COLOR, Access::Commandable);
-// `access` is used only by the Value constructors; Inputs retain their OOS contract.
+// `access` is used only by Values; Inputs retain OOS and Outputs command ownership.
 const INPUTS: [Case; 3] = [
     case(ObjectType::ANALOG_INPUT, Access::ReadOnly),
     case(ObjectType::BINARY_INPUT, Access::ReadOnly),
     case(ObjectType::MULTI_STATE_INPUT, Access::ReadOnly),
 ];
-const KINDS: [Case; 16] = [
+const OUTPUTS: [Case; 3] = [
+    case(ObjectType::ANALOG_OUTPUT, Access::Commandable),
+    case(ObjectType::BINARY_OUTPUT, Access::Commandable),
+    case(ObjectType::MULTI_STATE_OUTPUT, Access::Commandable),
+];
+const KINDS: [Case; 19] = [
+    OUTPUTS[0],
+    OUTPUTS[1],
+    OUTPUTS[2],
     INPUTS[0],
     INPUTS[1],
     INPUTS[2],
@@ -71,6 +91,7 @@ impl TagsPersistence for Storage {
         Ok(self.load_saved())
     }
     fn save(&self, _: ObjectIdentifier, snapshot: &TagsSnapshot) -> Result<(), Error> {
+        self.attempts.fetch_add(1, Ordering::SeqCst);
         self.store(snapshot)
     }
 }
@@ -95,6 +116,9 @@ fn object(kind: Case, storage: &Arc<Storage>) -> Box<dyn BACnetObject> {
         }};
     }
     match kind.kind {
+        ObjectType::ANALOG_OUTPUT => build!(AnalogOutputObject, 95),
+        ObjectType::BINARY_OUTPUT => build!(BinaryOutputObject),
+        ObjectType::MULTI_STATE_OUTPUT => build!(MultiStateOutputObject, 3),
         ObjectType::ANALOG_INPUT => build!(AnalogInputObject, 95),
         ObjectType::BINARY_INPUT => build!(BinaryInputObject),
         ObjectType::MULTI_STATE_INPUT => build!(MultiStateInputObject, 3),
@@ -540,3 +564,5 @@ async fn input_tags_save_while_out_of_service_without_persisting_simulation_stat
         assert_eq!(storage.saves.load(Ordering::SeqCst), 1);
     }
 }
+
+mod output_commands;

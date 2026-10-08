@@ -1,6 +1,8 @@
 use super::*;
 use crate::event::CommandFailureDetector;
+use crate::object_profile::{ObjectProfile, ProfileState, TagsPersistence};
 use crate::property_metadata::PropertyMetadata;
+use std::sync::Arc;
 
 mod metadata;
 
@@ -13,6 +15,7 @@ mod metadata;
 /// Commandable multi-state output with 16-level priority array.
 /// Present_Value is Unsigned, range 1..=number_of_states.
 pub struct MultiStateOutputObject {
+    profile: ProfileState,
     oid: ObjectIdentifier,
     name: String,
     description: String,
@@ -47,6 +50,7 @@ impl MultiStateOutputObject {
         let oid = ObjectIdentifier::new(ObjectType::MULTI_STATE_OUTPUT, instance)?;
         require_nonzero_states(number_of_states)?;
         Ok(Self {
+            profile: ProfileState::default(),
             oid,
             name: name.into(),
             description: String::new(),
@@ -69,6 +73,34 @@ impl MultiStateOutputObject {
             event_history: EventHistory::default(),
             value_source: crate::command_source::ValueSourceTracking::default(),
         })
+    }
+
+    /// Build with application-owned Tags storage. Saved Tags override configured
+    /// Tags only while [`Self::set_profile`] provisions the row. Loaded data must
+    /// satisfy the shared Tags rules and opt-in 1 MiB snapshot limit.
+    pub fn with_tags_persistence(
+        instance: u32,
+        name: impl Into<String>,
+        number_of_states: u32,
+        persistence: Arc<dyn TagsPersistence>,
+    ) -> Result<Self, Error> {
+        let mut object = Self::new(instance, name, number_of_states)?;
+        object.profile = ProfileState::persistent(object.oid, persistence)?;
+        Ok(object)
+    }
+
+    /// Provision independent optional Tags, Profile_Location and Profile_Name
+    /// rows before registration. Tags is writable independently of commands and
+    /// Out_Of_Service; the text rows are network read-only. Invalid configuration
+    /// leaves the previous profile and its attached storage unchanged.
+    pub fn set_profile(&mut self, profile: ObjectProfile) -> Result<(), Error> {
+        self.profile.provision(profile)
+    }
+
+    /// Wait for queued save attempts to finish; writes report their own outcomes.
+    /// This is not a success receipt. Unstaged synchronous writes block their caller.
+    pub fn wait_for_tag_saves(&self) {
+        self.profile.wait_for_saves();
     }
 
     /// Set the description string.
@@ -231,6 +263,9 @@ impl BACnetObject for MultiStateOutputObject {
             return result;
         }
         if let Some(result) = self.event_history.read(property, array_index) {
+            return result;
+        }
+        if let Some(result) = self.profile.read(property, array_index) {
             return result;
         }
         match property {
@@ -437,11 +472,23 @@ impl BACnetObject for MultiStateOutputObject {
             }
             return Err(common::invalid_data_type_error());
         }
+        if let Some(result) = self.profile.write(property, array_index, &value) {
+            return result;
+        }
         Err(crate::common::unhandled_write_error(
             self.property_metadata().as_ref(),
             property,
             array_index,
         ))
+    }
+
+    fn durable_writes_internal(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
+        self.profile.capability()
+    }
+
+    fn advance_monotonic_time_internal(&mut self, now: std::time::Duration) -> bool {
+        self.profile.expire(now);
+        false
     }
 
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
@@ -496,322 +543,8 @@ impl BACnetObject for MultiStateOutputObject {
 }
 
 #[cfg(test)]
-mod command_failure_tests {
-    use super::*;
-    use bacnet_types::enums::{EventState, EventType};
-
-    fn write_unsigned(
-        object: &mut MultiStateOutputObject,
-        property: PropertyIdentifier,
-        value: u64,
-    ) {
-        object
-            .write_property_from(
-                property,
-                None,
-                PropertyValue::Unsigned(value),
-                None,
-                &crate::command_source::test_origin(),
-            )
-            .unwrap();
-    }
-
-    fn set_detection_enabled(object: &mut MultiStateOutputObject, enabled: bool) {
-        object
-            .write_property(
-                PropertyIdentifier::EVENT_DETECTION_ENABLE,
-                None,
-                PropertyValue::Boolean(enabled),
-                None,
-            )
-            .unwrap();
-    }
-
-    #[test]
-    fn feedback_value_round_trips_and_is_advertised_writable() {
-        let mut mso = MultiStateOutputObject::new(1, "MSO-1", 3).unwrap();
-
-        write_unsigned(&mut mso, PropertyIdentifier::FEEDBACK_VALUE, 2);
-
-        assert_eq!(
-            mso.read_property(PropertyIdentifier::FEEDBACK_VALUE, None)
-                .unwrap(),
-            PropertyValue::Unsigned(2)
-        );
-        assert!(mso
-            .property_list()
-            .contains(&PropertyIdentifier::FEEDBACK_VALUE));
-        assert!(mso.is_writable_property(PropertyIdentifier::FEEDBACK_VALUE));
-        assert!(mso
-            .write_property(
-                PropertyIdentifier::FEEDBACK_VALUE,
-                None,
-                PropertyValue::Enumerated(2),
-                None,
-            )
-            .is_err());
-    }
-
-    /// Clause 12.19 defines an out-of-range Feedback_Value as a reportable condition
-    /// (Reliability CONFIGURATION_ERROR), not a value to refuse. Refusing it
-    /// would make that reliability unreachable, so the write is accepted even though
-    /// Present_Value at the same value would be rejected.
-    #[test]
-    fn feedback_value_outside_the_state_set_is_accepted_unlike_present_value() {
-        let mut mso = MultiStateOutputObject::new(1, "MSO-1", 3).unwrap();
-
-        write_unsigned(&mut mso, PropertyIdentifier::FEEDBACK_VALUE, 7);
-        assert_eq!(
-            mso.read_property(PropertyIdentifier::FEEDBACK_VALUE, None)
-                .unwrap(),
-            PropertyValue::Unsigned(7)
-        );
-
-        assert!(mso
-            .write_property_from(
-                PropertyIdentifier::PRESENT_VALUE,
-                None,
-                PropertyValue::Unsigned(7),
-                None,
-                &crate::command_source::test_origin(),
-            )
-            .is_err());
-    }
-
-    /// `feedback_value` initializes to match the initial `Present_Value` so that enabling
-    /// detection on an untouched object does not immediately report a command failure. This
-    /// states that property directly rather than relying on it incidentally: several other
-    /// tests in this module also fail if the initializer changes, but each does so as a side
-    /// effect of asserting something else, which is a fragile thing to depend on.
-    #[test]
-    fn fresh_object_reports_nothing_when_detection_is_enabled() {
-        let mut mso = MultiStateOutputObject::new(1, "MSO-1", 3).unwrap();
-        set_detection_enabled(&mut mso, true);
-
-        assert_eq!(mso.evaluate_intrinsic_reporting(), None);
-        assert_eq!(
-            mso.read_property(PropertyIdentifier::EVENT_STATE, None)
-                .unwrap(),
-            PropertyValue::Enumerated(EventState::NORMAL.to_raw())
-        );
-    }
-
-    /// A BACnet Unsigned decodes from up to 8 octets, so an unchecked `as u32` would wrap
-    /// a large Feedback_Value back into the valid state range and suppress the very
-    /// transition this object type exists to report. 0x1_0000_0002 truncates to 2, which
-    /// would read as agreeing with a Present_Value of 2.
-    #[test]
-    fn oversized_feedback_value_is_rejected_rather_than_wrapped_into_agreement() {
-        let mut mso = MultiStateOutputObject::new(1, "MSO-1", 3).unwrap();
-        set_detection_enabled(&mut mso, true);
-        write_unsigned(&mut mso, PropertyIdentifier::PRESENT_VALUE, 2);
-
-        assert!(mso
-            .write_property(
-                PropertyIdentifier::FEEDBACK_VALUE,
-                None,
-                PropertyValue::Unsigned(0x1_0000_0002),
-                None,
-            )
-            .is_err());
-
-        // The rejected write left the feedback value alone, so Present_Value 2 against the
-        // initial feedback of 1 still disagrees and still reports COMMAND_FAILURE.
-        assert_eq!(
-            mso.read_property(PropertyIdentifier::FEEDBACK_VALUE, None)
-                .unwrap(),
-            PropertyValue::Unsigned(1)
-        );
-        let outcome = mso.evaluate_intrinsic_reporting().unwrap();
-        assert_eq!(outcome.change.to, EventState::OFFNORMAL);
-        assert_eq!(outcome.event_type, EventType::COMMAND_FAILURE);
-    }
-
-    #[test]
-    fn command_failure_uses_present_and_feedback() {
-        let mut mso = MultiStateOutputObject::new(1, "MSO-1", 3).unwrap();
-        set_detection_enabled(&mut mso, true);
-        write_unsigned(&mut mso, PropertyIdentifier::PRESENT_VALUE, 2);
-
-        let proposal = mso.evaluate_intrinsic_reporting().unwrap();
-        let outcome = crate::event::commit_test_proposal(&mut mso, proposal);
-        assert_eq!(outcome.change.to, EventState::OFFNORMAL);
-        assert_eq!(outcome.event_type, EventType::COMMAND_FAILURE);
-
-        write_unsigned(&mut mso, PropertyIdentifier::FEEDBACK_VALUE, 2);
-        let returned = mso.evaluate_intrinsic_reporting().unwrap();
-        assert_eq!(returned.change.from, EventState::OFFNORMAL);
-        assert_eq!(returned.change.to, EventState::NORMAL);
-        assert_eq!(returned.event_type, EventType::COMMAND_FAILURE);
-    }
-
-    #[test]
-    fn time_delay_gates_command_failure() {
-        let mut mso = MultiStateOutputObject::new(1, "MSO-1", 3).unwrap();
-        set_detection_enabled(&mut mso, true);
-        write_unsigned(&mut mso, PropertyIdentifier::TIME_DELAY, 2);
-        write_unsigned(&mut mso, PropertyIdentifier::PRESENT_VALUE, 2);
-
-        assert_eq!(mso.evaluate_intrinsic_reporting(), None);
-        assert_eq!(mso.tick_intrinsic_reporting(), None);
-        let outcome = mso.tick_intrinsic_reporting().unwrap();
-        assert_eq!(outcome.change.to, EventState::OFFNORMAL);
-        assert_eq!(outcome.event_type, EventType::COMMAND_FAILURE);
-    }
-
-    #[test]
-    fn event_enable_to_offnormal_bit_controls_distribution() {
-        for (encoded, expected) in [(0x80, true), (0x00, false)] {
-            let mut mso = MultiStateOutputObject::new(1, "MSO-1", 3).unwrap();
-            set_detection_enabled(&mut mso, true);
-            mso.write_property(
-                PropertyIdentifier::EVENT_ENABLE,
-                None,
-                PropertyValue::BitString {
-                    unused_bits: 5,
-                    data: vec![encoded],
-                },
-                None,
-            )
-            .unwrap();
-            write_unsigned(&mut mso, PropertyIdentifier::PRESENT_VALUE, 2);
-            assert_eq!(
-                mso.evaluate_intrinsic_reporting().unwrap().distribute,
-                expected
-            );
-        }
-    }
-
-    #[test]
-    fn generic_event_properties_round_trip_and_match_pics() {
-        let mut mso = MultiStateOutputObject::new(1, "MSO-1", 3).unwrap();
-        let writes = [
-            (
-                PropertyIdentifier::NOTIFY_TYPE,
-                PropertyValue::Enumerated(1),
-            ),
-            (
-                PropertyIdentifier::NOTIFICATION_CLASS,
-                PropertyValue::Unsigned(42),
-            ),
-        ];
-        for (property, value) in writes {
-            mso.write_property_from(
-                property,
-                None,
-                value.clone(),
-                None,
-                &crate::command_source::test_origin(),
-            )
-            .unwrap();
-            assert_eq!(mso.read_property(property, None).unwrap(), value);
-        }
-
-        // Acked_Transitions is readable but NOT writable: only the AcknowledgeAlarm service
-        // may change it. A property write would assign where the service ORs, so it could
-        // both fabricate and erase acknowledgments, and it would break the Clause 12.19
-        // requirement that the field sit at its initial condition while
-        // Event_Detection_Enable is FALSE.
-        assert!(mso
-            .write_property(
-                PropertyIdentifier::ACKED_TRANSITIONS,
-                None,
-                PropertyValue::BitString {
-                    unused_bits: 5,
-                    data: vec![0x80],
-                },
-                None,
-            )
-            .is_err());
-        assert!(!mso.is_writable_property(PropertyIdentifier::ACKED_TRANSITIONS));
-
-        for property in [
-            PropertyIdentifier::EVENT_ENABLE,
-            PropertyIdentifier::TIME_DELAY,
-            PropertyIdentifier::TIME_DELAY_NORMAL,
-            PropertyIdentifier::NOTIFY_TYPE,
-            PropertyIdentifier::NOTIFICATION_CLASS,
-        ] {
-            assert!(mso.property_list().contains(&property));
-            assert!(mso.is_writable_property(property));
-        }
-        assert!(mso
-            .write_property(
-                PropertyIdentifier::EVENT_STATE,
-                None,
-                PropertyValue::Enumerated(EventState::NORMAL.to_raw()),
-                None,
-            )
-            .is_err());
-        assert!(!mso.is_writable_property(PropertyIdentifier::EVENT_STATE));
-    }
-
-    #[test]
-    fn detection_enable_is_a_disabled_by_default_invariant() {
-        let mut mso = MultiStateOutputObject::new(1, "MSO-1", 3).unwrap();
-        write_unsigned(&mut mso, PropertyIdentifier::PRESENT_VALUE, 2);
-
-        assert_eq!(mso.evaluate_intrinsic_reporting(), None);
-        assert_eq!(mso.tick_intrinsic_reporting(), None);
-        assert_eq!(
-            mso.read_property(PropertyIdentifier::EVENT_STATE, None)
-                .unwrap(),
-            PropertyValue::Enumerated(EventState::NORMAL.to_raw())
-        );
-        assert_eq!(
-            mso.read_property(PropertyIdentifier::STATUS_FLAGS, None)
-                .unwrap(),
-            PropertyValue::BitString {
-                unused_bits: 4,
-                data: vec![0],
-            }
-        );
-
-        set_detection_enabled(&mut mso, true);
-        assert_eq!(
-            mso.evaluate_intrinsic_reporting().unwrap().change.to,
-            EventState::OFFNORMAL
-        );
-        mso.event_detector.acked_transitions =
-            bacnet_types::bitstring::EventTransitionBits::empty();
-        set_detection_enabled(&mut mso, false);
-
-        assert_eq!(
-            mso.read_property(PropertyIdentifier::EVENT_STATE, None)
-                .unwrap(),
-            PropertyValue::Enumerated(EventState::NORMAL.to_raw())
-        );
-        assert_eq!(
-            mso.read_property(PropertyIdentifier::ACKED_TRANSITIONS, None)
-                .unwrap(),
-            PropertyValue::BitString {
-                unused_bits: 5,
-                data: vec![0xe0],
-            }
-        );
-        assert_eq!(mso.evaluate_intrinsic_reporting(), None);
-        assert_eq!(mso.tick_intrinsic_reporting(), None);
-
-        mso.reliability = Reliability::NO_SENSOR;
-        assert_eq!(
-            mso.read_property(PropertyIdentifier::STATUS_FLAGS, None)
-                .unwrap(),
-            PropertyValue::BitString {
-                unused_bits: 4,
-                data: vec![0x40],
-            }
-        );
-        assert_eq!(
-            mso.read_property(PropertyIdentifier::EVENT_DETECTION_ENABLE, None)
-                .unwrap(),
-            PropertyValue::Boolean(false)
-        );
-        assert!(mso
-            .property_list()
-            .contains(&PropertyIdentifier::EVENT_DETECTION_ENABLE));
-        assert!(mso.is_writable_property(PropertyIdentifier::EVENT_DETECTION_ENABLE));
-    }
-}
+#[path = "output/tests.rs"]
+mod command_failure_tests;
 
 #[cfg(test)]
 mod reliability_evaluator_tests;

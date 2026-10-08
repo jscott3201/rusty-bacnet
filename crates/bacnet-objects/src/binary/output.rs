@@ -1,5 +1,7 @@
 use super::*;
+use crate::object_profile::{ObjectProfile, ProfileState, TagsPersistence};
 use crate::property_metadata::PropertyMetadata;
+use std::sync::Arc;
 
 #[path = "output/metadata.rs"]
 mod metadata;
@@ -13,6 +15,7 @@ mod metadata;
 /// Commandable binary output with 16-level priority array.
 /// Uses Enumerated values: 0 = inactive, 1 = active.
 pub struct BinaryOutputObject {
+    profile: ProfileState,
     oid: ObjectIdentifier,
     name: String,
     description: String,
@@ -43,6 +46,7 @@ impl BinaryOutputObject {
     pub fn new(instance: u32, name: impl Into<String>) -> Result<Self, Error> {
         let oid = ObjectIdentifier::new(ObjectType::BINARY_OUTPUT, instance)?;
         Ok(Self {
+            profile: ProfileState::default(),
             oid,
             name: name.into(),
             description: String::new(),
@@ -63,6 +67,33 @@ impl BinaryOutputObject {
             event_history: EventHistory::default(),
             value_source: crate::command_source::ValueSourceTracking::default(),
         })
+    }
+
+    /// Build with application-owned Tags storage. Saved Tags override configured
+    /// Tags only while [`Self::set_profile`] provisions the row. Loaded data must
+    /// satisfy the shared Tags rules and opt-in 1 MiB snapshot limit.
+    pub fn with_tags_persistence(
+        instance: u32,
+        name: impl Into<String>,
+        persistence: Arc<dyn TagsPersistence>,
+    ) -> Result<Self, Error> {
+        let mut object = Self::new(instance, name)?;
+        object.profile = ProfileState::persistent(object.oid, persistence)?;
+        Ok(object)
+    }
+
+    /// Provision independent optional Tags, Profile_Location and Profile_Name
+    /// rows before registration. Tags is writable independently of commands and
+    /// Out_Of_Service; the text rows are network read-only. Invalid configuration
+    /// leaves the previous profile and its attached storage unchanged.
+    pub fn set_profile(&mut self, profile: ObjectProfile) -> Result<(), Error> {
+        self.profile.provision(profile)
+    }
+
+    /// Wait for queued save attempts to finish; writes report their own outcomes.
+    /// This is not a success receipt. Unstaged synchronous writes block their caller.
+    pub fn wait_for_tag_saves(&self) {
+        self.profile.wait_for_saves();
     }
 
     /// Set the description string.
@@ -163,6 +194,9 @@ impl BACnetObject for BinaryOutputObject {
             return result;
         }
         if let Some(result) = self.event_history.read(property, array_index) {
+            return result;
+        }
+        if let Some(result) = self.profile.read(property, array_index) {
             return result;
         }
         match property {
@@ -338,11 +372,23 @@ impl BACnetObject for BinaryOutputObject {
         ) {
             return result;
         }
+        if let Some(result) = self.profile.write(property, array_index, &value) {
+            return result;
+        }
         Err(crate::common::unhandled_write_error(
             self.property_metadata().as_ref(),
             property,
             array_index,
         ))
+    }
+
+    fn durable_writes_internal(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
+        self.profile.capability()
+    }
+
+    fn advance_monotonic_time_internal(&mut self, now: std::time::Duration) -> bool {
+        self.profile.expire(now);
+        false
     }
 
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {

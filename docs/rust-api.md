@@ -7264,14 +7264,16 @@ Most object tables list `Tags`, `Profile_Location` and `Profile_Name` as
 optional rows. `bacnet_objects::object_profile::ObjectProfile` holds the three;
 an object that carries one serves the rows its fields provision (#1553). The
 Color, Color Temperature, Lighting Output, Binary Lighting Output, Analog Value,
-Binary Value, Multi-state Value, Analog Input, Binary Input and Multi-state Input
-objects take one through `set_profile` before registration, which checks it first and
+Binary Value, Multi-state Value, Analog Input, Binary Input, Multi-state Input,
+Analog Output, Binary Output and Multi-state Output objects take one through `set_profile` before registration, which checks it first and
 refuses a bad one without changing anything. An unprovisioned object serves and
 lists none of them, so its wire behaviour, Property_List and PICS are as before.
 The three rows retain their relative order: Tags, Profile_Location, Profile_Name.
 They are independent of a Value object's Present_Value access and source tracking,
 and of an Input object's Out_Of_Service state. Input Present_Value simulation
 writes and internal application updates retain their existing ownership rules.
+Output profiles also remain independent of command priorities, Value_Source,
+command timestamps and feedback; attaching Tags storage does not persist commands.
 Existing descriptor order is preserved when the optional rows are added.
 
 - `Tags` is a BACnetARRAY of `bacnet_types::constructed::BACnetNameValue`, a
@@ -7307,6 +7309,12 @@ The Input constructors retain their normal arguments and append storage:
 - Analog Input: `with_tags_persistence(instance, name, units, storage)`.
 - Binary Input: `with_tags_persistence(instance, name, storage)`.
 - Multi-state Input: `with_tags_persistence(instance, name, number_of_states, storage)`.
+
+The Output constructors likewise preserve their normal arguments:
+
+- Analog Output: `with_tags_persistence(instance, name, units, storage)`.
+- Binary Output: `with_tags_persistence(instance, name, storage)`.
+- Multi-state Output: `with_tags_persistence(instance, name, number_of_states, storage)`.
 
 For example, construct a writable Analog Value with
 `AnalogValueObject::with_tags_persistence(1, "Temperature", 62, PresentValueAccess::Writable, storage)?`,
