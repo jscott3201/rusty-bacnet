@@ -8,7 +8,7 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 
 use super::color_link::{self, ColorLink};
 use crate::common::{self, read_common_properties, read_priority_array};
-use crate::object_profile::ObjectProfile;
+use crate::object_profile::{ObjectProfile, ProfileState, TagsPersistence};
 use crate::traits::{BACnetObject, MonotonicClock};
 
 const OFF: u32 = 0;
@@ -40,6 +40,10 @@ enum PresentValueCommand {
 ///
 /// The priority array stores only steady OFF/ON values. WARN, WARN_OFF,
 /// WARN_RELINQUISH, and STOP are command operations interpreted at write time.
+///
+/// Cloning copies served state into an in-memory object. Tags persistence and
+/// pending saves remain solely with the original; cloning or dropping the copy
+/// never saves, corrects, settles, or waits on the original writer.
 #[derive(Clone)]
 pub struct BinaryLightingOutputObject {
     oid: ObjectIdentifier,
@@ -62,7 +66,7 @@ pub struct BinaryLightingOutputObject {
     /// when overridable; absent until set.
     color_link: Option<ColorLink>,
     /// Tags, Profile_Location and Profile_Name, once provisioned (#1553).
-    profile: ObjectProfile,
+    profile: ProfileState,
 }
 
 impl BinaryLightingOutputObject {
@@ -85,7 +89,7 @@ impl BinaryLightingOutputObject {
             priority_array: [None; 16],
             relinquish_default: OFF,
             color_link: None,
-            profile: ObjectProfile::default(),
+            profile: ProfileState::default(),
         })
     }
 
@@ -103,17 +107,34 @@ impl BinaryLightingOutputObject {
         self.color_link.as_ref()
     }
 
+    /// Build with application-owned Tags storage. Saved Tags override configured
+    /// Tags only while `set_profile` provisions the row. Loaded data must satisfy
+    /// the normal Tags rules and the opt-in 1 MiB snapshot limit.
+    pub fn with_tags_persistence(
+        instance: u32,
+        name: impl Into<String>,
+        persistence: Arc<dyn TagsPersistence>,
+    ) -> Result<Self, Error> {
+        let mut object = Self::new(instance, name)?;
+        object.profile = ProfileState::persistent(object.oid, persistence)?;
+        Ok(object)
+    }
+
+    /// Wait for queued save attempts to finish. This is not a success receipt;
+    /// writes report their own save outcomes. Unstaged local writes block.
+    pub fn wait_for_tag_saves(&self) {
+        self.profile.wait_for_saves();
+    }
+
     /// Provision the optional Tags, Profile_Location and Profile_Name rows
     /// before registration (#1553), as a Color object's
     /// [`set_profile`](crate::color::ColorObject::set_profile) does.
     pub fn set_profile(&mut self, profile: ObjectProfile) -> Result<(), Error> {
-        profile.check()?;
-        self.profile = profile;
-        Ok(())
+        self.profile.provision(profile)
     }
 
     pub(super) fn profile(&self) -> &ObjectProfile {
-        &self.profile
+        self.profile.profile()
     }
 
     /// Set the description string.
@@ -385,6 +406,10 @@ impl BACnetObject for BinaryLightingOutputObject {
         ))
     }
 
+    fn durable_writes_internal(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
+        self.profile.capability()
+    }
+
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
@@ -407,6 +432,7 @@ impl BACnetObject for BinaryLightingOutputObject {
     }
 
     fn advance_monotonic_time_internal(&mut self, now: Duration) -> bool {
+        self.profile.expire(now);
         self.expire_at(now)
     }
 

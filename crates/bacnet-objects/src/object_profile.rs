@@ -18,12 +18,14 @@
 //!   a location is empty or its URI scheme is http, https or bacnet, and a
 //!   profile name begins with a decimal vendor identifier and a dash.
 //!
-//! Tags written over the network live in memory only: a restart brings back
-//! what the application provisioned (persistence is #1583).
+//! Objects built with `new` keep Tags in memory. Their
+//! `with_tags_persistence` constructors attach application-owned storage:
+//! successful writes then override configured Tags across reconstruction.
+//! Saved Tags never provision an absent row. See [`TagsPersistence`].
 
 use bacnet_encoding::constructed::{decode_name_value, encode_name_value};
 use bacnet_encoding::tags::Tag;
-use bacnet_types::constructed::{BACnetNameValue, TagValue};
+use bacnet_types::constructed::BACnetNameValue;
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier as P};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
@@ -35,6 +37,13 @@ use crate::property_metadata::{
     PropertyMetadata,
     PropertyWriteCapability::{Always, ReadOnly},
 };
+
+mod persistence;
+mod saving;
+pub use persistence::{
+    FileTagsPersistence, TagsPersistence, TagsSnapshot, MAX_TAGS_SNAPSHOT_BYTES,
+};
+pub(crate) use saving::ProfileState;
 
 /// Resource cap on Tags elements, the bound Exception_Schedule and a
 /// Calendar's Date_List have. A longer array is NO_SPACE_TO_WRITE_PROPERTY.
@@ -224,7 +233,7 @@ fn check_tags(tags: &[BACnetNameValue]) -> Result<(), Error> {
 
 /// Annex Y.1.4 keeps semicolons out of tag names, so names can be joined.
 fn check_tag(tag: &BACnetNameValue) -> Result<(), Error> {
-    if let Some(TagValue::Primitive(value)) = &tag.value {
+    if let Some(value) = &tag.value {
         if !value.is_primitive() {
             return Err(common::invalid_data_type_error());
         }
@@ -259,3 +268,10 @@ fn vendor_prefixed(name: &str) -> bool {
 #[cfg(test)]
 #[path = "object_profile_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod persistence_tests;
+#[cfg(test)]
+mod saving_tests;
+#[cfg(test)]
+mod test_support;

@@ -102,6 +102,10 @@ fn may_save(oid: ObjectIdentifier, property: PropertyIdentifier) -> bool {
             PropertyIdentifier::LOG_ENABLE | PropertyIdentifier::BUFFER_SIZE
         ),
         ObjectType::NOTIFICATION_CLASS => property == PropertyIdentifier::RECIPIENT_LIST,
+        ObjectType::COLOR
+        | ObjectType::COLOR_TEMPERATURE
+        | ObjectType::LIGHTING_OUTPUT
+        | ObjectType::BINARY_LIGHTING_OUTPUT => property == PropertyIdentifier::TAGS,
         ObjectType::ACCESS_RIGHTS => matches!(
             property,
             PropertyIdentifier::POSITIVE_ACCESS_RULES

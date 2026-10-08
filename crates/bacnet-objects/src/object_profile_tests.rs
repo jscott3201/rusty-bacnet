@@ -23,7 +23,7 @@ fn assert_code<T: std::fmt::Debug>(result: Result<T, Error>, expected: ErrorCode
 fn two_tags() -> Vec<BACnetNameValue> {
     vec![
         BACnetNameValue::semantic("exhaust"),
-        BACnetNameValue::valued("floor", TagValue::Primitive(PropertyValue::Unsigned(3))),
+        BACnetNameValue::valued("floor", PropertyValue::Unsigned(3)),
     ]
 }
 
@@ -112,11 +112,8 @@ fn tags_are_written_whole_resized_at_index_0_and_by_element() {
     // An element, in range.
     write(Some(2), data(&floor())).unwrap();
     let expected = vec![
-        BACnetNameValue::valued(
-            "zone",
-            TagValue::Primitive(PropertyValue::CharacterString("east".into())),
-        ),
-        BACnetNameValue::valued("floor", TagValue::Primitive(PropertyValue::Unsigned(3))),
+        BACnetNameValue::valued("zone", PropertyValue::CharacterString("east".into())),
+        BACnetNameValue::valued("floor", PropertyValue::Unsigned(3)),
         BACnetNameValue::semantic(""),
     ];
     assert_eq!(profile.tags.as_deref(), Some(expected.as_slice()));
@@ -240,14 +237,16 @@ fn profile_rows_are_read_only_and_checked_when_provisioned() {
     for profile in refused {
         assert_code(profile.check(), ErrorCode::VALUE_OUT_OF_RANGE);
     }
-    let constructed = ObjectProfile {
-        tags: Some(vec![BACnetNameValue::valued(
-            "a",
-            TagValue::Primitive(PropertyValue::List(vec![])),
-        )]),
-        ..ObjectProfile::default()
-    };
-    assert_code(constructed.check(), ErrorCode::INVALID_DATA_TYPE);
+    for value in [
+        PropertyValue::List(vec![]),
+        PropertyValue::ApplicationData(vec![0]),
+    ] {
+        let constructed = ObjectProfile {
+            tags: Some(vec![BACnetNameValue::valued("a", value)]),
+            ..ObjectProfile::default()
+        };
+        assert_code(constructed.check(), ErrorCode::INVALID_DATA_TYPE);
+    }
     let too_many = ObjectProfile {
         tags: Some(vec![BACnetNameValue::semantic("a"); MAX_TAGS + 1]),
         ..ObjectProfile::default()

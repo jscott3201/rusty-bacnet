@@ -1,83 +1,69 @@
-//! `BACnetNameValue` framing (Clause 21), the element of a Tags array
-//! (#1553).
+//! `BACnetNameValue` framing (Clause 21, corrected by errata 2024-04-29
+//! item 37), the element of a Tags array (#1553).
 //!
-//! The SEQUENCE has no frame of its own. The name is a CharacterString under
-//! primitive context tag 0. A value, when there is one, follows as the
-//! application-tagged encoding of its own datatype: one primitive, or a
-//! BACnetDateTime as an application Date then an application Time. An element
-//! of an array always opens with context tag 0, so an application Time that
-//! follows a Date can only be the time of a BACnetDateTime.
+//! A name under primitive context tag 0 is followed by at most one
+//! application-tagged primitive. Date and Time are valid separately; their
+//! pair is not one NameValue. The next array element starts at context tag 0.
 
-use bacnet_types::constructed::{BACnetNameValue, TagValue};
+use bacnet_types::constructed::BACnetNameValue;
 use bacnet_types::error::Error;
-use bacnet_types::primitives::PropertyValue;
 use bytes::BytesMut;
 
 use super::tagged::decode_ctx_character_string;
 use crate::primitives;
-use crate::tags::{self, app_tag, TagClass};
+use crate::tags::{self, TagClass};
 
-/// The production name decode errors carry.
 const WHAT: &str = "BACnetNameValue";
 
 /// Encode one `BACnetNameValue`, appending to `buf`.
 ///
-/// A [`TagValue::Primitive`] that isn't of a primitive datatype (a `List`
-/// or `ApplicationData`) returns an error before `buf` changes, as does a
-/// name too long to encode.
+/// A nonprimitive value (`List` or `ApplicationData`) or a name too long
+/// to encode returns an error before `buf` changes.
 pub fn encode_name_value(buf: &mut BytesMut, value: &BACnetNameValue) -> Result<(), Error> {
-    if let Some(TagValue::Primitive(primitive)) = &value.value {
-        if !primitive.is_primitive() {
-            return Err(Error::Encoding(format!(
-                "{WHAT}: a value must be of a primitive datatype or a BACnetDateTime"
-            )));
-        }
+    if value
+        .value
+        .as_ref()
+        .is_some_and(|value| !value.is_primitive())
+    {
+        return Err(Error::Encoding(format!(
+            "{WHAT}: a value must be a primitive datatype"
+        )));
     }
     primitives::encode_ctx_character_string(buf, 0, &value.name)?;
-    match &value.value {
-        None => {}
-        Some(TagValue::Primitive(primitive)) => primitives::encode_property_value(buf, primitive)?,
-        Some(TagValue::DateTime { date, time }) => {
-            primitives::encode_app_date(buf, date);
-            primitives::encode_app_time(buf, time);
-        }
+    if let Some(primitive) = &value.value {
+        primitives::encode_property_value(buf, primitive)?;
     }
     Ok(())
 }
 
-/// Whether the tag at `offset` is application-tagged; `false` at the end of
-/// `data`. A tag that doesn't decode is an error.
-fn next_is_application(data: &[u8], offset: usize, tag_number: Option<u8>) -> Result<bool, Error> {
+/// Whether another application-tagged value follows; false at end of input.
+fn next_is_application(data: &[u8], offset: usize) -> Result<bool, Error> {
     if offset >= data.len() {
         return Ok(false);
     }
     let (tag, _) = tags::decode_tag(data, offset)?;
-    Ok(tag.class == TagClass::Application && tag_number.is_none_or(|n| tag.number == n))
+    Ok(tag.class == TagClass::Application)
 }
 
-/// Decode one `BACnetNameValue` at `offset`, returning it and the offset past
-/// it.
+/// Decode one `BACnetNameValue` at `offset`, returning it and the next offset.
 ///
-/// Bytes after the element are left for the caller, as the next element of
-/// an array begins with context tag 0; a caller decoding a whole value must
-/// check the returned offset. A missing or constructed name, a name that
-/// isn't a CharacterString of a supported character set, a value under an
-/// unknown application tag, and contents that run past `data` are errors.
+/// The next context-tagged element is left to the caller, which must check
+/// complete consumption when decoding a whole value. Missing or malformed
+/// names, unsupported character sets, unknown application types, truncated
+/// values and a second application value (including Date followed by Time)
+/// are errors.
 pub fn decode_name_value(data: &[u8], offset: usize) -> Result<(BACnetNameValue, usize), Error> {
     let (name, offset) = decode_ctx_character_string(data, offset, 0, WHAT)?;
-    if !next_is_application(data, offset, None)? {
+    if !next_is_application(data, offset)? {
         return Ok((BACnetNameValue { name, value: None }, offset));
     }
-    let (primitive, offset) = primitives::decode_application_value(data, offset)?;
-    let (value, offset) = match primitive {
-        PropertyValue::Date(date) if next_is_application(data, offset, Some(app_tag::TIME))? => {
-            match primitives::decode_application_value(data, offset)? {
-                (PropertyValue::Time(time), end) => (TagValue::DateTime { date, time }, end),
-                _ => return Err(Error::decoding(offset, format!("{WHAT}: expected a Time"))),
-            }
-        }
-        primitive => (TagValue::Primitive(primitive), offset),
-    };
+    let (value, offset) = primitives::decode_application_value(data, offset)?;
+    if next_is_application(data, offset)? {
+        return Err(Error::decoding(
+            offset,
+            format!("{WHAT}: a value must contain only one primitive"),
+        ));
+    }
     Ok((
         BACnetNameValue {
             name,

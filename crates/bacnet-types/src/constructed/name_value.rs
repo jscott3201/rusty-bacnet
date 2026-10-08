@@ -3,7 +3,7 @@
 #[cfg(not(feature = "std"))]
 use alloc::string::String;
 
-use crate::primitives::{Date, PropertyValue, Time};
+use crate::primitives::PropertyValue;
 
 /// `BACnetNameValue` (Clause 21): a tag's name and, for a value tag, its
 /// value. A semantic tag has a name alone (Annex Y.1.4).
@@ -11,22 +11,24 @@ use crate::primitives::{Date, PropertyValue, Time};
 /// On the wire it is a SEQUENCE with no frame of its own: the name as a
 /// CharacterString under primitive context tag `[0]`, then the value, when
 /// there is one, application-tagged as its own datatype. The `bacnet-encoding`
-/// crate owns the codec.
+/// crate owns the codec. The 2024-04-29 errata, item 37, restricts the
+/// optional value to one primitive; Date and Time are allowed separately.
 ///
 /// ```
-/// use bacnet_types::constructed::{BACnetNameValue, TagValue};
+/// use bacnet_types::constructed::BACnetNameValue;
 /// use bacnet_types::primitives::PropertyValue;
 ///
 /// let semantic = BACnetNameValue::semantic("exhaust");
-/// let valued = BACnetNameValue::valued("floor", TagValue::Primitive(PropertyValue::Unsigned(3)));
+/// let valued = BACnetNameValue::valued("floor", PropertyValue::Unsigned(3));
 /// assert!(semantic.value.is_none() && valued.value.is_some());
 /// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct BACnetNameValue {
     /// Context tag 0: the tag's name.
     pub name: String,
-    /// The tag's value; `None` for a semantic tag.
-    pub value: Option<TagValue>,
+    /// One primitive value; `None` for a semantic tag. The codec and object
+    /// profile validator reject `List` and `ApplicationData` values.
+    pub value: Option<PropertyValue>,
 }
 
 impl BACnetNameValue {
@@ -39,27 +41,10 @@ impl BACnetNameValue {
     }
 
     /// A value tag: a name and its value.
-    pub fn valued(name: impl Into<String>, value: TagValue) -> Self {
+    pub fn valued(name: impl Into<String>, value: PropertyValue) -> Self {
         Self {
             name: name.into(),
             value: Some(value),
         }
     }
-}
-
-/// The value of a [`BACnetNameValue`]: Clause 21 limits it to a primitive
-/// datatype or a BACnetDateTime.
-#[derive(Debug, Clone, PartialEq)]
-pub enum TagValue {
-    /// A value of a primitive datatype: a [`PropertyValue`] whose
-    /// [`is_primitive`](PropertyValue::is_primitive) holds. The codec refuses
-    /// any other.
-    Primitive(PropertyValue),
-    /// A BACnetDateTime: an application Date, then an application Time.
-    DateTime {
-        /// The calendar date.
-        date: Date,
-        /// The time of day.
-        time: Time,
-    },
 }

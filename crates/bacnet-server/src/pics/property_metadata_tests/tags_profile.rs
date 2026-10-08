@@ -6,8 +6,10 @@ use super::*;
 use bacnet_objects::color::{ColorObject, ColorTemperatureObject};
 use bacnet_objects::lighting::{BinaryLightingOutputObject, LightingOutputObject};
 use bacnet_objects::object_profile::ObjectProfile;
+use bacnet_objects::object_profile::{TagsPersistence, TagsSnapshot};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::BACnetNameValue;
+use std::sync::Arc;
 use PropertyIdentifier as P;
 
 fn profile() -> ObjectProfile {
@@ -69,5 +71,90 @@ fn pics_lists_provisioned_tags_and_read_only_profile_rows() {
     let text = provisioned.generate_text();
     for (property, _) in rows {
         assert!(text.contains(&property.to_string()), "{property:?}");
+    }
+}
+
+struct SavedEmpty;
+
+impl TagsPersistence for SavedEmpty {
+    fn load(
+        &self,
+        _: ObjectIdentifier,
+    ) -> Result<Option<TagsSnapshot>, bacnet_types::error::Error> {
+        Ok(Some(TagsSnapshot { tags: Some(vec![]) }))
+    }
+
+    fn save(
+        &self,
+        _: ObjectIdentifier,
+        _: &TagsSnapshot,
+    ) -> Result<(), bacnet_types::error::Error> {
+        panic!("provisioning and PICS must not save configuration")
+    }
+}
+
+#[test]
+fn saved_tags_do_not_provision_rows_and_each_profile_row_remains_independent() {
+    for mask in 0..8 {
+        let configured = ObjectProfile {
+            tags: (mask & 1 != 0).then(|| vec![BACnetNameValue::semantic("configured")]),
+            profile_location: (mask & 2 != 0).then(|| "https://example.com/p.xdd".into()),
+            profile_name: (mask & 4 != 0).then(|| "555-profile".into()),
+        };
+        macro_rules! build {
+            ($ty:ty) => {{
+                let mut object =
+                    <$ty>::with_tags_persistence(1, stringify!($ty), Arc::new(SavedEmpty)).unwrap();
+                object.set_profile(configured.clone()).unwrap();
+                // Removing and reprovisioning must retain the saved-empty override.
+                object.set_profile(ObjectProfile::default()).unwrap();
+                object.set_profile(configured.clone()).unwrap();
+                Box::new(object) as Box<dyn BACnetObject>
+            }};
+        }
+        let mut db = ObjectDatabase::new();
+        for mut object in [
+            build!(ColorObject),
+            build!(ColorTemperatureObject),
+            build!(LightingOutputObject),
+            build!(BinaryLightingOutputObject),
+        ] {
+            for (bit, property) in [(1, P::TAGS), (2, P::PROFILE_LOCATION), (4, P::PROFILE_NAME)] {
+                assert_eq!(object.property_list().contains(&property), mask & bit != 0);
+                let read = object.read_property(property, None);
+                if mask & bit == 0 {
+                    assert!(
+                        matches!(read, Err(bacnet_types::error::Error::Protocol { code, .. }) if code == bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32)
+                    );
+                } else if property == P::TAGS {
+                    assert_eq!(read.unwrap(), PropertyValue::List(vec![]));
+                } else {
+                    let result = object.write_property(
+                        property,
+                        None,
+                        PropertyValue::CharacterString("555-other".into()),
+                        None,
+                    );
+                    assert!(
+                        matches!(result, Err(bacnet_types::error::Error::Protocol { code, .. }) if code == bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32)
+                    );
+                }
+            }
+            db.add(object).unwrap();
+        }
+        let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default());
+        for support in &pics.supported_object_types {
+            for (bit, property) in [(1, P::TAGS), (2, P::PROFILE_LOCATION), (4, P::PROFILE_NAME)] {
+                let row = support
+                    .supported_properties
+                    .iter()
+                    .find(|row| row.property_id == property);
+                assert_eq!(row.is_some(), mask & bit != 0);
+                if let Some(row) = row {
+                    assert!(row.access.optional && row.access.readable);
+                    assert_eq!(row.access.writable, property == P::TAGS);
+                }
+            }
+        }
     }
 }

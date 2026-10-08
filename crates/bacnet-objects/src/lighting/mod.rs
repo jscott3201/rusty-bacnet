@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::common::{self, read_common_properties, read_priority_array};
-use crate::object_profile::ObjectProfile;
+use crate::object_profile::{ObjectProfile, ProfileState, TagsPersistence};
 use crate::traits::{BACnetObject, DeadlineWaker, MonotonicClock};
 
 // ---------------------------------------------------------------------------
@@ -47,6 +47,10 @@ use crate::traits::{BACnetObject, DeadlineWaker, MonotonicClock};
 /// Fades, ramps and egress timers run on the monotonic clock the database
 /// binds; the server's monotonic task advances them and fans their COV out.
 /// With no clock bound they wait on `advance_time_internal`.
+///
+/// Cloning copies served state into an in-memory object. Tags persistence and
+/// pending saves remain solely with the original; cloning or dropping the copy
+/// never saves, corrects, settles, or waits on the original writer.
 #[derive(Clone)]
 pub struct LightingOutputObject {
     oid: ObjectIdentifier,
@@ -87,7 +91,7 @@ pub struct LightingOutputObject {
     /// when overridable; absent until set.
     color_link: Option<ColorLink>,
     /// Tags, Profile_Location and Profile_Name, once provisioned (#1553).
-    profile: ObjectProfile,
+    profile: ProfileState,
     monotonic_clock: Option<Arc<MonotonicClock>>,
     deadline_waker: Option<Arc<DeadlineWaker>>,
     /// The time an object with no clock bound has been advanced to.
@@ -121,7 +125,7 @@ impl LightingOutputObject {
             relinquish_default: 0.0,
             trims: trim::Trims::NONE,
             color_link: None,
-            profile: ObjectProfile::default(),
+            profile: ProfileState::default(),
             monotonic_clock: None,
             deadline_waker: None,
             logical_now: Duration::ZERO,
@@ -216,13 +220,30 @@ impl LightingOutputObject {
         self.color_link.as_ref()
     }
 
+    /// Build with application-owned Tags storage. Saved Tags override configured
+    /// Tags only while `set_profile` provisions the row. Loaded data must satisfy
+    /// the normal Tags rules and the opt-in 1 MiB snapshot limit.
+    pub fn with_tags_persistence(
+        instance: u32,
+        name: impl Into<String>,
+        persistence: Arc<dyn TagsPersistence>,
+    ) -> Result<Self, Error> {
+        let mut object = Self::new(instance, name)?;
+        object.profile = ProfileState::persistent(object.oid, persistence)?;
+        Ok(object)
+    }
+
+    /// Wait for queued save attempts to finish. This is not a success receipt;
+    /// writes report their own save outcomes. Unstaged local writes block.
+    pub fn wait_for_tag_saves(&self) {
+        self.profile.wait_for_saves();
+    }
+
     /// Provision the optional Tags, Profile_Location and Profile_Name rows
     /// before registration (#1553), as a Color object's
     /// [`set_profile`](crate::color::ColorObject::set_profile) does.
     pub fn set_profile(&mut self, profile: ObjectProfile) -> Result<(), Error> {
-        profile.check()?;
-        self.profile = profile;
-        Ok(())
+        self.profile.provision(profile)
     }
 
     /// Set Default_Fade_Time, the milliseconds a fade request without its own
@@ -500,6 +521,10 @@ impl BACnetObject for LightingOutputObject {
         ))
     }
 
+    fn durable_writes_internal(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
+        self.profile.capability()
+    }
+
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
@@ -530,6 +555,7 @@ impl BACnetObject for LightingOutputObject {
     }
 
     fn advance_monotonic_time_internal(&mut self, now: Duration) -> bool {
+        self.profile.expire(now);
         self.advance_to(now)
     }
 

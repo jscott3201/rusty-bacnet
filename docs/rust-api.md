@@ -7255,8 +7255,11 @@ The rows go in table order: on the colour objects after Value_Source and the
 audit rows; on a Lighting Output between its colour links and its trims.
 
 - `Tags` is a BACnetARRAY of `bacnet_types::constructed::BACnetNameValue`, a
-  name with an optional `TagValue` (a primitive or a date and time), whose codec
+  name with an optional primitive `PropertyValue`, whose codec
   is `bacnet_encoding::constructed::{encode_name_value, decode_name_value}`.
+  The 2024-04-29 errata restricts each value to one primitive: Date and Time
+  are allowed separately, but their pair is refused. `None` is a semantic tag;
+  `Some(PropertyValue::Null)` is a valued tag.
   Reads return each element as `PropertyValue::ApplicationData`. Peers write it
   whole, one element by index, or its size at index 0, which truncates or
   appends empty semantic tags (Clause 12.1.5.1); an index past the end is
@@ -7270,9 +7273,60 @@ audit rows; on a Lighting Output between its colour links and its trims.
   is http, https or bacnet, and a profile name that starts with a decimal vendor
   identifier and a dash.
 
-Tags written over the network are held in memory: a restart brings back what
-the application provisioned (persistence is #1583). More object types and a
-typed decode of a remote device's Tags are #1584.
+Objects built with `new` keep Tags in memory. Color, Color Temperature,
+Lighting Output and Binary Lighting Output also provide
+`with_tags_persistence(instance, name, Arc<dyn TagsPersistence>)`. The shared
+`bacnet_objects::object_profile::{TagsPersistence, TagsSnapshot,
+FileTagsPersistence}` contract attaches application-owned storage to those
+objects. This is an opt-in product durability feature; optional Tags rows do
+not establish a universal Standard persistence requirement.
+
+Call `set_profile` to provision the rows after constructing the object. A
+successful saved Tags write overrides the configured array, including a saved
+empty array. No saved write is distinct from a saved empty array. Storage never
+provisions a row: `tags: None` keeps Tags absent from reads, writes, Property_List
+and PICS even when old Tags are stored. Removing and later reprovisioning Tags
+reapplies the saved override. Profile_Location and Profile_Name remain separately
+provisioned and are never part of the saved payload. `set_profile` validates
+before changing anything and retains the attached store; a valid provisioning
+change supersedes any staged Tags write through the existing correction path.
+Configured defaults are not saved merely by provisioning them.
+
+Tags writes validate a prospective array before submitting a save. The object
+serves it only after the backend reports success; a failed save returns
+DEVICE/OPERATIONAL_PROBLEM and leaves the old served array. Backend implementations
+must refuse a save without replacing their previous snapshot. Whole-array,
+index-0 resize and indexed-element writes save the complete resulting array.
+WritePropertyMultiple composes its Tags changes in order, saves the final
+applicable state once, and retains normal successful-prefix behavior on a later
+failure. The bundled server stages network and `write_local` saves while releasing
+the database lock. Direct synchronous object/database writes wait in their caller,
+as with other persistent objects.
+
+Attached storage enforces `MAX_TAGS_SNAPSHOT_BYTES` (1 MiB for the complete encoded
+snapshot including its identity/version header) in addition to `MAX_TAGS`.
+Oversized writes fail with NO_SPACE_TO_WRITE_PROPERTY before the backend is
+called. This is an opt-in storage resource limit, not a BACnet limit; memory-only
+objects retain their existing limits. Both file and custom loaded snapshots are
+checked for the same Tags semantics and encoded-size limit. The file backend also
+rejects another object's identity, unsupported format versions and malformed data.
+
+The existing durable writer handles abandoned stages, correction, maintenance,
+graceful stop and object Drop. `wait_for_tag_saves` waits for queued attempts; it
+does not convert a failed attempt into successful persistence. Stop waits for
+correction attempts after canceling requests. Restoring the served state still
+requires a successful backend correction. `FileTagsPersistence::new(path)` takes
+an explicit application path and uses the shared synchronized temporary-file and
+atomic replacement backend. Parent-directory synchronization after rename is
+best effort and logged on failure. A successful save or local file round trip
+does not qualify power-loss survival; the backend's actual guarantees apply.
+The file backend does not coordinate competing owners or processes at one path.
+
+Cloning any of these four objects copies its served data into a memory-only
+object. Application clones and COV snapshots do not inherit persistence,
+pending writes or saved-override authority; clone/drop neither saves nor corrects,
+settles or waits on the source writer. Changes to a clone remain local to it.
+More object types and a typed decode of remote Tags remain separate work (#1584).
 
 ### Target Device Audit recipient
 

@@ -57,6 +57,7 @@ mod mutation_wpm_priority_tests;
 mod mutation_wpm_tests;
 #[cfg(test)]
 mod notification_class_durable_tests;
+
 mod read_range;
 #[cfg(test)]
 mod recipient_mac_bound_tests;
@@ -64,6 +65,8 @@ mod recipient_mac_bound_tests;
 mod structured_error_wire_tests;
 #[cfg(test)]
 mod subscribed_recipients_wire_tests;
+#[cfg(test)]
+mod tags_durable_tests;
 mod unconfirmed;
 #[cfg(test)]
 mod unconfirmed_tests;

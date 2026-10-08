@@ -11,7 +11,9 @@ use super::*;
 use bacnet_objects::color::ColorObject;
 use bacnet_objects::lighting::BinaryLightingOutputObject;
 use bacnet_objects::object_profile::ObjectProfile;
-use bacnet_types::constructed::{BACnetNameValue, TagValue};
+use bacnet_objects::object_profile::{TagsPersistence, TagsSnapshot};
+use bacnet_types::constructed::BACnetNameValue;
+use std::sync::{Arc, Mutex};
 
 const TAGS: PropertyIdentifier = PropertyIdentifier::TAGS;
 const EXHAUST: [u8; 10] = [0x0D, 0x08, 0x00, 0x65, 0x78, 0x68, 0x61, 0x75, 0x73, 0x74];
@@ -25,7 +27,7 @@ fn provisioned_color() -> (ObjectDatabase, ObjectIdentifier) {
         .set_profile(ObjectProfile {
             tags: Some(vec![
                 BACnetNameValue::semantic("exhaust"),
-                BACnetNameValue::valued("floor", TagValue::Primitive(PropertyValue::Unsigned(3))),
+                BACnetNameValue::valued("floor", PropertyValue::Unsigned(3)),
             ]),
             profile_location: Some(LOCATION.into()),
             profile_name: Some(NAME.into()),
@@ -120,6 +122,44 @@ fn provisioned_rows_read_with_exact_bytes() {
     }
     let list = read_wire(&db, blo, PropertyIdentifier::PROPERTY_LIST);
     assert!(!list.windows(3).any(|w| w == [0x92, 0x01, 0xE6]));
+}
+
+#[derive(Default)]
+struct TagStore(Mutex<Option<TagsSnapshot>>);
+
+impl TagsPersistence for TagStore {
+    fn load(&self, _: ObjectIdentifier) -> Result<Option<TagsSnapshot>, Error> {
+        Ok(self.0.lock().unwrap().clone())
+    }
+
+    fn save(&self, _: ObjectIdentifier, snapshot: &TagsSnapshot) -> Result<(), Error> {
+        *self.0.lock().unwrap() = Some(snapshot.clone());
+        Ok(())
+    }
+}
+
+fn persistent_color(store: &Arc<TagStore>) -> (ObjectDatabase, ObjectIdentifier) {
+    let mut color = ColorObject::with_tags_persistence(1, "CLR-1", store.clone()).unwrap();
+    color
+        .set_profile(ObjectProfile {
+            tags: Some(vec![BACnetNameValue::semantic("exhaust")]),
+            ..ObjectProfile::default()
+        })
+        .unwrap();
+    db_with(Box::new(color))
+}
+
+/// The pre-fix memory-only witness failed on reconstruction. Attached
+/// storage now makes this an explicit opt-in durability contract.
+#[test]
+fn tags_network_write_survives_reconstruction() {
+    let store = Arc::new(TagStore::default());
+    let (mut db, oid) = persistent_color(&store);
+    write_at(&mut db, oid, TAGS, None, &FLOOR).unwrap();
+    assert_eq!(read_wire(&db, oid, TAGS), FLOOR);
+    drop(db);
+    let (rebuilt, oid) = persistent_color(&store);
+    assert_eq!(read_wire(&rebuilt, oid, TAGS), FLOOR);
 }
 
 #[test]
