@@ -99,14 +99,16 @@ class RequestIntervalWireTests(unittest.IsolatedAsyncioTestCase):
             role = await endpoint.client()
             address = await target.local_address()
             oid = ObjectIdentifier(ObjectType.ANALOG_INPUT, 1)
-            started = time.monotonic()
+            # Python 3.12's Windows monotonic clock has coarse ticks; use the
+            # high-resolution performance counter for this strict duration check.
+            started = time.perf_counter_ns()
             async with asyncio.timeout(10):
                 for _ in range(3):
                     await role.read_property(address, oid, PropertyIdentifier.PRESENT_VALUE)
-            elapsed = time.monotonic() - started
+            elapsed = time.perf_counter_ns() - started
             # Each read after the first waits at least 150 ms from the answer
             # to the one before it.
-            self.assertGreaterEqual(elapsed, 2 * 0.15)
+            self.assertGreaterEqual(elapsed, 300_000_000)
         finally:
             await endpoint.close()
             await target.stop()
