@@ -1178,6 +1178,11 @@ class DeviceObjectPropertyReference(TypedDict):
     property in this device, and stores a member naming the server's own
     Device in its local form.
 
+    Typed reads include all four keys; absent optional device and array
+    index fields are ``None``. Single reference reads from Trend Log,
+    Averaging and Event Enrollment use this same mapping. Reserved instance
+    4194303 remains an explicit ObjectIdentifier, including unset references.
+
     Unknown or missing keys and a ``device_identifier`` that isn't a Device
     raise ValueError, a ``property_array_index`` outside unsigned32
     OverflowError, and wrong types TypeError. The server reads only its own objects, so a Trend Log
@@ -1449,7 +1454,9 @@ class PropertyValue:
       (``"authentication_policy"``: an ``AuthenticationPolicy``), Stages
       (``"stage_limit_value"``: ``(limit, values, deadband)``), Access Rights
       rules (``"access_rule"``:
-      an ``AccessRule`` with every key), property reference lists
+      an ``AccessRule`` with every key), property reference lists and the
+      single Trend Log Log_DeviceObjectProperty or Averaging and Event
+      Enrollment Object_Property_Reference
       (``"device_object_property_reference"``: a
       ``DeviceObjectPropertyReference`` with every key), a Global Group's
       Present_Value (``"property_access_result"``),
@@ -3070,8 +3077,9 @@ class BACnetServer:
     ) -> None:
         """Add a Trend Log (Clause 12.25) to the server (before starting).
 
-        Log_DeviceObjectProperty reads as ``application_data`` holding the
-        context-tagged reference; while unset it reads as Analog Input
+        Log_DeviceObjectProperty reads as one
+        ``device_object_property_reference`` value whose mapping includes all
+        four keys; while unset its object is Analog Input
         4194303's Present_Value, and writing a reference to instance 4194303
         unsets it. A null written to it succeeds and changes nothing.
 
@@ -3624,7 +3632,8 @@ class BACnetServer:
     ) -> None:
         """Add an Event Enrollment (Clause 12.12) to the server (before starting).
 
-        Object_Property_Reference, read-only to peers, reads as Analog Input
+        Object_Property_Reference, read-only to peers, reads as one typed
+        ``device_object_property_reference`` mapping. It names Analog Input
         4194303's Present_Value while the enrollment has no reference.
         Fault_Parameters reads as the context-tagged ``none`` choice while no
         fault algorithm is set, and writing that clears it; a null written to
@@ -3673,8 +3682,9 @@ class BACnetServer:
         can write both, and each write discards the samples. An interval of 0,
         or a sample count of 0 or above 1440, raises VALUE_OUT_OF_RANGE.
 
-        Object_Property_Reference reads as ``application_data`` holding the
-        context-tagged reference; while unset it reads as Analog Input
+        Object_Property_Reference reads as one
+        ``device_object_property_reference`` value whose mapping includes all
+        four keys; while unset its object is Analog Input
         4194303's Present_Value, and writing a reference whose object or
         Device is at instance 4194303 unsets it. A null written to it succeeds
         and changes nothing.

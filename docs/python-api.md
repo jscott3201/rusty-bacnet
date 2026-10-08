@@ -378,6 +378,8 @@ its octets.
 | Access Zone, Access User | Entry_Points, Exit_Points; Credentials, Members, Member_Of | `"device_object_reference"` | an `ObjectIdentifier`, or `(device, object)` | `add_access_zone(entry_points=..., exit_points=...)`, `add_access_user(credentials=..., members=..., member_of=...)` |
 | Life Safety Point, Life Safety Zone | Member_Of; Zone_Members | `"device_object_reference"` | an `ObjectIdentifier`, or `(device, object)` | none |
 | Global Group, Schedule, Channel, Trend Log Multiple | Group_Members; List_Of_Object_Property_References; Log_DeviceObjectProperty | `"device_object_property_reference"` | a `DeviceObjectPropertyReference` mapping with every key | `add_channel(members=...)`, `add_trend_log_multiple(members=...)` |
+| Trend Log; Averaging, Event Enrollment | Log_DeviceObjectProperty; Object_Property_Reference (one value) | `"device_object_property_reference"` | a `DeviceObjectPropertyReference` mapping with every key | existing property writes where writable |
+| Access Point; Lift, Escalator | Access_Event_Credential; Energy_Meter_Ref (one value) | `"device_object_reference"` | an `ObjectIdentifier`, or `(device, object)` | none |
 | Global Group | Present_Value | `"property_access_result"` | the member's `DeviceObjectPropertyReference` keys, then `"value"` (shaped as a read of the member) and `"error"` (`(ErrorClass, ErrorCode)`), one of them `None` | none |
 | Device | Audit_Notification_Recipient (one value) | `"recipient"` | an `AuditRecipientInput` mapping | `configure_audit_recipient(...)` |
 | Device | Active_COV_Subscriptions | `"cov_subscription"` | `{"recipient", "process_identifier", "object_identifier", "property_identifier", "property_array_index", "issue_confirmed_notifications", "time_remaining", "cov_increment"}`; `recipient` an `AuditRecipientInput` mapping, `cov_increment` a `float` or `None` | none |
@@ -391,6 +393,19 @@ its octets.
 | Accumulator | Scale (one value) | `"scale"` | a `float` for a float scale, an `int` for a power-of-ten scale | `add_accumulator(scale=...)` |
 | Accumulator | Prescale (one value) | `"prescale"` | `(multiplier, modulo_divide)` | `add_accumulator(prescale=...)` |
 | any object serving Tags | Tags | `"name_value"` | `{"name": str, "value": None or PropertyValue}` | no new constructor; read values can be written back |
+
+Single reference reads use these forms through local reads, client and endpoint
+RP/RPM, and device-aware singular and batch reads. A property-reference mapping
+always includes `object_identifier`, `property_identifier`,
+`property_array_index` and `device_identifier`; omitted optional fields are
+`None`. Reserved instance 4194303 stays an explicit `ObjectIdentifier`, including
+unset references. These values retain the complete original octets through
+copying, pickling and existing property writes where the property is writable.
+A framed value that fails reference decoding follows existing generic/raw
+behavior. Broken framing remains a read error; an RPM service envelope may be
+rejected before per-value conversion. An indexed read of a single reference
+does not acquire a typed form. Trend Log Multiple remains a collection, including
+empty and one-element reads.
 
 Tags reads use the same form through client RP/RPM, endpoint client roles,
 batch reads and the shared local-read decoder. A whole read is a `list` of
@@ -2112,8 +2127,9 @@ by COV yet (#1480), so a Trend Log refuses a COV Logging_Type, and a polled
 log's Log_Interval written from nonzero to zero (the older way to ask for
 COV), with OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
 
-A Trend Log's Log_DeviceObjectProperty reads as `application_data` holding the
-context-tagged BACnetDeviceObjectPropertyReference. Without a reference it
+A Trend Log's Log_DeviceObjectProperty reads as one
+`device_object_property_reference` value with a `DeviceObjectPropertyReference`
+mapping. Without a reference it
 reads as Analog Input 4194303's Present_Value (`0c 00 3f ff ff 19 55`), the
 empty element a Trend Log Multiple grows by, and the log polls nothing.
 Writing a reference whose object or Device is at instance 4194303 removes the
@@ -2694,7 +2710,7 @@ as unset, and write the unset form (for example the octets a fresh object
 reads) to clear one.
 
 An Event Enrollment's Object_Property_Reference, which peers can only read,
-reads as Analog Input 4194303's Present_Value (`0c 00 3f ff ff 19 55`) while
+reads as a `device_object_property_reference` mapping. It names Analog Input 4194303's Present_Value (`0c 00 3f ff ff 19 55`) while
 the enrollment has no reference, instead of null (#1417). Its
 Fault_Parameters reads as the context-tagged `none` choice (`08`) while no
 fault algorithm is set, and writing that clears it; a null written to it,
@@ -2746,7 +2762,8 @@ empties the window; out-of-range values raise VALUE_OUT_OF_RANGE. An
 Object_Property_Reference written with the server's own Device in it is kept
 as the local reference it names, and one naming another device is refused with
 OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED (#1153). Peers read and write it as the
-context-tagged BACnetDeviceObjectPropertyReference; the flat application-tagged
+context-tagged BACnetDeviceObjectPropertyReference, returned as one typed
+`device_object_property_reference` mapping; the flat application-tagged
 form is refused with INVALID_DATA_TYPE (#1182). Writing a reference whose
 object or Device is at instance 4194303 removes the reference, and a null
 succeeds and changes nothing (#1417); it used to remove it. The
