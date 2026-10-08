@@ -754,8 +754,8 @@ fn ensure_source_capacity(state: &mut DiscoveryState, policy: &DiscoveryPolicy, 
 }
 
 /// Broadcast this device's I-Am unless DeviceCommunicationControl restricts
-/// initiation. Clause 16.1.2 exempts only an I-Am answering a Who-Is, so an
-/// announcement made under DISABLE_INITIATION sends nothing and fails with
+/// initiation. This call announces independently of any received Who-Is;
+/// under DISABLE_INITIATION it sends nothing and fails with
 /// `SERVICES` / `COMMUNICATION_DISABLED`, the code Clause 18.6 keeps for local
 /// work that could not initiate a service for that reason.
 pub(crate) async fn broadcast_i_am_from<T: TransportPort + 'static>(
