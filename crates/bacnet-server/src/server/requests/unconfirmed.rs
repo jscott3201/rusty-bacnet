@@ -42,7 +42,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             network,
             config,
             clock,
-            comm_state,
             device_bindings,
             discovery_limiter,
             time_sync_limiter,
@@ -208,17 +207,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             let mut buf = BytesMut::new();
                             encode_apdu(&mut buf, &pdu).expect("valid APDU encoding");
 
-                            // Of the discovery answers, Clause 16.1.2 lets
-                            // only an I-Am for a Who-Is out while initiation
-                            // is disabled. Read the state after the last
-                            // await before the send, and before the limiter
-                            // records anything, so the same Who-Has is
-                            // answered once initiation is enabled again.
-                            if comm_state.initiation_restricted() {
-                                debug!("I-Have held back: DCC restricts initiation");
-                                return;
-                            }
-
+                            // This reply matches a received Who-Has. Use the
+                            // IC 135-2020-22 allowance during DISABLE_INITIATION,
+                            // retaining the ordinary discovery admission below.
                             if !discovery_limiter.try_consume_who_has_response(
                                 &target,
                                 received,
