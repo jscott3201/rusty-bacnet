@@ -263,3 +263,93 @@ fn a_whole_tags_write_takes_up_to_max_tags_elements() {
         [0x22, 0x04, 0x00]
     );
 }
+
+// New-feature integration witness: the initial provisioning seam alone did not
+// connect these rows to object dispatch. This is not a pre-existing-row regression.
+#[test]
+fn value_profiles_read_with_exact_wire_bytes() {
+    use bacnet_objects::analog::AnalogValueObject;
+    use bacnet_objects::binary::BinaryValueObject;
+    use bacnet_objects::multistate::MultiStateValueObject;
+    use bacnet_objects::present_value_access::PresentValueAccess;
+    for access in [
+        PresentValueAccess::Commandable,
+        PresentValueAccess::Writable,
+        PresentValueAccess::ReadOnly,
+    ] {
+        let profile = ObjectProfile {
+            tags: Some(vec![
+                BACnetNameValue::semantic("exhaust"),
+                BACnetNameValue::valued("floor", PropertyValue::Unsigned(3)),
+            ]),
+            profile_location: Some(LOCATION.into()),
+            profile_name: Some(NAME.into()),
+        };
+        macro_rules! build {
+            ($object:expr) => {{
+                let mut object = $object.unwrap();
+                // Absent rows refuse both reads and writes before provisioning.
+                for property in [
+                    TAGS,
+                    PropertyIdentifier::PROFILE_LOCATION,
+                    PropertyIdentifier::PROFILE_NAME,
+                ] {
+                    assert_refused(
+                        object.read_property(property, None).map(|_| ()),
+                        ErrorCode::UNKNOWN_PROPERTY,
+                    );
+                    assert_refused(
+                        object.write_property(property, None, PropertyValue::Null, None),
+                        ErrorCode::UNKNOWN_PROPERTY,
+                    );
+                    assert!(!object.property_list().contains(&property));
+                }
+                object.set_profile(profile.clone()).unwrap();
+                Box::new(object) as Box<dyn bacnet_objects::traits::BACnetObject>
+            }};
+        }
+        for object in [
+            build!(AnalogValueObject::with_access(1, "AV", 95, access)),
+            build!(BinaryValueObject::with_access(1, "BV", access)),
+            build!(MultiStateValueObject::with_access(1, "MSV", 3, access)),
+        ] {
+            let (mut db, oid) = db_with(object);
+            assert_eq!(read_wire(&db, oid, TAGS), [EXHAUST, FLOOR].concat());
+            assert_eq!(read_at(&db, oid, TAGS, Some(0)).unwrap(), [0x21, 2]);
+            assert_eq!(read_at(&db, oid, TAGS, Some(2)).unwrap(), FLOOR);
+            assert_refused(
+                read_at(&db, oid, TAGS, Some(3)).map(|_| ()),
+                ErrorCode::INVALID_ARRAY_INDEX,
+            );
+            for (property, expected) in [
+                (PropertyIdentifier::PROFILE_LOCATION, LOCATION),
+                (PropertyIdentifier::PROFILE_NAME, NAME),
+            ] {
+                assert_eq!(read_wire(&db, oid, property), text(expected));
+                assert_refused(
+                    read_at(&db, oid, property, Some(0)).map(|_| ()),
+                    ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
+                );
+                assert_refused(
+                    write_at(&mut db, oid, property, None, &text("555-other")),
+                    ErrorCode::WRITE_ACCESS_DENIED,
+                );
+                assert_refused(
+                    write_at(&mut db, oid, property, Some(1), &text("555-other")),
+                    ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
+                );
+            }
+            let list = read_wire(&db, oid, PropertyIdentifier::PROPERTY_LIST);
+            assert!(list.ends_with(&[0x92, 0x01, 0xE6, 0x92, 0x01, 0xE5, 0x91, 0xA8]));
+            write_at(&mut db, oid, TAGS, None, &FLOOR).unwrap();
+            assert_eq!(read_wire(&db, oid, TAGS), FLOOR);
+            write_at(&mut db, oid, TAGS, Some(0), &[0x21, 2]).unwrap();
+            assert_eq!(read_at(&db, oid, TAGS, Some(2)).unwrap(), [0x09, 0]);
+            write_at(&mut db, oid, TAGS, Some(2), &EXHAUST).unwrap();
+            assert_eq!(read_wire(&db, oid, TAGS), [FLOOR, EXHAUST].concat());
+            write_at(&mut db, oid, TAGS, None, &[]).unwrap();
+            assert_eq!(read_wire(&db, oid, TAGS), Vec::<u8>::new());
+            assert_eq!(read_at(&db, oid, TAGS, Some(0)).unwrap(), [0x21, 0]);
+        }
+    }
+}

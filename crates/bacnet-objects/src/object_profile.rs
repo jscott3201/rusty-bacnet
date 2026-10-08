@@ -5,7 +5,9 @@
 //! registration, as an [`ObjectAuditPolicy`](crate::audit::ObjectAuditPolicy)
 //! provisions the audit rows; an object that provisions none serves none,
 //! exactly as before. The Color, Color Temperature, Lighting Output and
-//! Binary Lighting Output objects carry one (`set_profile` on each).
+//! Binary Lighting Output, Analog Value, Binary Value and Multi-state Value
+//! objects carry one (`set_profile` on each). Value profile rows are
+//! independent of Present_Value access and source tracking.
 //!
 //! - Tags is a BACnetARRAY of BACnetNameValue that peers may write: whole, an
 //!   element by index, or its size at index 0, which truncates or appends
@@ -18,8 +20,9 @@
 //!   a location is empty or its URI scheme is http, https or bacnet, and a
 //!   profile name begins with a decimal vendor identifier and a dash.
 //!
-//! Objects built with `new` keep Tags in memory. Their
-//! `with_tags_persistence` constructors attach application-owned storage:
+//! Objects built with `new` or `with_access` keep Tags in memory. Their
+//! `with_tags_persistence` constructors (access-explicit for Values) attach
+//! application-owned storage:
 //! successful writes then override configured Tags across reconstruction.
 //! Saved Tags never provision an absent row. See [`TagsPersistence`].
 
@@ -275,3 +278,6 @@ mod persistence_tests;
 mod saving_tests;
 #[cfg(test)]
 mod test_support;
+
+#[cfg(test)]
+mod value_tests;
