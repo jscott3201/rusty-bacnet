@@ -16,7 +16,7 @@ use bacnet_encoding::constructed::{
     decode_access_rule, decode_action_list, decode_authentication_factor_format,
     decode_authentication_policy, decode_calendar_entry, decode_cov_subscription,
     decode_daily_schedule, decode_date_range, decode_destination,
-    decode_device_object_property_reference, decode_device_object_reference,
+    decode_device_object_property_reference, decode_device_object_reference, decode_name_value,
     decode_port_permission, decode_prescale, decode_property_access_result,
     decode_read_access_specification, decode_recipient, decode_scale, decode_special_event,
     decode_stage_limit_value, decode_value_source,
@@ -37,6 +37,8 @@ use super::PyPropertyValue;
 /// The constructed production a typed read splits a value into.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Element {
+    /// A Tags element as a name and an optional primitive PropertyValue.
+    NameValue,
     /// A Recipient_List destination, as a `Destination` mapping.
     Destination,
     /// A Port_Filter element, as a `(port_id, enabled)` pair.
@@ -153,6 +155,7 @@ pub(crate) fn element(
         (O::ACCUMULATOR, P::SCALE) => (Element::Scale, Single),
         (O::ACCUMULATOR, P::PRESCALE) => (Element::Prescale, Single),
         // Every object type that has these properties gives them one datatype.
+        (_, P::TAGS) => (Element::NameValue, Collection),
         (_, P::EVENT_TIME_STAMPS | P::COMMAND_TIME_ARRAY) => (Element::TimeStamp, Collection),
         (_, P::LAST_COMMAND_TIME) => (Element::TimeStamp, Single),
         (_, P::VALUE_SOURCE_ARRAY) => (Element::ValueSource, Collection),
@@ -208,7 +211,8 @@ pub(crate) fn decode(
 impl Element {
     /// Every element production, each once; a new one goes here too, so
     /// that [`Self::from_tag`] knows it.
-    const ALL: [Self; 23] = [
+    const ALL: [Self; 24] = [
+        Self::NameValue,
         Self::Destination,
         Self::PortPermission,
         Self::ReadAccessSpecification,
@@ -247,6 +251,7 @@ impl Element {
     /// The `PropertyValue.tag` of one element.
     pub(crate) fn tag(self) -> &'static str {
         match self {
+            Self::NameValue => "name_value",
             Self::Destination => "destination",
             Self::PortPermission => "port_permission",
             Self::ReadAccessSpecification => "read_access_specification",
@@ -309,6 +314,7 @@ impl Element {
             decoded.map(|(value, end)| (variant(value), end))
         }
         match self {
+            Self::NameValue => with(decode_name_value(octets, offset), Decoded::NameValue),
             Self::Destination => with(decode_destination(octets, offset), Decoded::Destination),
             Self::PortPermission => with(
                 decode_port_permission(octets, offset),
@@ -450,3 +456,7 @@ mod more_tests;
 #[cfg(test)]
 #[path = "constructed_read_scale_tests.rs"]
 mod scale_tests;
+
+#[cfg(test)]
+#[path = "constructed_read_tags_tests.rs"]
+mod tags_tests;

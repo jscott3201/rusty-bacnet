@@ -5,6 +5,7 @@ pub mod discovery;
 mod endpoint_requester;
 pub mod log_reader;
 pub mod segmentation;
+pub mod tags;
 pub mod tsm;
 
 #[doc(hidden)]

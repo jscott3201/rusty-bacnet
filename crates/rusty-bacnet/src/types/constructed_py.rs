@@ -8,9 +8,10 @@ use bacnet_types::constructed::{
     AccessResult, BACnetAccessRule, BACnetActionCommand, BACnetActionList,
     BACnetAuthenticationFactorFormat, BACnetAuthenticationPolicy, BACnetCOVSubscription,
     BACnetCalendarEntry, BACnetDateRange, BACnetDestination, BACnetDeviceObjectPropertyReference,
-    BACnetDeviceObjectReference, BACnetPortPermission, BACnetPrescale, BACnetPropertyAccessResult,
-    BACnetRecipient, BACnetScale, BACnetSpecialEvent, BACnetStageLimitValue, BACnetTimeValue,
-    BACnetValueSource, ReadAccessSpecification, SpecialEventPeriod,
+    BACnetDeviceObjectReference, BACnetNameValue, BACnetPortPermission, BACnetPrescale,
+    BACnetPropertyAccessResult, BACnetRecipient, BACnetScale, BACnetSpecialEvent,
+    BACnetStageLimitValue, BACnetTimeValue, BACnetValueSource, ReadAccessSpecification,
+    SpecialEventPeriod,
 };
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{BACnetTimeStamp, PropertyValue};
@@ -31,6 +32,7 @@ use super::{
 
 /// One element, decoded.
 pub(super) enum Decoded {
+    NameValue(BACnetNameValue),
     Destination(BACnetDestination),
     PortPermission(BACnetPortPermission),
     ReadAccessSpecification(ReadAccessSpecification),
@@ -60,6 +62,13 @@ pub(super) enum Decoded {
 impl Decoded {
     pub(super) fn into_python(self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         Ok(match self {
+            Self::NameValue(tag) => {
+                let dict = PyDict::new(py);
+                dict.set_item("name", tag.name)?;
+                dict.set_item("value", tag.value.map(PyPropertyValue::from_rust))?;
+                dict.into_any().unbind()
+            }
+
             Self::Destination(destination) => {
                 destination_to_py(py, &destination)?.into_any().unbind()
             }
