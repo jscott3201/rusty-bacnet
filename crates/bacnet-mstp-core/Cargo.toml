@@ -1,0 +1,26 @@
+[package]
+name = "bacnet-mstp-core"
+description = "Portable allocation-bounded BACnet MS/TP master core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["bacnet", "mstp", "embedded", "no-std"]
+categories = ["embedded", "network-programming", "no-std"]
+
+[features]
+default = []
+alloc = []
+std = ["alloc"]
+heapless = ["dep:heapless"]
+
+[dependencies]
+bacnet-mstp-codec = { workspace = true, default-features = false }
+heapless = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true
