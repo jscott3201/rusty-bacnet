@@ -17,7 +17,7 @@ serde = ["dep:serde", "serde/alloc"]
 [dependencies]
 bitflags = { workspace = true }
 smallvec = { workspace = true }
-thiserror = { workspace = true }
+thiserror = { version = "2", default-features = false }
 serde = { workspace = true, optional = true }
 
 [dev-dependencies]
