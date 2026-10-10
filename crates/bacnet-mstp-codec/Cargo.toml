@@ -1,0 +1,27 @@
+[package]
+name = "bacnet-mstp-codec"
+description = "Portable no-std BACnet MS/TP frame codec"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["bacnet", "mstp", "embedded", "no-std"]
+categories = ["embedded", "network-programming", "no-std"]
+
+[features]
+default = []
+alloc = []
+std = ["alloc", "dep:bytes"]
+heapless = ["dep:heapless"]
+
+[dependencies]
+bacnet-types = { version = "0.12.0", path = "../bacnet-types", default-features = false }
+bytes = { workspace = true, optional = true }
+heapless = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true
