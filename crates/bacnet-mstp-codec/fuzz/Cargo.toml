@@ -1,0 +1,22 @@
+[package]
+name = "mstp-codec-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+members = []
+
+[dependencies]
+libfuzzer-sys = "0.4"
+bacnet-mstp-codec = { path = "..", features = ["alloc"] }
+
+[[bin]]
+name = "mstp_decode"
+path = "fuzz_targets/mstp_decode.rs"
+test = false
+doc = false
+bench = false

@@ -4,6 +4,7 @@ members = [
     "crates/bacnet-types",
     "crates/bacnet-encoding",
     "crates/bacnet-services",
+    "crates/bacnet-mstp-codec",
     "crates/bacnet-transport",
     "crates/bacnet-network",
     "crates/bacnet-endpoint-core",
@@ -32,6 +33,7 @@ default-members = [
     "crates/bacnet-types",
     "crates/bacnet-encoding",
     "crates/bacnet-services",
+    "crates/bacnet-mstp-codec",
     "crates/bacnet-transport",
     "crates/bacnet-network",
     "crates/bacnet-endpoint-core",
@@ -58,6 +60,7 @@ categories = ["network-programming", "embedded"]
 bacnet-types = { version = "0.12.0", path = "crates/bacnet-types" }
 bacnet-encoding = { version = "0.12.0", path = "crates/bacnet-encoding" }
 bacnet-services = { version = "0.12.0", path = "crates/bacnet-services" }
+bacnet-mstp-codec = { version = "0.12.0", path = "crates/bacnet-mstp-codec", default-features = false }
 bacnet-transport = { version = "0.12.0", path = "crates/bacnet-transport" }
 bacnet-network = { version = "0.12.0", path = "crates/bacnet-network" }
 bacnet-endpoint-core = { version = "0.12.0", path = "crates/bacnet-endpoint-core" }
@@ -90,6 +93,8 @@ criterion = { version = "0.8", features = ["async_tokio"] }
 sysinfo = "0.39"
 libc = "0.2"
 getrandom = "0.3"
+heapless = "0.9"
+proptest = "1"
 
 [workspace.lints.rust]
 # Workspace floor. `bacnet-transport` overrides nothing: each FFI site
