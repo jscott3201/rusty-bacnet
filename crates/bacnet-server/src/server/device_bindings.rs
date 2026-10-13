@@ -8,7 +8,9 @@ use bacnet_encoding::primitives::{
 /// Maximum number of configured and observed device bindings held by a server.
 pub(super) const MAX_DEVICE_BINDINGS: usize = 4096;
 
-/// Freshness window for passively observed I-Am bindings.
+/// Freshness window for passively observed I-Am bindings, measured on
+/// [`runtime_clock::now`] (#1556): the instants the table's callers pass come
+/// from there, and so does the tokio deadline a fresh binding resolves to.
 pub(super) const OBSERVED_BINDING_TTL: Duration = Duration::from_secs(10 * 60);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -228,7 +230,7 @@ impl DeviceBindingTable {
         is_group: impl Fn(&[u8]) -> bool,
     ) -> bacnet_objects::command_source::CommandDeviceBinding {
         use bacnet_objects::command_source::CommandDeviceBinding;
-        let now = Instant::now();
+        let now = runtime_clock::now();
         let mut matched = None;
         for device in self.entries.keys() {
             let resolution = self.resolve_at(device, now, &is_group);
@@ -281,7 +283,12 @@ impl DeviceBindingTable {
         self.entries
             .iter()
             .filter(|(_, entry)| matches!(entry, BindingEntry::Configured(_)))
-            .map(|(device, _)| (*device, self.resolve_at(device, Instant::now(), |_| false)))
+            .map(|(device, _)| {
+                (
+                    *device,
+                    self.resolve_at(device, runtime_clock::now(), |_| false),
+                )
+            })
     }
 
     #[cfg(test)]

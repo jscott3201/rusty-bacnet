@@ -154,7 +154,8 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         crate::audit::ObjectAuditPolicy::default()
     }
 
-    /// Optional sealed built-in AV/BV policy assignment authority. Custom objects
+    /// Optional sealed built-in policy assignment authority (AV/BV, Color and
+    /// Color Temperature). Custom objects
     /// remain on their ordinary writer path; adapters may forward this capability.
     #[doc(hidden)]
     fn audit_policy_authority_internal(
@@ -316,6 +317,18 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     fn next_monotonic_deadline_internal(&self) -> Option<Duration> {
         None
     }
+
+    /// Take the finest COV increment an active property subscription to
+    /// Tracking_Value asks for, or `None` when no such subscription gives
+    /// one (#1510).
+    ///
+    /// The server's monotonic task passes it before each advance, so an
+    /// object whose fade or ramp samples Tracking_Value for COV samples it
+    /// at least that finely, still no more often than its sample grid
+    /// allows. The value is finite and not negative. Objects without such a
+    /// Tracking_Value ignore it.
+    #[doc(hidden)]
+    fn set_tracking_cov_increment_internal(&mut self, _finest: Option<f64>) {}
 
     /// Freeze COV-readable state while the object's mutation lock is held.
     #[doc(hidden)]
@@ -1111,6 +1124,23 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         })
     }
 
+    /// [`set_present_value_internal`](Self::set_present_value_internal) on
+    /// behalf of `origin`, the local Device the application runs in.
+    ///
+    /// A noncommandable Analog, Binary or Multi-state Value that tracks its
+    /// Present_Value's source (#1552) publishes `origin` as Value_Source
+    /// after the update, as Clause 19.5 asks of a write the local device
+    /// makes; plain `set_present_value_internal` leaves it NONE. The server's
+    /// `set_present_value_local` calls this when it knows its Device. The
+    /// default ignores `origin`, and decorators must forward it.
+    fn set_present_value_from_internal(
+        &mut self,
+        value: PropertyValue,
+        _origin: &crate::command_source::CommandOrigin,
+    ) -> Result<(), Error> {
+        self.set_present_value_internal(value)
+    }
+
     /// Apply the `Tracking_Value` the local application derived.
     ///
     /// Only the built-in Life Safety Point and Zone opt in, with a
@@ -1120,6 +1150,30 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// default fails closed with the same error as
     /// [`set_present_value_internal`](Self::set_present_value_internal).
     fn set_tracking_value_internal(&mut self, _value: PropertyValue) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+        })
+    }
+
+    /// Apply an input the application reports for an access-control object
+    /// the server holds (#1132): an Access Point's access event, a
+    /// Credential Data Input's read or an Access Door's hardware state, each
+    /// a record whose values change together. See
+    /// [`AccessControlInput`](crate::access_control::AccessControlInput).
+    ///
+    /// Only the built-in Access Point, Credential Data Input and Access Door
+    /// opt in, each for its own kind of record. While Out_Of_Service is TRUE
+    /// the point refuses an event with PROPERTY / WRITE_ACCESS_DENIED, since
+    /// it performs no authentication then, and the door and the reader store
+    /// the input with their device values put aside, leaving a client's
+    /// simulated values served. The default, and an object offered another
+    /// kind of record, fails closed with the same error as
+    /// [`set_present_value_internal`](Self::set_present_value_internal).
+    fn report_access_input_internal(
+        &mut self,
+        _input: crate::access_control::AccessControlInput,
+    ) -> Result<(), Error> {
         Err(Error::Protocol {
             class: ErrorClass::OBJECT.to_raw() as u32,
             code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,

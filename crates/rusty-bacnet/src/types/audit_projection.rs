@@ -1,7 +1,8 @@
 //! Projection of decoded Audit Log query ACKs into Python-owned mappings.
 
 use bacnet_services::audit::{
-    AuditLogQueryAck, AuditPropertyReference, BACnetAuditLogDatum, BACnetAuditNotification,
+    AuditLogQueryAck, AuditPropertyReference, BACnetAuditLogDatum, BACnetAuditLogRecord,
+    BACnetAuditNotification,
 };
 use bacnet_types::constructed::BACnetRecipient;
 use pyo3::prelude::*;
@@ -159,14 +160,23 @@ pub(crate) fn audit_log_query_ack_to_py(
     for item in &ack.records {
         let record_result = PyDict::new(py);
         record_result.set_item("sequence_number", item.sequence_number)?;
-        let record = PyDict::new(py);
-        let (date, time) = &item.record.timestamp;
-        record.set_item("timestamp", (date_value(date), time_value(time)))?;
-        record.set_item("datum", datum_to_py(py, &item.record.datum)?)?;
-        record_result.set_item("record", record)?;
+        record_result.set_item("record", audit_log_record_to_py(py, &item.record)?)?;
         records.append(record_result)?;
     }
     result.set_item("records", records)?;
     result.set_item("no_more_items", ack.no_more_items)?;
     Ok(result.into_any().unbind())
+}
+
+/// One Audit Log record: its `timestamp` as a `(date, time)` pair and its
+/// `datum`, as AuditLogQuery and a ReadRange of the Log_Buffer show it.
+pub(crate) fn audit_log_record_to_py<'py>(
+    py: Python<'py>,
+    record: &BACnetAuditLogRecord,
+) -> PyResult<Bound<'py, PyDict>> {
+    let result = PyDict::new(py);
+    let (date, time) = &record.timestamp;
+    result.set_item("timestamp", (date_value(date), time_value(time)))?;
+    result.set_item("datum", datum_to_py(py, &record.datum)?)?;
+    Ok(result)
 }

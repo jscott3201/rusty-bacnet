@@ -13,6 +13,15 @@ impl<T: TransportPort + 'static> ClientBuilder<T> {
         self
     }
 
+    /// Set the least time, in milliseconds, from the latest confirmed
+    /// request to a destination finishing to the next being sent (default
+    /// 0: no pacing; at most an hour). See
+    /// [`ClientConfig::min_request_interval_ms`].
+    pub fn min_request_interval_ms(mut self, ms: u64) -> Self {
+        self.config.min_request_interval_ms = ms;
+        self
+    }
+
     /// Set the maximum number of APDU segments this client accepts.
     ///
     /// Values 0 and 1 fail at build time. Other finite non-rung values are
@@ -56,6 +65,15 @@ impl BipClientBuilder {
     /// Set the number of APDU retries before a confirmed request times out.
     pub fn apdu_retries(mut self, retries: u8) -> Self {
         self.config.apdu_retries = retries;
+        self
+    }
+
+    /// Set the least time, in milliseconds, from the latest confirmed
+    /// request to a destination finishing to the next being sent (default
+    /// 0: no pacing; at most an hour). See
+    /// [`ClientConfig::min_request_interval_ms`].
+    pub fn min_request_interval_ms(mut self, ms: u64) -> Self {
+        self.config.min_request_interval_ms = ms;
         self
     }
 
@@ -106,6 +124,15 @@ impl Bip6ClientBuilder {
         self
     }
 
+    /// Set the least time, in milliseconds, from the latest confirmed
+    /// request to a destination finishing to the next being sent (default
+    /// 0: no pacing; at most an hour). See
+    /// [`ClientConfig::min_request_interval_ms`].
+    pub fn min_request_interval_ms(mut self, ms: u64) -> Self {
+        self.config.min_request_interval_ms = ms;
+        self
+    }
+
     /// Set the maximum number of APDU segments this client accepts.
     ///
     /// Values 0 and 1 fail at build time. Other finite non-rung values are
@@ -150,6 +177,15 @@ impl ScClientBuilder {
     /// Set the number of APDU retries before a confirmed request times out.
     pub fn apdu_retries(mut self, retries: u8) -> Self {
         self.config.apdu_retries = retries;
+        self
+    }
+
+    /// Set the least time, in milliseconds, from the latest confirmed
+    /// request to a destination finishing to the next being sent (default
+    /// 0: no pacing; at most an hour). See
+    /// [`ClientConfig::min_request_interval_ms`].
+    pub fn min_request_interval_ms(mut self, ms: u64) -> Self {
+        self.config.min_request_interval_ms = ms;
         self
     }
 

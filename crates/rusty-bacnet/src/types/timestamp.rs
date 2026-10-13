@@ -152,7 +152,7 @@ pub(crate) fn date_time_tuple(
     ))
 }
 
-pub(super) fn time_value(time: &primitives::Time) -> (u8, u8, u8, u8) {
+pub(crate) fn time_value(time: &primitives::Time) -> (u8, u8, u8, u8) {
     (time.hour, time.minute, time.second, time.hundredths)
 }
 

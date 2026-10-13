@@ -43,7 +43,7 @@ pub struct ScConnection {
     /// Maximum encoded BACnet/SC BVLC message length the hub can accept.
     pub hub_max_bvlc_length: u16,
     /// Maximum NPDU length the hub can accept (learned from ConnectAccept).
-    pub hub_max_apdu_length: u16,
+    pub hub_max_npdu_length: u16,
     pub(super) next_message_id: u16,
     /// Pending Disconnect-ACK to send after receiving a Disconnect-Request.
     pub disconnect_ack_to_send: Option<ScMessage>,
@@ -73,7 +73,7 @@ impl ScConnection {
             max_bvlc_length: crate::sc_limits::DEFAULT_MAX_BVLC_LENGTH,
             max_apdu_length: crate::sc_limits::LOCAL_RECEIVE_NPDU_CAPACITY,
             hub_max_bvlc_length: 1476,
-            hub_max_apdu_length: 1476,
+            hub_max_npdu_length: 1476,
             next_message_id: 1,
             disconnect_ack_to_send: None,
             pending_connect_message_id: None,
@@ -173,7 +173,7 @@ impl ScConnection {
         uuid.copy_from_slice(&msg.payload[6..22]);
         self.hub_device_uuid = Some(uuid);
         self.hub_max_bvlc_length = u16::from_be_bytes([msg.payload[22], msg.payload[23]]);
-        self.hub_max_apdu_length = u16::from_be_bytes([msg.payload[24], msg.payload[25]]);
+        self.hub_max_npdu_length = u16::from_be_bytes([msg.payload[24], msg.payload[25]]);
         self.state = ScConnectionState::Connected;
         true
     }

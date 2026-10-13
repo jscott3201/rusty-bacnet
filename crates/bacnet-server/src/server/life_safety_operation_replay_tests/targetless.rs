@@ -40,7 +40,9 @@ fn decode_frame(frame: &Bytes) -> Apdu {
     decode_apdu(npdu.payload).unwrap()
 }
 
-#[tokio::test]
+// Paused: the replay window is measured on tokio's clock (#1556), so a
+// runner stall between the sends can't close it.
+#[tokio::test(start_paused = true)]
 async fn targetless_reset_duplicate_replays_identical_simple_ack_without_second_actuation() {
     // PR-0802 remainder: a targetless RESET applies to both an armed Point and
     // an armed Zone (single SimpleACK per §13.13), and an identical confirmed

@@ -67,7 +67,7 @@ use bacnet_types::enums::{
 use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
 
-use super::simulated_reliability;
+use super::{simulated_reliability, DoorStateReport};
 use crate::common;
 
 /// The door state a client can simulate while Out_Of_Service is TRUE.
@@ -134,6 +134,37 @@ impl DoorState {
                 .and_then(|state| checked(state, &admits))
                 .map(|state| self.door_alarm_state = state),
         })
+    }
+}
+
+impl DoorState {
+    /// Apply a report from the door's hardware (#1132): each value given,
+    /// checked against its production as a client's simulated write is, and
+    /// the alarm state against `admits`. Any value refused is
+    /// VALUE_OUT_OF_RANGE and none of them changes.
+    pub(super) fn report(
+        &mut self,
+        report: DoorStateReport,
+        admits: impl Fn(DoorAlarmState) -> bool,
+    ) -> Result<(), Error> {
+        let door_status = report
+            .door_status
+            .map(|status| checked(status, door_status_in_range))
+            .transpose()?;
+        let lock_status = report
+            .lock_status
+            .map(|status| checked(status, lock_status_in_range))
+            .transpose()?;
+        let door_alarm_state = report
+            .door_alarm_state
+            .map(|state| {
+                checked(state, door_alarm_state_in_range).and_then(|state| checked(state, &admits))
+            })
+            .transpose()?;
+        self.door_status = door_status.unwrap_or(self.door_status);
+        self.lock_status = lock_status.unwrap_or(self.lock_status);
+        self.door_alarm_state = door_alarm_state.unwrap_or(self.door_alarm_state);
+        Ok(())
     }
 }
 

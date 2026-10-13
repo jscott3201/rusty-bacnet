@@ -14,7 +14,8 @@ cargo install bacnet-cli --locked --features sc-tls
 
 The binary is called `bacnet`. Features:
 
-- `tui` (default): `bacnet tui`, the full-screen terminal UI.
+- `tui`: `bacnet tui`, the full-screen terminal UI. It is off by default, and
+  out of the release binaries, until the terminal UI ships in 0.14.0.
 - `sc-tls`: the BACnet/SC transport (WebSocket over TLS).
 - `pcap`: `bacnet capture`, live or from a pcap file. It needs libpcap and its
   headers (`libpcap-dev` on Debian and Ubuntu).
@@ -28,7 +29,7 @@ Prebuilt binaries are attached to each
 bacnet discover
 bacnet read 192.168.1.100 ai:1 pv
 bacnet --json readm 192.168.1.100 ai:1 pv,object-name
-bacnet tui
+bacnet tui    # built with --features tui
 ```
 
 The [CLI reference](https://github.com/jscott3201/rusty-bacnet/blob/main/docs/CLI.md)

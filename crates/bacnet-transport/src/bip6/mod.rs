@@ -1,127 +1,103 @@
-//! BACnet/IPv6 BVLC codec per ASHRAE 135-2020 Annex U.
+//! The BACnet/IPv6 transport (Annex U).
 //!
-//! Frame format: type(1) + function(1) + length(2) + source-vmac(3) + payload
-//! Multicast groups: FF02::BAC0 (link-local), FF05::BAC0 (site-local)
+//! All B/IPv6 BVLL parsing and encoding lives in
+//! [`bacnet_bip_codec::ipv6`]. This module holds the transport around it:
+//! the socket, multicast groups, the neighbour table that maps VMACs to
+//! B/IPv6 addresses and resolves the ones it lacks (U.5), foreign-device
+//! registration, and [`decode_bvll6`], [`encode_bvll6`] and
+//! [`bvll6_error`], which use the transport's
+//! [`Error`](bacnet_types::error::Error).
+//!
+//! The transport's network-layer MAC is the node's 3-octet VMAC (U.1.3):
+//! see [`Bip6Transport`].
+//!
+//! Every codec item that a public transport signature names is re-exported
+//! here under its codec name, so a crate that depends on the transport can
+//! build and read B/IPv6 messages without depending on the codec too: the
+//! message, frame and error types, the function and result codes, the VMAC
+//! and address types, the sink trait and the wire-length constants.
+//!
+//! ```
+//! use bacnet_transport::bip6::{
+//!     decode_bvll6, encode_bvll6, Bip6Address, Bip6Vmac, Bvlc6Function, Bvll6,
+//!     BIP6_ADDRESS_LENGTH, HEADER_LENGTH, VMAC_LENGTH,
+//! };
+//! use bytes::BytesMut;
+//! use std::net::Ipv6Addr;
+//!
+//! // A Forwarded-NPDU, as a BBMD hands a foreign device a broadcast.
+//! let origin = Bip6Address::new(Ipv6Addr::new(0x2001, 0xDB8, 0, 0, 0, 0, 0, 9), 47808);
+//! let npdu = [0x01, 0x00, 0x10, 0x08];
+//! let forwarded = Bvll6::ForwardedNpdu {
+//!     original_source: Bip6Vmac::new([0x00, 0x04, 0xD2]),
+//!     original_address: origin,
+//!     npdu: &npdu,
+//! };
+//! let mut wire = BytesMut::new();
+//! encode_bvll6(&mut wire, &forwarded)?;
+//! assert_eq!(wire.len(), HEADER_LENGTH + VMAC_LENGTH + BIP6_ADDRESS_LENGTH + npdu.len());
+//!
+//! let received = decode_bvll6(&wire)?;
+//! assert_eq!(received.function(), Bvlc6Function::FORWARDED_NPDU);
+//! assert_eq!(received.origin(), Some(origin));
+//! assert_eq!(received.npdu(), Some(&npdu[..]));
+//! # Ok::<(), bacnet_types::error::Error>(())
+//! ```
 
-use bytes::Bytes;
-
-/// BVLC type byte for BACnet/IPv6 (Annex U).
-pub const BVLC6_TYPE: u8 = 0x82;
-
-/// BIP6 virtual MAC address: 3 bytes per Annex U.2.
-pub type Bip6Vmac = [u8; 3];
-
-/// Minimum BVLC-IPv6 header length: type(1) + function(1) + length(2) + source-vmac(3).
-pub const BVLC6_HEADER_LENGTH: usize = 7;
-
-/// BVLC-IPv6 unicast header length: type(1) + function(1) + length(2) + source-vmac(3) + dest-vmac(3).
-pub const BVLC6_UNICAST_HEADER_LENGTH: usize = 10;
+pub use bacnet_bip_codec::ipv6::{
+    Bip6Address, Bip6Vmac, Bvlc6Function, Bvlc6ResultCode, Bvll6, Bvll6Error, Bvll6Frame,
+    BIP6_ADDRESS_LENGTH, BVLC_TYPE_BIP6, VMAC_LENGTH,
+};
+pub use bacnet_bip_codec::{BvllSink, PayloadShape, SinkFull, HEADER_LENGTH, MAX_BVLL_LENGTH};
 
 /// Maximum number of random VMAC regenerations before startup fails (Annex U.5/H.7.2).
 pub const MAX_VMAC_RETRIES: u32 = 3;
 
-/// BVLC-IPv6 function codes per Annex U.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Bvlc6Function {
-    /// BVLC-Result (0x00).
-    Result,
-    /// Original-Unicast-NPDU (0x01).
-    OriginalUnicast,
-    /// Original-Broadcast-NPDU (0x02).
-    OriginalBroadcast,
-    /// Address-Resolution (0x03).
-    AddressResolution,
-    /// Forwarded-Address-Resolution (0x04).
-    ForwardedAddressResolution,
-    /// Address-Resolution-Ack (0x05).
-    AddressResolutionAck,
-    /// Virtual-Address-Resolution (0x06).
-    VirtualAddressResolution,
-    /// Virtual-Address-Resolution-Ack (0x07).
-    VirtualAddressResolutionAck,
-    /// Forwarded-NPDU (0x08).
-    ForwardedNpdu,
-    /// Register-Foreign-Device (0x09).
-    RegisterForeignDevice,
-    /// Delete-Foreign-Device-Table-Entry (0x0A).
-    DeleteForeignDeviceEntry,
-    /// Distribute-Broadcast-To-Network (0x0C).
-    DistributeBroadcastToNetwork,
-    /// Unrecognized function code.
-    Unknown(u8),
-}
-
-impl Bvlc6Function {
-    /// Convert a wire byte to a `Bvlc6Function`.
-    pub fn from_byte(byte: u8) -> Self {
-        match byte {
-            0x00 => Self::Result,
-            0x01 => Self::OriginalUnicast,
-            0x02 => Self::OriginalBroadcast,
-            0x03 => Self::AddressResolution,
-            0x04 => Self::ForwardedAddressResolution,
-            0x05 => Self::AddressResolutionAck,
-            0x06 => Self::VirtualAddressResolution,
-            0x07 => Self::VirtualAddressResolutionAck,
-            0x08 => Self::ForwardedNpdu,
-            0x09 => Self::RegisterForeignDevice,
-            0x0A => Self::DeleteForeignDeviceEntry,
-            0x0C => Self::DistributeBroadcastToNetwork,
-            other => Self::Unknown(other),
-        }
-    }
-
-    /// Convert a `Bvlc6Function` to its wire byte.
-    pub fn to_byte(self) -> u8 {
-        match self {
-            Self::Result => 0x00,
-            Self::OriginalUnicast => 0x01,
-            Self::OriginalBroadcast => 0x02,
-            Self::AddressResolution => 0x03,
-            Self::ForwardedAddressResolution => 0x04,
-            Self::AddressResolutionAck => 0x05,
-            Self::VirtualAddressResolution => 0x06,
-            Self::VirtualAddressResolutionAck => 0x07,
-            Self::ForwardedNpdu => 0x08,
-            Self::RegisterForeignDevice => 0x09,
-            Self::DeleteForeignDeviceEntry => 0x0A,
-            Self::DistributeBroadcastToNetwork => 0x0C,
-            Self::Unknown(b) => b,
-        }
-    }
-}
-
-/// A decoded BVLC-IPv6 frame.
-#[derive(Debug, Clone)]
-pub struct Bvlc6Frame {
-    /// BVLC-IPv6 function code.
-    pub function: Bvlc6Function,
-    /// Source virtual MAC address (3 bytes).
-    pub source_vmac: Bip6Vmac,
-    /// Destination virtual MAC address (3 bytes, present in unicast only).
-    pub destination_vmac: Option<Bip6Vmac>,
-    /// Payload after the BVLC-IPv6 header (typically NPDU bytes).
-    pub payload: Bytes,
-}
-
+mod addressing;
+mod collision_probe;
 mod frame;
-pub use frame::*;
+pub use frame::{bvll6_error, decode_bvll6, encode_bvll6};
 mod ingress;
 mod link;
 mod port;
 mod receive;
+mod receive_counters;
+mod reply_limit;
+mod resolve;
+mod resolve_counters;
+mod resolver;
 mod send;
 mod socket;
 mod vmac_table;
 pub use port::{
-    decode_bip6_mac, encode_bip6_mac, Bip6BroadcastScope, Bip6ForeignDeviceConfig, Bip6Transport,
-    BACNET_IPV6_MULTICAST, BACNET_IPV6_MULTICAST_LINK_LOCAL, BACNET_IPV6_MULTICAST_ORG_LOCAL,
+    Bip6BroadcastScope, Bip6ForeignDeviceConfig, Bip6Transport, BACNET_IPV6_MULTICAST,
+    BACNET_IPV6_MULTICAST_LINK_LOCAL, BACNET_IPV6_MULTICAST_ORG_LOCAL,
     BACNET_IPV6_MULTICAST_SITE_LOCAL, DEFAULT_BACNET6_PORT,
 };
-pub use vmac_table::generate_random_vmac;
+pub use receive_counters::Bip6ReceiveCounters;
+pub use resolve_counters::Bip6ResolutionCounters;
+pub use resolver::UnresolvedSend;
+pub use vmac_table::{
+    format_vmac_text, generate_random_vmac, parse_vmac_text, vmac_from_device_instance,
+    VMAC_TEXT_PREFIX,
+};
 
 #[cfg(test)]
+mod frame_tests;
+#[cfg(test)]
 mod group_delivery_tests;
+#[cfg(all(test, unix))]
+mod multicast_resolution_tests;
+#[cfg(test)]
+mod receive_counters_tests;
+#[cfg(test)]
+mod reply_tests;
+#[cfg(test)]
+mod resolve_tests;
+#[cfg(test)]
+mod resolver_tests;
+#[cfg(test)]
+mod revalidation_tests;
 #[cfg(test)]
 mod safety_tests;
 #[cfg(test)]

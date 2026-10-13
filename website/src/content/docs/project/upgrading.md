@@ -1,132 +1,135 @@
 ---
-title: "Upgrade from v0.11.0 to v0.12.0"
+title: "Upgrade from v0.12.0 to v0.13.0"
 description: "Review the breaking changes by area before replacing a working integration."
 ---
 
-Do not treat this pre-1.0 update as a drop-in replacement merely because the package name stayed the same. v0.12.0 changes Rust and Python APIs, some on-the-wire behavior, BACnet/SC trust and identity, and how several objects answer. This page groups what changes for code and deployments built on v0.11.0.
+Do not treat this pre-1.0 update as a drop-in replacement merely because the package name stayed the same. v0.13.0 moves the MS/TP and BACnet/IP transports and the router onto new portable `no_std` cores, names BACnet/IPv6 peers by VMAC, and changes Rust and Python APIs and some on-the-wire behavior. This page groups what changes for code and deployments built on v0.12.0.
 
 :::note[This guide and the changelog]
-The [0.12.0 section of the changelog](https://github.com/jscott3201/rusty-bacnet/blob/v0.12.0/CHANGELOG.md) lists every change by area and issue, and its migration notes give the exact replacements. This guide groups what changes for code written against v0.11.0.
+The [0.13.0 section of the changelog](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/CHANGELOG.md) lists every change by area and issue, and its migration notes give the exact replacements. This guide groups what changes for code written against v0.12.0.
 :::
 
 ## Before updating
 
-Record your current package/binary version, enabled features, platform, transport, and important application workflows. Back up persisted Audit Log snapshots before the first start on v0.12.0. Keep a known-working deployment or environment available according to your operational policy.
+Record your current package/binary version, enabled features, platform, transport, and important application workflows. On BACnet/IPv6, list every address you store (recipient lists, bindings, COV subscriptions, configuration): their form changes in this release, and a router must be upgraded together with the BACnet/IPv6 nodes it serves. Keep a known-working deployment or environment available according to your operational policy.
 
 ## Update the selected interface
 
 In a Python virtual environment:
 
 ```sh
-python -m pip install --upgrade rusty-bacnet==0.12.0
+python -m pip install --upgrade rusty-bacnet==0.13.0
 ```
 
-For Rust, move every `bacnet-*` dependency to `0.12.0` together; all eleven crates share the version, and `bacnet-endpoint` and `bacnet-cli` are new on crates.io. For the CLI, [download the v0.12.0 executable](/rusty-bacnet/start/installation/#install-a-cli-executable), check it against `SHA256SUMS`, and confirm its version and features.
+For Rust, move every `bacnet-*` dependency to `0.13.0` together; all seventeen crates share the version, and six are [new on crates.io](#new-portable-crates). A crate that depends on `bacnet-types`, `bacnet-encoding` or `bacnet-services` with `default-features = false` must now turn on `std` or the new `alloc` feature, or it won't build (#1604). For the CLI, [download the v0.13.0 executable](/rusty-bacnet/start/installation/#install-a-cli-executable), check it against `SHA256SUMS`, and confirm its version and features.
 
-The packaging changed too:
-
-- The Linux CLI executables need glibc 2.17 or newer and no libpcap package; v0.11.0's needed glibc 2.39 and libpcap. The Windows executable no longer needs the Visual C++ Redistributable.
-- Wheels now cover CPython 3.14 as well as 3.11 to 3.13.
+The packaging is unchanged: the same platforms, glibc floor and CPython versions as v0.12.0.
 
 ## Rust API
 
-- `BACnetClient::builder()` and `BACnetServer::builder()` are gone; use `bip_builder()`. `ObjectIdentifier::new_unchecked` is gone too; use the validating `new` or `new_addressable` (#847, #873).
-- `Error` gains `Structured`, which the client returns for a structured error body: some list-write refusals that came back as `Error::Protocol` now come back as `Error::Structured`, so match both for the class and code. `Error` also gains `UnsupportedTransport`, `Error::Decoding` carries a `DecodingKind`, and `Error::InvalidTag` is gone; match `kind: DecodingKind::InvalidTag` instead (#956, #1026, #1047, #1048, #1446).
-- `subscribe_cov_property` takes a `CovPropertySubscription`, routed sends take a `RoutedTarget`, and `AnyTransport::Bip` holds its `BipTransport` in a `Box` (#902).
-- More constructed-value codecs are free functions in `bacnet_encoding::constructed`: the calendar and schedule codecs (`bacnet_services::schedule` and `BACnetDateRange::encode`/`decode` are gone), the event notification codecs (`EventNotificationRequest` and `NotificationParameters` lose `encode`/`decode`), and `PropertyReference` and `ReadAccessSpecification`, now in `bacnet_types::constructed`. The ReadRange, WritePropertyMultiple and recipient encoders return `Result`, and `tags::decode_optional_context` is gone (#771, #793, #996, #1134, #1156, #1276, #1374).
-- Alarm and event types use the `bacnet-types` enumerations and bit strings, such as `EventState` and `StatusFlags`, instead of raw integers (#914, #930, #932).
-- Who-Is and Who-Has take one optional `DeviceInstanceRange` instead of two limits. `VTOpenRequest`, `WhoAmIRequest` and the WriteGroup request carry their standard fields (#912, #1483).
-- `subscribe_cov_property` takes a `NonZeroU32` lifetime. Audit queries take a three-state `BACnetSuccessFilter` and a `u64` cursor, and ReadRange indices and sequence numbers are `u64` (#345, #802, #1092).
-- `ServerConfig` and `ReceivedApdu` gain fields, such as the DCC, COV, mutation and request admission settings and the ingress network, global-broadcast flag and provenance, so struct literals need them (`ServerConfig` has `..Default::default()`) and patterns need `..` (#522, #1225).
-- `CanonicalPeer::from_source` takes the local network number; `None` keeps the old matching (#1465).
-- `decode_npdu` returns `NpduDecodeError` instead of `Error` (#1141).
-- A custom `TransportPort` must provide `local_receive_apdu_capacity()`, `max_apdu_length()` is now `egress_apdu_limit()` with no alias, and `ReceivedNpdu` gains `provenance` and `direct_response` (#693).
-- `PropertyPresenceCondition::IntrinsicReporting` splits into `IntrinsicReportingRequired` and `IntrinsicReportingOptional`; give a custom object's rows the one its table names (#1485).
-- The PICS generator's `CharacterSet` renames or drops four variants to match the six standard character sets (#913).
-- Local writes (`write_local`, `write_local_encoded` and the `*_local` setters) must be awaited inside a Tokio runtime; outside one they return `Error::Encoding` and write nothing. Once a write commits, its COV, event, Schedule and Staging work finishes even if the caller is dropped (#1367).
+- `bacnet_types::error::Error` is `#[non_exhaustive]`, so a `match` on it needs a wildcard arm. A ReadRange answer that breaks a rule now fails with `Error::ReadRangeViolation` naming the rule instead of `Error::Decoding`, and strict validation refuses some pages it took before; `ReadRangeValidation::Lenient` keeps them (#1530, #1531, #1604).
+- Struct literals need new fields, or `..Default::default()`: `ClientConfig` takes `min_request_interval_ms` and `share_port_by_address`, `ServerConfig` takes `share_port_by_address` and `on_reinitialize`, `SessionConfig` takes `min_request_interval_ms`, and a full `DeviceConfig` takes `apdu_segment_timeout`, which must match the server's (#1138, #1535, #1538, #1542, #1593).
+- `handle_reinitialize_device` returns the decoded `ReinitializedState` instead of `()` (#1138).
+- `AccessPointObject::set_access_event` takes an `AccessEventReport`, and `set_number_of_authentication_policies` no longer refuses a count below Active_Authentication_Policy (#1132, #1325).
+- `ColorObject::set_present_value` takes a `BACnetXyColor`, and the colour objects' `set_present_value` and `set_min_max` return `Result`. `MemberDatatype::of` takes the member's object type, and `constructed_channel_value` replaces `is_lighting_command_channel_value` (#1474).
+- A custom `LogBufferRecords` implements `record_identity`, and a wrapper that forwards `BACnetObject` methods forwards the new `report_access_input_internal` and `set_present_value_from_internal` too (#1132, #1536, #1552).
+- `EndpointReadRequest::Range` takes a `ReadRangeValidation`, and the endpoint's range answer is a `ReadRangeReply`. `PolicyReason` gains `GroupSource` (#1504, #1531).
+- `set_life_safety_operation_expected_local` must be awaited inside a Tokio runtime, like the other local writes (#1520).
+- `decode_app_primitive` takes its label as any `impl Display` (#1645).
+- `BvlcFunction`, `BvlcResultCode`, `Bvlc6Function` and `Bvlc6ResultCode` move out of `bacnet-types`: import them from `bacnet_transport::bvll` and `bacnet_transport::bip6` (#1604, #1621).
 
 ## Python API
 
-- A Rust panic raises PyO3's `PanicException`, which `except Exception` misses. A transport failure raises `BacnetTransportError`, which is also an `OSError` (#1002, #1120).
-- An integer outside its field's range raises `OverflowError` everywhere, and an oversized object type raises `ValueError` (#847, #1360).
-- An array or list reads as a `list` at any length. Local `read_property` and `write_property_local` behave like network requests and raise `BacnetProtocolError` (#1296, #1297).
-- The properties in the Python API's [typed constructed values](https://github.com/jscott3201/rusty-bacnet/blob/v0.12.0/docs/python-api.md#typed-constructed-values) table, such as Recipient_List, a Group's members and Present_Value, a Command's Action, the Access Rights rules and schedules, read as typed mappings, tuples and identifiers instead of `application_data` octets, so comparisons against octets change. Other constructed values still read as octets. Writing a read value back still works (#1310, #1344, #1345, #1487).
-- Dates carry the full year, so drop any `+ 1900`; an unspecified year is 255, `rusty_bacnet.UNSPECIFIED`. `time_synchronization` and `utc_time_synchronization` need a specific date and time (#1501).
-- `comm_state()` returns `EnableDisable` values, which are all truthy; compare with them or call `.to_raw()` (#1431).
-- `successful_actions_only` takes 0, 1 or 2 (1 for the old `True`), and the alarm calls take enum values. Who-Is limits come in pairs (#345, #914, #1483).
-- New required parameters: `vt_open` takes a `VTClass` and a local session identifier, `who_am_i` the vendor ID, model name and serial number, and `write_group` names each change by channel number (#912). `write_property_local` needs the keyword `source_object` (#824).
-- `add_bip_network_port` replaces `add_network_port` (#867).
+- BACnet/IPv6 peers are named by VMAC. Pass `bip6:<device instance>`, `bip6:0x<6 hex digits>` or the result of `await client.resolve_vmac("[ip]:port")`; an `"[ip]:port"` string is refused. `DiscoveredDevice.mac_address` and a COV notification's `source_mac` are 3 octets on BACnet/IPv6, and an ipv6 server's `local_address()` reads `bip6:0x…` (#1671).
+- An ipv6 `BACnetServer`'s VMAC is its device instance, so `start()` fails when another node on its link and port uses that instance. A client picks a random VMAC unless it gets `ipv6_device_instance`, which it needs on a link without multicast, such as Linux loopback (#1671).
+- A ReadRange page that breaks a rule raises `BacnetReadRangeViolationError` naming the rule; `validation="lenient"` keeps such pages, which some devices send (#1531).
+- On MS/TP, a client or server waits longer by default for a successor, a poll answer and a reply ([MS/TP](#mstp)); `mstp_usage_timeout_ms` and `mstp_reply_timeout_ms` set those waits (#1655).
 
-`ObjectIdentifier`, `PropertyValue` and `BACnetTimeStamp` can now be copied and pickled, and every exported class reports the `rusty_bacnet` module (#1500); nothing needs to change for that.
-
-## Wire behavior
-
-- The server ignores a confirmed request sent by broadcast or multicast, and the stack won't send one to a group address. Address each device by unicast or a routed DNET/DADR (#1257, #1479, #1493).
-- An undecodable confirmed request draws a Reject naming the fault, and trailing octets or wrongly tagged members are refused (#1374, #1375, #1411, #1446).
-- A Who-Is or Who-Has carrying only one range limit is dropped (#1447, #1483).
-- AddListElement and RemoveListElement errors name the first failed element; duplicates are skipped and a missing element fails the whole removal. CreateObject and SubscribeCOVPropertyMultiple errors carry their full bodies (#1026, #1027, #1047, #1048).
-- ReadRange reads only lists. SubscribeCOVPropertyMultiple stops at the first failing reference. SubscribeCOVProperty and SubscribeCOVPropertyMultiple refuse a zero lifetime; SubscribeCOV still treats zero as indefinite (#802, #1025, #1058, #1059, #1102).
-- Priority_Array is read-only; command and relinquish through Present_Value with a priority (#842).
-- Default_Color, Default_Color_Temperature and Color_Command use their standard property identifiers instead of 508 to 510, which belong to Network Port; use the named constants (#887).
-- Who-Am-I, You-Are, VT and WriteGroup encode in the standard form (#912).
-- Log records carry Log_Status with bit 0 first, so log-disabled no longer reads as log-interrupted (#1233).
-- Addresses longer than 18 octets are refused by the address codecs, the recipient encoders and You-Are (#1098, #1156, #1200).
-- While DCC disables initiation, the server skips I-Have and `broadcast_i_am()` returns an error; Who-Is still gets an I-Am (#1388).
-- Notifications to a recipient on the local network number go out as local traffic (#1299).
-- Lighting Output carries out its lighting commands: fades and ramps move Tracking_Value over time, steps and STOP act on the priority array, and the warn commands (also Present_Value -1.0 to -3.0) blink and hold for Egress_Time when Blink_Warn_Enable is TRUE. Lighting_Command_Default_Priority refuses 6 (#1384).
+The new keywords need no change to existing code: `bbmd=` and `foreign_device=` on the B/IP owners, `min_request_interval_ms`, `share_port_by_address`, the `mstp_*` options, and `segmentation_supported` with `apdu_segment_timeout_ms` on a full server (#938, #1535, #1538, #1593, #1611, #1653, #1655).
 
 ## CLI
 
-- `bacnet --sc` requires `--sc-ca` with the site CA and no longer loads the system roots (#513). See [BACnet/SC](/rusty-bacnet/guides/bacnet-sc/).
-- `bacnet read-range` decodes log records, and its JSON lists them under `records` instead of `items` (#1274).
-- The Docker test tools in `benchmarks/` changed too: `bacnet-sc-hub` requires `--ca`, `--cert`, `--key` and `--device-uuid`, and `bacnet-device --transport=sc` needs SC credentials and a device UUID (#513, #517).
+- With `--ipv6`, targets take `bip6:<device instance>` or `bip6:0x<6 hex digits>`. An `[ip]` or `[ip]:port` target is first resolved to the VMAC of the node there, and addresses print as `bip6:0x…`. Without `--device-instance` the CLI needs a link with multicast (#1671).
+- `register` and `discover --bbmd` take the global `--ttl`, and `--foreign-bbmd` with `--renewal` runs the whole session as a registered foreign device (#938).
+- `read-range` takes `--position`, `--sequence` or `--time`, pages a log with `--all`, and shows the rules a page broke; `--strict` refuses such a page (#1532).
+- The packet decoder shows BVLC function 0x0C as `12`, and reports a capture whose BVLC Length disagrees with its UDP payload as a decode error (#1604).
 
-## Transports
+## Wire behavior
 
-- BACnet/SC needs mutual TLS 1.3 with explicit CA trust. `ScHub::start` takes an `ScHubTlsConfig` instead of a `TlsAcceptor`, and the node builders an `ScNodeTlsConfig` instead of a rustls `ClientConfig`, both built from DER. In Python, pass `sc_ca_cert`, `sc_client_cert` and `sc_client_key`, and `ca_cert` for `ScHub` (#513).
-- Every SC hub and node needs a nonzero device UUID: `sc_device_uuid` for a Python client or server, `device_uuid` for `ScHub`. Provision it once and keep it for the device's life (#517).
-- Read SC link state with `connection_state_changes()` instead of `ScTransport::connection()`, and MS/TP counts with `diagnostics()` instead of `node_state()`. An SC hub bind failure is `Error::Transport` (#956, #1104).
-- B/IPv6 with `::` or no interface picks one usable non-loopback multicast interface and a unique address on it, keeps traffic on that link, and fails startup when the choice is ambiguous; pass a concrete address then. v0.11.0 asked the routing table for an address and fell back to `::1` when that failed.
-- A B/IP BBMD bound to `0.0.0.0` fails `start()` when it can't tell its own address; bind the interface address instead (#937, #952).
-- A device or router binding at a multicast or broadcast address fails `build()` and `start()`. B/IP drops forwarded packets from a group origin (#1493).
-- `BACnetRouter::start` takes `RouterOptions` and returns a `StartedRouter` (#1220).
-- Send a remote network's broadcast with `broadcast_to_network`, not `send_apdu_routed_via_local_broadcast` with an empty DADR. Routed confirmed requests refuse DNET 0, DNET 65535, an empty DADR and addresses over 18 octets (#1267, #1278, #1479).
-- NPDUs and frames with addresses over 18 octets are dropped and counted, and router rejects go back to the original sender (#1141, #1158, #1198).
-- `NetworkPortObject::new` gives way to `NetworkPortObject::new_bip` with a `BipPortConfig`, and Python's `add_network_port` to `add_bip_network_port`; a registered NORMAL B/IP Network Port follows its real bind (#863, #867).
+- Color and Color Temperature serve their addendum rows: Status_Flags, Event_State, Reliability and Out_Of_Service answer UNKNOWN_PROPERTY, Color's Present_Value is writable, and Default_Fade_Time refuses a value outside 100 to 86,400,000 ms (#1474).
+- An Access Point serves Access_Event_Authentication_Factor, and its Active_Authentication_Policy can read 0, with Reliability CONFIGURATION_ERROR, when no usable policy is in effect (#1132, #1325).
+- The server, client and endpoint ignore a confirmed request whose link-layer source is a group address (#1504).
+- A WriteProperty of Tags to an object without Tags answers that it has no such property, whatever the value (#1553).
+- An accepted WARMSTART or COLDSTART ends DISABLE_INITIATION at once, and the full server answers a matching Who-Has while initiation is disabled (#1567, #1590).
+- A full server's segment timeout is configurable and matches what its Device declares; a narrow endpoint refuses a segmentation declaration it can't serve (#1593).
 
-## Objects and server
+## MS/TP
 
-- Objects serve the properties their standard tables list. Undefined rows, such as Out_Of_Service on Command, answer UNKNOWN_PROPERTY, and missing required rows appear; regenerate your PICS (#979, #985, #1021, #1052, #1062, #1064, #1073, #1092, #1227, #1284, #1485).
-- Constructed properties, from Lighting_Command and Color_Command to references and schedules, use their standard encodings and refuse the old octets. Rust reads them as `ApplicationData`; use the `bacnet_encoding::constructed` helpers. `BACnetLightingCommand` takes a `LightingOperation` (#980, #996, #1107, #1133, #1134, #1169, #1234, #1263, #1312, #1386, #1395, #1487).
-- An indexed array read returns one element, or UNKNOWN_PROPERTY for an array the object lacks. An unset reference reads as instance 4194303, not NULL; write such a reference to clear it (#1034, #1296, #1417, #1426).
-- Many setters validate and return `Result`, take typed values, or sit behind accessors such as `recipient_list()`. Device references refuse non-Device identifiers (#1029, #1087, #1088, #1098, #1149, #1182, #1249, #1285, #1308, #1316).
-- Custom objects and wrappers adopt the reworked `BACnetObject` hooks for intrinsic reporting, life safety, COV increment, schedules and logs: `apply_life_safety_operation` returns a `LifeSafetyOperationOutcome` in place of the `_detailed` hook, and `impl_intrinsic_reporting!` is gone (#746, #752, #815, #845, #889, #1088, #1111, #1203, #1233, #1329, #1433, #1436).
-- The server refuses DeviceCommunicationControl, even with the right password, until you pick a `DccPolicy` (`dcc_policy` in Python). `comm_state()` returns a `DccState` instead of a `u8`, and `handlers::handle_device_communication_control` is gone (#522, #1399, #1430).
-- `CovAckResult::Error` carries the refusing answer as a `Refusal`, a `Data` variant is added, and the type is no longer `Copy` (#1323, #1342).
-- Local writes take a `LocalCommandSource`. Writing a Command's Present_Value runs its Action list, and a Channel writes members in other devices (#824, #1150, #1264).
-- The Device's Device_Address_Binding lists the server's own configured bindings and recent I-Am observations, replacing any value the application stored there. An event notification to a Device recipient with no fresh binding sends a targeted Who-Is and waits up to a minute for the answer (#1368, #1369).
-- A Notification Class Recipient_List holds at most 32 destinations, `add_destination` returns `Result`, and the flat list form from before #152 is gone (#1098, #1124, #1125).
-- Log_Buffer reads only through ReadRange, and the pollers log any datatype. Trend Logs refuse COV logging for now (#1480), so stop a polled log by clearing Enable (#1092, #1233, #1236, #1354).
-- Calendar follows the local date, and a Schedule evaluates in the standard order. A target that refuses its write sets the Schedule's Reliability to CONFIGURATION_ERROR (#1028, #1029, #1086, #1433).
-- Access objects accept simulated writes while out of service and refuse NORMAL in their alarm values. A State_Text write sets Number_Of_States, and Averaging samples itself over a sliding window (#1083, #1131, #1144, #1149, #1247, #1401, #1443).
+- The transport runs on `bacnet-mstp-core`. `MasterNode`, `MasterState` and `bacnet_transport::mstp_frame` are gone: build and read frames with `bacnet_transport::mstp::codec`, whose `FrameType` has constants (`TOKEN`) where the enum had variants (`Token`), and whose CRC functions are in its `crc` module (#1608, #1684).
+- `MstpConfig` gains `extended_frames`, `usage_timeout`, `reply_timeout` and `transmit_latency_pad`; end a literal with `..MstpConfig::default()`. `start()` and the new `validate()` refuse `max_info_frames` 0 and baud rates below 2667 (#1608, #1611, #1654, #1655).
+- A port waits 35 ms for its successor or a polled station and 300 ms for a reply, the longest Clause 9.5.3 allows, so an answer a USB adapter delivers late isn't missed. v0.12.0 waited 20 ms after passing the token, 10 ms after a poll and 255 ms for a reply; set `usage_timeout` and `reply_timeout` to shorten the waits (#1655).
+- A port with no drain, such as `TokioSerialPort` on Windows, adds `transmit_latency_pad` to each frame's wire time, 4 ms by default on Windows (#1654).
+- A custom `SerialPort::read` waits for data: three `Ok(0)` reads in a row now end the transport as a read error does. Declare an adapter that hears its own frames with `with_echo(Echo::full())`, or `mstp_echo=True` in Python (#1608, #1653, #1656).
+- `MstpDiagnosticsSnapshot` loses its received-frame counts; read them from its new `mac` field (#1608).
+- Extended frames (Types 32 and 33) carry NPDUs of up to 1497 octets when `extended_frames` is on. It is off by default; `BACnetRouter` turns it on for every MS/TP port it routes, so a router's MS/TP ports declare an APDU limit of 1476 (#1611, #1663).
+- Token passing follows Clause 9 more closely: turnaround before every frame, the waiting states' handling of unexpected and invalid frames, and the successor search and maintenance polls with a successor above Max_Master. A frame dropped after a valid header, for a COBS type the port doesn't take, a bad source or a length too long, is skipped whole, where v0.12.0 looked for a new frame inside its body (#1608, #1609, #1640).
 
-Request admission is new: the server caps the requests it works on at once, in total and per peer, and keeps a reserve for DCC recovery. [Request admission](https://github.com/jscott3201/rusty-bacnet/blob/v0.12.0/docs/request-admission.md) gives its defaults and how to change them.
+## B/IP and BBMD
 
-## Persistence
+- The client, server and endpoint builders take one `BipMode`. On the endpoint builder, `.mode(BipMode::Foreign(config))` replaces `register_as_foreign_device`, and `.mode(BipMode::Bbmd(BbmdOptions { .. }))` replaces `enable_bbmd` and the BBMD setters. A `ForeignDeviceConfig` literal adds `renewal_interval: None` (#938, #1013).
+- A `BipTransport` set up both as a BBMD and as a foreign device fails `start()`. A foreign device manages its own registration, so a manual Register-Foreign-Device, Delete-Foreign-Device-Table-Entry or Write-BDT to its own BBMD fails; send those from a transport in normal mode (#1622).
+- A foreign device takes a Forwarded-NPDU only from its BBMD by unicast, holds up to 16 broadcasts until its first registration attempt is answered, and retries a lost registration sooner (#1622). `bvlc_client_snapshot()` reports how its registration goes (#1013).
+- `bbmd_state()` hands out a `std::sync::Mutex`: lock it without `.await`, never across an await, and drop `.await` from `fdt_counters()`. `BbmdState::bdt()` and `fdt()` return copies, and `encode_bdt`, `encode_fdt` and the forwarding helpers are gone (#939, #1623, #1669).
+- A custom `TransportPort` overrides `bip_port` instead of `normal_bip_endpoint`, and `publish_bip_port_internal` takes the port's mode (#939).
+- A Forwarded-NPDU's `BvllMessage::payload` now starts with the 6-octet origin: read the NPDU with `npdu()` and the origin with `origin()`. `encode_bvll` takes a `&Bvll`, and several `bvll` constants are renamed (#1604).
+- The transport drops a datagram whose BVLC Length field is wrong, refuses to send an NPDU over 1497 octets, and fails a unicast to one of the link's group addresses; `NetworkLayer::send_apdu` sends an Unconfirmed-Request for such an address as a broadcast (#1604, #1622, #1677).
+- A BBMD rebroadcasts a peer's Forwarded-NPDU on its subnet when its own BDT row is two-hop and the datagram came by unicast, not by the sender's row (#1623).
+- A registered Network Port follows the transport's mode: a BBMD serves its BDT and FDT, and a foreign device its BBMD's address (#939).
 
-- Audit Log snapshots from v0.11.0 convert to the new schema on first load (#1233). Keep the backup until the converted log checks out.
-- Custom Audit Log persistence runs on a plain thread with no Tokio context, and a panic fails the save (#1270).
-- Durable saves finish on that writer thread, so a `BACnetServer` dropped without `stop()` returns before storage settles. Call `stop().await` before building another server on the same storage (#1270, #1409).
-- A wildcard BBMD with a persisted BDT finds its own address from that table alone (#952).
+## B/IPv6
+
+- A B/IPv6 transport's MAC is the node's 3-octet VMAC instead of its 18-octet address: pass a peer's VMAC to sends, client requests, recipient lists and bindings, and rewrite the addresses you stored. `Bip6Transport::resolve_virtual_address` finds a peer's VMAC from its address, and `local_address()` gives this node's (#1637).
+- `encode_bip6_mac` and `decode_bip6_mac` are gone; build and read an address with `Bip6Address`. `Bvlc6Frame`, `decode_bvlc6`, `encode_bvlc6` and the message helpers become `Bvll6` values with `decode_bvll6` and `encode_bvll6` (#1621, #1671).
+- A unicast to a VMAC the transport hasn't heard sends Address-Resolution and waits up to 3 s before failing; a router port queues instead (#1637).
+- A node answers a BBMD's Forwarded-Address-Resolution for its VMAC, and NAKs the requests only a BBMD serves (#1632, #1638).
+
+## The router
+
+- `BACnetRouter` runs on `bacnet-router-core`. `table()` returns a synchronous guard: drop the `.lock().await`, and don't hold it across an await or call `table()` again while it lives (#1679).
+- The table's types are the core's: `RouteEntry`, `ReachabilityStatus`, `ConvergenceMode` and `RoutingClaimSnapshot` are `Route`, `Reachability`, `Convergence` and `ClaimCounters`, ports are `PortId`s and next hops `Mac`s. `lookup` returns an owned `Route`, read through getters such as `port()`, `is_direct()` and `next_hop()`, and `lookup_mut` is gone. `add_direct` and `add_learned` return `bool`, refusing a new network once the table holds 256 routes (#1679, #1684).
+- Calls that read the clock take `router.now()`: `add_learned(.., now)` replaces `add_learned_at`, `touch(.., now)` replaces `touch_used_at`, and `learn` or `apply_claim` replaces `add_learned_with_flap_detection` and its `_at` form. `purge_stale` and `expire_pending` report what they drop through a callback instead of a `Vec`, the listings (`networks()` and the rest) are iterators in ascending order, so `sorted_networks()` is `networks()`, and `wire_port_id` is `PortId::wire_id`. The [Rust API guide](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/docs/rust-api.md#moving-a-router-table-from-012) lists every change (#1679, #1684).
+- `start` refuses a router with no ports, more than 255, or a port whose MAC is longer than 18 octets (#1679).
+- A `TransportPort` wrapper delegates the new `max_npdu()` and `prepare_for_routing`, and a custom transport that carries more or less than 1,497 octets overrides `max_npdu()` (#1611, #1665).
+- On the wire the router follows Clause 6 more closely. At startup each port broadcasts Network-Number-Is, then its I-Am-Router-To-Network. An NPDU too long for the port it would leave by draws Reject-Message-To-Network reason 4, and a reject for any reason but 1 or 2 no longer removes a learned route. The router's own list of reachable networks leaves out unreachable ones when it answers Who-Is-Router-To-Network, and a request naming a network behind the arrival port goes unanswered. An NPDU for another router, or a global broadcast, that arrives with a hop count of 1 isn't passed on; delivery onto an attached network is unchanged. An APDU for the router's own MAC on any of its networks is delivered locally (#1665, #1679).
+- To a group DADR on a directly connected port the router passes on only an Unconfirmed-Request, counting anything else in `group_dadr_drops()` (#1504, #1677).
+
+## BACnet/SC
+
+- `ScConnection::hub_max_apdu_length` is `hub_max_npdu_length`; its value is unchanged (#1679).
+- After a failed return to the primary hub, the next attempt waits a full restore interval, and a restore attempt no longer blocks traffic on the failover hub (#1555, #1575).
+- A router port on BACnet/SC carries the NPDUs its hub accepts, read when the port starts (#1665).
+
+## New portable crates
+
+Six crates publish for the first time. They are `no_std`, need no allocator and take their time from the caller, so firmware can use them directly, and like the rest they need Rust 1.93. The Tokio MS/TP and B/IP transports and the router run on them; hosted code that doesn't call them changes nothing for them.
+
+- `bacnet-time`: the nanosecond `Instant` and `Duration` the cores share, so firmware feeds them one clock. It has no features (#1681).
+- `bacnet-mstp-codec`: MS/TP frames, standard and extended, with their CRCs and a stream decoder. `alloc`, `bytes` and `heapless` add encode sinks, and `crc32k-table` a table-driven CRC-32K (#1604, #1611).
+- `bacnet-bip-codec`: every B/IP and B/IPv6 BVLL message, with typed addresses and VMACs. `alloc`, `bytes` and `heapless` add encode sinks (#1604, #1621).
+- `bacnet-mstp-core`: the MS/TP master node. `alloc` adds heap-backed queues (#1605).
+- `bacnet-bip-core`: the B/IP node in its three modes, and a BBMD's tables and forwarding. It has no features (#1622, #1623).
+- `bacnet-router-core`: the Clause 6 router, with B/IP and MS/TP ports behind its `bip` and `mstp` features (#1679).
+
+Each crate's README and docs.rs page show how to drive it, and the [Rust API guide](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/docs/rust-api.md) covers the three cores' firmware use. `bacnet-types`, `bacnet-encoding` and `bacnet-services` also build as `no_std` with an allocator, through their new `alloc` feature (#1604).
 
 ## Verify more than import success
 
-Exercise a known read, error handling, any routing or segmentation paths you depend on, subscription lifecycle, relevant server objects, and controlled cleanup. SC and MS/TP deployments need transport-specific validation, not only package-level tests.
+Exercise a known read, error handling, any routing or segmentation paths you depend on, subscription lifecycle, relevant server objects, and controlled cleanup. MS/TP deployments need on-wire validation, since the master node and its timing are new. BACnet/IPv6 deployments need every stored address checked in its VMAC form, and a router tested with the nodes it serves.
 
-Retest your application's output parsing where it depends on CLI JSON, typed Python values or Rust models: some constructed properties, dates and arrays read differently now. Separate regressions from corrected behavior that an older integration may have depended on accidentally. The [integration guides](/rusty-bacnet/development/overview/) explain shared endpoints, Network Port registration and SC setup, which are new or changed in this release.
+Retest your application's output parsing where it depends on CLI addresses, typed Python values or Rust models. Separate regressions from corrected behavior that an older integration may have depended on accidentally. The [integration guides](/rusty-bacnet/development/overview/) explain shared endpoints, Network Port registration and SC setup.
 
 ## Sources and release scope
 
-This guide covers the move from **v0.11.0** to **v0.12.0**. Source review is not hardware qualification.
+This guide covers the move from **v0.12.0** to **v0.13.0**. Source review is not hardware qualification.
 
-[v0.12.0 release notes](https://github.com/jscott3201/rusty-bacnet/releases/tag/v0.12.0) · [Changelog](https://github.com/jscott3201/rusty-bacnet/blob/v0.12.0/CHANGELOG.md) · [Rust API guide](https://github.com/jscott3201/rusty-bacnet/blob/v0.12.0/docs/rust-api.md) · [Python API guide](https://github.com/jscott3201/rusty-bacnet/blob/v0.12.0/docs/python-api.md).
+[v0.13.0 release notes](https://github.com/jscott3201/rusty-bacnet/releases/tag/v0.13.0) · [Changelog](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/CHANGELOG.md) · [Rust API guide](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/docs/rust-api.md) · [Python API guide](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/docs/python-api.md).

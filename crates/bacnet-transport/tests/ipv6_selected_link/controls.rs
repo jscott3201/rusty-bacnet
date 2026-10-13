@@ -7,7 +7,8 @@ async fn explicit_own_port_peer_proves_multicast_intake_unicast_and_control_sour
     let (selected, index) = fixture();
     let mut transport = Bip6Transport::new(selected, 0, None);
     let mut incoming = transport.start().await.unwrap();
-    let (announced, port) = decode_bip6_mac(transport.local_mac()).unwrap();
+    let local = transport.local_address().unwrap();
+    let (announced, port) = (*local.ip(), local.port());
     assert_eq!(announced, selected);
     let peer = udp(selected, 0, index, false);
     let peer_vmac = [0x40, 0x88, 0x16];

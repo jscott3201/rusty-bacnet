@@ -126,7 +126,7 @@ impl<T: TransportPort + 'static> CommandRunner<T> {
             learned_routers: Arc::clone(writer.learned_routers),
             device_bindings: Arc::clone(writer.device_bindings),
             event_suppressions: Arc::clone(writer.event_suppressions),
-            config: Arc::new(writer.config.clone()),
+            config: Arc::clone(writer.config),
             tasks: server.request_tasks.spawner(),
         }
     }

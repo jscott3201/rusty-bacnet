@@ -4,6 +4,30 @@
 //! structs and encode/decode functions. Service data at constructed boundaries
 //! remains as raw bytes (`Vec<u8>`) — the application layer interprets
 //! property values, not the service codec.
+//!
+//! # Features
+//!
+//! Decoded lists and text are owned, so the codecs need an allocator, and one
+//! of these features to say so:
+//!
+//! - `std` (default): hosted builds.
+//! - `alloc`: `no_std` with a global allocator, for bare-metal targets:
+//!   `default-features = false, features = ["alloc"]`. As for
+//!   `bacnet-encoding`, `bytes` must build for the target.
+//!
+//! A build with neither fails; that combination is reserved for a future
+//! allocation-free subset.
+
+// Tests always build with std, so feature-off test runs need no imports of
+// their own.
+#![cfg_attr(all(not(feature = "std"), not(test)), no_std)]
+
+#[cfg(not(any(feature = "std", feature = "alloc")))]
+compile_error!("bacnet-services needs the `std` or the `alloc` feature");
+
+// `format!` and `vec!` without std's prelude.
+#[macro_use]
+extern crate alloc;
 
 pub mod alarm_event;
 pub mod alarm_summary;

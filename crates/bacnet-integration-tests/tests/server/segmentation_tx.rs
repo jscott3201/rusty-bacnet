@@ -19,6 +19,7 @@ async fn server_segments_large_rpm_response() {
         name: "Segmentation Test Device".into(),
         vendor_name: "Rusty BACnet Seg Test".into(),
         vendor_id: 555,
+        segmentation_supported: Segmentation::BOTH,
         ..DeviceConfig::default()
     })
     .unwrap();

@@ -62,6 +62,11 @@ pub const DEFAULT_DOOR_OPEN_TOO_LONG_TIME: u32 = 300;
 /// device. That includes DOOR_OPEN_TOO_LONG: the door serves
 /// Door_Open_Too_Long_Time for the application's logic to read but runs no
 /// timer of its own.
+///
+/// While the server holds the door, the application reports its
+/// Door_Status, Lock_Status and Door_Alarm_State through
+/// `BACnetServer::report_door_state_local` (#1132), which stores them as the
+/// setters do, out of service included.
 #[derive(Clone)]
 pub struct AccessDoorObject {
     oid: ObjectIdentifier,
@@ -652,6 +657,24 @@ impl BACnetObject for AccessDoorObject {
 
     fn cov_snapshot_internal(&self) -> Option<Box<dyn BACnetObject>> {
         Some(Box::new(self.clone()))
+    }
+
+    /// Take what the door's hardware reports (#1132): Door_Status,
+    /// Lock_Status and Door_Alarm_State, each one given, together. A value
+    /// outside its production, or an alarm state the door's lists don't
+    /// admit, is VALUE_OUT_OF_RANGE and changes nothing. Stored as the
+    /// setters store the device's values: while Out_Of_Service is TRUE the
+    /// report replaces the values put aside, and a client's simulated ones
+    /// stay served until the return to service. Any other record is
+    /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
+    fn report_access_input_internal(&mut self, input: AccessControlInput) -> Result<(), Error> {
+        let AccessControlInput::DoorState(report) = input else {
+            return Err(common::optional_functionality_not_supported_error());
+        };
+        let (lists, alarm_values) = (&self.alarm_lists, self.reporting.alarm_values());
+        // The device's own state: put aside out of service, else served.
+        let device = self.device_state.as_mut().unwrap_or(&mut self.state);
+        device.report(report, |state| lists.admits(alarm_values, state))
     }
 }
 

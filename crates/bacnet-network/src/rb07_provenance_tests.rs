@@ -1,44 +1,15 @@
 //! RB-07 network threading tests (in-memory, deterministic, no sleeps).
 //!
-//! Covers: IngressContext threads provenance, ReceivedApdu preserves it
-//! through clone/queueing, routed sources stay claims (compat: decisions
-//! unchanged), redacted Debug.
+//! Covers: ReceivedApdu preserves provenance through clone/queueing,
+//! routed sources stay claims (compat: decisions unchanged), redacted Debug.
+//! The router threads a frame's provenance to its consumers: see
+//! `router::tests::provenance_threads_by_value_to_every_consumer`.
 
 use super::layer::ReceivedApdu;
-use super::router::IngressContext;
-use bacnet_encoding::npdu::{Npdu, NpduAddress};
+use bacnet_encoding::npdu::NpduAddress;
 use bacnet_transport::port::TransportProvenance;
 use bacnet_types::MacAddr;
 use bytes::Bytes;
-
-fn test_npdu() -> Npdu {
-    Npdu::default()
-}
-
-#[test]
-fn ingress_context_threads_provenance_by_value() {
-    use bacnet_transport::sc::{LoopbackWebSocket, ScTransport};
-    // test_local is unverified legacy; test_local_with_provenance threads any
-    // value by value (verified values arrive behaviorally via SC in async
-    // paths; here we prove threading with distinct unverified-derived copies
-    // plus a scope check on the default).
-    let npdu = test_npdu();
-    let unverified = IngressContext::test_local(0, 1000, &[0x0A], npdu.clone());
-    assert!(unverified.provenance.is_unverified());
-    let copied = IngressContext::test_local_with_provenance(
-        0,
-        1000,
-        &[0x0A],
-        npdu,
-        TransportProvenance::unverified(),
-    );
-    assert_eq!(copied.provenance, unverified.provenance);
-    assert!(copied.provenance.scope().contains("unverified"));
-    let _ = (
-        LoopbackWebSocket::pair,
-        ScTransport::<LoopbackWebSocket>::new,
-    );
-}
 
 #[test]
 fn received_apdu_preserves_provenance_through_clone() {

@@ -1,6 +1,8 @@
 //! Build the client for the chosen transport, then serve UI commands and
 //! forward client notifications until the UI closes the command channel.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::time::Duration;
 
 use bacnet_client::client::BACnetClient;
@@ -16,7 +18,7 @@ use tokio::time::Instant;
 use super::{DeviceFeed, EventSink};
 use crate::transport::{self, TransportArgs};
 use crate::tui::message::{
-    AddressStyle, Command, OpId, OpOutcome, WhoIsScope, WhoIsSpec, WorkerEvent,
+    AddressStyle, Command, DirectedTo, OpId, OpOutcome, WhoIsScope, WhoIsSpec, WorkerEvent,
 };
 
 /// How often the worker checks whether the UI needs a resync.
@@ -94,7 +96,20 @@ async fn connect(plan: ConnectPlan, sink: EventSink, mut commands: mpsc::Receive
     let style = plan.kind.style();
     match plan.kind {
         TransportKind::Bip => match Box::pin(transport::build_bip_client(&args)).await {
-            Ok(client) => Box::pin(serve(client, style, sink, commands)).await,
+            Ok(client) => {
+                // `--foreign-bbmd`: say in the log pane how the first
+                // registration went, as the shell does at start (#938).
+                if let Some(foreign) = &args.foreign_device {
+                    let bbmd = std::net::SocketAddrV4::new(foreign.bbmd_ip, foreign.bbmd_port);
+                    match crate::foreign::await_registration(&client, bbmd).await {
+                        Ok(()) => tracing::info!(
+                            "BBMD {bbmd} accepted the foreign-device registration; it renews automatically"
+                        ),
+                        Err(error) => tracing::warn!("{error}; retrying in the background"),
+                    }
+                }
+                Box::pin(serve(client, style, sink, commands)).await
+            }
             Err(error) => failed(&sink, error).await,
         },
         TransportKind::Bip6 => match Box::pin(transport::build_bip6_client(&args)).await {
@@ -123,6 +138,27 @@ async fn failed(sink: &EventSink, error: Error) {
     .await;
 }
 
+/// A directed Who-Is waiting for the VMAC of the B/IPv6 node it goes to.
+///
+/// The worker loop polls the lookup beside its other branches, so Cancel,
+/// device events and a newer Who-Is don't wait the up to three seconds a
+/// Virtual-Address-Resolution can take (U.5). The lookup holds no lock while
+/// it waits; dropping it gives up the wait.
+struct Resolving<'a> {
+    op: OpId,
+    spec: WhoIsSpec,
+    vmac: Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send + 'a>>,
+}
+
+/// The VMAC `resolving` waits for. Never ready while there is none, so the
+/// loop's branch for it stays idle.
+async fn resolved(resolving: &mut Option<Resolving<'_>>) -> Result<Vec<u8>, String> {
+    match resolving {
+        Some(lookup) => lookup.vmac.as_mut().await,
+        None => std::future::pending().await,
+    }
+}
+
 /// Serve one connected client until the UI drops its command sender.
 pub(crate) async fn serve<T: TransportPort + 'static>(
     mut client: BACnetClient<T>,
@@ -130,13 +166,19 @@ pub(crate) async fn serve<T: TransportPort + 'static>(
     sink: EventSink,
     mut commands: mpsc::Receiver<Command>,
 ) {
-    let local = style.format(client.local_mac());
+    let mut local = style.format(client.local_mac());
+    // A B/IPv6 VMAC alone doesn't say where the client is bound.
+    if let Some(bound) = crate::resolve::as_bip6(client.transport()).and_then(|t| t.local_address())
+    {
+        local = format!("{local} ({bound})");
+    }
     tracing::info!("connected; local address {local}");
     let mut devices = client.device_events();
     let mut collisions = client.device_collision_events();
     if sink.deliver(WorkerEvent::Connected { local }).await {
         let mut feed = DeviceFeed::new(style);
         let mut listening: Option<(OpId, Instant)> = None;
+        let mut resolving: Option<Resolving<'_>> = None;
         let mut resync = tokio::time::interval(RESYNC_EVERY);
         resync.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
@@ -144,14 +186,24 @@ pub(crate) async fn serve<T: TransportPort + 'static>(
             tokio::select! {
                 command = commands.recv() => match command {
                     Some(Command::WhoIs { op, spec }) => {
-                        if let Some((old, _)) = listening.take() {
+                        let superseded = listening.take().map(|(old, _)| old);
+                        let superseded = superseded.or(resolving.take().map(|lookup| lookup.op));
+                        if let Some(old) = superseded {
                             sink.deliver(WorkerEvent::OpFinished { op: old, outcome: OpOutcome::Cancelled }).await;
                         }
-                        listening = who_is(&client, &sink, op, &spec).await;
+                        if let WhoIsScope::Directed { to: DirectedTo::Bip6(peer), .. } = &spec.scope {
+                            let vmac = Box::pin(crate::resolve::bip6_vmac(client.transport(), *peer));
+                            resolving = Some(Resolving { op, spec, vmac });
+                        } else {
+                            listening = who_is(&client, &sink, op, &spec).await;
+                        }
                     }
                     Some(Command::Cancel { op }) => {
-                        if listening.is_some_and(|(id, _)| id == op) {
+                        let running = listening.is_some_and(|(id, _)| id == op)
+                            || resolving.as_ref().is_some_and(|lookup| lookup.op == op);
+                        if running {
                             listening = None;
+                            resolving = None;
                             tracing::info!("Who-Is {op} cancelled");
                             sink.deliver(WorkerEvent::OpFinished { op, outcome: OpOutcome::Cancelled }).await;
                         }
@@ -159,6 +211,17 @@ pub(crate) async fn serve<T: TransportPort + 'static>(
                     Some(Command::Connect { .. }) => {}
                     None => break,
                 },
+                vmac = resolved(&mut resolving), if resolving.is_some() => {
+                    if let Some(Resolving { op, spec, .. }) = resolving.take() {
+                        listening = match vmac {
+                            Ok(mac) => who_is(&client, &sink, op, &spec.with_vmac(mac)).await,
+                            Err(error) => {
+                                failed_who_is(&sink, op, error).await;
+                                None
+                            }
+                        };
+                    }
+                }
                 received = devices.recv(), if feed.devices_open => feed.on_device(&sink, received),
                 received = collisions.recv(), if feed.collisions_open => {
                     if let Some(event) = feed.on_collision(&sink, received) {
@@ -202,23 +265,29 @@ async fn who_is<T: TransportPort + 'static>(
             Some((op, Instant::now() + spec.listen))
         }
         Err(error) => {
-            tracing::warn!("Who-Is {op} failed: {error}");
-            sink.deliver(WorkerEvent::OpFinished {
-                op,
-                outcome: OpOutcome::Failed(error.to_string()),
-            })
-            .await;
+            failed_who_is(sink, op, error).await;
             None
         }
     }
 }
 
+async fn failed_who_is(sink: &EventSink, op: OpId, error: String) {
+    tracing::warn!("Who-Is {op} failed: {error}");
+    sink.deliver(WorkerEvent::OpFinished {
+        op,
+        outcome: OpOutcome::Failed(error),
+    })
+    .await;
+}
+
+/// Send the Who-Is `spec` describes. A directed one to a B/IPv6 address
+/// must have had its VMAC found first ([`WhoIsSpec::with_vmac`]).
 async fn send_who_is<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     spec: &WhoIsSpec,
-) -> Result<(), Error> {
+) -> Result<(), String> {
     let range = spec.range;
-    match &spec.scope {
+    let sent = match &spec.scope {
         WhoIsScope::Local => {
             let mut buf = BytesMut::new();
             WhoIsRequest { range }.encode(&mut buf);
@@ -227,7 +296,15 @@ async fn send_who_is<T: TransportPort + 'static>(
                 .await
         }
         WhoIsScope::Global => client.who_is(range).await,
-        WhoIsScope::Directed { mac, .. } => client.who_is_directed(mac, range).await,
+        WhoIsScope::Directed {
+            to: DirectedTo::Mac(mac),
+            ..
+        } => client.who_is_directed(mac, range).await,
+        WhoIsScope::Directed {
+            to: DirectedTo::Bip6(peer),
+            ..
+        } => return Err(format!("the VMAC at {peer} has not been found")),
         WhoIsScope::Network(dnet) => client.who_is_network(*dnet, range).await,
-    }
+    };
+    sent.map_err(|error| error.to_string())
 }

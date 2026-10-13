@@ -9,6 +9,9 @@
 //! There is no opening/closing frame, and a BACnetLIST of these values is the
 //! plain concatenation of its elements.
 
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
 use bacnet_types::constructed::{BACnetLandingCallStatus, LandingCallCommand};
 use bacnet_types::enums::LiftCarDirection;
 use bacnet_types::error::Error;

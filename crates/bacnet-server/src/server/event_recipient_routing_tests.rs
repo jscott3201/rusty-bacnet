@@ -442,7 +442,7 @@ pub(super) fn npdu_destination(frame: &Bytes) -> Option<(u16, Vec<u8>)> {
 /// Clause 21 spells a local broadcast as network 0 with a zero-length MAC.
 ///
 /// This previously reached `send_apdu` with an empty MAC, which BACnet/IP
-/// rejects ("BIP MAC must be 6 bytes, got 0"), so the one configuration the
+/// rejects ("B/IP address must be 6 octets, got 0"), so the one configuration the
 /// standard prescribes for a whole class of device sent nothing at all.
 #[tokio::test]
 async fn zero_length_mac_on_local_network_broadcasts() {

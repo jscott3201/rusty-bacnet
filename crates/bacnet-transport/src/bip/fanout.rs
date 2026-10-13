@@ -6,16 +6,18 @@
 //! and global packet and byte rate limits.
 
 use std::collections::HashMap;
-use std::net::SocketAddrV4;
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use bacnet_bip_codec::Bvll;
 use bytes::Bytes;
 use tokio::sync::mpsc;
-use tracing::warn;
+use tracing::{debug, warn};
 
-use crate::bvll::encode_bvll_forwarded;
+use crate::bvll::encode_bvll;
+use crate::warn_throttle::WarnThrottle;
 
 /// Policy governing broadcast forwarding fanout limits, rate budgets, and work queue capacity.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,7 +72,9 @@ pub struct FanoutCounters {
     pub send_errors: u64,
 }
 
-/// Atomic storage for thread-safe operational counters.
+/// Atomic storage for thread-safe operational counters, and the throttles on
+/// the two fan-out warnings that could otherwise go out for every job or
+/// datagram (#1643).
 #[derive(Debug, Default)]
 pub(crate) struct AtomicFanoutCounters {
     pub(crate) packets_forwarded: AtomicU64,
@@ -79,6 +83,10 @@ pub(crate) struct AtomicFanoutCounters {
     pub(crate) destinations_deduplicated: AtomicU64,
     pub(crate) queue_overflow_drops: AtomicU64,
     pub(crate) send_errors: AtomicU64,
+    /// The warning about a full work queue.
+    queue_full: WarnThrottle,
+    /// The warning about a forwarded packet the worker failed to send.
+    send_failed: WarnThrottle,
 }
 
 impl AtomicFanoutCounters {
@@ -91,6 +99,48 @@ impl AtomicFanoutCounters {
             queue_overflow_drops: self.queue_overflow_drops.load(Ordering::Relaxed),
             send_errors: self.send_errors.load(Ordering::Relaxed),
         }
+    }
+
+    /// Count a job dropped because the work queue is full, and warn at most
+    /// once per [`WARNING_INTERVAL`](crate::warn_throttle::WARNING_INTERVAL)
+    /// with the jobs dropped since the last warning; the rest log at debug.
+    /// A full queue means real local overload, so it still warns, but a
+    /// flood of broadcasts can't flood the log. Returns the number
+    /// reported, when it warns.
+    pub(crate) fn queue_full(&self) -> Option<u64> {
+        self.queue_overflow_drops.fetch_add(1, Ordering::Relaxed);
+        let dropped = self.queue_full.note();
+        match dropped {
+            Some(dropped) => warn!(
+                dropped,
+                "BIP BBMD: fanout work queue full; dropped broadcast forwarding jobs \
+                 since the last warning"
+            ),
+            None => debug!("BIP BBMD: fanout work queue full, dropping a broadcast forwarding job"),
+        }
+        dropped
+    }
+
+    /// Count a forwarded packet the worker failed to send, and warn at most
+    /// once per [`WARNING_INTERVAL`](crate::warn_throttle::WARNING_INTERVAL)
+    /// with the failures since the last warning; the rest log at debug. A
+    /// failed send tends to repeat for every packet to the same
+    /// destination, as when a route is missing, and the counter alone names
+    /// neither the destination nor the error, so the warning stays.
+    /// Returns the number reported, when it warns.
+    pub(crate) fn send_failed(&self, error: &std::io::Error, dest: SocketAddrV4) -> Option<u64> {
+        self.send_errors.fetch_add(1, Ordering::Relaxed);
+        let failed = self.send_failed.note();
+        match failed {
+            Some(failed) => warn!(
+                %error,
+                %dest,
+                failed,
+                "BIP BBMD: failed to send forwarded NPDU; failures since the last warning"
+            ),
+            None => debug!(%error, %dest, "BIP BBMD: failed to send forwarded NPDU"),
+        }
+        failed
     }
 }
 
@@ -282,14 +332,13 @@ impl FanoutDispatcher {
         match self.tx.try_send(job) {
             Ok(()) => true,
             Err(mpsc::error::TrySendError::Full(_)) => {
-                self.counters
-                    .queue_overflow_drops
-                    .fetch_add(1, Ordering::Relaxed);
-                warn!("BIP BBMD: fanout work queue full, dropping broadcast forwarding job");
+                self.counters.queue_full();
                 false
             }
+            // The worker ends only when the transport stops, so this is a
+            // broadcast that raced the stop: nothing to act on (#1643).
             Err(mpsc::error::TrySendError::Closed(_)) => {
-                warn!("BIP BBMD: fanout worker task closed");
+                debug!("BIP BBMD: fanout worker stopped, dropping a broadcast forwarding job");
                 false
             }
         }
@@ -313,7 +362,11 @@ impl FanoutDispatcher {
             return true;
         }
         let mut buf = bytes::BytesMut::with_capacity(10 + npdu.len());
-        if let Err(e) = encode_bvll_forwarded(&mut buf, orig_ip, orig_port, npdu) {
+        let message = Bvll::ForwardedNpdu {
+            origin: SocketAddrV4::new(Ipv4Addr::from(orig_ip), orig_port),
+            npdu,
+        };
+        if let Err(e) = encode_bvll(&mut buf, &message) {
             warn!(error = %e, "Failed to encode Forwarded-NPDU for fanout");
             return false;
         }
@@ -338,8 +391,7 @@ pub(crate) async fn run_fanout_worker(
                         .fetch_add(bytes_sent as u64, Ordering::Relaxed);
                 }
                 Err(e) => {
-                    counters.send_errors.fetch_add(1, Ordering::Relaxed);
-                    warn!(error = %e, %dest, "BIP BBMD: failed to send forwarded NPDU");
+                    counters.send_failed(&e, dest);
                 }
             }
         }

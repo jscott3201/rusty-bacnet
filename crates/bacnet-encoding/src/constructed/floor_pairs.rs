@@ -7,6 +7,9 @@
 //! (Unsigned8), then a BACnet enumeration `[1]` (a door status, or a car
 //! direction). An empty list encodes as the bare frame.
 
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
 use bacnet_types::error::Error;
 use bytes::BytesMut;
 

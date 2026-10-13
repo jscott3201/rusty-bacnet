@@ -90,7 +90,7 @@ fn rpm_device_property_metadata_pics_and_database_are_exact() {
                 P::DEVICE_UUID,
             ];
             if segmentation_supported != Segmentation::NONE {
-                optional.push(P::MAX_SEGMENTS_ACCEPTED);
+                optional.extend([P::APDU_SEGMENT_TIMEOUT, P::MAX_SEGMENTS_ACCEPTED]);
             }
             if state == 1 {
                 optional.extend([

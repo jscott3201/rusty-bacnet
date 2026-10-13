@@ -67,6 +67,9 @@
 //! releasing the guard, and a server dropped without `stop()` in async code
 //! drops its database there too (#1409); application code that removes an
 //! object, or drops the last handle on the database, should do the same.
+//! `bacnet_server::server::drop_database_off_runtime` lets go of a handle on
+//! the server's database that way, as the server's own detached tasks do
+//! (#1513).
 //! An object dropped with a write still staged for a request that never
 //! came back first saves the state it serves, so storage never keeps a
 //! state no client was told about, and waits for that save too (#1363).

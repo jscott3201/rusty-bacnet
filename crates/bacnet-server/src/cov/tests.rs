@@ -474,3 +474,37 @@ fn is_peer_reserved_checks_canonical_peer_identity() {
         mac_address: other_mac
     })));
 }
+
+#[test]
+fn finest_increments_take_each_objects_smallest_live_increment_on_the_property() {
+    let tv = PropertyIdentifier::TRACKING_VALUE;
+    let on = |mac: u8, oid, property, cov_increment| CovSubscription {
+        monitored_property: Some(property),
+        cov_increment,
+        ..make_sub(&[mac], 1, oid)
+    };
+    let mut table = CovSubscriptionTable::new();
+    for sub in [
+        on(1, ai1(), tv, Some(5.0)),
+        on(2, ai1(), tv, Some(0.5)),
+        // Another property's increment doesn't count.
+        on(3, ai1(), PropertyIdentifier::PRESENT_VALUE, Some(0.1)),
+        // Nor does one that reports nothing finer, nor none at all.
+        on(4, ai2(), tv, Some(f32::NAN)),
+        on(5, ai2(), tv, Some(f32::INFINITY)),
+        on(6, ai2(), tv, None),
+    ] {
+        table.subscribe(sub).unwrap();
+    }
+    assert_eq!(table.finest_increments(tv), HashMap::from([(ai1(), 0.5)]));
+    // A negative increment reports any change, as zero does; an expired
+    // subscription counts for nothing.
+    table.subscribe(on(7, ai2(), tv, Some(-1.0))).unwrap();
+    let mut expired = on(8, ai1(), tv, Some(0.01));
+    expired.expires_at = Some(Instant::now() - Duration::from_secs(1));
+    table.subscribe(expired).unwrap();
+    assert_eq!(
+        table.finest_increments(tv),
+        HashMap::from([(ai1(), 0.5), (ai2(), 0.0)])
+    );
+}

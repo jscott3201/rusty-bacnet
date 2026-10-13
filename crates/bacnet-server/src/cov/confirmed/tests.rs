@@ -17,7 +17,7 @@ fn proposal(kind: CovNotificationKind, property: PropertyIdentifier) -> CovSubsc
         subscriber_process_identifier: 1,
         monitored_object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 1).unwrap(),
         issue_confirmed_notifications: true,
-        expires_at: Some(std::time::Instant::now() + Duration::from_secs(60)),
+        expires_at: Some(crate::runtime_clock::now() + Duration::from_secs(60)),
         last_notified_observation: None,
         monitored_property: Some(property),
         monitored_property_array_index: None,
@@ -71,7 +71,7 @@ fn refresh(
     let expires = listed
         .first()
         .and_then(|sub| sub.expires_at)
-        .unwrap_or_else(|| std::time::Instant::now() + Duration::from_secs(120));
+        .unwrap_or_else(|| crate::runtime_clock::now() + Duration::from_secs(120));
     table
         .subscribe_multiple(&context, route, expires, 5, None, listed)
         .unwrap();

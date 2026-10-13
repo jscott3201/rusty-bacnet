@@ -42,12 +42,14 @@ pub(crate) fn log_buffer_read_denied() -> Error {
 }
 
 /// A log object's Log_Buffer as ReadRange pages it: the resident records,
-/// oldest first, each framed on demand as its Clause 21 record production.
+/// oldest first, each framed on demand as its Clause 21 record production,
+/// with the identity ReadRange selects it by.
 ///
 /// The records align element for element with
 /// [`crate::traits::BACnetObject::log_record_identities_internal`]. A page
-/// encodes only the records it visits, so a narrow window over a full log
-/// stays cheap.
+/// encodes only the records it visits, and the built-in logs find them
+/// without walking the whole buffer, so a narrow window over a full log
+/// stays cheap (#1536).
 pub trait LogBufferRecords {
     /// The number of resident records.
     fn record_count(&self) -> usize;
@@ -59,6 +61,95 @@ pub trait LogBufferRecords {
     /// too. Panics when `index` is not below
     /// [`record_count`](Self::record_count).
     fn encode_record(&self, index: usize, buf: &mut BytesMut);
+
+    /// The identity of the record at `index` (0 is the oldest). Panics when
+    /// `index` is not below [`record_count`](Self::record_count).
+    fn record_identity(&self, index: usize) -> LogRecordIdentity;
+
+    /// The index of the resident record numbered `sequence_number`, or
+    /// `None` when no resident record has that number.
+    ///
+    /// The default visits every record. The built-in logs number their
+    /// records consecutively and compute the index instead.
+    fn record_position(&self, sequence_number: u64) -> Option<usize> {
+        (0..self.record_count())
+            .find(|&index| self.record_identity(index).sequence_number() == sequence_number)
+    }
+
+    /// Whether every resident timestamp is an actual moment, and if so
+    /// whether they run in order, which lets a search by time bisect them.
+    ///
+    /// The default visits every record. The built-in logs keep the answer
+    /// up to date as records come and go.
+    fn timestamp_order(&self) -> TimestampOrder {
+        let mut order = TimestampOrder::Ascending;
+        let mut previous = None;
+        for index in 0..self.record_count() {
+            let Some(key) = self.record_identity(index).timestamp_key() else {
+                return TimestampOrder::Unkeyed;
+            };
+            if previous.is_some_and(|previous| key < previous) {
+                order = TimestampOrder::Unordered;
+            }
+            previous = Some(key);
+        }
+        order
+    }
+}
+
+/// A record timestamp as ReadRange By-Time compares it: the civil date and
+/// time, most significant field first, with the day of the week left out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct TimestampKey {
+    year: u16,
+    month: u8,
+    day: u8,
+    hour: u8,
+    minute: u8,
+    second: u8,
+    hundredths: u8,
+}
+
+impl TimestampKey {
+    /// The key of `date` and `time`, or `None` unless every field is
+    /// specified and in range. The day of the week has to name a weekday
+    /// too, though the key then leaves it out; the day of the month is
+    /// checked against 31, not against its month.
+    pub fn of(date: Date, time: Time) -> Option<Self> {
+        let year = date.actual_year()?;
+        let valid = (1..=12).contains(&date.month)
+            && (1..=31).contains(&date.day)
+            && (1..=7).contains(&date.day_of_week)
+            && time.hour <= 23
+            && time.minute <= 59
+            && time.second <= 59
+            && time.hundredths <= 99;
+        valid.then_some(Self {
+            year,
+            month: date.month,
+            day: date.day,
+            hour: time.hour,
+            minute: time.minute,
+            second: time.second,
+            hundredths: time.hundredths,
+        })
+    }
+}
+
+/// How a log buffer's timestamps stand for a search by time
+/// ([`LogBufferRecords::timestamp_order`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimestampOrder {
+    /// Some resident timestamp is not an actual moment
+    /// ([`TimestampKey::of`] refuses it), so the buffer can't be searched by
+    /// time at all.
+    Unkeyed,
+    /// Every timestamp is an actual moment and none is earlier than the one
+    /// before it, so a search can bisect them.
+    Ascending,
+    /// Every timestamp is an actual moment, but the clock went back at least
+    /// once, so a search has to visit each record.
+    Unordered,
 }
 
 /// The largest encoded value, in octets, that the trend pollers log as an
@@ -104,6 +195,12 @@ impl LogRecordIdentity {
     /// Return the time owned by this record.
     pub fn time(&self) -> Time {
         self.time
+    }
+
+    /// This record's timestamp as ReadRange By-Time compares it, or `None`
+    /// when it is not an actual moment.
+    pub fn timestamp_key(&self) -> Option<TimestampKey> {
+        TimestampKey::of(self.date, self.time)
     }
 }
 
@@ -174,11 +271,22 @@ impl ResidentLogRecord for BACnetLogMultipleRecord {
     }
 }
 
+/// A log's resident records and Total_Record_Count.
+///
+/// The records are numbered consecutively up to the count, so the buffer
+/// derives any record's identity, or the index of any number, from the
+/// count alone. It also keeps two tallies as records come and go, which
+/// answer [`LogBufferRecords::timestamp_order`] without a walk: the
+/// records whose timestamp is not an actual moment, and the neighbouring
+/// pairs where the later record is stamped earlier, as after the clock was
+/// set back.
 #[derive(Clone)]
 pub(crate) struct LogRecordBuffer<R = BACnetLogRecord> {
     capacity: u32,
     records: VecDeque<R>,
     total_record_count: u32,
+    unkeyed: usize,
+    descents: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -201,6 +309,8 @@ impl<R: ResidentLogRecord> LogRecordBuffer<R> {
             capacity,
             records: VecDeque::new(),
             total_record_count: 0,
+            unkeyed: 0,
+            descents: 0,
         }
     }
 
@@ -249,32 +359,63 @@ impl<R: ResidentLogRecord> LogRecordBuffer<R> {
 
     pub(crate) fn clear(&mut self) {
         self.records.clear();
+        self.unkeyed = 0;
+        self.descents = 0;
     }
 
     pub(crate) fn identities(&self) -> Vec<LogRecordIdentity> {
-        if self.records.is_empty() {
-            return Vec::new();
-        }
-
-        debug_assert_ne!(self.total_record_count, 0);
-        let mut sequence_number = self.total_record_count;
-        for _ in 1..self.records.len() {
-            sequence_number = previous_sequence(sequence_number);
-        }
-
-        self.records
-            .iter()
-            .map(|record| {
-                let (date, time) = record.timestamp();
-                let identity = LogRecordIdentity {
-                    sequence_number: u64::from(sequence_number),
-                    date,
-                    time,
-                };
-                sequence_number = next_sequence(sequence_number);
-                identity
-            })
+        (0..self.records.len())
+            .map(|index| self.record_identity(index))
             .collect()
+    }
+
+    /// Replace the resident records with `records`, oldest first, the newest
+    /// numbered `total_record_count` and each one before it one less, below
+    /// 1 wrapping to 2^32 - 1 (#1537). A count below the number of records
+    /// is therefore a count that has wrapped: Clause 12.25.16 lets the count
+    /// start again at 1, after which it no longer says how many records
+    /// were collected.
+    ///
+    /// Refused, leaving the buffer as it was: more records than Buffer_Size;
+    /// records with a count of zero, which only a log that never collected
+    /// one has; records that fill the buffer of a log that `stops_when_full`
+    /// (Stop_When_Full and Enable both TRUE), since such a log stops before
+    /// its last slot is taken; and a record that would not encode.
+    pub(crate) fn restore(
+        &mut self,
+        total_record_count: u32,
+        records: VecDeque<R>,
+        stops_when_full: bool,
+    ) -> Result<(), Error> {
+        let held = records.len();
+        if held > self.capacity as usize {
+            return Err(Error::OutOfRange(format!(
+                "{held} log records exceed Buffer_Size {}",
+                self.capacity
+            )));
+        }
+        if total_record_count == 0 && held > 0 {
+            return Err(Error::OutOfRange(format!(
+                "{held} log records restored with a Total_Record_Count of 0"
+            )));
+        }
+        if stops_when_full && held > 0 && held >= self.capacity as usize {
+            return Err(Error::OutOfRange(
+                "a log with Stop_When_Full and Enable TRUE can't hold a full buffer".into(),
+            ));
+        }
+        let mut scratch = BytesMut::new();
+        for record in &records {
+            record.encode(&mut scratch)?;
+            scratch.clear();
+        }
+
+        self.clear();
+        for record in records {
+            self.push_back(record);
+        }
+        self.total_record_count = total_record_count;
+        Ok(())
     }
 
     fn next_record_would_fill(&self) -> bool {
@@ -287,16 +428,43 @@ impl<R: ResidentLogRecord> LogRecordBuffer<R> {
             return ForcedAdmission::CountOnly;
         }
         if self.is_full() {
-            self.records.pop_front();
+            self.pop_front();
         }
-        self.records.push_back(record);
+        self.push_back(record);
         ForcedAdmission::Inserted
     }
 
-    #[cfg(test)]
-    pub(crate) fn set_total_record_count_for_test(&mut self, total_record_count: u32) {
-        debug_assert!(self.records.is_empty());
-        self.total_record_count = total_record_count;
+    /// Append `record`, counting it into the timestamp tallies.
+    fn push_back(&mut self, record: R) {
+        if self
+            .records
+            .back()
+            .is_some_and(|last| descends(last, &record))
+        {
+            self.descents += 1;
+        }
+        if timestamp_key(&record).is_none() {
+            self.unkeyed += 1;
+        }
+        self.records.push_back(record);
+    }
+
+    /// Drop the oldest record, taking it out of the timestamp tallies. The
+    /// pair it formed with its successor was counted when that one came.
+    fn pop_front(&mut self) {
+        let Some(oldest) = self.records.pop_front() else {
+            return;
+        };
+        if timestamp_key(&oldest).is_none() {
+            self.unkeyed -= 1;
+        }
+        if self
+            .records
+            .front()
+            .is_some_and(|next| descends(&oldest, next))
+        {
+            self.descents -= 1;
+        }
     }
 }
 
@@ -306,14 +474,65 @@ impl<R: ResidentLogRecord> LogBufferRecords for LogRecordBuffer<R> {
     }
 
     fn encode_record(&self, index: usize, buf: &mut BytesMut) {
-        // `LogLifecycle::try_add_ordinary` refuses a record that would not
-        // encode, the lifecycle's own status records always encode, and a
-        // resident record is never changed.
+        // `LogLifecycle::try_add_ordinary` and `restore` refuse a record that
+        // would not encode, the lifecycle's own status records always
+        // encode, and a resident record is never changed.
         self.records[index]
             .encode(buf)
             .expect("every resident log record encodes");
     }
+
+    fn record_identity(&self, index: usize) -> LogRecordIdentity {
+        let (date, time) = self.records[index].timestamp();
+        let newer = self.records.len() - 1 - index;
+        LogRecordIdentity {
+            sequence_number: u64::from(sequence_before(self.total_record_count, newer)),
+            date,
+            time,
+        }
+    }
+
+    fn record_position(&self, sequence_number: u64) -> Option<usize> {
+        let sequence_number = u32::try_from(sequence_number)
+            .ok()
+            .filter(|&number| number != 0)?;
+        let newer = sequence_distance(sequence_number, self.total_record_count);
+        let newer = usize::try_from(newer)
+            .ok()
+            .filter(|&newer| newer < self.records.len())?;
+        Some(self.records.len() - 1 - newer)
+    }
+
+    fn timestamp_order(&self) -> TimestampOrder {
+        if self.unkeyed > 0 {
+            TimestampOrder::Unkeyed
+        } else if self.descents > 0 {
+            TimestampOrder::Unordered
+        } else {
+            TimestampOrder::Ascending
+        }
+    }
 }
+
+fn timestamp_key<R: ResidentLogRecord>(record: &R) -> Option<TimestampKey> {
+    let (date, time) = record.timestamp();
+    TimestampKey::of(date, time)
+}
+
+/// Whether `later`, coming right after `earlier`, is stamped before it. A
+/// pair with a timestamp that is not an actual moment never counts: such a
+/// record is tallied on its own, and the buffer can't be searched by time
+/// while it is resident.
+fn descends<R: ResidentLogRecord>(earlier: &R, later: &R) -> bool {
+    matches!(
+        (timestamp_key(earlier), timestamp_key(later)),
+        (Some(earlier), Some(later)) if later < earlier
+    )
+}
+
+/// Sequence numbers run 1 to 2^32 - 1 and then start again at 1, a cycle of
+/// 2^32 - 1 numbers that never includes 0.
+const SEQUENCE_CYCLE: u64 = u32::MAX as u64;
 
 fn next_sequence(sequence_number: u32) -> u32 {
     if sequence_number == u32::MAX {
@@ -323,13 +542,21 @@ fn next_sequence(sequence_number: u32) -> u32 {
     }
 }
 
-fn previous_sequence(sequence_number: u32) -> u32 {
-    if sequence_number == 1 {
-        u32::MAX
-    } else {
-        sequence_number - 1
-    }
+/// The number `steps` places before `sequence_number` in the cycle.
+fn sequence_before(sequence_number: u32, steps: usize) -> u32 {
+    let steps = steps as u64 % SEQUENCE_CYCLE;
+    let offset = u64::from(sequence_number).saturating_sub(1);
+    ((offset + SEQUENCE_CYCLE - steps) % SEQUENCE_CYCLE) as u32 + 1
 }
+
+/// How many places after `from` the number `to` comes in the cycle.
+fn sequence_distance(from: u32, to: u32) -> u64 {
+    (u64::from(to) + SEQUENCE_CYCLE - u64::from(from)) % SEQUENCE_CYCLE
+}
+
+#[cfg(test)]
+#[path = "log_buffer_lookup_tests.rs"]
+mod lookup_tests;
 
 #[cfg(test)]
 mod tests {
@@ -369,7 +596,7 @@ mod tests {
         assert_eq!(buffer.identities()[0].sequence_number(), 1);
 
         buffer.clear();
-        buffer.set_total_record_count_for_test(u32::MAX);
+        buffer.restore(u32::MAX, VecDeque::new(), false).unwrap();
         assert_eq!(
             buffer.admit_ordinary(record(2), true, false),
             OrdinaryAdmission::Inserted
@@ -454,7 +681,9 @@ mod tests {
     #[test]
     fn log_buffer_wrap_and_eviction_keep_modular_fifo_alignment() {
         let mut buffer = LogRecordBuffer::new(3);
-        buffer.set_total_record_count_for_test(u32::MAX - 1);
+        buffer
+            .restore(u32::MAX - 1, VecDeque::new(), false)
+            .unwrap();
         assert_eq!(
             buffer.admit_ordinary(record(1), true, false),
             OrdinaryAdmission::Inserted

@@ -8,6 +8,9 @@
 //! between the event type and the notify type, and every other field keeps
 //! the strict decoder's checks.
 
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
 use core::ops::Range;
 
 use super::*;

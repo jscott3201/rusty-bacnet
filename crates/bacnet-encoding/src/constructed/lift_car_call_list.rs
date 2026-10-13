@@ -7,6 +7,9 @@
 //! context tag of their own. A car door with no registered calls encodes as
 //! the empty frame.
 
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
 use bacnet_types::constructed::BACnetLiftCarCallList;
 use bacnet_types::error::Error;
 use bytes::BytesMut;

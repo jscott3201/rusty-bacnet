@@ -58,12 +58,12 @@ async fn audit_reporter_range_file_decode_and_budget_aborts_are_silent() {
                 "bytes" => {
                     fixture
                         .server
-                        .config
+                        .config_mut()
                         .read_range_budget
                         .max_service_ack_bytes = 1;
                     fixture
                         .server
-                        .config
+                        .config_mut()
                         .atomic_read_file_budget
                         .max_service_ack_bytes = 1;
                     data
@@ -71,12 +71,12 @@ async fn audit_reporter_range_file_decode_and_budget_aborts_are_silent() {
                 "count" => {
                     fixture
                         .server
-                        .config
+                        .config_mut()
                         .atomic_read_file_budget
                         .max_requested_stream_octets = 1;
                     fixture
                         .server
-                        .config
+                        .config_mut()
                         .atomic_read_file_budget
                         .max_requested_records = 1;
                     data
@@ -98,8 +98,8 @@ async fn audit_reporter_range_file_decode_and_budget_aborts_are_silent() {
             assert_eq!(reads.load(Ordering::Acquire), usize::from(case == "bytes"));
             assert!(records(&fixture).is_empty());
             assert_idle(&fixture);
-            fixture.server.config.read_range_budget = ReadRangeBudget::default();
-            fixture.server.config.atomic_read_file_budget = AtomicReadFileBudget::default();
+            fixture.server.config_mut().read_range_budget = ReadRangeBudget::default();
+            fixture.server.config_mut().atomic_read_file_budget = AtomicReadFileBudget::default();
             assert!(matches!(
                 dispatch(&fixture.server, kind.service(), kind.request(1, 1)).await,
                 Apdu::ComplexAck(_)
@@ -238,7 +238,7 @@ async fn audit_reporter_range_file_segmented_response_and_divergence_are_silent(
         for segmented in [false, true] {
             let mut fixture = server(read_reporter()).await;
             let reads = add_target(&fixture, kind, None, true).await;
-            fixture.server.config.segmentation_supported = Segmentation::BOTH;
+            fixture.server.config_mut().segmentation_supported = Segmentation::BOTH;
             let (tx, rx) = oneshot::channel();
             ingress(
                 &fixture.server,

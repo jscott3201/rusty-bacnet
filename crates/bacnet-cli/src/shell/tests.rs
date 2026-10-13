@@ -150,3 +150,58 @@ fn tokenized_ack_alarm_accepts_one_quoted_event_timestamp_pair() {
         bacnet_types::primitives::BACnetTimeStamp::SequenceNumber(9)
     );
 }
+
+/// The shell's `[ip]:port` target is the VMAC of the node there, found with
+/// a Virtual-Address-Resolution (Clause U.5), and `status` shows the
+/// shell's own VMAC with the address it is bound to.
+#[tokio::test]
+async fn shell_bip6_address_target_resolves_to_the_vmac_there() {
+    let mut server =
+        bacnet_transport::bip6::Bip6Transport::new(std::net::Ipv6Addr::LOCALHOST, 0, Some(1234));
+    let _server_rx = server.start().await.unwrap();
+    let port = server.local_address().unwrap().port();
+    let mut client = BACnetClient::bip6_builder()
+        .interface(std::net::Ipv6Addr::LOCALHOST)
+        .port(0)
+        // An instance VMAC: a random one needs a multicast probe at start,
+        // which Linux loopback can't carry.
+        .device_instance(4321)
+        .build()
+        .await
+        .unwrap();
+    let target = format!("[::1]:{port}");
+    assert_eq!(
+        resolve_target_mac(&client, &target).await.unwrap(),
+        [0x00, 0x04, 0xD2]
+    );
+    let bound = resolve::as_bip6(client.transport())
+        .and_then(|bip6| bip6.local_address())
+        .unwrap();
+    let (label, line) = local_address_line(client.local_mac(), Some(bound));
+    assert_eq!(label, "Local address:");
+    // Instance 4321 is VMAC 00 10 E1 (H.7.2).
+    assert_eq!(line, format!("bip6:0x0010E1 ({bound})"));
+    client.stop().await.unwrap();
+    server.stop().await.unwrap();
+}
+
+#[test]
+fn status_shows_each_local_address_as_a_target() {
+    let bound = "[::1]:47808".parse().unwrap();
+    assert_eq!(
+        local_address_line(&[0x00, 0x04, 0xD2], Some(bound)),
+        ("Local address:", "bip6:0x0004D2 ([::1]:47808)".to_string())
+    );
+    assert_eq!(
+        local_address_line(&[0x00, 0x04, 0xD2], None),
+        ("Local address:", "bip6:0x0004D2".to_string())
+    );
+    assert_eq!(
+        local_address_line(&[10, 0, 0, 1, 0xBA, 0xC0], None),
+        ("Local address:", "10.0.0.1:47808".to_string())
+    );
+    assert_eq!(
+        local_address_line(&[7], None),
+        ("Local MAC:", "[07]".to_string())
+    );
+}

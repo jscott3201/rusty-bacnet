@@ -5,7 +5,7 @@
 //! `Error::Encoding`-style error and preserve the committed table.
 
 use super::{BbmdState, BdtEntry, ForeignDevicePolicy};
-use bacnet_types::enums::BvlcResultCode;
+use bacnet_bip_codec::BvlcResultCode;
 use bacnet_types::error::Error;
 
 const PORT: u16 = 0xBAC0;
@@ -280,12 +280,46 @@ fn relocated_forwarded_npdu_needs_local_broadcast_for_unicast_peer() {
     assert!(bbmd.forwarded_npdu_needs_local_broadcast([10, 0, 0, 1], PORT));
 }
 
+/// Annex J.4.5 reads this BBMD's own row, not the sender's: the appended
+/// /32 own row means peers send here alone, so a /24 peer's forward needs
+/// the local broadcast too. Before #1623 the sender's /24 row skipped it.
 #[test]
-fn relocated_forwarded_npdu_skips_local_broadcast_for_directed_peer() {
+fn relocated_forwarded_npdu_needs_local_broadcast_for_directed_peer_when_own_row_is_two_hop() {
     let mut bbmd = make_bbmd();
     bbmd.set_bdt(vec![entry([10, 0, 0, 1], PORT, MASK_24)])
         .unwrap();
+    assert!(bbmd.forwarded_npdu_needs_local_broadcast([10, 0, 0, 1], PORT));
+}
+
+/// A /24 own row: peers reach this subnet by its directed broadcast, so the
+/// subnet already has their forwards, even a /32 peer's.
+#[test]
+fn forwarded_npdu_skips_local_broadcast_when_own_row_is_one_hop() {
+    let mut bbmd = make_bbmd();
+    bbmd.set_bdt(vec![
+        entry([192, 168, 1, 1], PORT, MASK_24),
+        entry([10, 0, 0, 1], PORT, MASK_32),
+    ])
+    .unwrap();
     assert!(!bbmd.forwarded_npdu_needs_local_broadcast([10, 0, 0, 1], PORT));
+}
+
+/// A peer on this BBMD's own subnet, once the host has reported the mask:
+/// the subnet heard the broadcast first hand.
+#[test]
+fn forwarded_npdu_skips_local_broadcast_for_a_peer_on_the_own_subnet() {
+    let mut bbmd = make_bbmd();
+    bbmd.set_bdt(vec![
+        entry([192, 168, 1, 2], PORT, MASK_32),
+        entry([10, 0, 0, 1], PORT, MASK_32),
+    ])
+    .unwrap();
+    assert!(bbmd.forwarded_npdu_needs_local_broadcast([192, 168, 1, 2], PORT));
+    // Never for this BBMD itself, though its own row is in the table.
+    assert!(!bbmd.forwarded_npdu_needs_local_broadcast([192, 168, 1, 1], PORT));
+    bbmd.set_subnet_mask(Some(std::net::Ipv4Addr::new(255, 255, 255, 0)));
+    assert!(!bbmd.forwarded_npdu_needs_local_broadcast([192, 168, 1, 2], PORT));
+    assert!(bbmd.forwarded_npdu_needs_local_broadcast([10, 0, 0, 1], PORT));
 }
 
 #[test]

@@ -104,23 +104,43 @@ impl Bip6Socket {
         }
     }
 
-    pub async fn recv_from(&self, bytes: &mut [u8]) -> io::Result<ReceivedDatagram> {
-        let mut received = self.receiver.recv_from(&self.udp, bytes).await?;
-        if let Some(link) = self.selection {
-            if !admits(link, &received) {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "datagram is outside selected IPv6 link/address",
-                ));
-            }
-            if let SocketAddr::V6(peer) = &mut received.peer {
-                if peer.ip().is_unicast_link_local() {
-                    peer.set_scope_id(link.index);
-                }
+    /// Read the next datagram. In normal mode one the selected link doesn't
+    /// take is read and refused ([`Inbound::OffLink`]); the caller reads on.
+    pub async fn recv_from(&self, bytes: &mut [u8]) -> io::Result<Inbound> {
+        let received = self.receiver.recv_from(&self.udp, bytes).await?;
+        Ok(classify(self.selection, received))
+    }
+}
+
+/// Whether the transport takes a datagram the socket read: in normal mode,
+/// with `selection`, only one [`admits`] lets in, whose link-local peer then
+/// gets the link's scope. In foreign mode, with none, every one.
+fn classify(selection: Option<SelectedLink>, mut received: ReceivedDatagram) -> Inbound {
+    if let Some(link) = selection {
+        if !admits(link, &received) {
+            return Inbound::OffLink;
+        }
+        if let SocketAddr::V6(peer) = &mut received.peer {
+            if peer.ip().is_unicast_link_local() {
+                peer.set_scope_id(link.index);
             }
         }
-        Ok(received)
     }
+    Inbound::Datagram(received)
+}
+
+/// What one read of a [`Bip6Socket`] returned.
+#[derive(Debug)]
+pub(super) enum Inbound {
+    /// A datagram for this transport: in normal mode, one that arrived on
+    /// the selected link and was sent to its address or a BACnet group.
+    Datagram(ReceivedDatagram),
+    /// In normal mode, a datagram that arrived on another interface or was
+    /// sent to another address. The wildcard socket gets the datagrams for
+    /// every address and interface at its port, so this is routine on a
+    /// host with more than one, or with another B/IPv6 port at the same
+    /// UDP port.
+    OffLink,
 }
 
 fn foreign_bind_address(
@@ -199,5 +219,50 @@ mod tests {
             datagram.destination = IpAddr::V6(destination.parse().unwrap());
             assert!(!admits(link, &datagram));
         }
+    }
+
+    /// In normal mode a datagram the selected link doesn't admit is read as
+    /// off-link, and one it admits is kept, a link-local peer taking the
+    /// link's scope. In foreign mode every datagram is kept as it came.
+    #[test]
+    fn a_datagram_for_another_link_or_address_is_off_link() {
+        let link = SelectedLink {
+            address: "fd12::1".parse().unwrap(),
+            index: 3,
+        };
+        let datagram = |peer: &str, destination: &str, arrival_index| ReceivedDatagram {
+            len: 11,
+            peer: peer.parse().unwrap(),
+            destination: destination.parse().unwrap(),
+            arrival_index,
+            os_group_delivery: None,
+        };
+        let elsewhere = [
+            datagram("[fd12::2]:47808", "fd12::9", Some(3)),
+            datagram("[fd12::2]:47808", "fd12::1", Some(4)),
+            datagram("[fe80::2]:47808", "ff05::bac0", None),
+        ];
+        for received in elsewhere {
+            assert!(
+                matches!(classify(Some(link), received), Inbound::OffLink),
+                "{received:?}"
+            );
+            assert!(matches!(
+                classify(None, received),
+                Inbound::Datagram(kept) if kept == received
+            ));
+        }
+
+        let on_link = datagram("[fe80::2]:47808", "ff05::bac0", Some(3));
+        let Inbound::Datagram(kept) = classify(Some(link), on_link) else {
+            panic!("an admitted datagram is kept");
+        };
+        assert_eq!(kept.peer, "[fe80::2%3]:47808".parse().unwrap());
+        assert_eq!((kept.destination, kept.len), (on_link.destination, 11));
+        let unicast = datagram("[fd12::2]:47808", "fd12::1", Some(3));
+        assert!(matches!(
+            classify(Some(link), unicast),
+            Inbound::Datagram(kept) if kept == unicast
+        ));
     }
 }

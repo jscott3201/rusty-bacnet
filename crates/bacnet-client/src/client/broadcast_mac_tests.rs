@@ -189,14 +189,17 @@ async fn a_confirmed_request_to_any_bip_group_address_is_refused() {
     .await;
 }
 
-/// Every IPv6 multicast group, BACnet's and others such as ff02::1.
+/// A B/IPv6 MAC is the peer's 3-octet VMAC (U.1.3), which never names a
+/// group: a B/IPv6 broadcast is the zero-length MAC. An 18-octet address,
+/// an IPv6 multicast group's or a node's, is refused by the transport before
+/// it starts any resolution, and the client keeps no transaction for it
+/// (#1637).
 #[cfg(feature = "ipv6")]
-#[tokio::test(start_paused = true)]
-async fn a_confirmed_request_to_any_bip6_multicast_group_is_refused() {
-    use bacnet_transport::bip6::Bip6Transport;
+#[tokio::test]
+async fn a_confirmed_request_to_an_18_octet_bip6_address_is_refused() {
+    use bacnet_transport::bip6::{Bip6ResolutionCounters, Bip6Transport};
     use std::net::Ipv6Addr;
 
-    let bip6 = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0xBAC0, None);
     let mac = |ip: &str, port: u16| {
         let ip: Ipv6Addr = ip.parse().unwrap();
         [&ip.octets()[..], &port.to_be_bytes()].concat()
@@ -205,8 +208,33 @@ async fn a_confirmed_request_to_any_bip6_multicast_group_is_refused() {
         mac("ff02::bac0", 0xBAC0),
         mac("ff02::1", 0xBAC0),
         mac("ff05::1:3", 0x1234),
+        mac("::1", 0xBAC0),
     ];
-    refuses_each_group_form(bip6.group_destinations(), &forms, &mac("fe80::7", 0xBAC0)).await;
+    let transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, Some(10));
+    let config = ClientConfig {
+        apdu_timeout_ms: 20,
+        apdu_retries: 0,
+        ..ClientConfig::default()
+    };
+    let mut client = BACnetClient::start(config, transport).await.unwrap();
+    for mac in &forms {
+        assert!(!client.transport().is_group_destination(mac));
+        let refused = client
+            .confirmed_request(mac, ConfirmedServiceChoice::READ_PROPERTY, &[0x0C])
+            .await;
+        assert!(
+            matches!(&refused, Err(Error::Transport(error))
+                if error.kind() == std::io::ErrorKind::InvalidInput),
+            "{mac:02X?}: {refused:?}"
+        );
+    }
+    assert_eq!(client.tsm.lock().await.pending_count(), 0);
+    assert_eq!(
+        client.transport().resolution_counters(),
+        Bip6ResolutionCounters::default(),
+        "no resolution started"
+    );
+    client.stop().await.unwrap();
 }
 
 /// A routed target naming the client's own network goes local (#1358), so

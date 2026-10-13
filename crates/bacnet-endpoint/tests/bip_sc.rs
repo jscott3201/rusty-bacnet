@@ -1,8 +1,8 @@
 //! RB-15 concrete transport controls (no real-transport proofs).
 //!
-//! B/IP BBMD/FDT controls + SC builder validation live at endpoint level as
-//! concrete types (not generic-trait erasure). Real one-socket B/IP + SC
-//! proofs are RB-16/17 and stay out of scope.
+//! B/IP modes + SC builder validation live at endpoint level as concrete
+//! types (not generic-trait erasure). Real one-socket B/IP + SC proofs are
+//! RB-16/17 and stay out of scope.
 
 use std::net::Ipv4Addr;
 
@@ -10,7 +10,9 @@ use bacnet_endpoint::bip::BipEndpointBuilder;
 use bacnet_endpoint::sc::ScEndpointBuilder;
 use bacnet_endpoint::session::SessionRole;
 use bacnet_transport::bbmd::{BdtEntry, ForeignDevicePolicy};
-use bacnet_transport::bip::ForeignDeviceConfig;
+use bacnet_transport::bip::{BbmdOptions, BipMode, FanoutPolicy, ForeignDeviceConfig};
+use bacnet_transport::port::TransportPort;
+use bacnet_types::bip_port::BipPortMode;
 
 fn bdt_entry(ip: [u8; 4], port: u16) -> BdtEntry {
     BdtEntry {
@@ -20,34 +22,71 @@ fn bdt_entry(ip: [u8; 4], port: u16) -> BdtEntry {
     }
 }
 
-#[test]
-fn bip_builder_applies_bbmd_controls_concretely() {
-    let builder = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
-        .role(SessionRole::Both)
-        .queue_capacity(8)
-        .enable_bbmd(vec![bdt_entry([127, 0, 0, 1], 47808)])
-        .foreign_device_policy(ForeignDevicePolicy::default())
-        .bbmd_management_acl(vec![[127, 0, 0, 1]])
-        .fanout_policy(bacnet_transport::bip::FanoutPolicy::default())
-        .register_as_foreign_device(ForeignDeviceConfig {
-            bbmd_ip: Ipv4Addr::LOCALHOST,
-            bbmd_port: 47808,
-            ttl: 60,
-        });
-    // Concrete transport builds without generic erasure; BBMD config is
-    // accepted pre-start (fail-closed ACL + policy staged for `start()`).
-    // `bbmd_state()` appears only after `start()` binds the socket, so a
-    // Loopback-first unit test asserts construction, not live state.
-    let _transport = builder
-        .build_transport()
-        .expect("B/IP transport must build");
+fn foreign() -> BipMode {
+    BipMode::Foreign(ForeignDeviceConfig {
+        bbmd_ip: Ipv4Addr::LOCALHOST,
+        bbmd_port: 47808,
+        renewal_interval: None,
+        ttl: 60,
+    })
 }
 
 #[test]
-fn bip_builder_rejects_bbmd_controls_without_enable() {
-    let builder = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
-        .foreign_device_policy(ForeignDevicePolicy::default());
-    assert!(builder.build_transport().is_err());
+fn bip_builder_applies_the_mode_concretely() {
+    let bbmd = BipMode::Bbmd(BbmdOptions {
+        bdt: vec![bdt_entry([127, 0, 0, 1], 47808)],
+        foreign_device_policy: Some(ForeignDevicePolicy::default()),
+        management_acl: vec![[127, 0, 0, 1]],
+        fanout_policy: FanoutPolicy::default(),
+        bdt_persist_path: None,
+    });
+    // The transport builds unstarted, in the mode given: a BBMD's tables
+    // appear only once `start()` creates them.
+    let transport = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
+        .role(SessionRole::Both)
+        .queue_capacity(8)
+        .mode(bbmd)
+        .build_transport()
+        .expect("B/IP transport must build");
+    assert!(matches!(
+        transport.bip_port().unwrap().mode,
+        BipPortMode::Bbmd { tables: None }
+    ));
+    let transport = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
+        .mode(foreign())
+        .build_transport()
+        .unwrap();
+    assert!(matches!(
+        transport.bip_port().unwrap().mode,
+        BipPortMode::Foreign {
+            subscription_lifetime: 60,
+            ..
+        }
+    ));
+}
+
+/// One mode at a time: a later `mode` replaces an earlier one, so a BBMD
+/// that also registers as a foreign device can't be built (#938).
+#[test]
+fn bip_builder_keeps_only_the_last_mode() {
+    let transport = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
+        .mode(BipMode::Bbmd(BbmdOptions::default()))
+        .mode(foreign())
+        .build_transport()
+        .unwrap();
+    assert!(matches!(
+        transport.bip_port().unwrap().mode,
+        BipPortMode::Foreign { .. }
+    ));
+    let transport = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
+        .mode(foreign())
+        .mode(BipMode::Normal)
+        .build_transport()
+        .unwrap();
+    assert!(matches!(
+        transport.bip_port().unwrap().mode,
+        BipPortMode::Normal
+    ));
 }
 
 #[test]

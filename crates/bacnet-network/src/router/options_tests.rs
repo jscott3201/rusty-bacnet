@@ -79,7 +79,7 @@ async fn one_start_combines_admission_tracking_a_control_policy_and_the_control_
         (0, 1)
     );
     assert_eq!(decisions.reject.allow_total, 1);
-    assert!(router.table().lock().await.lookup(3000).is_none());
+    assert!(router.table().lookup(3000).is_none());
 
     // A local APDU from peer A lands in the tracked queue, which counts it.
     peer_a
@@ -123,8 +123,8 @@ async fn plain_options_start_a_permissive_router_without_a_control_receiver() {
     }
     assert_eq!(router.control_snapshot().i_am.allow_total, 1);
     assert_eq!(
-        router.table().lock().await.lookup(3000).unwrap().port_index,
-        1
+        router.table().lookup(3000).unwrap().port(),
+        crate::router_table::PortId(1)
     );
 
     router.stop().await;

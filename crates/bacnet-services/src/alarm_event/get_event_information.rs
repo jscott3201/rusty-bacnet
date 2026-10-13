@@ -1,3 +1,6 @@
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
 use super::*;
 use bacnet_encoding::constructed::tagged::{
     decode_app_unsigned, decode_ctx_boolean, decode_ctx_object_id, decode_ctx_primitive,

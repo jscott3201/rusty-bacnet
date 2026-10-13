@@ -285,12 +285,94 @@ async fn custom_backend_without_drain_never_claims_tx_complete() {
         Err(Error::Transport(e)) if e.kind() == std::io::ErrorKind::Unsupported));
 }
 
+/// A port without its inner port's drain, timed by the wire instead.
+#[cfg(unix)]
+struct WithoutDrain<S>(S);
+
+#[cfg(unix)]
+impl<S: SerialPort> SerialPort for WithoutDrain<S> {
+    async fn write(&self, data: &[u8]) -> Result<(), Error> {
+        self.0.write(data).await
+    }
+
+    async fn read(&self, buf: &mut [u8]) -> Result<usize, Error> {
+        self.0.read(buf).await
+    }
+
+    fn echo(&self) -> Echo {
+        self.0.echo()
+    }
+}
+
+/// A native port declared with an echo, on a line that returns every
+/// octet: the station drops its own polls and keeps polling address after
+/// address. Had its poll echo reached the core, POLL_FOR_MASTER would have
+/// taken it for an unexpected frame and stopped (Clause 9.5.6.8). The
+/// station's drain is left out: on a pseudo-terminal pair, `tcdrain` can
+/// wait for the peer's echo to be read, which only happens after it.
+#[cfg(unix)]
+#[tokio::test]
+async fn unix_serial_with_echo_drops_its_own_frames() {
+    use crate::mstp::codec::{decode_frame, FrameType};
+    use crate::mstp::{MstpConfig, MstpTransport};
+    use crate::port::TransportPort;
+
+    let (stream, peer) = SerialStream::pair().unwrap();
+    let serial = TokioSerialPort {
+        inner: Arc::new(Mutex::new(stream)),
+        echo: Echo::None,
+    }
+    .with_echo(Echo::full());
+    assert_eq!(serial.echo(), Echo::full());
+    let config = MstpConfig {
+        this_station: 3,
+        max_master: 7,
+        max_info_frames: 1,
+        baud_rate: 38_400,
+        ..MstpConfig::default()
+    };
+    let mut transport = MstpTransport::new(WithoutDrain(serial), config);
+    let diagnostics = transport.diagnostics();
+    let _npdus = transport.start().await.unwrap();
+    let (mut from_station, mut to_station) = tokio::io::split(peer);
+    let mut polls = Vec::new();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let mut buf = [0u8; 64];
+        let mut pending = Vec::new();
+        while polls.len() < 3 {
+            let count = from_station.read(&mut buf).await.unwrap();
+            // The line returns what the station sent, as its transceiver would.
+            to_station.write_all(&buf[..count]).await.unwrap();
+            pending.extend_from_slice(&buf[..count]);
+            while let Ok((frame, consumed)) = decode_frame(&pending) {
+                polls.push((frame.header.frame_type, frame.header.destination));
+                pending.drain(..consumed);
+            }
+        }
+    })
+    .await
+    .expect("the station stopped polling");
+    assert_eq!(
+        polls,
+        [
+            (FrameType::POLL_FOR_MASTER, 4),
+            (FrameType::POLL_FOR_MASTER, 5),
+            (FrameType::POLL_FOR_MASTER, 6)
+        ]
+    );
+    let counts = diagnostics.snapshot();
+    assert_eq!(counts.mac.own_address_frames, 0);
+    assert_eq!(counts.mac.parser_errors, 0);
+    transport.stop().await.unwrap();
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn unix_serial_drain_uses_the_native_backend() {
     let (stream, mut peer) = SerialStream::pair().unwrap();
     let serial = TokioSerialPort {
         inner: Arc::new(Mutex::new(stream)),
+        echo: Echo::None,
     };
     serial.write(&[1, 2, 3]).await.unwrap();
     serial.drain().await.unwrap();
@@ -303,7 +385,7 @@ async fn unix_serial_drain_uses_the_native_backend() {
 #[cfg(unix)]
 #[tokio::test]
 async fn native_serial_execution_modes_share_host_timing_harness() {
-    use crate::mstp::{port_timing_tests::execution_timing_harness, MstpExecutionMode};
+    use crate::mstp::{execution_tests::execution_timing_harness, MstpExecutionMode};
 
     // Native pseudo-terminals exercise the backend used for UART and USB ports;
     // late-tail delivery models host chunking, not physical RS-485 timing.
@@ -315,9 +397,11 @@ async fn native_serial_execution_modes_share_host_timing_harness() {
                     let (stream, peer) = SerialStream::pair().unwrap();
                     let serial = TokioSerialPort {
                         inner: Arc::new(Mutex::new(stream)),
+                        echo: Echo::None,
                     };
                     let peer = TokioSerialPort {
                         inner: Arc::new(Mutex::new(peer)),
+                        echo: Echo::None,
                     };
                     let wire = if software_direction {
                         // Exercise the existing software-direction/drain boundary
@@ -406,8 +490,8 @@ impl<S: SerialPort> SerialPort for DirectionTestPort<S> {
 
 #[tokio::test]
 async fn dedicated_blocking_io_keeps_app_responsive_and_stop_waits_for_release() {
-    use crate::mstp::{LoopbackSerial, MasterState, MstpConfig, MstpExecutionMode, MstpTransport};
-    use crate::mstp_frame::{encode_frame, FrameType, MstpFrame};
+    use crate::mstp::codec::{Frame, FrameType};
+    use crate::mstp::{LoopbackSerial, MstpConfig, MstpExecutionMode, MstpTransport};
     use crate::port::TransportPort;
 
     for operation in [BlockedIo::Read, BlockedIo::Write, BlockedIo::Drain] {
@@ -425,17 +509,10 @@ async fn dedicated_blocking_io_keeps_app_responsive_and_stop_waits_for_release()
             control: MockDirection::default(),
             direction: SoftwareDirection::new(0),
         };
-        let mut incoming = bytes::BytesMut::new();
-        encode_frame(
-            &mut incoming,
-            &MstpFrame {
-                frame_type: FrameType::PollForMaster,
-                destination: 0,
-                source: 7,
-                data: bytes::Bytes::new(),
-            },
-        )
-        .unwrap();
+        let mut incoming = Vec::new();
+        Frame::new(FrameType::POLL_FOR_MASTER, 0, 7, &[])
+            .encode_to_sink(&mut incoming)
+            .unwrap();
         peer.write(&incoming).await.unwrap();
         let mut transport = MstpTransport::new(serial, MstpConfig::default())
             .with_execution_mode(MstpExecutionMode::DedicatedThread);
@@ -446,22 +523,22 @@ async fn dedicated_blocking_io_keeps_app_responsive_and_stop_waits_for_release()
             .unwrap();
         assert_ne!(thread, std::thread::current().id());
         transport.send_broadcast(&[1, 0]).await.unwrap();
-        let node = transport.node_state().unwrap().clone();
-        let stop = transport.stop();
-        tokio::pin!(stop);
-        tokio::select! {
-            _ = &mut stop => panic!("stop completed while backend I/O was blocked"),
-            _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+        {
+            let stop = transport.stop();
+            tokio::pin!(stop);
+            tokio::select! {
+                _ = &mut stop => panic!("stop completed while backend I/O was blocked"),
+                _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+            }
+            // The app's current-thread runtime made progress while MAC I/O blocked.
+            release.send(()).unwrap();
+            tokio::time::timeout(Duration::from_secs(2), stop)
+                .await
+                .unwrap()
+                .unwrap();
         }
-        // The app's current-thread runtime made progress while MAC I/O blocked.
-        release.send(()).unwrap();
-        tokio::time::timeout(Duration::from_secs(2), stop)
-            .await
-            .unwrap()
-            .unwrap();
-        let node = node.lock().await;
-        assert!(node.tx_queue.is_empty());
-        assert_eq!(node.state, MasterState::Idle);
+        // The queue went with the task; a send after stop is refused.
+        assert!(transport.send_broadcast(&[1, 0]).await.is_err());
     }
 }
 

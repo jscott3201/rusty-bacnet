@@ -427,6 +427,7 @@ mod direct_dial_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::port_ownership::connect_loopback;
     use std::sync::Arc;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio_rustls::rustls::pki_types::pem::PemObject;
@@ -436,9 +437,7 @@ mod tests {
     #[tokio::test]
     async fn disable_nagle_sets_tcp_nodelay_on_both_ends() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let dialed = TcpStream::connect(listener.local_addr().unwrap())
-            .await
-            .unwrap();
+        let dialed = connect_loopback(listener.local_addr().unwrap()).await;
         let (accepted, _) = listener.accept().await.unwrap();
         for stream in [&dialed, &accepted] {
             assert!(!stream.nodelay().unwrap(), "Nagle is on by default");

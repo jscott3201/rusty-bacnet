@@ -1,3 +1,6 @@
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
 use super::decode_helpers::{decode_context_status_flags, finish_variant};
 use super::*;
 

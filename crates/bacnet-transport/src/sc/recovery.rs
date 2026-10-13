@@ -3,6 +3,19 @@
 use super::connector::dial_reconnect_ws;
 use super::*;
 
+async fn connect_probe_from(conn: &Arc<Mutex<ScConnection>>) -> Arc<Mutex<ScConnection>> {
+    Arc::new(Mutex::new(conn.lock().await.connect_probe()))
+}
+
+async fn absorb_failed_connect_probe(
+    conn: &Arc<Mutex<ScConnection>>,
+    probe_conn: &Arc<Mutex<ScConnection>>,
+) {
+    let probe = probe_conn.lock().await;
+    let mut c = conn.lock().await;
+    c.absorb_failed_probe(&probe);
+}
+
 /// Jitter a nominal backoff from validated reconnect settings without changing
 /// its doubling progression. Both the configured initial floor and cap apply.
 fn jittered_backoff(backoff: Duration, initial: Duration, maximum: Duration) -> Duration {

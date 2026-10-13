@@ -5,7 +5,7 @@ use std::sync::{Mutex as SyncMutex, Weak};
 pub(super) struct BroadcasterState<T: TransportPort> {
     network: SyncMutex<Option<Arc<NetworkLayer<T>>>>,
     requests: Weak<request_tasks::RequestTasks>,
-    config: ServerConfig,
+    config: Arc<ServerConfig>,
     /// Weak, so a server dropped without `stop()` is left holding the only
     /// handle it hands off the runtime (#1409).
     db: Weak<RwLock<ObjectDatabase>>,
@@ -22,14 +22,14 @@ impl<T: TransportPort> BroadcasterState<T> {
     pub(super) fn new(
         network: &Arc<NetworkLayer<T>>,
         requests: &Arc<request_tasks::RequestTasks>,
-        config: &ServerConfig,
+        config: &Arc<ServerConfig>,
         db: &Arc<RwLock<ObjectDatabase>>,
         comm_state: &Arc<CommState>,
     ) -> Arc<Self> {
         Arc::new(Self {
             network: SyncMutex::new(Some(Arc::clone(network))),
             requests: Arc::downgrade(requests),
-            config: config.clone(),
+            config: Arc::clone(config),
             db: Arc::downgrade(db),
             comm_state: Arc::clone(comm_state),
             capacity: Arc::new(Semaphore::new(32)),
@@ -59,7 +59,7 @@ impl<T: TransportPort + 'static> BroadcasterState<T> {
             .try_acquire_owned()
             .map_err(|_| Error::Encoding("server I-Am broadcast capacity exhausted".into()))?;
         let requests = self.requests.upgrade().ok_or_else(stopped)?;
-        let config = self.config.clone();
+        let config = Arc::clone(&self.config);
         let db = self.db.upgrade().ok_or_else(stopped)?;
         let comm_state = Arc::clone(&self.comm_state);
         let (tx, rx) = oneshot::channel();

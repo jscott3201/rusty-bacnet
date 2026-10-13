@@ -232,7 +232,7 @@ fn lighting_output_takes_a_lighting_command_a_channel_passes_on() {
     // The channel value frames the command in context tag 0.
     let framed = [&[0x0E][..], &FADE, &[0x0F]].concat();
     let current = lo.read_property(LC, None).ok();
-    let target = MemberDatatype::of(LC, current.as_ref());
+    let target = MemberDatatype::of(ObjectType::LIGHTING_OUTPUT, LC, current.as_ref());
     assert_eq!(target, MemberDatatype::LightingCommand);
     let value = coerce_channel_value(&PropertyValue::ApplicationData(framed), target).unwrap();
     lo.write_property(LC, None, value, Some(10)).unwrap();

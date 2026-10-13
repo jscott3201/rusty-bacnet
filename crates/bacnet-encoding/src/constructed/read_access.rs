@@ -7,6 +7,9 @@
 //! object identifier in `[0]`, then its references back to back inside an
 //! opening/closing `[1]` pair.
 
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;

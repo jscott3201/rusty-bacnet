@@ -17,8 +17,8 @@
 //!   object's Present_Value.
 //! - A Color Temperature object takes FADE_TO_CCT, RAMP_TO_CCT, STEP_UP_CCT,
 //!   STEP_DOWN_CCT and STOP. FADE_TO_CCT and RAMP_TO_CCT need a target colour
-//!   temperature of 1000 to 30000 K, the object's range; the object would
-//!   clamp it to Min_Pres_Value and Max_Pres_Value when carrying it out.
+//!   temperature of 1000 to 30000 K, the object's range; the object clamps
+//!   it to Min_Pres_Value and Max_Pres_Value when it carries the command out.
 //! - A fade time must be 100 to 86,400,000 ms where a fade carries one; a
 //!   ramp rate 1 to 30000 K/s where RAMP_TO_CCT does; a step increment 1 to
 //!   30000 K where a step operation does.
@@ -39,14 +39,17 @@ use bytes::BytesMut;
 
 use crate::common;
 
-/// The fade times a colour command may carry, in milliseconds.
-const FADE_TIME_MS: RangeInclusive<u32> = 100..=86_400_000;
+/// The fade times a colour command may carry, in milliseconds, which bound
+/// Default_Fade_Time too (Clauses 12.X.10 and 12.Y.10).
+pub(super) const FADE_TIME_MS: RangeInclusive<u32> = 100..=86_400_000;
 
 /// The colour temperatures a Color Temperature object takes, in kelvin.
-const KELVIN: RangeInclusive<u32> = 1_000..=30_000;
+pub(super) const KELVIN: RangeInclusive<u32> = 1_000..=30_000;
 
-/// The ramp rates (K/s) and step increments (K) a colour command may carry.
-const KELVIN_STEP: RangeInclusive<u32> = 1..=30_000;
+/// The ramp rates (K/s) and step increments (K) a colour command may carry,
+/// which bound Default_Ramp_Rate and Default_Step_Increment too (Clauses
+/// 12.Y.11 and 12.Y.12).
+pub(super) const KELVIN_STEP: RangeInclusive<u32> = 1..=30_000;
 
 /// The range of each xy coordinate.
 const COORDINATE: RangeInclusive<f32> = 0.0..=1.0;
@@ -65,7 +68,7 @@ fn required<T>(value: Option<T>) -> Result<T, Error> {
 }
 
 /// Whether both coordinates of `color` are within 0.0 to 1.0; NaN is not.
-fn xy_in_range(color: BACnetXyColor) -> bool {
+pub(super) fn xy_in_range(color: BACnetXyColor) -> bool {
     COORDINATE.contains(&color.x) && COORDINATE.contains(&color.y)
 }
 

@@ -16,6 +16,7 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use crate::clock::{ClockFrame, ClockReader};
 use crate::common::read_property_list_property;
+use crate::object_profile::{ObjectProfile, ProfileState, TagsPersistence};
 use crate::traits::BACnetObject;
 
 mod audit_recipient;
@@ -126,6 +127,8 @@ pub struct DeviceConfig {
     pub max_apdu_length: u32,
     /// Segmentation support level.
     pub segmentation_supported: Segmentation,
+    /// Segment timeout in milliseconds, exposed when segmentation is supported.
+    pub apdu_segment_timeout: u64,
     /// APDU timeout in milliseconds.
     pub apdu_timeout: u32,
     /// Number of APDU retries.
@@ -144,6 +147,7 @@ impl Default for DeviceConfig {
             application_software_version: "0.1.0".into(),
             max_apdu_length: 1476,
             segmentation_supported: Segmentation::NONE,
+            apdu_segment_timeout: 5000,
             apdu_timeout: 6000,
             apdu_retries: 3,
         }
@@ -155,6 +159,7 @@ pub struct DeviceObject {
     oid: ObjectIdentifier,
     recipient: audit_recipient::RecipientState,
     properties: HashMap<PropertyIdentifier, PropertyValue>,
+    profile: ProfileState,
     /// Cached object list for array-indexed reads.
     object_list: Vec<ObjectIdentifier>,
     /// Protocol_Object_Types_Supported — bitstring indicating which object
@@ -262,6 +267,15 @@ impl DeviceObject {
 
         // Max_Segments_Accepted — only included when segmentation is supported.
         if config.segmentation_supported != Segmentation::NONE {
+            if config.apdu_segment_timeout == 0 {
+                return Err(Error::Encoding(
+                    "APDU_Segment_Timeout must be positive when segmentation is supported".into(),
+                ));
+            }
+            properties.insert(
+                PropertyIdentifier::APDU_SEGMENT_TIMEOUT,
+                PropertyValue::Unsigned(config.apdu_segment_timeout),
+            );
             let max_segments_accepted = if config.segmentation_supported == Segmentation::TRANSMIT {
                 1
             } else {
@@ -346,12 +360,39 @@ impl DeviceObject {
         Ok(Self {
             oid,
             recipient: Default::default(),
+            profile: ProfileState::default(),
             properties,
             object_list: vec![oid], // Device itself is always in the list
             protocol_object_types_supported,
             configured_services_supported: EXECUTED_SERVICES.to_vec(),
             clock: None,
         })
+    }
+
+    /// Build with application-owned Tags storage. Saved Tags override configured
+    /// Tags only while [`Self::set_profile`] provisions the row. Loaded data must
+    /// satisfy the shared Tags rules and opt-in 1 MiB snapshot limit.
+    pub fn with_tags_persistence(
+        config: DeviceConfig,
+        persistence: Arc<dyn TagsPersistence>,
+    ) -> Result<Self, Error> {
+        let mut object = Self::new(config)?;
+        object.profile = ProfileState::persistent(object.oid, persistence)?;
+        Ok(object)
+    }
+
+    /// Provision independent optional Tags, Profile_Location and Profile_Name
+    /// rows before registration. Ordinary servers permit Tags writes; an endpoint
+    /// still applies its narrower Device write allowlist. The profile text is
+    /// network read-only. Invalid configuration leaves the old profile unchanged.
+    pub fn set_profile(&mut self, profile: ObjectProfile) -> Result<(), Error> {
+        self.profile.provision(profile)
+    }
+
+    /// Wait for queued save attempts; each write reports its own outcome.
+    /// This is not a success receipt. Unstaged synchronous writes block their caller.
+    pub fn wait_for_tag_saves(&self) {
+        self.profile.wait_for_saves();
     }
 
     /// Update the object-list with the current database contents.
@@ -563,6 +604,9 @@ impl BACnetObject for DeviceObject {
             };
         }
 
+        if let Some(value) = self.profile.read(property, array_index) {
+            return value;
+        }
         self.properties
             .get(&property)
             .cloned()
@@ -581,6 +625,9 @@ impl BACnetObject for DeviceObject {
     ) -> Result<(), Error> {
         if property == PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT {
             return self.write_audit_recipient(array_index, value, _priority, None);
+        }
+        if let Some(result) = self.profile.write(property, array_index, &value) {
+            return result;
         }
         if property == PropertyIdentifier::DESCRIPTION {
             if array_index.is_some() {
@@ -608,6 +655,15 @@ impl BACnetObject for DeviceObject {
             property,
             array_index,
         ))
+    }
+
+    fn durable_writes_internal(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
+        self.profile.capability()
+    }
+
+    fn advance_monotonic_time_internal(&mut self, now: std::time::Duration) -> bool {
+        self.profile.expire(now);
+        false
     }
 
     fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {

@@ -1,0 +1,32 @@
+[package]
+name = "nostd-harness"
+description = "Chooses a portable-atomic backend so the no_std crates' bytes builds lint on ARMv6-M"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+# Nothing to test or document: the crate only adds features to a build graph.
+[lib]
+test = false
+doctest = false
+
+# bytes needs atomic compare-and-swap, which ARMv6-M lacks. Its
+# extra-platforms feature takes the atomics from portable-atomic instead,
+# which then needs a backend, and only the final firmware may choose that,
+# so no library here does. scripts/ci/check-no-std.sh lints the bytes builds
+# for thumbv6m-none-eabi with this crate in the graph, which plays the
+# firmware's part: it turns on both features, and cargo unifies them into
+# the bytes the linted crate uses. Other targets and host builds see neither
+# dependency.
+#
+# critical-section, not unsafe-assume-single-core: a library sits behind
+# the firmware's own implementation of it. Clippy doesn't link, so the
+# implementation is never needed here.
+[target.thumbv6m-none-eabi.dependencies]
+bytes = { workspace = true, features = ["extra-platforms"] }
+portable-atomic = { workspace = true, features = ["critical-section"] }
+
+[lints]
+workspace = true

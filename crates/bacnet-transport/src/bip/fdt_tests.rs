@@ -6,7 +6,7 @@ async fn wait_for_fdt_len(transport: &BipTransport, expected: usize) {
     timeout(Duration::from_secs(1), async {
         loop {
             let len = {
-                let state = state.lock().await;
+                let state = state.lock().unwrap();
                 state.fdt_len_for_test()
             };
             if len == expected {
@@ -41,7 +41,7 @@ async fn bbmd_fdt_purge_task_clears_expired_entry_without_bvlc_request() {
 
     {
         let state = bbmd_transport.bbmd_state().unwrap();
-        let mut state = state.lock().await;
+        let mut state = state.lock().unwrap();
         state.backdate_foreign_device_for_test(fd_ip, fd_port, Duration::from_secs(91));
         assert_eq!(state.fdt_len_for_test(), 1);
     }
@@ -57,14 +57,14 @@ async fn bbmd_fdt_purge_task_clears_expired_entry_without_bvlc_request() {
 async fn register_foreign_device_resets_entry_before_purge_task_removes_it() {
     let fd_ip = [192, 0, 2, 10];
     let fd_port = 0xBAC0;
-    let bbmd = std::sync::Arc::new(tokio::sync::Mutex::new(BbmdState::new(
+    let bbmd = std::sync::Arc::new(std::sync::Mutex::new(BbmdState::new(
         [127, 0, 0, 1],
         0xBAC0,
     )));
     let purge_task = BipTransport::spawn_bbmd_fdt_purge_task(bbmd.clone());
 
     {
-        let mut state = bbmd.lock().await;
+        let mut state = bbmd.lock().unwrap();
         state.enable_foreign_device_registration(ForeignDevicePolicy::default());
         assert_eq!(
             state.register_foreign_device(fd_ip, fd_port, 1),
@@ -81,7 +81,7 @@ async fn register_foreign_device_resets_entry_before_purge_task_removes_it() {
     tokio::time::sleep(Duration::from_millis(1_200)).await;
 
     {
-        let state = bbmd.lock().await;
+        let state = bbmd.lock().unwrap();
         assert_eq!(state.fdt_len_for_test(), 1);
     }
 
@@ -106,12 +106,12 @@ async fn bbmd_without_foreign_device_policy_naks_bvlc_registration() {
         .unwrap();
     assert_eq!(result, BvlcResultCode::REGISTER_FOREIGN_DEVICE_NAK);
 
-    let counters = bbmd_transport.fdt_counters().await.unwrap();
+    let counters = bbmd_transport.fdt_counters().unwrap();
     assert_eq!(counters.registrations_rejected, 1);
     assert_eq!(counters.registrations_accepted, 0);
 
     // Non-BBMD client returns None for fdt_counters
-    assert!(client_transport.fdt_counters().await.is_none());
+    assert!(client_transport.fdt_counters().is_none());
 
     client_transport.stop().await.unwrap();
     bbmd_transport.stop().await.unwrap();

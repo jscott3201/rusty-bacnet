@@ -6,7 +6,7 @@
 use bacnet_endpoint::identity::DeviceIdentity;
 use bacnet_endpoint::mstp::MstpEndpointBuilder;
 use bacnet_endpoint::session::{EndpointSession, SessionRole};
-use bacnet_transport::mstp::MstpTransport;
+use bacnet_transport::mstp::{Echo, MstpConfig, MstpTransport, SerialPort};
 use bacnet_transport::mstp_serial::{SerialConfig, TokioSerialPort};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -20,10 +20,49 @@ use crate::endpoint::common::{
 use crate::endpoint::lifecycle::Lifecycle;
 use crate::endpoint::roles::{PyEndpointClient, PyEndpointServer};
 use crate::errors::to_py_err;
+use crate::mstp_py::MstpTiming;
 use crate::types::{PyReadAccessSpec, PySegmentation};
 
-/// MS/TP APDU bound enforced at composition (standard-frame transport).
-const MSTP_MAX_APDU: u16 = 480;
+/// The largest `max_apdu` the link carries, which the identity may
+/// advertise: 480 with standard frames, 1476 with extended ones.
+fn mstp_max_apdu(extended_frames: bool) -> u16 {
+    MstpConfig {
+        extended_frames,
+        ..MstpConfig::default()
+    }
+    .max_apdu_length()
+}
+
+/// An endpoint builder over `serial` whose transport takes `link`.
+fn link_builder<S: SerialPort>(serial: S, link: &MstpConfig) -> MstpEndpointBuilder<S> {
+    MstpEndpointBuilder::new(serial, link.this_station)
+        .max_master(link.max_master)
+        .max_info_frames(link.max_info_frames)
+        .baud_rate(link.baud_rate)
+        .extended_frames(link.extended_frames)
+        .usage_timeout(link.usage_timeout)
+        .reply_timeout(link.reply_timeout)
+        .transmit_latency_pad(link.transmit_latency_pad)
+}
+
+/// The link configuration an endpoint's keywords describe.
+fn link_config(
+    mac: u8,
+    max_master: u8,
+    max_info_frames: u8,
+    baud: u32,
+    extended_frames: bool,
+    timing: MstpTiming,
+) -> MstpConfig {
+    timing.apply(MstpConfig {
+        this_station: mac,
+        max_master,
+        max_info_frames,
+        baud_rate: baud,
+        extended_frames,
+        ..MstpConfig::default()
+    })
+}
 
 /// Owned, validated MS/TP endpoint startup configuration (no I/O here).
 #[derive(Clone)]
@@ -35,16 +74,29 @@ struct MstpEndpointConfig {
     mac: u8,
     max_master: u8,
     max_info_frames: u8,
+    /// Extended frames (Types 32 and 33) on the link, and APDUs of up to
+    /// 1476 (#1663).
+    extended_frames: bool,
+    /// What the port hears while it sends, from `mstp_echo` and
+    /// `mstp_echo_grace_ms`, checked at construction (#1663).
+    echo: Echo,
+    /// The transmit-latency pad and the host timeouts, checked at
+    /// construction.
+    timing: MstpTiming,
     identity: DeviceIdentity,
     queue_capacity: usize,
     read_work_limit: usize,
     apdu_timeout_ms: u64,
     apdu_retries: u8,
+    min_request_interval_ms: u64,
 }
 
 #[cfg(test)]
 #[path = "mstp_lifecycle_tests.rs"]
 mod lifecycle_tests;
+#[cfg(test)]
+#[path = "mstp_options_tests.rs"]
+mod options_tests;
 #[cfg(test)]
 type EndpointSerial = lifecycle_tests::TestSerial;
 #[cfg(not(test))]
@@ -52,33 +104,51 @@ type EndpointSerial = TokioSerialPort;
 type MstpSession = EndpointSession<MstpTransport<EndpointSerial>>;
 
 impl MstpEndpointConfig {
-    async fn prepare(self, objects: Vec<PendingObject>) -> PyResult<MstpSession> {
-        let config = self;
+    /// The link configuration the keywords describe, as the builder will
+    /// make it.
+    fn link(&self) -> MstpConfig {
+        link_config(
+            self.mac,
+            self.max_master,
+            self.max_info_frames,
+            self.baud,
+            self.extended_frames,
+            self.timing,
+        )
+    }
+
+    /// Open the serial port, declaring the echo the keywords asked for, so
+    /// the declared echo can't be lost between the two.
+    fn open_serial(&self) -> PyResult<EndpointSerial> {
         let serial_config = SerialConfig {
-            port_name: config.serial_port.clone(),
-            baud_rate: config.baud,
+            port_name: self.serial_port.clone(),
+            baud_rate: self.baud,
         };
         #[cfg(not(test))]
         let serial = TokioSerialPort::open(&serial_config)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         #[cfg(test)]
-        let serial = match &config.serial_opener {
+        let serial = match &self.serial_opener {
             Some(open) => open(&serial_config)?,
             None => lifecycle_tests::TestSerial::Real(
                 TokioSerialPort::open(&serial_config)
                     .map_err(|e| PyRuntimeError::new_err(e.to_string()))?,
             ),
         };
+        Ok(serial.with_echo(self.echo))
+    }
+
+    async fn prepare(self, objects: Vec<PendingObject>) -> PyResult<MstpSession> {
+        let config = self;
+        let serial = config.open_serial()?;
         let boxes = build_pending_boxes(&objects)?;
         let db = build_database(&config.identity, boxes)?;
-        let session = MstpEndpointBuilder::new(serial, config.mac)
-            .max_master(config.max_master)
-            .max_info_frames(config.max_info_frames)
-            .baud_rate(config.baud)
+        let session = link_builder(serial, &config.link())
             .role(SessionRole::Both)
             .queue_capacity(config.queue_capacity)
             .read_work_limit(config.read_work_limit)
             .client_timers(config.apdu_timeout_ms, config.apdu_retries)
+            .min_request_interval_ms(config.min_request_interval_ms)
             .database(db)
             .identity(config.identity.clone())
             .build_session()
@@ -120,7 +190,8 @@ impl PyMstpEndpoint {
     ///     mstp_baud: One of 9600/19200/38400/57600/76800/115200.
     ///     mstp_mac / mstp_max_master / mstp_max_info_frames: Addressing
     ///         (mac <= max_master, both <=127, info frames >=1).
-    ///     max_apdu: Wire-legal APDU within the 480 MS/TP bound.
+    ///     max_apdu: Wire-legal APDU within the link's bound: 480, or 1476
+    ///         with ``mstp_extended_frames=True``.
     ///     segmentation / services / device_uuid: Identity knobs (UUID zeros
     ///         allowed; stored into DEVICE_UUID).
     ///     queue_capacity / apdu_timeout_ms / apdu_retries: Session tuning.
@@ -128,6 +199,23 @@ impl PyMstpEndpoint {
     ///         by the server role may expand (must be >0, default 256): its
     ///         own row plus, for a Group's Present_Value, one per member
     ///         property. A read past it is aborted with OUT_OF_RESOURCES.
+    ///     min_request_interval_ms: Keyword-only (default 0, no pacing; at
+    ///         most 3600000). Least time between the client role's confirmed
+    ///         requests to one destination, as for `BACnetClient`.
+    ///     mstp_extended_frames: Keyword-only (default False). Extended
+    ///         frames (Types 32 and 33, NPDUs of up to 1497 octets), which
+    ///         lift the APDU bound from 480 to 1476, as for `BACnetClient`.
+    ///     mstp_echo / mstp_echo_grace_ms: Keyword-only (default False and
+    ///         None). The adapter returns every octet the station sends, and
+    ///         how long after a frame its echo may still arrive (None: 40 ms),
+    ///         as for `BACnetClient`. A grace of 0, or one without
+    ///         ``mstp_echo=True``, is a ValueError here.
+    ///     mstp_transmit_latency_pad_ms / mstp_usage_timeout_ms /
+    ///         mstp_reply_timeout_ms: Keyword-only (default None, the
+    ///         transport's own: a 4 ms pad on Windows and none elsewhere,
+    ///         35 ms and 300 ms), as for `BACnetClient`. A pad over 15 ms, or
+    ///         a timeout outside 20-35 ms or 255-300 ms, is a ValueError
+    ///         here.
     #[new]
     #[pyo3(signature = (
         device_instance,
@@ -146,7 +234,14 @@ impl PyMstpEndpoint {
         apdu_timeout_ms=6000,
         apdu_retries=0,
         *,
-        read_work_limit=256
+        read_work_limit=256,
+        min_request_interval_ms=0,
+        mstp_extended_frames=false,
+        mstp_echo=false,
+        mstp_echo_grace_ms=None,
+        mstp_transmit_latency_pad_ms=None,
+        mstp_usage_timeout_ms=None,
+        mstp_reply_timeout_ms=None
     ))]
     fn new(
         device_instance: u32,
@@ -165,6 +260,13 @@ impl PyMstpEndpoint {
         apdu_timeout_ms: u64,
         apdu_retries: u8,
         read_work_limit: usize,
+        min_request_interval_ms: u64,
+        mstp_extended_frames: bool,
+        mstp_echo: bool,
+        mstp_echo_grace_ms: Option<u32>,
+        mstp_transmit_latency_pad_ms: Option<u32>,
+        mstp_usage_timeout_ms: Option<u32>,
+        mstp_reply_timeout_ms: Option<u32>,
     ) -> PyResult<Self> {
         if queue_capacity == 0 {
             return Err(PyValueError::new_err(
@@ -172,6 +274,8 @@ impl PyMstpEndpoint {
             ));
         }
         let read_work_limit = parse_read_work_limit(read_work_limit)?;
+        let min_request_interval_ms =
+            crate::client::parse_min_request_interval_ms(min_request_interval_ms)?;
         // Early addressing/baud validation without opening (ValueError).
         crate::mstp_py::validate_mstp_config(
             Some(serial_port),
@@ -180,9 +284,29 @@ impl PyMstpEndpoint {
             mstp_max_master,
             mstp_max_info_frames,
         )?;
-        if max_apdu > MSTP_MAX_APDU {
+        let echo = crate::mstp_py::port_echo(mstp_echo, mstp_echo_grace_ms)?;
+        let timing = MstpTiming {
+            transmit_latency_pad_ms: mstp_transmit_latency_pad_ms,
+            usage_timeout_ms: mstp_usage_timeout_ms,
+            reply_timeout_ms: mstp_reply_timeout_ms,
+        };
+        crate::mstp_py::check_config(&link_config(
+            mstp_mac,
+            mstp_max_master,
+            mstp_max_info_frames,
+            mstp_baud,
+            mstp_extended_frames,
+            timing,
+        ))?;
+        let bound = mstp_max_apdu(mstp_extended_frames);
+        if max_apdu > bound {
+            let hint = if mstp_extended_frames {
+                ""
+            } else {
+                " (mstp_extended_frames=True carries up to 1476)"
+            };
             return Err(PyValueError::new_err(format!(
-                "max_apdu {max_apdu} exceeds MS/TP transport bound {MSTP_MAX_APDU}"
+                "max_apdu {max_apdu} exceeds MS/TP transport bound {bound}{hint}"
             )));
         }
         let segmentation = parse_segmentation(segmentation);
@@ -207,11 +331,15 @@ impl PyMstpEndpoint {
                 mac: mstp_mac,
                 max_master: mstp_max_master,
                 max_info_frames: mstp_max_info_frames,
+                extended_frames: mstp_extended_frames,
+                echo,
+                timing,
                 identity,
                 queue_capacity,
                 read_work_limit,
                 apdu_timeout_ms,
                 apdu_retries,
+                min_request_interval_ms,
             },
         })
     }

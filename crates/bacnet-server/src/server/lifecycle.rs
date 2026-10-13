@@ -50,6 +50,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         super::audit_forwarder::initialize(&db, &config, &device_bindings, &transport);
         super::network_port::validate_apdu_capacity(&mut config, &transport)?;
         crate::local_device::validate_apdu_declaration(&db, config.max_apdu_length)?;
+        let receive_timeout = super::segmented_receive::validate_segment_timeout(&config, &db)?;
+        // Settled now: every owner from here on shares it (#1521).
+        let config = Arc::new(config);
         let request_tasks = super::request_tasks::RequestTasks::for_server(&config)?;
 
         if config.vendor_id == 0 {
@@ -117,7 +120,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             )
         });
         let network_dispatch = Arc::clone(&network);
-        let config_dispatch = Arc::new(config.clone());
+        let config_dispatch = Arc::clone(&config);
         let notification_transactions_dispatch = Arc::clone(&notification_transactions);
 
         let audit_owner = target_audit
@@ -164,7 +167,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             let mut ingress_open = true;
 
             loop {
+                // Drain all selected ownership before the first asynchronous Abort.
+                Self::reap_expired_requests(
+                    &network_dispatch,
+                    &mut seg_receivers,
+                    runtime_clock::now(),
+                    receive_timeout,
+                )
+                .await;
                 let received = tokio::select! {
+                    () = super::segmented_receive::wait_receive_deadline(&seg_receivers, receive_timeout), if !seg_receivers.is_empty() => continue,
                     result = notification_transactions_dispatch.join_next(), if notifications_open => {
                         notifications_open = result.is_some();
                         NotificationTransactions::observe(result);
@@ -186,8 +198,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     },
                     else => break,
                 };
-                let now = Instant::now();
-                super::segmented_receive::expire_segmented_requests(&mut seg_receivers, now);
+                // Input and the timer can become ready together. Apply expiry
+                // before interpreting this segment in either scheduling order.
+                Self::reap_expired_requests(
+                    &network_dispatch,
+                    &mut seg_receivers,
+                    runtime_clock::now(),
+                    receive_timeout,
+                )
+                .await;
 
                 match apdu::decode_apdu(received.apdu.clone()) {
                     Ok(decoded) => {
@@ -213,6 +232,17 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             debug!("Ignoring a ConfirmedRequest addressed to a group");
                             continue;
                         }
+                        // Nor one sent from a group address, where its
+                        // answer would go (#1504).
+                        if matches!(decoded, Apdu::ConfirmedRequest(_))
+                            && dispatch_context
+                                .confirmed_request_tracker
+                                .refuse_group_source(&received.source_mac, |mac| {
+                                    network_dispatch.transport().is_group_destination(mac)
+                                })
+                        {
+                            continue;
+                        }
                         let source_mac = received.source_mac.clone();
                         let source_network = received.source_network.clone();
 
@@ -225,20 +255,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         // Provenance snapshot for this ingress (RB-07, by value).
                         let provenance = received.provenance;
                         let route = received.response_route();
-                        if let Apdu::Abort(ref abt) = decoded {
-                            if !abt.sent_by_server {
-                                let abort_key = segmented_receive_key(
-                                    source_mac.as_slice(),
-                                    source_network.as_ref(),
-                                    abt.invoke_id,
-                                    provenance,
-                                );
-                                super::segmented_receive::remove_matching_reassemblies(
-                                    &mut seg_receivers,
-                                    &abort_key,
-                                );
-                            }
-                        }
+                        super::segmented_receive::remove_peer_aborted_request(
+                            &mut seg_receivers,
+                            &received,
+                            &decoded,
+                        );
 
                         let mut received = Some(received);
                         let handled = if let Apdu::ConfirmedRequest(ref req) = decoded {
@@ -320,7 +341,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                     // for accepted, duplicate and
                                     // out-of-order segments alike, so the
                                     // refresh precedes the ordering checks.
-                                    state.last_activity = Instant::now();
+                                    state.last_activity = runtime_clock::now();
                                     if seq != state.expected_seq {
                                         ack_to_send =
                                             super::segmented_receive::classify_non_next_segment(
@@ -384,7 +405,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                             .await;
                                             continue;
                                         }
-                                        state.last_progress = Instant::now();
+                                        state.last_progress = runtime_clock::now();
                                         state.accepted_segments += 1;
                                         state.expected_seq = seq.wrapping_add(1);
                                         state.last_acked_seq = seq;
@@ -482,6 +503,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                             received
                                                 .as_ref()
                                                 .and_then(|r| r.direct_response.clone()),
+                                            source_mac.clone(),
+                                            source_network.clone(),
                                             req,
                                         );
                                     ack_to_send = initial_ack;

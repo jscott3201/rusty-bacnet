@@ -38,24 +38,46 @@ fn row(hour: u8, datum: &str, status_flags: Option<&str>) -> LogRecordRow {
     }
 }
 
-/// Decode `data` as the log buffer of `object_type`.
-fn rows(object_type: ObjectType, data: &[u8]) -> LogRecords {
-    decode_records(record_decoder(object_type).unwrap(), data)
+fn ack(object_type: ObjectType, item_count: u32, data: &[u8]) -> ReadRangeAck {
+    ReadRangeAck {
+        object_identifier: oid(object_type, 1),
+        property_identifier: PropertyIdentifier::LOG_BUFFER,
+        property_array_index: None,
+        result_flags: (true, true, false),
+        item_count,
+        item_data: data.to_vec(),
+        first_sequence_number: None,
+    }
+}
+
+/// Decode `data`, said to hold `item_count` records, as the log buffer of
+/// `object_type`.
+fn rows(object_type: ObjectType, item_count: u32, data: &[u8]) -> LogRows {
+    log_rows(&ack(object_type, item_count, data)).unwrap()
 }
 
 #[test]
-fn only_the_four_log_objects_have_a_record_decoder() {
+fn only_a_log_objects_log_buffer_shows_records() {
     for object_type in [
         ObjectType::TREND_LOG,
         ObjectType::EVENT_LOG,
         ObjectType::TREND_LOG_MULTIPLE,
         ObjectType::AUDIT_LOG,
     ] {
-        assert!(record_decoder(object_type).is_some(), "{object_type}");
+        assert!(
+            log_rows(&ack(object_type, 0, &[])).is_some(),
+            "{object_type}"
+        );
     }
     for object_type in [ObjectType::DEVICE, ObjectType::ANALOG_INPUT] {
-        assert!(record_decoder(object_type).is_none(), "{object_type}");
+        assert!(
+            log_rows(&ack(object_type, 0, &[])).is_none(),
+            "{object_type}"
+        );
     }
+    let mut other = ack(ObjectType::TREND_LOG, 0, &[]);
+    other.property_identifier = PropertyIdentifier::EVENT_TIME_STAMPS;
+    assert!(log_rows(&other).is_none());
 }
 
 #[test]
@@ -87,7 +109,7 @@ fn trend_log_records_show_datum_and_status_flags() {
         };
         encode_log_record(&record, &mut data).unwrap();
     }
-    let records = rows(ObjectType::TREND_LOG, &data);
+    let records = rows(ObjectType::TREND_LOG, 4, &data);
     assert_eq!(
         records.rows,
         [
@@ -136,7 +158,7 @@ fn event_log_records_show_the_typed_notification() {
         encode_event_log_record(&record, &mut data).unwrap();
     }
     assert_eq!(
-        rows(ObjectType::EVENT_LOG, &data).rows,
+        rows(ObjectType::EVENT_LOG, 3, &data).rows,
         [
             row(
                 8,
@@ -176,7 +198,7 @@ fn trend_log_multiple_records_show_every_value() {
         encode_log_multiple_record(&record, &mut data).unwrap();
     }
     assert_eq!(
-        rows(ObjectType::TREND_LOG_MULTIPLE, &data).rows,
+        rows(ObjectType::TREND_LOG_MULTIPLE, 2, &data).rows,
         [
             row(8, "[21.5, true, null, enumerated(3)]", None),
             row(9, "log-status LOG_INTERRUPTED", None),
@@ -220,7 +242,7 @@ fn audit_log_records_show_the_operation_and_its_target() {
         encode_audit_log_record(&record, &mut data).unwrap();
     }
     assert_eq!(
-        rows(ObjectType::AUDIT_LOG, &data).rows,
+        rows(ObjectType::AUDIT_LOG, 2, &data).rows,
         [
             row(
                 8,
@@ -246,12 +268,12 @@ fn records_after_an_undecodable_one_fall_back_to_hex() {
     };
     encode_log_record(&record, &mut data).unwrap();
     data.extend_from_slice(&[0x0E, 0xA4]);
-    let records = rows(ObjectType::TREND_LOG, &data);
+    let records = rows(ObjectType::TREND_LOG, 2, &data);
     assert_eq!(records.rows, [row(8, "7", None)]);
     assert_eq!(records.undecoded.as_deref(), Some("0e a4"));
 
     // A Trend Log record read as a Trend Log Multiple record fails whole.
-    let records = rows(ObjectType::TREND_LOG_MULTIPLE, &data[..data.len() - 2]);
+    let records = rows(ObjectType::TREND_LOG_MULTIPLE, 1, &data[..data.len() - 2]);
     assert!(records.rows.is_empty());
     assert!(records.undecoded.unwrap().starts_with("0e a4 7e 0a 03"));
 }

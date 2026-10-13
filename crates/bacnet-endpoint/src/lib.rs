@@ -55,7 +55,9 @@
 //!   (+ `Reject`/`Abort` + segmentation-`Abort`). Explicit
 //!   [`EndpointSession::with_device_writes`](session::EndpointSession::with_device_writes)
 //!   enables authorized writes to the one local Device's Description and its
-//!   installed source Audit recipient, with
+//!   installed source Audit recipient, and explicit
+//!   [`EndpointSession::with_reinitialize`](session::EndpointSession::with_reinitialize)
+//!   enables ReinitializeDevice through an application handler, each with
 //!   deterministic and real B/IP loopback tests. Full `bacnet-server`
 //!   dispatch parity is out of scope. Accepted-direct replies preserve the original
 //!   sealed response capability through the bounded endpoint queue, before any
@@ -69,7 +71,7 @@
 //! | Data link | Endpoint builder | Evidence |
 //! |-----------|------------------|----------|
 //! | B/IP IPv4 unicast + local broadcast | [`bip::BipEndpointBuilder`] | Real loopback UDP proof (RB-16) |
-//! | B/IP BBMD / foreign-device mode | [`bip::BipEndpointBuilder::enable_bbmd`] et al. | **Experimental / unproven**: construction-only coverage, no wire BBMD proof; live BVLC queries stay on [`BipTransport`](bacnet_transport::bip::BipTransport) |
+//! | B/IP BBMD / foreign-device mode | [`bip::BipEndpointBuilder::mode`] | The standalone builders' transport and modes; loopback Network Number wire coverage; [`session::EndpointSession::foreign_registration`] reports a registration; live BVLC queries stay on [`BipTransport`](bacnet_transport::bip::BipTransport) |
 //! | BACnet/SC via hub | [`sc::ScEndpointBuilder`] | Real constrained-TLS hub proof (RB-16, `sc-tls`); loopback composition for unit validation |
 //! | MS/TP | [`mstp::MstpEndpointBuilder`] | **Simulator evidence only** (`LoopbackSerial` ownership + frame sequencing); no bench or on-wire conformance; timing is RB-26 |
 //! | BIPv6 | None | Explicitly unsupported: no endpoint builder; use `bacnet-transport` directly |
@@ -152,7 +154,7 @@
 //!
 //! Standalone BBMD helpers (`read_bdt` / `write_bdt` / `read_fdt` / foreign
 //! registration) stay on [`BipTransport`](bacnet_transport::bip::BipTransport);
-//! the endpoint BBMD setters only stage pre-start state and are experimental.
+//! [`bip::BipEndpointBuilder::mode`] sets the endpoint's B/IP mode before start.
 //! BIPv6/Ethernet have no endpoint builder: keep the standalone path there.
 //! See `docs/rust-api.md` for the same table with service-scope notes.
 //!
@@ -178,6 +180,7 @@
 #![deny(unsafe_code)]
 
 pub mod bip;
+mod held_database;
 pub mod identity;
 pub mod mstp;
 pub mod roles;

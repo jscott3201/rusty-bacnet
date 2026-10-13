@@ -16,7 +16,7 @@ use bacnet_objects::{
 use bacnet_server::server::{BACnetServer, ServerConfig};
 use bacnet_transport::{
     any::AnyTransport,
-    bip6::{decode_bip6_mac, Bip6ForeignDeviceConfig, Bip6Transport},
+    bip6::{Bip6ForeignDeviceConfig, Bip6Transport},
     mstp::LoopbackSerial,
 };
 use std::net::{Ipv6Addr, SocketAddrV6};
@@ -67,8 +67,14 @@ async fn start(transport: Bip6Transport) -> (Server, SocketAddrV6) {
     ))
     .await
     .unwrap();
-    let (ip, port) = decode_bip6_mac(server.local_mac()).unwrap();
-    (server, SocketAddrV6::new(ip, port, 0, 0))
+    let Some(AnyTransport::Bip6(transport)) = server.transport() else {
+        unreachable!("started on B/IPv6");
+    };
+    let address = transport.local_address().unwrap();
+    (
+        server,
+        SocketAddrV6::new(*address.ip(), address.port(), 0, 0),
+    )
 }
 
 async fn send(peer: &UdpSocket, target: SocketAddrV6, group: bool, npdu: &[u8]) {

@@ -136,7 +136,7 @@ impl ServerClock {
             .state
             .lock()
             .map_err(|_| Error::Encoding("Device clock lock poisoned".into()))?;
-        state.synchronized_utc = Some((utc_hundredths, Instant::now()));
+        state.synchronized_utc = Some((utc_hundredths, crate::runtime_clock::now()));
         Ok(())
     }
 }
@@ -146,8 +146,8 @@ impl ClockReader for ServerClock {
         let state = *self.state.lock().ok()?;
         let utc_hundredths = match state.synchronized_utc {
             Some((anchor, monotonic_anchor)) => {
-                let elapsed_hundredths =
-                    i128::try_from(monotonic_anchor.elapsed().as_millis() / 10).ok()?;
+                let elapsed = crate::runtime_clock::now().duration_since(monotonic_anchor);
+                let elapsed_hundredths = i128::try_from(elapsed.as_millis() / 10).ok()?;
                 anchor + elapsed_hundredths
             }
             None => system_utc_hundredths(),
@@ -368,8 +368,8 @@ mod tests {
         assert_eq!(clock.state.lock().unwrap().synchronized_utc, anchor);
     }
 
-    #[test]
-    fn local_and_utc_synchronization_share_the_configured_frame() {
+    #[tokio::test(start_paused = true)]
+    async fn local_and_utc_synchronization_share_the_configured_frame() {
         let clock = ServerClock::new(ClockConfig::new(300, true).unwrap());
         clock
             .synchronize(date(2024, 7, 4, 4), time(9, 15, 0, 0), false)
@@ -388,8 +388,8 @@ mod tests {
         assert!(utc.daylight_savings_status);
     }
 
-    #[test]
-    fn device_schedule_recipient_and_cov_use_the_same_frame() {
+    #[tokio::test(start_paused = true)]
+    async fn device_schedule_recipient_and_cov_use_the_same_frame() {
         use bacnet_objects::database::ObjectDatabase;
         use bacnet_objects::device::{DeviceConfig, DeviceObject};
         use bacnet_objects::traits::BACnetObject;
@@ -430,6 +430,26 @@ mod tests {
             crate::server::cov_clock::cov_multiple_datetime(frame),
             (frame.local_date, frame.local_time)
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn synchronized_clock_crosses_hundredths_at_second_and_minute_edges() {
+        for (anchor, after) in [
+            (time(0, 0, 0, 99), time(0, 0, 1, 0)),
+            (time(0, 0, 59, 99), time(0, 1, 0, 0)),
+        ] {
+            let clock = ServerClock::new(ClockConfig::default());
+            clock
+                .synchronize(date(2024, 7, 4, 4), anchor, true)
+                .unwrap();
+            assert_eq!(clock.read_clock().unwrap().local_time, anchor);
+            tokio::time::advance(Duration::from_millis(9)).await;
+            assert_eq!(clock.read_clock().unwrap().local_time, anchor);
+            tokio::time::advance(Duration::from_millis(1)).await;
+            let frame = clock.read_clock().unwrap();
+            assert_eq!(frame.local_date, date(2024, 7, 4, 4));
+            assert_eq!(frame.local_time, after);
+        }
     }
 }
 

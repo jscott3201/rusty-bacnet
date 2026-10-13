@@ -1,5 +1,14 @@
-//! Real-clock rejection deadlines at the WebSocket boundary, not OS backpressure.
+//! Rejection deadlines at the WebSocket boundary, not OS backpressure.
+//!
+//! Tests that run a transport against its heartbeat budget use tokio's paused
+//! clock, which the budget and the receive loop read (#1017). On real time a
+//! runner stall can fire the budget and a test's own deadline in one turn, and
+//! the test future, polled first, sees its deadline win (#1547). The rest stay
+//! on real time: they start from an already-expired budget, never reach one,
+//! or block a poll with a thread sleep to cross a cutoff, which a paused clock
+//! would not see.
 
+use super::test_waits::until;
 use super::*;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use tokio::time::timeout;
@@ -125,12 +134,13 @@ async fn within<F: std::future::Future>(future: F) -> F::Output {
         .expect("bounded test operation timed out")
 }
 
+/// Wait until `count` reaches `expected`; see [`until`].
 async fn wait_count(count: &AtomicUsize, expected: usize) {
-    within(async {
-        while count.load(Ordering::SeqCst) < expected {
-            tokio::task::yield_now().await;
-        }
-    })
+    let what = format!("count reaching {expected}");
+    until(
+        &what,
+        || async move { count.load(Ordering::SeqCst) >= expected },
+    )
     .await;
 }
 
@@ -204,7 +214,7 @@ async fn abort_and_join(transport: &mut ScTransport<GateSocket>) {
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn rejection_deadline_held_naks_disconnect_and_drop_future() {
     for (wire, _) in transport_rejections() {
         let (client, hub, observed) = GateSocket::pair();
@@ -212,7 +222,7 @@ async fn rejection_deadline_held_naks_disconnect_and_drop_future() {
             .with_device_uuid([1; 16])
             .with_test_heartbeat_timing_ms(80, 240);
         let mut rx = started(&mut transport, &hub).await;
-        let start = Instant::now();
+        let start = tokio::time::Instant::now();
         observed.hold_nak.store(true, Ordering::SeqCst);
         hub.send(&wire).await.unwrap();
         let expired = wait_for_state(&transport, ScConnectionState::Disconnected).await;
@@ -240,8 +250,8 @@ async fn rejection_deadline_held_naks_disconnect_and_drop_future() {
     }
 }
 
-// Paused clock: on real time, a runner stall between the held NAK and the
-// budget expiry could break the upper bound on `held.elapsed()` (#1017).
+// On real time, a runner stall between the held NAK and the budget expiry
+// could also break the upper bound on `held.elapsed()` (#1017).
 #[tokio::test(start_paused = true)]
 async fn rejection_deadline_late_naks_share_original_budget_not_per_frame() {
     for (wire, nak) in transport_rejections() {
@@ -282,7 +292,9 @@ async fn rejection_deadline_late_naks_share_original_budget_not_per_frame() {
     }
 }
 
-#[tokio::test]
+// On real time, a stall of about 450 ms after the probe would let the 600 ms
+// heartbeat timeout disconnect before the Connected check.
+#[tokio::test(start_paused = true)]
 async fn rejection_deadline_timely_completion_and_immediate_error_preserve_pending_ack() {
     for fail in [false, true] {
         for (wire, nak) in transport_rejections() {

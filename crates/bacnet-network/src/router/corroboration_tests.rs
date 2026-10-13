@@ -1,9 +1,19 @@
-use super::*;
-use crate::router::forwarding::forward_unicast;
-use crate::router_table::{ReachabilityStatus, RoutingClaimSnapshot};
-use bacnet_encoding::npdu::decode_npdu;
-use bytes::Bytes;
+//! Hardened convergence end to end (RB-06): claims from I-Am-Router and
+//! Init-ACK hold a cross-port move until a second claim, while the old
+//! route keeps forwarding. Three ports on 1000, 2000 and 4000, on the
+//! router's engine through [`super::envelope_harness`].
+
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+
+use bacnet_encoding::npdu::{decode_npdu, Npdu, NpduAddress};
+use bacnet_types::enums::NetworkMessageType;
+use bacnet_types::MacAddr;
+use bytes::Bytes;
+
+use super::envelope_harness::*;
+use super::SendRequest;
+use crate::router_table::{ClaimCounters, Convergence, PortId, Reachability};
 
 const I_AM: NetworkMessageType = NetworkMessageType::I_AM_ROUTER_TO_NETWORK;
 const ACK: NetworkMessageType = NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK;
@@ -29,8 +39,10 @@ impl DebugCounter {
 
 impl tracing::Subscriber for DebugCounter {
     fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        // The engine reports each ignored removal, and the router's host
+        // logs it there (#1679).
         *metadata.level() == tracing::Level::DEBUG
-            && metadata.target() == "bacnet_network::router::control_messages"
+            && metadata.target() == "bacnet_network::router::hosted_host"
     }
     fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
         tracing::span::Id::from_u64(1)
@@ -47,46 +59,30 @@ impl tracing::Subscriber for DebugCounter {
 }
 
 struct Fixture {
-    table: Arc<Mutex<RouterTable>>,
-    txs: [mpsc::Sender<SendRequest>; 3],
-    rxs: [mpsc::Receiver<SendRequest>; 3],
+    h: Harness,
 }
 
 impl Fixture {
-    fn new(table: RouterTable) -> Self {
-        let (tx0, rx0) = mpsc::channel(16);
-        let (tx1, rx1) = mpsc::channel(16);
-        let (tx2, rx2) = mpsc::channel(16);
+    /// Ports 0, 1 and 2 on 1000, 2000 and 4000.
+    fn new() -> Self {
         Self {
-            table: Arc::new(Mutex::new(table)),
-            txs: [tx0, tx1, tx2],
-            rxs: [rx0, rx1, rx2],
+            h: Harness::with_networks(&[1000, 2000, 4000]),
         }
     }
 
+    /// Hardened convergence, with 3000 learned through [1] on port 0.
     fn learned() -> Self {
-        let mut table = RouterTable::new_hardened();
-        table.add_learned(3000, 0, MacAddr::from_slice(&[1]));
-        Self::new(table)
+        let fixture = Self::new();
+        fixture.h.table().set_convergence(Convergence::Hardened);
+        fixture.h.learned(3000, 0, &[1]);
+        fixture
     }
 
     async fn deliver(&mut self, port: usize, mac: &[u8], kind: NetworkMessageType, payload: &[u8]) {
-        let npdu = Npdu {
-            is_network_message: true,
-            message_type: Some(kind.to_raw()),
-            payload: Bytes::copy_from_slice(payload),
-            ..Default::default()
-        };
-        let ctx = IngressContext::test_local(port, 1000, mac, npdu.clone());
-        handle_network_message(
-            &self.table,
-            &self.txs,
-            &ctx,
-            &crate::router::control_policy::ControlGate::permissive(),
-            &crate::router::local_control::LocalControl::default(),
-        )
-        .await;
-        for (index, rx) in self.rxs.iter_mut().enumerate() {
+        let npdu = control_npdu(kind, payload);
+        self.h.handle(self.h.ctx(port, mac, npdu.clone())).await;
+        for index in 0..3 {
+            let rx = &mut self.h.rxs[index];
             if kind == I_AM && index != port {
                 let SendRequest::Broadcast { npdu: data, .. } = rx.try_recv().unwrap() else {
                     panic!("expected unchanged I-Am rebroadcast");
@@ -121,14 +117,17 @@ impl Fixture {
         self.deliver(port, mac, kind, payload).await;
     }
 
+    fn claims(&self) -> ClaimCounters {
+        self.h.table().claim_counters()
+    }
+
+    /// An APDU for 3000 from [7] on port 2 goes out `expected_port` to
+    /// `expected_mac`, one hop spent, and nowhere else.
     async fn assert_forwarded(&mut self, expected_port: usize, expected_mac: &[u8]) {
-        let table = self.table.lock().await;
         assert_eq!(
-            table.effective_reachability(3000),
-            Some(ReachabilityStatus::Reachable)
+            self.h.table().effective_reachability(3000, self.h.now()),
+            Some(Reachability::Reachable)
         );
-        let route = table.lookup(3000).unwrap().clone();
-        drop(table);
         let npdu = Npdu {
             destination: Some(NpduAddress {
                 network: 3000,
@@ -138,8 +137,9 @@ impl Fixture {
             payload: Bytes::from_static(&[0x10, 0x20]),
             ..Default::default()
         };
-        forward_unicast(&self.txs, &route, 1000, &[7], npdu.clone(), 2, &[]);
-        for (index, rx) in self.rxs.iter_mut().enumerate() {
+        self.h.dispatch(self.h.ctx(2, &[7], npdu.clone())).await;
+        for index in 0..3 {
+            let rx = &mut self.h.rxs[index];
             if index == expected_port {
                 let SendRequest::Unicast {
                     npdu: data, mac, ..
@@ -166,28 +166,21 @@ async fn both_claim_paths_keep_forwarding_old_route_until_repeat() {
                 let mut fixture = Fixture::learned();
                 fixture.claim(1, &[2], first).await;
                 fixture.assert_forwarded(0, &[1]).await;
-                assert_eq!(
-                    fixture.table.lock().await.claim_snapshot(),
-                    RoutingClaimSnapshot {
-                        pending_started: 1,
-                        ..Default::default()
-                    }
-                );
+                assert_eq!(fixture.claims(), claim_counts(|c| c.pending_started = 1));
                 fixture.claim(1, repeat_mac, second).await;
                 fixture.assert_forwarded(1, repeat_mac).await;
                 assert_eq!(
-                    fixture.table.lock().await.claim_snapshot(),
-                    RoutingClaimSnapshot {
-                        learned_ok: 1,
-                        pending_started: 1,
-                        corroborated_applied: 1,
-                        ..Default::default()
-                    }
+                    fixture.claims(),
+                    claim_counts(|c| {
+                        c.learned_ok = 1;
+                        c.pending_started = 1;
+                        c.corroborated_applied = 1;
+                    })
                 );
                 // Same-port MAC updates still apply on the very next claim.
                 fixture.claim(1, &[4], second).await;
                 fixture.assert_forwarded(1, &[4]).await;
-                assert_eq!(fixture.table.lock().await.claim_snapshot().learned_ok, 2);
+                assert_eq!(fixture.claims().learned_ok, 2);
             }
         }
     }
@@ -204,39 +197,19 @@ async fn duplicate_entries_in_one_message_cannot_corroborate_a_replacement() {
         let mut fixture = Fixture::learned();
         fixture.deliver(1, &[2], kind, payload).await;
         fixture.assert_forwarded(0, &[1]).await;
-        assert_eq!(
-            fixture.table.lock().await.claim_snapshot(),
-            RoutingClaimSnapshot {
-                pending_started: 1,
-                ..Default::default()
-            }
-        );
+        assert_eq!(fixture.claims(), claim_counts(|c| c.pending_started = 1));
         fixture.claim(1, &[2], kind).await;
         fixture.assert_forwarded(1, &[2]).await;
-        assert_eq!(
-            fixture
-                .table
-                .lock()
-                .await
-                .claim_snapshot()
-                .corroborated_applied,
-            1
-        );
+        assert_eq!(fixture.claims().corroborated_applied, 1);
 
         // Duplicates of absent/current-port entries still take the immediate
         // learning/refresh path, including its original successful-entry count.
-        let mut fixture = Fixture::new(RouterTable::new());
+        let mut fixture = Fixture::new();
         fixture.deliver(1, &[2], kind, payload).await;
         fixture.assert_forwarded(1, &[2]).await;
         fixture.deliver(1, &[3], kind, payload).await;
         fixture.assert_forwarded(1, &[3]).await;
-        assert_eq!(
-            fixture.table.lock().await.claim_snapshot(),
-            RoutingClaimSnapshot {
-                learned_ok: 4,
-                ..Default::default()
-            }
-        );
+        assert_eq!(fixture.claims(), claim_counts(|c| c.learned_ok = 4));
     }
 }
 
@@ -248,13 +221,7 @@ async fn alternating_ports_in_both_handlers_never_replace_forwarding_route() {
             fixture.claim(1 + index % 2, &[2], kind).await;
             fixture.assert_forwarded(0, &[1]).await;
         }
-        assert_eq!(
-            fixture.table.lock().await.claim_snapshot(),
-            RoutingClaimSnapshot {
-                pending_started: 20,
-                ..Default::default()
-            }
-        );
+        assert_eq!(fixture.claims(), claim_counts(|c| c.pending_started = 20));
     }
 }
 
@@ -272,9 +239,9 @@ async fn unrelated_management_and_absent_only_messages_preserve_pending() {
             let mut fixture = Fixture::learned();
             fixture.claim(1, &[2], kind).await;
             let payload: &[u8] = if other == NetworkMessageType::INITIALIZE_ROUTING_TABLE {
-                // Adds unrelated 4000 via Port ID 2 (local port 1) and purges
+                // Adds unrelated 5001 via Port ID 2 (local port 1) and purges
                 // absent 5000: touches neither 3000 nor its challenger.
-                &[2, 0x0f, 0xa0, 2, 0, 0x13, 0x88, 0, 0]
+                &[2, 0x13, 0x89, 2, 0, 0x13, 0x88, 0, 0]
             } else {
                 &[0x0b, 0xb8, 0]
             };
@@ -283,20 +250,19 @@ async fn unrelated_management_and_absent_only_messages_preserve_pending() {
                 fixture.assert_forwarded(0, &[1]).await;
             }
             if other == NetworkMessageType::INITIALIZE_ROUTING_TABLE {
-                assert!(fixture.table.lock().await.lookup(4000).is_some());
+                assert!(fixture.h.table().lookup(5001).is_some());
             } else {
-                assert!(fixture.table.lock().await.lookup(4000).is_none());
+                assert!(fixture.h.table().lookup(5001).is_none());
             }
             fixture.claim(1, &[2], kind).await;
             fixture.assert_forwarded(1, &[2]).await;
             assert_eq!(
-                fixture.table.lock().await.claim_snapshot(),
-                RoutingClaimSnapshot {
-                    learned_ok: 1,
-                    pending_started: 1,
-                    corroborated_applied: 1,
-                    ..Default::default()
-                }
+                fixture.claims(),
+                claim_counts(|c| {
+                    c.learned_ok = 1;
+                    c.pending_started = 1;
+                    c.corroborated_applied = 1;
+                })
             );
         }
     }
@@ -310,7 +276,7 @@ async fn all_absent_learning_paths_apply_on_first_message() {
         NetworkMessageType::INITIALIZE_ROUTING_TABLE,
         NetworkMessageType::I_COULD_BE_ROUTER_TO_NETWORK,
     ] {
-        let mut fixture = Fixture::new(RouterTable::new());
+        let mut fixture = Fixture::new();
         let payload: &[u8] = if kind == I_AM {
             &[0x0b, 0xb8]
         } else if kind == NetworkMessageType::I_COULD_BE_ROUTER_TO_NETWORK {
@@ -325,11 +291,8 @@ async fn all_absent_learning_paths_apply_on_first_message() {
         fixture.deliver(1, &[2], kind, payload).await;
         fixture.assert_forwarded(1, &[2]).await;
         assert_eq!(
-            fixture.table.lock().await.claim_snapshot(),
-            RoutingClaimSnapshot {
-                learned_ok: u64::from(kind == I_AM || kind == ACK),
-                ..Default::default()
-            }
+            fixture.claims(),
+            claim_counts(|c| c.learned_ok = u64::from(kind == I_AM || kind == ACK))
         );
     }
 }
@@ -337,12 +300,11 @@ async fn all_absent_learning_paths_apply_on_first_message() {
 #[tokio::test]
 async fn disconnect_retains_route_state_and_pending_and_counts_only_complete_requests() {
     let mut fixture = Fixture::learned();
-    fixture.table.lock().await.add_direct(4000, 2);
     fixture.claim(1, &[2], I_AM).await;
     let debug_events = Arc::new(AtomicUsize::new(0));
     // This test's current-thread runtime keeps the scoped subscriber local.
     let _subscriber = tracing::subscriber::set_default(DebugCounter::new(debug_events.clone()));
-    let before = fixture.table.lock().await.lookup(3000).unwrap().clone();
+    let before = fixture.h.table().lookup(3000).unwrap();
     let kind = NetworkMessageType::DISCONNECT_CONNECTION_TO_NETWORK;
     for net in [3000u16, 4000, 5000, 0, 0xffff, 3000] {
         fixture.deliver(1, &[2], kind, &net.to_be_bytes()).await;
@@ -352,36 +314,29 @@ async fn disconnect_retains_route_state_and_pending_and_counts_only_complete_req
         fixture.deliver(1, &[2], kind, payload).await;
     }
     {
-        let table = fixture.table.lock().await;
+        let table = fixture.h.table();
         let route = table.lookup(3000).unwrap();
-        assert_eq!(route.last_seen, before.last_seen);
-        assert_eq!(route.busy_until, before.busy_until);
-        assert_eq!(route.flap_count, before.flap_count);
-        assert_eq!(route.last_port_change, before.last_port_change);
-        assert!(table.lookup(4000).unwrap().directly_connected);
-        assert_eq!(table.len(), 2);
+        assert_eq!(route.last_seen(), before.last_seen());
+        assert_eq!(route.busy_until(), before.busy_until());
+        assert_eq!(route.flap_count(), before.flap_count());
+        assert_eq!(route.last_port_change(), before.last_port_change());
+        assert!(table.lookup(4000).unwrap().is_direct());
+        assert_eq!(table.lookup(4000).unwrap().port(), PortId(2));
+        // The three direct routes and 3000.
+        assert_eq!(table.len(), 4);
         assert_eq!(
-            table.claim_snapshot(),
-            RoutingClaimSnapshot {
-                pending_started: 1,
-                disconnect_removal_ignored: 6,
-                ..Default::default()
-            }
+            table.claim_counters(),
+            claim_counts(|c| {
+                c.pending_started = 1;
+                c.disconnect_removal_ignored = 6;
+            })
         );
     }
     // One DEBUG event per ignored removal; malformed requests log nothing.
     assert_eq!(debug_events.load(Ordering::Relaxed), 6);
     fixture.claim(1, &[2], ACK).await; // Disconnect did not clear the pending slot.
     fixture.assert_forwarded(1, &[2]).await;
-    assert_eq!(
-        fixture
-            .table
-            .lock()
-            .await
-            .claim_snapshot()
-            .corroborated_applied,
-        1
-    );
+    assert_eq!(fixture.claims().corroborated_applied, 1);
 }
 
 /// A parallel test reaching the disconnect DEBUG callsite first must not hide

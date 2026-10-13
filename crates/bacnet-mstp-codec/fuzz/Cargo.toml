@@ -1,0 +1,41 @@
+[package]
+name = "mstp-codec-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+# A workspace of its own, outside the root one: it builds only with cargo-fuzz
+# on the pinned nightly, from its own Cargo.lock (docs/ci.md, "Fuzzing").
+[workspace]
+members = []
+
+[dependencies]
+arbitrary = { version = "1", features = ["derive"] }
+bacnet-mstp-codec = { path = "..", features = ["bytes", "heapless"] }
+bytes = "1"
+heapless = "0.9"
+libfuzzer-sys = "0.4"
+
+[[bin]]
+name = "mstp_decode"
+path = "fuzz_targets/mstp_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mstp_encode"
+path = "fuzz_targets/mstp_encode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mstp_stream"
+path = "fuzz_targets/mstp_stream.rs"
+test = false
+doc = false
+bench = false

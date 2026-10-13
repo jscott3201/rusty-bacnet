@@ -31,6 +31,9 @@
 //! stores `f64`, so encode always selects the `Double` alternative; decode
 //! accepts all four.
 
+#[cfg(not(feature = "std"))]
+use alloc::{string::ToString, vec::Vec};
+
 use bacnet_types::constructed::FaultParameters;
 use bacnet_types::enums::LifeSafetyState;
 use bacnet_types::error::Error;

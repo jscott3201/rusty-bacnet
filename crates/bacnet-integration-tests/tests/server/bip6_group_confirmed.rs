@@ -18,8 +18,7 @@ use bacnet_server::server::{BACnetServer, DiscoveryPolicy};
 use bacnet_services::who_is::WhoIsRequest;
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_transport::bip6::{
-    decode_bip6_mac, decode_bvlc6, encode_bvlc6, Bip6ForeignDeviceConfig, Bip6Transport,
-    Bvlc6Function,
+    decode_bvll6, encode_bvll6, Bip6ForeignDeviceConfig, Bip6Transport, Bip6Vmac, Bvll6,
 };
 use bacnet_types::enums::{
     ConfirmedServiceChoice, ObjectType, PropertyIdentifier, UnconfirmedServiceChoice,
@@ -69,15 +68,14 @@ pub(super) fn npdu(apdu: &Apdu, expecting_reply: bool) -> Vec<u8> {
 /// at a routable documentation address.
 fn forwarded(npdu: &[u8]) -> BytesMut {
     let origin = SocketAddrV6::new(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 9), 47808, 0, 0);
-    let mut payload = origin.ip().octets().to_vec();
-    payload.extend_from_slice(&origin.port().to_be_bytes());
-    payload.extend_from_slice(npdu);
     let mut frame = BytesMut::new();
-    encode_bvlc6(
+    encode_bvll6(
         &mut frame,
-        Bvlc6Function::ForwardedNpdu,
-        &[0xAA, 0xAA, 0xAA],
-        &payload,
+        &Bvll6::ForwardedNpdu {
+            original_source: Bip6Vmac::new([0xAA, 0xAA, 0xAA]),
+            original_address: origin.into(),
+            npdu,
+        },
     )
     .unwrap();
     frame
@@ -121,16 +119,14 @@ pub(super) fn who_is() -> Apdu {
 
 /// Whether one datagram the server sent the BBMD carries an I-Am.
 fn is_i_am(datagram: &[u8]) -> bool {
-    let Ok(frame) = decode_bvlc6(datagram) else {
-        return false;
+    let npdu = match decode_bvll6(datagram) {
+        Ok(
+            Bvll6::DistributeBroadcastToNetwork { npdu, .. }
+            | Bvll6::OriginalUnicastNpdu { npdu, .. },
+        ) => npdu,
+        _ => return false,
     };
-    if !matches!(
-        frame.function,
-        Bvlc6Function::DistributeBroadcastToNetwork | Bvlc6Function::OriginalUnicast
-    ) {
-        return false;
-    }
-    let Ok(npdu) = decode_npdu(Bytes::copy_from_slice(&frame.payload)) else {
+    let Ok(npdu) = decode_npdu(Bytes::copy_from_slice(npdu)) else {
         return false;
     };
     matches!(
@@ -163,7 +159,7 @@ async fn a_confirmed_request_forwarded_to_a_bip6_foreign_device_is_ignored() {
         .build()
         .await
         .unwrap();
-    let (_, port) = decode_bip6_mac(server.local_mac()).unwrap();
+    let port = server.transport().unwrap().local_address().unwrap().port();
     let server_address = SocketAddrV6::new(Ipv6Addr::LOCALHOST, port, 0, 0);
 
     // The WriteProperty goes first; the Who-Is behind it is the fence.

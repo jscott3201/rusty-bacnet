@@ -283,7 +283,7 @@ fn connect_accept_with_payload_sets_hub_max_bvlc_and_apdu() {
     assert_eq!(conn.state, ScConnectionState::Connected);
     assert_eq!(conn.hub_vmac, Some([0x10; 6]));
     assert_eq!(conn.hub_max_bvlc_length, 1200);
-    assert_eq!(conn.hub_max_apdu_length, 480);
+    assert_eq!(conn.hub_max_npdu_length, 480);
 }
 
 #[test]
@@ -812,5 +812,5 @@ fn connect_accept_parses_device_uuid() {
     assert!(conn.handle_connect_accept(&accept));
     assert_eq!(conn.hub_vmac, Some([0x02; 6]));
     assert_eq!(conn.hub_device_uuid, Some([0xAB; 16]));
-    assert_eq!(conn.hub_max_apdu_length, 1400);
+    assert_eq!(conn.hub_max_npdu_length, 1400);
 }

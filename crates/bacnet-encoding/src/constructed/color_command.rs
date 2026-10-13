@@ -78,7 +78,7 @@ pub fn encode_color_command(buf: &mut BytesMut, value: &BACnetColorCommand) {
 
 /// A decoded command, the offset just past its last field, and the first
 /// field too wide for its type, if any.
-type Fields = (BACnetColorCommand, usize, Option<&'static str>);
+pub(super) type Fields = (BACnetColorCommand, usize, Option<&'static str>);
 
 /// Read the target colour framed in tag 1 at `offset`, if one opens there.
 fn target_color(data: &[u8], offset: usize) -> Result<(Option<BACnetXyColor>, usize), Error> {
@@ -95,7 +95,7 @@ fn target_color(data: &[u8], offset: usize) -> Result<(Option<BACnetXyColor>, us
 /// stopping at the first tag that isn't the next optional field. A field
 /// too wide for its type is returned rather than refused, so the caller can
 /// check the rest of its input first.
-fn decode_fields(data: &[u8], offset: usize) -> Result<Fields, Error> {
+pub(super) fn decode_fields(data: &[u8], offset: usize) -> Result<Fields, Error> {
     let mut oversized = None;
     let (operation, offset) = unsigned_field::<u32>(
         data,

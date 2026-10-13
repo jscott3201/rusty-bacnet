@@ -180,6 +180,15 @@ impl BufferReadyReporting {
         self.count_restarted_at = total;
     }
 
+    /// Count afresh from Total_Record_Count `total`, as a log restored or
+    /// seeded at that count does (#1537): Last_Notify_Record moves to it and
+    /// Records_Since_Notification reads zero, as when detection starts, so
+    /// the jump to `total` is never taken for records collected.
+    pub(crate) fn restart_from(&mut self, total: u32) {
+        self.last_notify_record = total;
+        self.count_restarted_at = total;
+    }
+
     /// Serve one of the event rows for a log whose Total_Record_Count is
     /// `total`, or `None` for any other property.
     pub(crate) fn read(

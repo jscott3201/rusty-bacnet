@@ -3,6 +3,7 @@
 
 use super::fixtures::{address, clock, day, monotonic, noon, oid, schedule_write, waker};
 use super::probe::{CUSTOM, CUSTOM_LIST};
+use bacnet_objects::access_control::{AccessControlInput, DoorStateReport};
 use bacnet_objects::accumulator::InputReading;
 use bacnet_objects::command::WriteFailure;
 use bacnet_objects::command_source::CommandOrigin;
@@ -18,7 +19,8 @@ use bacnet_types::constructed::{
     EventLogDatum, LogData, LogDatum, LogValue,
 };
 use bacnet_types::enums::{
-    AuditLevel, EventState, LifeSafetyOperation, ObjectType, PropertyIdentifier as P, Reliability,
+    AuditLevel, DoorStatus, EventState, LifeSafetyOperation, ObjectType, PropertyIdentifier as P,
+    Reliability,
 };
 use bacnet_types::primitives::{BACnetTimeStamp, Date, PropertyValue};
 use std::time::Duration;
@@ -322,6 +324,9 @@ pub const COMMANDS: &[(&str, Command)] = &[
         o.advance_monotonic_time_internal(Duration::from_secs(33))
             .to_string()
     }),
+    ("set_tracking_cov_increment_internal", |o| {
+        format!("{:?}", o.set_tracking_cov_increment_internal(Some(0.25)))
+    }),
     ("take_staging_write_plan_internal", |o| {
         format!("{:?}", o.take_staging_write_plan_internal())
     }),
@@ -444,10 +449,30 @@ pub const COMMANDS: &[(&str, Command)] = &[
             o.set_present_value_internal(PropertyValue::Real(21.5))
         )
     }),
+    ("set_present_value_from_internal", |o| {
+        let origin = CommandOrigin::Local {
+            owner_device: oid(ObjectType::DEVICE, 9),
+            initiating_object: None,
+        };
+        format!(
+            "{:?}",
+            o.set_present_value_from_internal(PropertyValue::Real(22.5), &origin)
+        )
+    }),
     ("set_tracking_value_internal", |o| {
         format!(
             "{:?}",
             o.set_tracking_value_internal(PropertyValue::Unsigned(4))
+        )
+    }),
+    ("report_access_input_internal", |o| {
+        let report = DoorStateReport {
+            door_status: Some(DoorStatus::OPENED),
+            ..DoorStateReport::default()
+        };
+        format!(
+            "{:?}",
+            o.report_access_input_internal(AccessControlInput::DoorState(report))
         )
     }),
     ("set_controlled_variable_value_internal", |o| {

@@ -129,21 +129,31 @@ pub(crate) struct RouterFixture {
 
 impl RouterFixture {
     pub(crate) async fn start() -> Self {
-        Self::launch(false).await.0
+        Self::launch(false, None).await.0
     }
 
     /// [`Self::start`], with the router's network-control receiver (#1175).
     pub(crate) async fn start_with_network_control(
     ) -> (Self, mpsc::Receiver<ReceivedNetworkControl>) {
-        let (fixture, controls) = Self::launch(true).await;
+        let (fixture, controls) = Self::launch(true, None).await;
         (fixture, controls.expect("opted in"))
+    }
+
+    /// [`Self::start`], with `mac` a group destination of the router's port
+    /// B, as its broadcast MAC (#1504).
+    pub(crate) async fn start_with_group_on_b(mac: u8) -> Self {
+        Self::launch(false, Some(mac)).await.0
     }
 
     async fn launch(
         network_control: bool,
+        group_on_b: Option<u8>,
     ) -> (Self, Option<mpsc::Receiver<ReceivedNetworkControl>>) {
         let (mut port_a, mut peer_a) = LoopbackTransport::pair(vec![0x01], vec![0x0A]);
         let (mut port_b, mut peer_b) = LoopbackTransport::pair(vec![0x02], vec![0x0B]);
+        if let Some(mac) = group_on_b {
+            port_b.set_broadcast_mac(vec![mac]);
+        }
         // Frames sent without data attributes arrive without them, so only a
         // test that sends some sees any.
         for transport in [&mut port_a, &mut peer_a, &mut port_b, &mut peer_b] {
@@ -219,16 +229,21 @@ impl RouterFixture {
     }
 }
 
-/// The next frame a router sends to a peer, past its I-Am-Router-To-Network
-/// announcements, with the MAC it was unicast to, or `None` when it went out
-/// as a data-link broadcast.
+/// The next frame a router sends to a peer, past its startup announcements
+/// (Network-Number-Is and I-Am-Router-To-Network), with the MAC it was
+/// unicast to, or `None` when it went out as a data-link broadcast.
 pub(crate) async fn next_received_from_router(
     rx: &mut FromRouter,
 ) -> (ReceivedNpdu, Option<MacAddr>) {
-    let i_am = Some(NetworkMessageType::I_AM_ROUTER_TO_NETWORK.to_raw());
+    let announcements = [
+        NetworkMessageType::I_AM_ROUTER_TO_NETWORK,
+        NetworkMessageType::NETWORK_NUMBER_IS,
+    ]
+    .map(|message| Some(message.to_raw()));
     loop {
         let (frame, to) = rx.recv().await;
-        if decode_npdu(frame.npdu.clone()).unwrap().message_type != i_am {
+        let message_type = decode_npdu(frame.npdu.clone()).unwrap().message_type;
+        if !announcements.contains(&message_type) {
             return (frame, to);
         }
     }

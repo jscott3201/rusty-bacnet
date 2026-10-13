@@ -23,11 +23,12 @@ impl BACnetClient {
         array_index: Option<u32>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
+        let peers = PeerAddresses::for_transport(&self.transport_type);
         let oid = object_id.to_rust();
         let pid = property_id.to_rust();
 
         crate::py_async::future_into_py(py, async move {
-            let mac = parse_address(&address)?;
+            let mac = peers.parse(&address)?;
             let c = {
                 let guard = inner.lock().await;
                 Arc::clone(guard.as_ref().ok_or_else(|| {
@@ -70,12 +71,13 @@ impl BACnetClient {
         validate_write_priority(priority)?;
 
         let inner = self.inner.clone();
+        let peers = PeerAddresses::for_transport(&self.transport_type);
         let oid = object_id.to_rust();
         let pid = property_id.to_rust();
         let prop_value = value.inner;
 
         let future = async move {
-            let mac = parse_address(&address)?;
+            let mac = peers.parse(&address)?;
             let c = {
                 let guard = inner.lock().await;
                 Arc::clone(guard.as_ref().ok_or_else(|| {
@@ -169,10 +171,11 @@ impl BACnetClient {
         specs: Vec<PyReadAccessSpec>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
+        let peers = PeerAddresses::for_transport(&self.transport_type);
         let rust_specs = py_to_rpm_specs(specs);
 
         crate::py_async::future_into_py(py, async move {
-            let mac = parse_address(&address)?;
+            let mac = peers.parse(&address)?;
             let c = {
                 let guard = inner.lock().await;
                 Arc::clone(guard.as_ref().ok_or_else(|| {
@@ -196,10 +199,11 @@ impl BACnetClient {
         specs: Vec<PyWriteAccessSpec>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
+        let peers = PeerAddresses::for_transport(&self.transport_type);
         let rust_specs = py_to_wpm_specs(specs)?;
 
         let future = async move {
-            let mac = parse_address(&address)?;
+            let mac = peers.parse(&address)?;
             let c = {
                 let guard = inner.lock().await;
                 Arc::clone(guard.as_ref().ok_or_else(|| {

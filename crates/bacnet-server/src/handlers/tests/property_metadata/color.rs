@@ -27,8 +27,6 @@ fn color_objects(configured: bool) -> [Box<dyn BACnetObject>; 2] {
                 None,
             )
             .unwrap();
-        // Present_Value has no Out_Of_Service gate: the in-range write lands
-        // in both configurations.
         temperature
             .write_property(P::PRESENT_VALUE, None, PropertyValue::Unsigned(5000), None)
             .unwrap();
@@ -52,71 +50,52 @@ fn color_objects(configured: bool) -> [Box<dyn BACnetObject>; 2] {
                 None,
             )
             .unwrap();
-        // Exercise the unconditional write route so large encodings persist.
-        object
-            .write_property(
-                P::OUT_OF_SERVICE,
-                None,
-                PropertyValue::Boolean(configured),
-                None,
-            )
-            .unwrap();
     }
     objects
 }
 
 fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
+    // Table 12-X and Table 12-Y, in their order (#1474).
     let all = match kind {
         ObjectType::COLOR => vec![
             P::OBJECT_IDENTIFIER,
             P::OBJECT_NAME,
-            P::DESCRIPTION,
             P::OBJECT_TYPE,
             P::PRESENT_VALUE,
             P::TRACKING_VALUE,
             P::COLOR_COMMAND,
             P::IN_PROGRESS,
             P::DEFAULT_COLOR,
+            P::DESCRIPTION,
             P::DEFAULT_FADE_TIME,
             P::TRANSITION,
-            P::STATUS_FLAGS,
-            P::EVENT_STATE,
-            P::OUT_OF_SERVICE,
-            P::RELIABILITY,
         ],
         _ => vec![
             P::OBJECT_IDENTIFIER,
             P::OBJECT_NAME,
-            P::DESCRIPTION,
             P::OBJECT_TYPE,
             P::PRESENT_VALUE,
             P::TRACKING_VALUE,
             P::COLOR_COMMAND,
             P::IN_PROGRESS,
             P::DEFAULT_COLOR_TEMPERATURE,
+            P::DESCRIPTION,
             P::DEFAULT_FADE_TIME,
             P::DEFAULT_RAMP_RATE,
             P::DEFAULT_STEP_INCREMENT,
-            P::TRANSITION,
             P::MIN_PRES_VALUE,
             P::MAX_PRES_VALUE,
-            P::STATUS_FLAGS,
-            P::EVENT_STATE,
-            P::OUT_OF_SERVICE,
-            P::RELIABILITY,
+            P::TRANSITION,
         ],
     };
-    // Secondary tuning rows per the dispatch-first mapping; every other
-    // served row is RequiredRead.
+    // The O rows of each table; every other row is R or W.
     let optional = match kind {
-        ObjectType::COLOR => vec![P::DESCRIPTION, P::DEFAULT_COLOR, P::RELIABILITY],
+        ObjectType::COLOR => vec![P::DESCRIPTION, P::TRANSITION],
         _ => vec![
             P::DESCRIPTION,
-            P::DEFAULT_COLOR_TEMPERATURE,
-            P::DEFAULT_FADE_TIME,
-            P::DEFAULT_RAMP_RATE,
-            P::DEFAULT_STEP_INCREMENT,
-            P::RELIABILITY,
+            P::MIN_PRES_VALUE,
+            P::MAX_PRES_VALUE,
+            P::TRANSITION,
         ],
     };
     let required: Vec<_> = all
@@ -203,23 +182,35 @@ fn color_delete_object_removes_each_pair_member() {
 }
 
 #[test]
-fn rpm_color_metadata_corrects_historical_pics_writability() {
-    // Intended PICS correction (call-out): the historical default advertised
-    // Object_Name and (for Color) Present_Value writable while no arm routes
-    // them, and hid the routed Color_Command and Default_Fade_Time arms. The
-    // canonical rows correct both directions; dispatch itself is unchanged.
-    // Color Temperature Present_Value stays advertised (its Unsigned arm is
-    // routed unconditionally, with no Out_Of_Service gate).
+fn rpm_color_metadata_advertises_the_routed_writes() {
+    // Present_Value and Color_Command are W in both tables; the defaults and
+    // Transition take writes too (#1474). Object_Name has no write route.
     let color = ColorObject::new(1, "CLR-1").unwrap();
-    assert!(!color.is_writable_property(P::OBJECT_NAME));
-    assert!(!color.is_writable_property(P::PRESENT_VALUE));
-    assert!(color.is_writable_property(P::COLOR_COMMAND));
-    assert!(color.is_writable_property(P::DEFAULT_FADE_TIME));
+    for p in [
+        P::PRESENT_VALUE,
+        P::COLOR_COMMAND,
+        P::DEFAULT_COLOR,
+        P::DEFAULT_FADE_TIME,
+        P::TRANSITION,
+    ] {
+        assert!(color.is_writable_property(p), "{p:?}");
+    }
+    for p in [P::OBJECT_NAME, P::TRACKING_VALUE, P::IN_PROGRESS] {
+        assert!(!color.is_writable_property(p), "{p:?}");
+    }
     let temperature = ColorTemperatureObject::new(1, "CT-1").unwrap();
-    assert!(!temperature.is_writable_property(P::OBJECT_NAME));
-    assert!(temperature.is_writable_property(P::PRESENT_VALUE));
-    assert!(temperature.is_writable_property(P::COLOR_COMMAND));
-    // The Default_Fade_Time asymmetry is preserved, not reconciled: only
-    // Color routes the write.
-    assert!(!temperature.is_writable_property(P::DEFAULT_FADE_TIME));
+    for p in [
+        P::PRESENT_VALUE,
+        P::COLOR_COMMAND,
+        P::DEFAULT_COLOR_TEMPERATURE,
+        P::DEFAULT_FADE_TIME,
+        P::DEFAULT_RAMP_RATE,
+        P::DEFAULT_STEP_INCREMENT,
+        P::TRANSITION,
+    ] {
+        assert!(temperature.is_writable_property(p), "{p:?}");
+    }
+    for p in [P::OBJECT_NAME, P::MIN_PRES_VALUE, P::MAX_PRES_VALUE] {
+        assert!(!temperature.is_writable_property(p), "{p:?}");
+    }
 }

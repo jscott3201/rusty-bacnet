@@ -74,6 +74,8 @@ fn state(now: Instant, first: &[u8]) -> SegmentedRequestState {
     let mut payload = RequestPayload::new(&req);
     payload.save_new(0, req.service_request, Some(0)).unwrap();
     SegmentedRequestState {
+        source_mac: MacAddr::new(),
+        source_network: None,
         direct_response: None,
         payload,
         provenance: TransportProvenance::unverified(),
@@ -232,7 +234,7 @@ fn request_payload_owner_expiry_returns_capacity_without_refund_bookkeeping() {
         let old = if progress {
             Duration::from_secs(16)
         } else {
-            Duration::from_secs(4)
+            Duration::from_secs(4) + Duration::from_nanos(1)
         };
         let mut stale = state(now, b"stale");
         if progress {
@@ -249,11 +251,11 @@ fn request_payload_owner_expiry_returns_capacity_without_refund_bookkeeping() {
             (fresh_key.clone(), state(now, b"fresh")),
         ]);
         assert_eq!(saved_request_payload_bytes(&receivers), Some(10));
-        expire_segmented_requests(&mut receivers, now);
+        expire_segmented_requests(&mut receivers, now, Duration::from_secs(4));
         assert_eq!(saved_request_payload_bytes(&receivers), Some(5));
         assert_eq!(drops.load(Ordering::SeqCst), 1);
         assert!(receivers.contains_key(&fresh_key));
-        expire_segmented_requests(&mut receivers, now);
+        expire_segmented_requests(&mut receivers, now, Duration::from_secs(4));
         assert_eq!(saved_request_payload_bytes(&receivers), Some(5));
         receivers.clear();
         assert_eq!(saved_request_payload_bytes(&receivers), Some(0));

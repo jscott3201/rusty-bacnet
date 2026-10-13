@@ -1130,7 +1130,7 @@ class AuditContractArtifactTests(unittest.TestCase):
     def test_direct_binding_rejects_incompatible_shapes_without_reserving_device(self) -> None:
         server = BACnetServer(device_instance=8)
         for device, address in enumerate((
-            "[::1]:47808", "[::ffff:127.0.0.1]:47808", "0", "254", "mstp:7",
+            "bip6:1234", "bip6:0x40ABCD", "0", "254", "mstp:7",
             "01:02", "01:02:03:04:05", "01:02:03:04:05:06:07",
             "00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:01:ba:c0",
         )):
@@ -1148,7 +1148,7 @@ class AuditContractArtifactTests(unittest.TestCase):
                 missing = str(Path(directory) / "missing.pem")
                 cases: list[tuple[dict[str, Any], str, type[Exception], str]] = [
                     ({"transport": "ipv6", "ipv6_interface": "invalid"},
-                     "[::1]:47808", RuntimeError, "invalid IPv6 interface"),
+                     "bip6:1234", RuntimeError, "invalid IPv6 interface"),
                     ({"transport": "mstp"}, "mstp:7", ValueError, "serial_port is required"),
                     ({"transport": "sc", "sc_device_uuid": b"\x01" * 16,
                       "sc_ca_cert": missing, "sc_client_cert": missing, "sc_client_key": missing},
@@ -1240,7 +1240,7 @@ class AuditContractArtifactTests(unittest.TestCase):
                 server.add_audit_log(1, "Child", str(Path(directory) / "child"))
 
                 def rejected() -> None:
-                    for address in (ADDRESS, "[::1]:47808", "mstp:7", "01:02"):
+                    for address in (ADDRESS, "bip6:1234", "mstp:7", "01:02"):
                         with self.subTest(frozen_address=address), self.assertRaises(RuntimeError):
                             server.add_device_binding(9, address)
                     # Existing malformed-input precedence still applies before lifecycle checks.

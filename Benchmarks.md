@@ -107,6 +107,23 @@ are historical, including SC comparisons and takeaways elsewhere in this report.
 | ReadProperty | 472 µs | 4.75 ms | 47.1 ms | **~21.2 K/s** |
 | WriteProperty | 471 µs | 4.72 ms | 47.1 ms | **~21.2 K/s** |
 
+### 1.6 ReadRange of a Full Trend Log (CPU-bound, no I/O)
+
+Measured 2026-10-05 on an Apple M5 (10 cores), rustc 1.99.0, with
+`cargo bench -p bacnet-benchmarks --bench read_range -- --warm-up-time 2
+--measurement-time 5`: one `handle_read_range` call asking for 100 records
+from the middle of a full Trend Log (#1536). Before is the v0.12.0 handler,
+which built every record's identity per request; after finds the window
+without walking the log. `by_time_clock_back` reads a log whose clock went
+back an hour a quarter of the way in, so it can't be bisected.
+
+| Request | 10,000 records before | after | 100,000 records before | after |
+|---|---|---|---|---|
+| By Position | 27.7 µs | **8.4 µs** | 206.8 µs | **7.9 µs** |
+| By Sequence Number | 27.5 µs | **8.1 µs** | 217.5 µs | **8.0 µs** |
+| By Time | 46.3 µs | **8.1 µs** | 374.4 µs | **8.0 µs** |
+| By Time, clock set back | 48.0 µs | **31.7 µs** | 376.2 µs | **157.1 µs** |
+
 ---
 
 ## 2. Stress Tests
@@ -494,7 +511,7 @@ local artifacts into tracked history.
 ## 8. How to Reproduce
 
 ```bash
-# Current Criterion targets (7 suites; run sequentially; SC limits above apply)
+# Current Criterion targets (8 suites; run sequentially; SC limits above apply)
 cargo bench -p bacnet-benchmarks --bench encoding
 cargo bench -p bacnet-benchmarks --bench bip_latency
 cargo bench -p bacnet-benchmarks --bench bip_throughput
@@ -502,6 +519,7 @@ cargo bench -p bacnet-benchmarks --bench bip6_latency
 cargo bench -p bacnet-benchmarks --bench bip6_throughput
 cargo bench -p bacnet-benchmarks --bench sc_mtls_latency
 cargo bench -p bacnet-benchmarks --bench sc_mtls_throughput
+cargo bench -p bacnet-benchmarks --bench read_range
 
 # Quick run (reduced samples, ~10s per suite instead of ~60s)
 cargo bench -p bacnet-benchmarks --bench bip_latency -- --sample-size 10 --warm-up-time 1

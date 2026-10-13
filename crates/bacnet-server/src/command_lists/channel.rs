@@ -36,7 +36,9 @@
 //! write made with it is refused as a configuration fault (an invalid
 //! datatype, say), so a property whose datatype can change is read again. No
 //! read is sent when the coercion can't depend on the answer: for a NULL, a
-//! lighting command, or a member that is a Lighting_Command. A read that gets
+//! constructed value (a lighting command, an xy colour or a colour command),
+//! or a member whose property fixes its datatype (a Lighting_Command, a
+//! Color_Command, or a Color object's xy colour, #1474). A read that gets
 //! no answer finds the device silent, since every device executes
 //! ReadProperty: the member fails as a communication failure with no write
 //! sent. A read that is refused, or returns NULL, a constructed value or an
@@ -213,9 +215,11 @@ async fn slot<H: RunHost>(host: &H, device: ObjectIdentifier) -> Option<RemoteSl
 
 /// The datatype `member`'s property in `device` holds, read there when the
 /// coercion depends on it and kept on the Channel when it's a primitive one.
-/// Anything short of that is [`MemberDatatype::Unknown`], or Lighting_Command
-/// for that property, and the value goes as written; a read that gets no
-/// answer marks the device silent, so the member's write is never sent.
+/// Anything short of that is [`MemberDatatype::Unknown`], or the constructed
+/// datatype the property's identifier fixes (Lighting_Command,
+/// Color_Command, a Color object's xy colours), and the value goes as
+/// written; a read that gets no answer marks the device silent, so the
+/// member's write is never sent.
 async fn learn<H: RunHost>(
     host: &H,
     run: &CommandRun,
@@ -226,9 +230,11 @@ async fn learn<H: RunHost>(
 ) -> MemberDatatype {
     let reference = &member.reference;
     let property = PropertyIdentifier::from_raw(reference.property_identifier);
-    let unread = MemberDatatype::of(property, None);
-    // NULL passes to every datatype, a lighting command goes only to a
-    // Lighting_Command, and a Lighting_Command takes nothing else.
+    let object_type = reference.object_identifier.object_type();
+    let unread = MemberDatatype::of(object_type, property, None);
+    // NULL passes to every primitive datatype, a constructed value goes only
+    // to a property of its own datatype, and such a property takes nothing
+    // else, so none of them needs a read.
     let decides = !matches!(
         distribution.value,
         PropertyValue::Null | PropertyValue::ApplicationData(_)
@@ -248,7 +254,7 @@ async fn learn<H: RunHost>(
         host.read_remote(device, reference).await
     };
     let datatype = match read {
-        Ok(value) => MemberDatatype::of(property, Some(&value)),
+        Ok(value) => MemberDatatype::of(object_type, property, Some(&value)),
         Err(error @ (RemoteRequestError::Unanswered | RemoteRequestError::Undiscovered)) => {
             debug!(
                 channel = %run.source,
@@ -320,7 +326,11 @@ async fn write_member<H: RunHost>(
                         .read_property(property, reference.property_array_index)
                         .ok()
                 });
-                (None, MemberDatatype::of(property, value.as_ref()))
+                let object_type = reference.object_identifier.object_type();
+                (
+                    None,
+                    MemberDatatype::of(object_type, property, value.as_ref()),
+                )
             }
         }
     };
@@ -383,7 +393,10 @@ async fn write_member<H: RunHost>(
             let kept = remote.is_some_and(|(_, datatype)| {
                 !matches!(
                     datatype,
-                    MemberDatatype::Unknown | MemberDatatype::LightingCommand
+                    MemberDatatype::Unknown
+                        | MemberDatatype::LightingCommand
+                        | MemberDatatype::ColorCommand
+                        | MemberDatatype::XyColor
                 )
             });
             if refused && kept {

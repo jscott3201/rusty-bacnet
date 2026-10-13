@@ -9,10 +9,17 @@ repository.workspace = true
 keywords = ["bacnet", "building-automation", "ashrae", "protocol", "types"]
 categories = ["network-programming", "no-std"]
 
+# One of `std` or `alloc` is required; with neither the crate refuses to build.
+# Leaving both off is reserved for a future allocation-free subset.
 [features]
 default = ["std"]
-std = []
-serde = ["dep:serde", "serde/alloc"]
+# Hosted builds: adds what needs std, the transport I/O error and the B/IP
+# port contract (`bip_port`). thiserror needs no std for either: its derive
+# implements core::error::Error.
+std = ["alloc"]
+# no_std with a global allocator.
+alloc = []
+serde = ["alloc", "dep:serde", "serde/alloc"]
 
 [dependencies]
 bitflags = { workspace = true }

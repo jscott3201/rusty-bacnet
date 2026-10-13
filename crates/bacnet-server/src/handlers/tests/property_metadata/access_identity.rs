@@ -25,6 +25,13 @@ fn access_objects(configured: bool) -> [Box<dyn BACnetObject>; 4] {
             .unwrap();
         user.write_property(P::USER_TYPE, None, PropertyValue::Enumerated(2), None)
             .unwrap();
+        user.write_property(
+            P::GLOBAL_IDENTIFIER,
+            None,
+            PropertyValue::Unsigned(78),
+            None,
+        )
+        .unwrap();
         rights
             .write_property(
                 P::GLOBAL_IDENTIFIER,
@@ -76,9 +83,9 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
     ];
     // PICS corrections vs the historical heuristic: Object_Name is required
     // and read-only (the heuristic called it writable); User_Type and the
-    // rights and credential Global_Identifier are required and writable (the
-    // heuristic called only Description/Out_Of_Service/Present_Value
-    // writable).
+    // rights, credential and user Global_Identifier are required and
+    // writable (the heuristic called only
+    // Description/Out_Of_Service/Present_Value writable).
     let middle: &[P] = match kind {
         // Table 12-40 has no Present_Value row (#979).
         ObjectType::ACCESS_CREDENTIAL => &[
@@ -121,9 +128,10 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
     if kind == ObjectType::ACCESS_RIGHTS {
         all.push(P::LOG_ENABLE);
     }
-    // And Table 12-38's optional Members and Member_Of (#1394).
+    // And Table 12-38's optional Members and Member_Of (#1394), then its
+    // Global_Identifier (#1463).
     if kind == ObjectType::ACCESS_USER {
-        all.extend_from_slice(&[P::MEMBERS, P::MEMBER_OF]);
+        all.extend_from_slice(&[P::MEMBERS, P::MEMBER_OF, P::GLOBAL_IDENTIFIER]);
     }
     let optional: &[P] = match kind {
         ObjectType::ACCESS_CREDENTIAL => &[P::DESCRIPTION],

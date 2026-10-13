@@ -21,8 +21,9 @@ impl BACnetClient {
         local_vt_session_identifier: u8,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
+        let peers = PeerAddresses::for_transport(&self.transport_type);
         crate::py_async::future_into_py(py, async move {
-            let mac = parse_address(&address)?;
+            let mac = peers.parse(&address)?;
             let c = {
                 let guard = inner.lock().await;
                 Arc::clone(guard.as_ref().ok_or_else(|| {
@@ -64,8 +65,9 @@ impl BACnetClient {
             .map_err(|error| PyValueError::new_err(error.to_string()))?;
 
         let inner = self.inner.clone();
+        let peers = PeerAddresses::for_transport(&self.transport_type);
         let future = async move {
-            let mac = parse_address(&address)?;
+            let mac = peers.parse(&address)?;
             let c = {
                 let guard = inner.lock().await;
                 Arc::clone(guard.as_ref().ok_or_else(|| {
@@ -98,8 +100,9 @@ impl BACnetClient {
         data_flag: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
+        let peers = PeerAddresses::for_transport(&self.transport_type);
         crate::py_async::future_into_py(py, async move {
-            let mac = parse_address(&address)?;
+            let mac = peers.parse(&address)?;
             let c = {
                 let guard = inner.lock().await;
                 Arc::clone(guard.as_ref().ok_or_else(|| {
@@ -144,8 +147,9 @@ impl BACnetClient {
         service_data: Vec<u8>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
+        let peers = PeerAddresses::for_transport(&self.transport_type);
         let future = async move {
-            let mac = parse_address(&address)?;
+            let mac = peers.parse(&address)?;
             let c = {
                 let guard = inner.lock().await;
                 Arc::clone(guard.as_ref().ok_or_else(|| {
@@ -174,8 +178,9 @@ impl BACnetClient {
     ) -> PyResult<Bound<'py, PyAny>> {
         let request = audit_notification_request_from_py(request)?;
         let inner = self.inner.clone();
+        let peers = PeerAddresses::for_transport(&self.transport_type);
         crate::py_async::future_into_py(py, async move {
-            let mac = parse_address(&address)?;
+            let mac = peers.parse(&address)?;
             let c = {
                 let guard = inner.lock().await;
                 Arc::clone(guard.as_ref().ok_or_else(|| {
@@ -202,8 +207,9 @@ impl BACnetClient {
         service_data: Vec<u8>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
+        let peers = PeerAddresses::for_transport(&self.transport_type);
         let future = async move {
-            let mac = parse_address(&address)?;
+            let mac = peers.parse(&address)?;
             let c = {
                 let guard = inner.lock().await;
                 Arc::clone(guard.as_ref().ok_or_else(|| {
@@ -232,8 +238,9 @@ impl BACnetClient {
     ) -> PyResult<Bound<'py, PyAny>> {
         let request = audit_notification_request_from_py(request)?;
         let inner = self.inner.clone();
+        let peers = PeerAddresses::for_transport(&self.transport_type);
         crate::py_async::future_into_py(py, async move {
-            let mac = parse_address(&address)?;
+            let mac = peers.parse(&address)?;
             let c = {
                 let guard = inner.lock().await;
                 Arc::clone(guard.as_ref().ok_or_else(|| {
@@ -260,8 +267,9 @@ impl BACnetClient {
         service_data: Vec<u8>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
+        let peers = PeerAddresses::for_transport(&self.transport_type);
         crate::py_async::future_into_py(py, async move {
-            let mac = parse_address(&address)?;
+            let mac = peers.parse(&address)?;
             let c = {
                 let guard = inner.lock().await;
                 Arc::clone(guard.as_ref().ok_or_else(|| {
@@ -286,8 +294,9 @@ impl BACnetClient {
     ) -> PyResult<Bound<'py, PyAny>> {
         let request = audit_log_query_request_from_py(request)?;
         let inner = self.inner.clone();
+        let peers = PeerAddresses::for_transport(&self.transport_type);
         crate::py_async::future_into_py(py, async move {
-            let mac = parse_address(&address)?;
+            let mac = peers.parse(&address)?;
             let c = {
                 let guard = inner.lock().await;
                 Arc::clone(guard.as_ref().ok_or_else(|| {
@@ -320,10 +329,11 @@ impl BACnetClient {
         time: (u8, u8, u8, u8),
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
+        let peers = PeerAddresses::for_transport(&self.transport_type);
         let (d, t) = crate::types::specific_date_time(date, time)?;
 
         let future = async move {
-            let mac = parse_address(&address)?;
+            let mac = peers.parse(&address)?;
             let c = {
                 let guard = inner.lock().await;
                 Arc::clone(guard.as_ref().ok_or_else(|| {
@@ -351,10 +361,11 @@ impl BACnetClient {
         time: (u8, u8, u8, u8),
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
+        let peers = PeerAddresses::for_transport(&self.transport_type);
         let (d, t) = crate::types::specific_date_time(date, time)?;
 
         let future = async move {
-            let mac = parse_address(&address)?;
+            let mac = peers.parse(&address)?;
             let c = {
                 let guard = inner.lock().await;
                 Arc::clone(guard.as_ref().ok_or_else(|| {
@@ -385,8 +396,9 @@ impl BACnetClient {
     ) -> PyResult<Bound<'py, PyAny>> {
         let range = device_range(low_limit, high_limit)?;
         let inner = self.inner.clone();
+        let peers = PeerAddresses::for_transport(&self.transport_type);
         let future = async move {
-            let mac = parse_address(&address)?;
+            let mac = peers.parse(&address)?;
             let c = {
                 let guard = inner.lock().await;
                 Arc::clone(guard.as_ref().ok_or_else(|| {
@@ -540,8 +552,9 @@ impl BACnetClient {
         address: String,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
+        let peers = PeerAddresses::for_transport(&self.transport_type);
         let future = async move {
-            let mac = parse_address(&address)?;
+            let mac = peers.parse(&address)?;
             let c = {
                 let guard = inner.lock().await;
                 Arc::clone(guard.as_ref().ok_or_else(|| {

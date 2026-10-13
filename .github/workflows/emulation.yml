@@ -1,0 +1,54 @@
+name: Emulation
+
+# Runs the firmware link test's images on emulated boards: QEMU, in the
+# Docker image scripts/emu/Dockerfile pins, runs the mstp, mstp-extended,
+# bip, node, bbmd and apdu images on a Cortex-M0, a Cortex-M3, a Cortex-M4F
+# and an RV32 core, and each checks its scenario's summary and reports its
+# stack's high-water mark. See docs/ci.md, "Emulation (manual)".
+#
+# A manual check, run at intervals: workflow_dispatch is its only trigger,
+# so no push, pull request or schedule ever runs it. Its job's name starts
+# with "Emulation:", so it can't pass for CI OK or Native OK, and
+# scripts/release/ci_gate.py reads only ci.yml and native-tests.yml runs.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # One run per branch at a time; a second waits instead of cancelling.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  emulate:
+    name: "Emulation: firmware images under QEMU"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # As in ci.yml: the channel rust-toolchain.toml pins, with the
+      # components it lists.
+      - name: Install the pinned Rust toolchain
+        run: |
+          channel=$(sed -n 's/^channel = "\([^"]*\)"$/\1/p' rust-toolchain.toml)
+          components=$(sed -n 's/^components = \[\(.*\)\]$/\1/p' rust-toolchain.toml | tr -d '" ')
+          [[ $channel =~ ^[0-9A-Za-z.-]+$ && $components =~ ^[a-z,-]+$ ]] \
+            || { echo "::error::no channel or components line in rust-toolchain.toml"; exit 1; }
+          rustup toolchain install "$channel" --profile minimal --component "$components"
+          rustup default "$channel"
+          rustc -vV
+      - name: Add the boards' targets
+        run: rustup target add thumbv6m-none-eabi thumbv7m-none-eabi thumbv7em-none-eabihf riscv32imc-unknown-none-elf
+      # Builds the images, builds the QEMU image from scripts/emu/Dockerfile,
+      # and runs each image in it.
+      - name: Emulate every board
+        run: bash scripts/emu/emulate-firmware.sh

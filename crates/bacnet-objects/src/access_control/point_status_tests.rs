@@ -101,7 +101,11 @@ fn access_point_access_event_stores_its_credential() {
         PropertyValue::ApplicationData(NO_CREDENTIAL.to_vec())
     );
     point
-        .set_access_event(AccessEvent::GRANTED, 1, stamp(9), Some(credential()))
+        .set_access_event(AccessEventReport {
+            time: Some(stamp(9)),
+            credential: Some(credential()),
+            ..AccessEventReport::new(AccessEvent::GRANTED, 1)
+        })
         .unwrap();
     assert_eq!(
         event_credential(&point),
@@ -110,7 +114,11 @@ fn access_point_access_event_stores_its_credential() {
     // An event without a credential stores the no-credential reference
     // again (Clause 12.31.30).
     point
-        .set_access_event(AccessEvent::DENIED_UNKNOWN_CREDENTIAL, 2, stamp(10), None)
+        .set_access_event(AccessEventReport {
+            time: Some(stamp(10)),
+            credential: None,
+            ..AccessEventReport::new(AccessEvent::DENIED_UNKNOWN_CREDENTIAL, 2)
+        })
         .unwrap();
     assert_eq!(
         event_credential(&point),
@@ -122,18 +130,21 @@ fn access_point_access_event_stores_its_credential() {
 fn access_point_access_event_refuses_a_credential_of_another_type() {
     let mut point = AccessPointObject::new(1, "AP-1").unwrap();
     point
-        .set_access_event(AccessEvent::GRANTED, 1, stamp(9), Some(credential()))
+        .set_access_event(AccessEventReport {
+            time: Some(stamp(9)),
+            credential: Some(credential()),
+            ..AccessEventReport::new(AccessEvent::GRANTED, 1)
+        })
         .unwrap();
     let rows = [P::ACCESS_EVENT, P::ACCESS_EVENT_TAG, P::ACCESS_EVENT_TIME]
         .map(|property| point.read_property(property, None).unwrap());
     for object_type in [ObjectType::ACCESS_USER, ObjectType::CREDENTIAL_DATA_INPUT] {
         let other = ObjectIdentifier::new(object_type, 3).unwrap();
-        assert_value_out_of_range(point.set_access_event(
-            AccessEvent::DENIED_OTHER,
-            2,
-            stamp(10),
-            Some(other.into()),
-        ));
+        assert_value_out_of_range(point.set_access_event(AccessEventReport {
+            time: Some(stamp(10)),
+            credential: Some(other.into()),
+            ..AccessEventReport::new(AccessEvent::DENIED_OTHER, 2)
+        }));
         assert_eq!(
             [P::ACCESS_EVENT, P::ACCESS_EVENT_TAG, P::ACCESS_EVENT_TIME]
                 .map(|property| point.read_property(property, None).unwrap()),
@@ -156,17 +167,20 @@ fn access_point_access_event_refuses_a_half_empty_credential() {
     };
     let mut point = AccessPointObject::new(1, "AP-1").unwrap();
     point
-        .set_access_event(AccessEvent::GRANTED, 1, stamp(9), Some(credential()))
+        .set_access_event(AccessEventReport {
+            time: Some(stamp(9)),
+            credential: Some(credential()),
+            ..AccessEventReport::new(AccessEvent::GRANTED, 1)
+        })
         .unwrap();
     // 4194303 in only one of the two instances is neither a credential nor
     // the no-credential reference (Clause 12.31.30), and nothing changes.
     for half_empty in [reference(empty, Some(9)), reference(3, Some(empty))] {
-        assert_value_out_of_range(point.set_access_event(
-            AccessEvent::DENIED_OTHER,
-            2,
-            stamp(10),
-            Some(half_empty),
-        ));
+        assert_value_out_of_range(point.set_access_event(AccessEventReport {
+            time: Some(stamp(10)),
+            credential: Some(half_empty),
+            ..AccessEventReport::new(AccessEvent::DENIED_OTHER, 2)
+        }));
         assert_eq!(
             event_credential(&point),
             PropertyValue::ApplicationData(CREDENTIAL_3.to_vec())
@@ -184,7 +198,11 @@ fn access_point_access_event_refuses_a_half_empty_credential() {
         reference(3, Some(9)),
     ] {
         point
-            .set_access_event(AccessEvent::DENIED_OTHER, 2, stamp(10), Some(accepted))
+            .set_access_event(AccessEventReport {
+                time: Some(stamp(10)),
+                credential: Some(accepted),
+                ..AccessEventReport::new(AccessEvent::DENIED_OTHER, 2)
+            })
             .unwrap();
     }
 }

@@ -532,8 +532,8 @@ async fn mutation_deny_all_does_not_gate_reads_discovery_or_dcc() {
         panic!("expected I-Am")
     };
     assert_eq!(i_am.service_choice, UnconfirmedServiceChoice::I_AM);
-    server.config.dcc_policy = DccPolicy::RequirePassword;
-    server.config.dcc_password = Some("boundary-test".into());
+    server.config_mut().dcc_policy = DccPolicy::RequirePassword;
+    server.config_mut().dcc_password = Some("boundary-test".into());
     server.comm_state.set_for_test(DccState::DisableInitiation);
     let mut data = BytesMut::new();
     DeviceCommunicationControlRequest {

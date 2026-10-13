@@ -67,24 +67,18 @@ async fn dbtn_registered_foreign_device_fans_out_without_origin_echo() {
     );
 
     let ctx = RecvContext {
-        local_mac: encode_bip_mac(Ipv4Addr::LOCALHOST.octets(), local_port),
-        socket: bbmd_socket,
-        npdu_tx,
-        bbmd: Some(Arc::new(Mutex::new(state))),
-        broadcast_addr: Ipv4Addr::LOCALHOST,
-        broadcast_port: local_broadcast_port,
-        pending_bvlc_response: Arc::new(Mutex::new(None)),
-        management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
-        fanout: None,
-        force_dbtn_forward_failure: false,
-        forwarded_origins: super::groups::ForwardedOrigins::detached(),
+        ..RecvContext::for_test(
+            bbmd_socket,
+            npdu_tx,
+            SocketAddrV4::new(Ipv4Addr::from(Ipv4Addr::LOCALHOST.octets()), local_port),
+            SocketAddrV4::new(Ipv4Addr::LOCALHOST, local_broadcast_port),
+            Some(Arc::new(std::sync::Mutex::new(state))),
+        )
     };
     let sender = (Ipv4Addr::LOCALHOST.octets(), origin_fd_port);
     let msg = BvllMessage {
         function: BvlcFunction::DISTRIBUTE_BROADCAST_TO_NETWORK,
         payload: Bytes::from_static(&[0x01, 0x20, 0xBA, 0xC0, 0xDB, 0x10]),
-        originating_ip: None,
-        originating_port: None,
     };
 
     handle_bvll_message(&msg, sender, Delivery::Unicast, &ctx).await;
@@ -107,9 +101,12 @@ async fn dbtn_registered_foreign_device_fans_out_without_origin_echo() {
     ] {
         let frame = recv_bvll(socket).await;
         assert_eq!(frame.function, BvlcFunction::FORWARDED_NPDU, "{label}");
-        assert_eq!(frame.originating_ip, Some(sender.0), "{label}");
-        assert_eq!(frame.originating_port, Some(sender.1), "{label}");
-        assert_eq!(frame.payload.as_ref(), msg.payload.as_ref(), "{label}");
+        assert_eq!(origin_of(&frame), Some(sender), "{label}");
+        assert_eq!(
+            frame.npdu().unwrap().as_ref(),
+            msg.payload.as_ref(),
+            "{label}"
+        );
     }
 
     for (label, socket) in [
@@ -145,24 +142,19 @@ async fn dbtn_registered_foreign_device_naks_when_forwarding_fails() {
     );
 
     let ctx = RecvContext {
-        local_mac: encode_bip_mac(Ipv4Addr::LOCALHOST.octets(), local_port),
-        socket: bbmd_socket,
-        npdu_tx,
-        bbmd: Some(Arc::new(Mutex::new(state))),
-        broadcast_addr: Ipv4Addr::LOCALHOST,
-        broadcast_port: local_port,
-        pending_bvlc_response: Arc::new(Mutex::new(None)),
-        management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
-        fanout: None,
         force_dbtn_forward_failure: true,
-        forwarded_origins: super::groups::ForwardedOrigins::detached(),
+        ..RecvContext::for_test(
+            bbmd_socket,
+            npdu_tx,
+            SocketAddrV4::new(Ipv4Addr::from(Ipv4Addr::LOCALHOST.octets()), local_port),
+            SocketAddrV4::new(Ipv4Addr::LOCALHOST, local_port),
+            Some(Arc::new(std::sync::Mutex::new(state))),
+        )
     };
     let sender = (Ipv4Addr::LOCALHOST.octets(), origin_fd_port);
     let msg = BvllMessage {
         function: BvlcFunction::DISTRIBUTE_BROADCAST_TO_NETWORK,
         payload: Bytes::from_static(&[0x01, 0x20, 0xBA, 0xC0, 0x00, 0x60]),
-        originating_ip: None,
-        originating_port: None,
     };
 
     handle_bvll_message(&msg, sender, Delivery::Unicast, &ctx).await;

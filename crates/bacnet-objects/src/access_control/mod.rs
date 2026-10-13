@@ -8,6 +8,9 @@
 //! - AccessUser (type 35)
 //! - AccessZone (type 36)
 //! - CredentialDataInput (type 37)
+//!
+//! [`evaluate_access_rights`] checks a credential against the Access Rights
+//! it is assigned, for the application to act on (#1331).
 
 use bacnet_encoding::primitives::encode_timestamp_choice;
 use bacnet_types::constructed::BACnetDeviceObjectReference;
@@ -156,11 +159,14 @@ mod credential_rules;
 mod door;
 mod door_alarm;
 mod door_out_of_service;
+mod input;
 mod metadata_identity;
 mod metadata_topology;
 mod point;
 mod point_authorization;
+mod point_event_time;
 mod rights;
+mod rights_evaluation;
 mod rights_writes;
 mod user;
 mod zone;
@@ -169,8 +175,10 @@ mod zone_out_of_service;
 pub use credential::*;
 pub use credential_data_input::*;
 pub use door::*;
+pub use input::*;
 pub use point::*;
 pub use rights::*;
+pub use rights_evaluation::*;
 pub use user::*;
 pub use zone::*;
 
@@ -183,6 +191,8 @@ mod credential_data_input_format_tests;
 #[cfg(test)]
 mod credential_data_input_out_of_service_tests;
 #[cfg(test)]
+mod credential_exemption_tests;
+#[cfg(test)]
 mod credential_tests;
 #[cfg(test)]
 mod device_reference_tests;
@@ -193,9 +203,13 @@ mod door_out_of_service_tests;
 #[cfg(test)]
 mod door_pulse_tests;
 #[cfg(test)]
+mod input_tests;
+#[cfg(test)]
 mod point_authorization_tests;
 #[cfg(test)]
 mod point_out_of_service_tests;
+#[cfg(test)]
+mod point_policy_tests;
 #[cfg(test)]
 mod point_status_tests;
 #[cfg(test)]

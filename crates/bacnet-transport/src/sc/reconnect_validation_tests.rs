@@ -430,7 +430,7 @@ async fn check_invalid_accept_failover_and_primary_probe(field: std::ops::Range<
         assert_eq!(after.hub_vmac, before.hub_vmac);
         assert_eq!(after.hub_device_uuid, before.hub_device_uuid);
         assert_eq!(after.hub_max_bvlc_length, before.hub_max_bvlc_length);
-        assert_eq!(after.hub_max_apdu_length, before.hub_max_apdu_length);
+        assert_eq!(after.hub_max_npdu_length, before.hub_max_npdu_length);
         assert_eq!(after.next_message_id, before.next_message_id);
         assert_eq!(
             after.pending_connect_message_id,
@@ -526,7 +526,7 @@ async fn check_invalid_accept_reconnect_probe(field: std::ops::Range<usize>) {
         assert_eq!(after.local_vmac, before.local_vmac);
         assert_eq!(after.device_uuid, before.device_uuid);
         assert_eq!(after.hub_max_bvlc_length, before.hub_max_bvlc_length);
-        assert_eq!(after.hub_max_apdu_length, before.hub_max_apdu_length);
+        assert_eq!(after.hub_max_npdu_length, before.hub_max_npdu_length);
         assert_ne!(after.hub_device_uuid, Some([0; 16]));
     }
     let good_hub = tokio::time::timeout(Duration::from_secs(2), hub_rx.recv())

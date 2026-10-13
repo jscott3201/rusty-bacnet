@@ -1,6 +1,7 @@
 //! Real TLS principal/incarnation snapshots, independent of Connect claims.
 use super::*;
 use crate::port::TransportProvenance;
+use crate::port_ownership::connect_loopback;
 
 async fn snapshot(
     url: &str,
@@ -124,7 +125,7 @@ async fn direct_principal_verified_leaf_survives_real_tls_resumption() {
         observed
     });
     for _ in 0..2 {
-        let tcp = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let tcp = connect_loopback(addr).await;
         let mut tls = client
             .clone()
             .into_connector()

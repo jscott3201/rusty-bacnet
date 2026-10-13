@@ -1,4 +1,5 @@
-//! Declared configuration for an unbound, flat application-level NORMAL B/IP port.
+//! Declared configuration for an unbound, flat application-level B/IP port.
+//! The B/IP mode is not configuration here: a registered owner publishes it.
 
 use crate::common;
 use bacnet_types::error::Error;

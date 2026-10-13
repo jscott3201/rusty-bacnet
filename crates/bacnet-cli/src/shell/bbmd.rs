@@ -243,12 +243,14 @@ pub(super) async fn handle_bip_discover(
     }
 
     if let Some(bbmd_addr) = &bbmd {
-        let bbmd_mac = match resolve::parse_target(bbmd_addr) {
-            Ok(resolve::Target::Mac(m)) => m,
-            Ok(_) => {
-                output::print_error("--bbmd requires an IP address, not a device instance");
-                return;
-            }
+        let bbmd_mac = match resolve::address_mac(
+            client.transport(),
+            bbmd_addr,
+            "--bbmd requires an IP address, not a device instance",
+        )
+        .await
+        {
+            Ok(m) => m,
             Err(e) => {
                 output::print_error(&e);
                 return;
@@ -270,15 +272,15 @@ pub(super) async fn handle_bip_discover(
     }
 
     let result = if let Some(target_str) = &target {
-        match resolve::parse_target(target_str) {
-            Ok(resolve::Target::Mac(mac)) => {
+        match resolve::address_mac(
+            client.transport(),
+            target_str,
+            resolve::TARGET_NOT_AN_ADDRESS,
+        )
+        .await
+        {
+            Ok(mac) => {
                 commands::discover::discover_directed(client, &mac, range, wait_secs, format).await
-            }
-            Ok(_) => {
-                output::print_error(
-                    "--target requires an IP address, not a device instance or routed address",
-                );
-                return;
             }
             Err(e) => {
                 output::print_error(&e);
@@ -294,4 +296,47 @@ pub(super) async fn handle_bip_discover(
     if let Err(e) = result {
         output::print_error(&e.to_string());
     }
+}
+
+/// Report how a `--foreign-bbmd` registration went once the BBMD answers
+/// the first attempt (#938). The transport keeps trying either way.
+pub(super) async fn report_foreign_start(
+    client: &BACnetClient<BipTransport>,
+    bbmd: std::net::SocketAddrV4,
+) {
+    match crate::foreign::await_registration(client, bbmd).await {
+        Ok(()) => eprintln!(
+            "{}",
+            format!(
+                "BBMD {bbmd} accepted the foreign-device registration; it renews automatically"
+            )
+            .green()
+        ),
+        Err(e) => output::print_error(&format!("{e}; retrying in the background")),
+    }
+}
+
+/// The `--foreign-bbmd` registration, for `status`.
+pub(super) fn print_foreign_status(
+    client: &BACnetClient<BipTransport>,
+    bbmd: std::net::SocketAddrV4,
+) {
+    let Ok(registration) = client.foreign_registration() else {
+        return;
+    };
+    let state = match registration.lease_remaining {
+        Some(left) if registration.registered => {
+            format!("(registered, {}s of the lease left)", left.as_secs())
+        }
+        _ => format!(
+            "(not registered; last attempt {:?})",
+            registration.last_outcome
+        ),
+    };
+    println!(
+        "{} {} {}",
+        "Foreign device of BBMD:".dimmed(),
+        bbmd.to_string().cyan(),
+        state.dimmed()
+    );
 }

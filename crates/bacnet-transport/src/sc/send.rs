@@ -109,11 +109,11 @@ impl<W: WebSocketPort> ScTransport<W> {
                     "BACnet/SC transport not in Connected state".into(),
                 ));
             }
-            if npdu.len() > c.hub_max_apdu_length as usize {
+            if npdu.len() > c.hub_max_npdu_length as usize {
                 return Err(Error::Encoding(format!(
                     "BACnet/SC NPDU length {} exceeds peer Max-NPDU-Length {}",
                     npdu.len(),
-                    c.hub_max_apdu_length
+                    c.hub_max_npdu_length
                 )));
             }
             let hub_max_bvlc_length = c.hub_max_bvlc_length;

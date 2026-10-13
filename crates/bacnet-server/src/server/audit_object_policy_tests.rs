@@ -558,5 +558,62 @@ async fn object_audit_policy_also_filters_list_and_file_execution_failures() {
     }
 }
 
+/// A Color Temperature object's provisioned Audit_Level governs the target
+/// records of writes to it, as an Analog Value's does (#1525): a NONE level
+/// silences a Present_Value write, changing the level is itself recorded, and
+/// the write then is too, with no priority, as the object has no priority
+/// array.
+#[tokio::test]
+async fn a_colour_objects_audit_level_governs_its_write_records() {
+    use bacnet_objects::color::ColorTemperatureObject;
+    let mut f = server(reporter()).await;
+    let target = oid(ObjectType::COLOR_TEMPERATURE, 11);
+    let mut object = ColorTemperatureObject::new(11, "policy ct").unwrap();
+    object.set_audit_policy(ObjectAuditPolicy {
+        level: Some(AuditLevel::NONE),
+        ..Default::default()
+    });
+    f.server.db.write().await.add(Box::new(object)).unwrap();
+    let write = |property, value: PropertyValue| {
+        dispatch(
+            &f.server,
+            ConfirmedServiceChoice::WRITE_PROPERTY,
+            wp(target, property, encoded(&value), None),
+        )
+    };
+    let kelvin = PropertyIdentifier::PRESENT_VALUE;
+    assert!(matches!(
+        write(kelvin, PropertyValue::Unsigned(3_000)).await,
+        Apdu::SimpleAck(_)
+    ));
+    settle().await;
+    assert_eq!(count(&f), 0);
+    let level = PropertyIdentifier::AUDIT_LEVEL;
+    let all = PropertyValue::Enumerated(AuditLevel::AUDIT_ALL.to_raw());
+    assert!(matches!(write(level, all).await, Apdu::SimpleAck(_)));
+    settle().await;
+    assert_eq!(count(&f), 1);
+    assert!(matches!(
+        write(kelvin, PropertyValue::Unsigned(3_500)).await,
+        Apdu::SimpleAck(_)
+    ));
+    settle().await;
+    let records = notifications(&f.transport.sent);
+    assert_eq!(records.len(), 2);
+    let record = &records[1].notifications[0];
+    assert_eq!(record.target_object, Some(target));
+    assert_eq!(record.target_priority, None);
+    // 3,000 K before and 3,500 K after, as application Unsigneds.
+    assert_eq!(
+        record.current_value.as_deref(),
+        Some(&[0x22, 0x0B, 0xB8][..])
+    );
+    assert_eq!(
+        record.target_value.as_deref(),
+        Some(&[0x22, 0x0D, 0xAC][..])
+    );
+    f.server.stop().await.unwrap();
+}
+
 #[path = "audit_policy_precommit_tests.rs"]
 mod precommit;

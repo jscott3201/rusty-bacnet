@@ -157,6 +157,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 transport.register_as_foreign_device(ForeignDeviceConfig {
                     bbmd_ip,
                     bbmd_port,
+                    renewal_interval: None,
                     ttl: args.foreign_ttl,
                 });
 

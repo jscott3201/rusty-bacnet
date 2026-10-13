@@ -10,6 +10,9 @@
 //! Unsigned32 to Unsigned64 at unchanged optional tag \[2\]. Unsigned values
 //! use the library's `u64` implementation limit (1-8 octet canonical forms).
 
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
 pub use bacnet_types::constructed::{
     AuditPropertyReference, BACnetAuditLogDatum, BACnetAuditLogQueryParameters,
     BACnetAuditLogRecord, BACnetAuditLogRecordResult, BACnetAuditNotification,

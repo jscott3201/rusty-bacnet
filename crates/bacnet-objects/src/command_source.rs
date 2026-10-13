@@ -1,4 +1,6 @@
-//! Explicit command origins and object-owned source tracking (Clause 19.5).
+//! Explicit command origins and object-owned source tracking (Clause 19.5):
+//! per priority for a commandable Present_Value, and a single source for one
+//! with no priority array (#1552).
 //!
 //! Standalone callers assert their origin; validation establishes syntax, not
 //! authentication or database membership. Full servers derive remote origins
@@ -8,7 +10,9 @@ use bacnet_types::enums::ObjectType;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 
+mod single;
 mod tracking;
+pub(crate) use single::SingleValueSource;
 pub(crate) use tracking::write_sourced_priority;
 pub(crate) use tracking::ValueSourceTracking;
 

@@ -146,6 +146,33 @@ async fn sc_max_apdu_length_reflects_negotiated_hub_npdu_limit() {
     drop(ws_hub);
 }
 
+/// What a router reads from the port once it has started (#1665): the
+/// hub connection's Max-NPDU-Length, within its Max-BVLC-Length less the
+/// encapsulation, both ways; past 1497 octets when the hub carries more.
+/// Before start, the default.
+#[tokio::test]
+async fn sc_reports_its_hub_connections_npdu_limit() {
+    use crate::port::NpduLimits;
+    for (bvlc, npdu, limit) in [(1200, 480, 480), (1476, 1476, 1466), (65535, 61327, 61327)] {
+        let (ws_client, ws_hub) = LoopbackWebSocket::pair();
+        let mut transport = ScTransport::new(ws_client, [0x01; 6]).with_device_uuid([1; 16]);
+        assert_eq!(transport.max_npdu(), NpduLimits::STANDARD);
+        let hub_task = tokio::spawn(async move {
+            accept_with_limits(&ws_hub, [0x10; 6], bvlc, npdu).await;
+            ws_hub
+        });
+        let _rx = transport.start().await.unwrap();
+        let ws_hub = hub_task.await.unwrap();
+        assert_eq!(
+            transport.max_npdu(),
+            NpduLimits::both(limit),
+            "{bvlc}/{npdu}"
+        );
+        transport.stop().await.unwrap();
+        drop(ws_hub);
+    }
+}
+
 #[tokio::test]
 async fn sc_max_apdu_length_updates_after_failover_handshake() {
     let (primary_client, primary_hub) = LoopbackWebSocket::pair();

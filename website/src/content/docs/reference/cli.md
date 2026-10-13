@@ -35,10 +35,10 @@ Use `--json` explicitly in automation. Preserve protocol errors and nonzero proc
 
 ## Full documentation
 
-[Read the versioned CLI guide](https://github.com/jscott3201/rusty-bacnet/blob/v0.12.0/docs/CLI.md), but resolve discrepancies against the parser, dispatch, and actual installed command help, and report any conflict you find.
+[Read the versioned CLI guide](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/docs/CLI.md), but resolve discrepancies against the parser, dispatch, and actual installed command help, and report any conflict you find.
 
 ## Sources and release scope
 
-These instructions target **v0.12.0**. Source review is not a claim of hardware qualification.
+These instructions target **v0.13.0**. Source review is not a claim of hardware qualification.
 
-[CLI documentation](https://github.com/jscott3201/rusty-bacnet/blob/v0.12.0/docs/CLI.md) · [Argument source](https://github.com/jscott3201/rusty-bacnet/blob/v0.12.0/crates/bacnet-cli/src/args.rs) · [Dispatch source](https://github.com/jscott3201/rusty-bacnet/blob/v0.12.0/crates/bacnet-cli/src/main.rs).
+[CLI documentation](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/docs/CLI.md) · [Argument source](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/crates/bacnet-cli/src/args.rs) · [Dispatch source](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/crates/bacnet-cli/src/main.rs).

@@ -12,6 +12,9 @@ import unittest
 
 
 SCRIPT = Path(__file__).with_name("check-msrv.sh")
+# The no_std builds' run, after the baseline (#1613).
+NO_STD_ALLOC = ["-p", "bacnet-types", "-p", "bacnet-encoding", "-p", "bacnet-services",
+                "--no-default-features", "--features", "alloc"]
 DRIVER = r'''
 import json, os, sys
 from pathlib import Path
@@ -113,15 +116,16 @@ class MsrvScriptTests(unittest.TestCase):
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stdout)
         commands = self.commands()
-        self.assertEqual(len(commands), 1)
+        self.assertEqual(len(commands), 2)
         self.assertEqual(commands[0]["args"], ["check", "--locked", "-p", "eligible", "-p", "newly-eligible",
-            "--features", "bacnet-transport/sc-tls,bacnet-transport/ipv6,bacnet-client/sc-tls,bacnet-client/ipv6,bacnet-server/sc-tls,bacnet-cli/sc-tls,bacnet-cli/tui"])
+            "--features", "bacnet-transport/sc-tls,bacnet-transport/ipv6,bacnet-client/sc-tls,bacnet-client/ipv6,bacnet-server/sc-tls,bacnet-cli/sc-tls,bacnet-cli/tui,bacnet-mstp-codec/bytes,bacnet-mstp-codec/heapless,bacnet-mstp-core/alloc,bacnet-bip-codec/bytes,bacnet-bip-codec/heapless,bacnet-router-core/bip,bacnet-router-core/mstp"])
+        self.assertEqual(commands[1]["args"], ["check", "--locked", *NO_STD_ALLOC])
 
     def test_native_sequence_compiler_target_and_nondefault_artifact(self):
         result = self.run_script("--linux-native")
         self.assertEqual(result.returncode, 0, result.stdout)
         commands = self.commands()
-        self.assertEqual(len(commands), 5)
+        self.assertEqual(len(commands), 6)
         for command in commands:
             self.assertIn("--locked", command["args"])
             index = command["args"].index("--target")
@@ -130,9 +134,10 @@ class MsrvScriptTests(unittest.TestCase):
                 self.assertEqual(command["env"][key], str(self.bin / "rustc"))
             for key in ["RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "CARGO_BUILD_RUSTC_WRAPPER", "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER"]:
                 self.assertEqual(command["env"][key], "")
-        for command, feature in zip(commands[1:4], ["ethernet", "serial", "serial-gpio"]):
+        self.assertEqual(commands[1]["args"], ["check", "--locked", *NO_STD_ALLOC, "--target", "aarch64-unknown-linux-gnu"])
+        for command, feature in zip(commands[2:5], ["ethernet", "serial", "serial-gpio"]):
             self.assertEqual(command["args"][:6], ["check", "--locked", "-p", "bacnet-transport", "--features", feature])
-        self.assertEqual(commands[4]["args"][:8], ["build", "--locked", "-p", "bacnet-cli", "--bin", "bacnet", "--features", "pcap"])
+        self.assertEqual(commands[5]["args"][:8], ["build", "--locked", "-p", "bacnet-cli", "--bin", "bacnet", "--features", "pcap"])
         self.assertIn("Cargo executable: " + self.env["CARGO_TARGET_DIR"], result.stdout)
         self.assertIn("OK: Linux native MSRV", result.stdout)
 
@@ -158,7 +163,16 @@ class MsrvScriptTests(unittest.TestCase):
     def test_failed_feature_stops_remaining_builds(self):
         result = self.run_script("--linux-native", MOCK_FAIL_FEATURE="serial")
         self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(len(self.commands()), 3)
+        self.assertEqual(len(self.commands()), 4)
+
+    def test_failed_no_std_alloc_check_fails_both_modes(self):
+        for args in [(), ("--linux-native",)]:
+            with self.subTest(args=args):
+                (self.root / "commands.jsonl").unlink(missing_ok=True)
+                result = self.run_script(*args, MOCK_FAIL_FEATURE="alloc")
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertNotIn("OK: Linux native MSRV", result.stdout)
+                self.assertEqual(len(self.commands()), 2)
 
     def test_artifact_requires_success_and_exact_unique_target(self):
         for mode in ["absent", "other-manifest", "other-bin", "duplicate", "failed", "bad-exit"]:

@@ -390,8 +390,8 @@ fn raw_destination(recipient: &[u8]) -> Vec<u8> {
 
 #[test]
 fn recipient_mac_bound_holds_in_both_directions() {
-    // 18 octets, B/IPv6's IPv6 address and UDP port, is the longest MAC this
-    // stack uses (`BACnetAddress::MAX_MAC_LEN`). Every recipient, configured
+    // 18 octets is the longest MAC this stack takes
+    // (`BACnetAddress::MAX_MAC_LEN`). Every recipient, configured
     // (#1124) or carried by a service or report (#1156), decodes up to it and
     // refuses one octet more, and the encoder refuses what the decoder would.
     let longest = address_with_mac(BACnetAddress::MAX_MAC_LEN);

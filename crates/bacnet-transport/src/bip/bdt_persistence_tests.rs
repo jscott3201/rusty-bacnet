@@ -41,8 +41,7 @@ async fn raw_bvlc_request(target: &[u8], function: BvlcFunction, payload: &[u8])
     let (ip, port) = decode_bip_mac(target).unwrap();
     let dest = SocketAddrV4::new(Ipv4Addr::from(ip), port);
 
-    let mut buf = BytesMut::new();
-    encode_bvll(&mut buf, function, payload).unwrap();
+    let buf = raw_frame(function, payload);
     socket.send_to(&buf, dest).await.unwrap();
 
     let mut recv_buf = [0u8; 2048];
@@ -129,7 +128,7 @@ async fn seeded_persisted_bdt_loads_on_startup_and_network_write_bdt_mutates_nei
     let response = raw_bvlc_request(
         &bbmd_mac,
         BvlcFunction::WRITE_BROADCAST_DISTRIBUTION_TABLE,
-        &[0; bbmd::BDT_ENTRY_SIZE - 1],
+        &[0; bacnet_bip_codec::BDT_ENTRY_LENGTH - 1],
     )
     .await;
     assert_eq!(

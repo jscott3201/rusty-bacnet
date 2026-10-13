@@ -40,13 +40,17 @@ pub struct DeviceInfo {
     pub remote_mac: Option<String>,
 }
 
-/// Format a BIP MAC address (6 bytes: 4 IP + 2 port) as `ip:port`.
-/// Falls back to hex display for non-BIP MACs.
+/// Format a MAC address as a target the CLI reads back: a BIP MAC (6 bytes:
+/// 4 IP + 2 port) as `ip:port`, and a B/IPv6 VMAC (3 bytes, the only
+/// 3-byte MAC the CLI's transports use) as `bip6:0x0004D2`. Falls back to
+/// hex display for other MACs.
 pub fn format_mac(mac: &[u8]) -> String {
     if mac.len() == 6 {
         let ip = Ipv4Addr::new(mac[0], mac[1], mac[2], mac[3]);
         let port = u16::from_be_bytes([mac[4], mac[5]]);
         format!("{ip}:{port}")
+    } else if let Ok(vmac) = <[u8; 3]>::try_from(mac) {
+        bacnet_transport::bip6::format_vmac_text(bacnet_transport::bip6::Bip6Vmac::new(vmac))
     } else {
         mac.iter()
             .map(|b| format!("{b:02x}"))
@@ -403,6 +407,21 @@ mod tests {
             format_property_value(&PropertyValue::Time(t)),
             "14:30:00.00"
         );
+    }
+
+    /// Each MAC prints as a target the CLI reads back: a B/IPv6 VMAC as
+    /// `bip6:0x……`, not as hex, which no target form takes.
+    #[test]
+    fn macs_print_as_targets() {
+        assert_eq!(format_mac(&[10, 0, 0, 1, 0xBA, 0xC0]), "10.0.0.1:47808");
+        assert_eq!(format_mac(&[0x00, 0x04, 0xD2]), "bip6:0x0004D2");
+        assert_eq!(format_mac(&[7]), "07");
+        for mac in [vec![10, 0, 0, 1, 0xBA, 0xC0], vec![0x40, 0xAB, 0xCD]] {
+            match crate::resolve::parse_target(&format_mac(&mac)) {
+                Ok(crate::resolve::Target::Mac(parsed)) => assert_eq!(parsed, mac),
+                _ => panic!("{} does not read back", format_mac(&mac)),
+            }
+        }
     }
 
     #[test]

@@ -25,9 +25,7 @@ fn listed_and_reachable() -> (Vec<Ipv4Addr>, Vec<Ipv4Addr>) {
 }
 
 fn frame(function: BvlcFunction, npdu: &[u8]) -> BytesMut {
-    let mut buf = BytesMut::new();
-    encode_bvll(&mut buf, function, npdu).unwrap();
-    buf
+    raw_frame(function, npdu)
 }
 
 async fn next_npdu(rx: &mut mpsc::Receiver<ReceivedNpdu>) -> ReceivedNpdu {
@@ -105,15 +103,14 @@ async fn the_os_reports_a_listed_destination_for_unicast_to_a_wildcard_socket() 
         .await
         .expect("timed out waiting for the limited broadcast")
         .unwrap();
-        assert_eq!(
-            Delivery::of(
-                received.destination,
-                Ipv4Addr::BROADCAST,
-                received.os_group_delivery
-            ),
-            Delivery::Broadcast,
-            "{received:?}"
-        );
+        use bacnet_bip_core::node::{Addressed, LocalAddresses};
+        let IpAddr::V4(destination) = received.destination else {
+            panic!("an IPv4 destination: {received:?}");
+        };
+        let mut local = LocalAddresses::new(Ipv4Addr::UNSPECIFIED, Ipv4Addr::BROADCAST);
+        local.wildcard = Some(&listed);
+        let to = Addressed::classify(destination, received.os_group_delivery, &local);
+        assert!(to.broadcast && !to.node, "{received:?}");
         assert!(
             accepts(BvlcFunction::ORIGINAL_BROADCAST_NPDU, &received),
             "{received:?}"

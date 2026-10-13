@@ -444,15 +444,15 @@ async fn audit_reporter_auditing_failure_excludes_nonresource_failures_under_loa
                 .unwrap()
         })
         .collect();
-    fixture.server.config.max_apdu_length = 1;
+    fixture.server.config_mut().max_apdu_length = 1;
     writes(&fixture, 2).await;
-    fixture.server.config.max_apdu_length = 1476;
-    fixture.server.config.mutation_policy = crate::mutation::MutationPolicy::DenyAll;
+    fixture.server.config_mut().max_apdu_length = 1476;
+    fixture.server.config_mut().mutation_policy = crate::mutation::MutationPolicy::DenyAll;
     assert!(matches!(
         write_value(&fixture.server, None).await,
         Apdu::Error(_)
     ));
-    fixture.server.config.mutation_policy = crate::mutation::MutationPolicy::Permissive;
+    fixture.server.config_mut().mutation_policy = crate::mutation::MutationPolicy::Permissive;
     dispatch(
         &fixture.server,
         ConfirmedServiceChoice::WRITE_PROPERTY,

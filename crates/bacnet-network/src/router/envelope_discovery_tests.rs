@@ -7,12 +7,14 @@
 //!
 //! Shares [`super::envelope_harness`] with the control-envelope module.
 
-use super::control_messages::handle_network_message;
+use bacnet_encoding::npdu::{decode_npdu, Npdu, NpduAddress};
+use bacnet_types::enums::{NetworkMessageType, RejectMessageReason};
+use bacnet_types::MacAddr;
+use bytes::Bytes;
+
 use super::envelope_harness::*;
-use super::*;
-use crate::router_table::ReachabilityStatus;
-use bacnet_encoding::npdu::{decode_npdu, NpduAddress};
-use bacnet_types::enums::RejectMessageReason;
+use super::SendRequest;
+use crate::router_table::{PortId, Reachability};
 
 // --- Who-Is discovery origin (Clause 6.6.3.2) ---
 
@@ -44,7 +46,7 @@ async fn who_is_local_origin_adds_ingress_source_and_attributes_on_forward() {
         Some(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK.to_raw())
     );
     // Next hop stays separate: the relay is a link broadcast, not addressed.
-    assert_eq!(h.table.lock().await.len(), 2);
+    assert_eq!(h.table().len(), 2);
 }
 
 #[tokio::test]
@@ -134,7 +136,7 @@ async fn who_is_truncated_tail_never_promotes_to_global_scan() {
         .await;
         h.assert_quiet();
     }
-    assert_eq!(h.table.lock().await.len(), 2);
+    assert_eq!(h.table().len(), 2);
 }
 
 // --- Initialize-Routing-Table transactional envelope ---
@@ -154,7 +156,7 @@ async fn init_update_query_and_garbage_envelopes() {
     ))
     .await;
     h.assert_quiet();
-    assert_eq!(h.table.lock().await.len(), 2);
+    assert_eq!(h.table().len(), 2);
 
     // Trailing garbage after a zero count: not a query, no ACK.
     h.handle(h.ctx(
@@ -192,10 +194,10 @@ async fn init_update_query_and_garbage_envelopes() {
         }
         SendRequest::Broadcast { .. } => panic!("expected unicast ACK"),
     }
-    let route = h.table.lock().await.lookup(3000).unwrap().clone();
-    assert_eq!(route.port_index, 0);
-    assert!(!route.directly_connected);
-    assert_eq!(route.next_hop_mac.as_slice(), &[2]);
+    let route = h.table().lookup(3000).unwrap();
+    assert_eq!(route.port(), PortId(0));
+    assert!(!route.is_direct());
+    assert_eq!(route.next_hop().as_slice(), &[2]);
 
     // Valid query: one ACK carries the full table — ascending DNETs with
     // stable nonzero wire Port IDs (1000->1, 2000->2, 3000->1).
@@ -232,7 +234,7 @@ async fn init_ack_truncated_entry_learns_nothing() {
     ))
     .await;
     h.assert_quiet();
-    let table = h.table.lock().await;
+    let table = h.table();
     assert_eq!(table.len(), 2);
     assert!(table.lookup(3000).is_none());
 }
@@ -241,14 +243,10 @@ async fn init_ack_truncated_entry_learns_nothing() {
 
 #[tokio::test]
 async fn initialize_routing_table_ack() {
-    let mut table = RouterTable::new();
+    let mut table = TableSeed::new();
     table.add_direct(1000, 0);
     table.add_direct(2000, 1);
-
-    let table = Arc::new(Mutex::new(table));
-
-    let (tx, mut rx) = mpsc::channel::<SendRequest>(256);
-    let send_txs = vec![tx];
+    let mut h = Harness::with_table(table);
 
     // RB-03: a table query is Number of Ports == 0 (one octet), not a
     // missing field. An empty payload is a truncated envelope: no ACK.
@@ -258,17 +256,9 @@ async fn initialize_routing_table_ack() {
         payload: Bytes::from_static(&[0]),
         ..Npdu::default()
     };
+    h.handle(h.ctx(0, &[0x0A], npdu)).await;
 
-    handle_network_message(
-        &table,
-        &send_txs,
-        &IngressContext::test_local(0, 1000, &[0x0A], npdu),
-        &control_policy::ControlGate::permissive(),
-        &LocalControl::default(),
-    )
-    .await;
-
-    let sent = rx.try_recv().unwrap();
+    let sent = h.rxs[0].try_recv().unwrap();
     match sent {
         SendRequest::Unicast {
             npdu: data, mac, ..
@@ -296,12 +286,9 @@ async fn initialize_routing_table_ack() {
 async fn initialize_routing_table_empty_payload_sends_no_ack() {
     // RB-03: the Number of Ports octet is absent, so this is a truncated
     // envelope, not a query. No table change, no ACK.
-    let mut table = RouterTable::new();
+    let mut table = TableSeed::new();
     table.add_direct(1000, 0);
-    let table = Arc::new(Mutex::new(table));
-
-    let (tx, mut rx) = mpsc::channel::<SendRequest>(256);
-    let send_txs = vec![tx];
+    let mut h = Harness::with_table(table);
 
     let npdu = Npdu {
         is_network_message: true,
@@ -309,25 +296,17 @@ async fn initialize_routing_table_empty_payload_sends_no_ack() {
         payload: Bytes::new(),
         ..Npdu::default()
     };
+    h.handle(h.ctx(0, &[0x0A], npdu)).await;
 
-    handle_network_message(
-        &table,
-        &send_txs,
-        &IngressContext::test_local(0, 1000, &[0x0A], npdu),
-        &control_policy::ControlGate::permissive(),
-        &LocalControl::default(),
-    )
-    .await;
-
-    assert!(rx.try_recv().is_err());
-    assert_eq!(table.lock().await.len(), 1);
+    h.assert_quiet();
+    assert_eq!(h.table().len(), 1);
 }
 
 // --- Routing-first dispatcher for directed controls ---
 
 #[tokio::test]
 async fn directed_control_routed_not_consumed() {
-    let mut table = RouterTable::new();
+    let mut table = TableSeed::new();
     table.add_direct(1000, 0);
     table.add_direct(2000, 1);
     table.add_learned(3000, 1, MacAddr::from_slice(&[5]));
@@ -373,9 +352,9 @@ async fn directed_control_routed_not_consumed() {
         SendRequest::Broadcast { .. } => panic!("expected unicast route"),
     }
     // The payload network was forwarded, not learned.
-    let table = h.table.lock().await;
+    let table = h.table();
     assert!(table.lookup(4000).is_none());
-    assert_eq!(table.lookup(3000).unwrap().port_index, 1);
+    assert_eq!(table.lookup(3000).unwrap().port(), PortId(1));
 }
 
 #[tokio::test]
@@ -443,7 +422,7 @@ async fn directed_control_to_unknown_network_rejected() {
         }
         SendRequest::Broadcast { .. } => panic!("expected unicast reject"),
     }
-    assert_eq!(h.table.lock().await.len(), 2);
+    assert_eq!(h.table().len(), 2);
 }
 
 #[tokio::test]
@@ -498,7 +477,7 @@ async fn directed_who_is_remote_broadcast_forwarded_with_origin() {
 
 #[tokio::test]
 async fn link_broadcast_routed_unicast_control_stays_unicast() {
-    let mut table = RouterTable::new();
+    let mut table = TableSeed::new();
     table.add_direct(1000, 0);
     table.add_direct(2000, 1);
     table.add_learned(3000, 1, MacAddr::from_slice(&[5]));
@@ -522,7 +501,7 @@ async fn link_broadcast_routed_unicast_control_stays_unicast() {
     }
     // A transit control is never consumed: no busy mark from our own relay.
     assert_eq!(
-        h.table.lock().await.effective_reachability(3000),
-        Some(ReachabilityStatus::Reachable)
+        h.table().effective_reachability(3000, h.now()),
+        Some(Reachability::Reachable)
     );
 }

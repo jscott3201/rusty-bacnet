@@ -12,7 +12,8 @@ pub(super) struct CovNotifyContext<'a, T: TransportPort + 'static> {
     pub(super) cov_in_flight: &'a Arc<Semaphore>,
     pub(super) notification_transactions: &'a Arc<NotificationTransactions>,
     pub(super) comm_state: &'a Arc<CommState>,
-    pub(super) config: &'a ServerConfig,
+    /// Shared, so a task can own it without copying it (#1521).
+    pub(super) config: &'a Arc<ServerConfig>,
 }
 
 /// A [`CovNotifyContext`] plus the subscription table's in-flight tracker and

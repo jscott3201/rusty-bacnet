@@ -1,5 +1,8 @@
 //! AddListElement / RemoveListElement services per ASHRAE 135-2020 Clauses 15.1 and 15.2.
 
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
 use bacnet_encoding::constructed::tagged::{
     decode_ctx_constructed, decode_ctx_object_id, decode_ctx_unsigned, decode_optional_ctx,
     expect_end,

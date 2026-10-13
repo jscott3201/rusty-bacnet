@@ -321,7 +321,7 @@ async fn value_source_cov_send_failure_and_confirmation_baselines() {
                     .last_notified_observation
                     .as_ref()
                     .unwrap()
-                    .command()
+                    .source_companions()
                     .is_some());
             } else {
                 assert!(observation.is_none());
@@ -337,7 +337,7 @@ async fn value_source_cov_send_failure_and_confirmation_baselines() {
                     .last_notified_observation
                     .as_ref()
                     .unwrap()
-                    .command()
+                    .source_companions()
                     .is_some());
                 f.finish(false).await;
             }
@@ -370,7 +370,8 @@ async fn value_source_cov_held_send_commits_exact_delivered_tuple() {
             .last_notified_observation
             .clone()
             .unwrap();
-        let (pv, priority) = before.command().unwrap();
+        let (pv, priority) = before.source_companions().unwrap();
+        let priority = priority.as_ref().unwrap();
         for (property, sample) in [
             (PropertyIdentifier::PRESENT_VALUE, pv),
             (PropertyIdentifier::VALUE_SOURCE, before.sample()),

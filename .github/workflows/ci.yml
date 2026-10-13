@@ -9,16 +9,21 @@ name: CI
 #
 #   Lean  — every PR to dev/main, push to dev/main, v* tags, weekly, manual:
 #           lint (fmt, file-size cap, no-secret scan, script regressions,
-#           changelog fragments, the pins),
+#           changelog fragments, the pins, the fuzz crates' lockfiles),
 #           clippy and rustdoc with warnings denied (every feature, the PyO3
 #           crate, and each published crate alone with default features, for
 #           Linux, Windows and macOS; the every-feature and PyO3 rustdoc runs
-#           include private items),
-#           every-feature Linux tests plus bacnet-cli's feature-off tests,
+#           include private items), the no_std crates on bare-metal targets
+#           and their alloc tests on the host, and the firmware images
+#           (MS/TP and B/IP without an allocator, the APDU stack with one)
+#           linked and checked against their size budgets,
+#           every-feature Linux tests plus bacnet-cli's feature-off tests
+#           and the no_std crates' tests and doctests without std,
 #           and the Python bindings built with maturin, their unittest suite
 #           and the PyO3 crate's own Rust tests.
 #   Heavy — PRs to main, push to main, v* tags, weekly schedule, manual:
-#           MSRV (Linux native, incl. optional features and pcap link), audit, deny.
+#           MSRV (Linux native, incl. optional features, the no_std builds
+#           and pcap link), audit, deny.
 #   CI OK — the required status; fails if any job above failed.
 #
 # Pushes to dev (PR merges) run the Lean jobs. Only runs on dev save the Rust
@@ -70,7 +75,7 @@ env:
   # such as bacnet-endpoint/sc-tls and bacnet-cli/{sc-tls,pcap,tui} that nothing
   # else in the workspace turns on (#906). bacnet-benchmarks/console is left
   # out: it needs tokio_unstable.
-  LINUX_FEATURES: bacnet-types/serde,bacnet-transport/ipv6,bacnet-transport/sc-tls,bacnet-transport/serial,bacnet-transport/serial-gpio,bacnet-transport/ethernet,bacnet-client/ipv6,bacnet-client/sc-tls,bacnet-server/sc-tls,bacnet-endpoint/sc-tls,bacnet-integration-tests/ipv6,bacnet-integration-tests/ethernet,bacnet-cli/sc-tls,bacnet-cli/pcap,bacnet-cli/tui
+  LINUX_FEATURES: bacnet-types/serde,bacnet-mstp-codec/bytes,bacnet-mstp-codec/heapless,bacnet-mstp-core/alloc,bacnet-bip-codec/bytes,bacnet-bip-codec/heapless,bacnet-router-core/bip,bacnet-router-core/mstp,bacnet-transport/ipv6,bacnet-transport/sc-tls,bacnet-transport/serial,bacnet-transport/serial-gpio,bacnet-transport/ethernet,bacnet-client/ipv6,bacnet-client/sc-tls,bacnet-server/sc-tls,bacnet-endpoint/sc-tls,bacnet-integration-tests/ipv6,bacnet-integration-tests/ethernet,bacnet-cli/sc-tls,bacnet-cli/pcap,bacnet-cli/tui
 
 jobs:
   lint:
@@ -103,18 +108,22 @@ jobs:
           rustup toolchain list
           rustc -vV
       # Every line of the pins file is a comment, blank or NAME=value with a
-      # plain value, once per name, and every *_SHA256 is a SHA-256 in hex; the
-      # toolchain pin is an exact release; and the MSRV is the same in the
-      # pins, Cargo.toml and check-msrv.sh.
+      # plain value that starts with a letter or digit, once per name, and
+      # every *_SHA256 is a SHA-256 in hex; the toolchain pin is an exact
+      # release, and the fuzz nightly a dated one; and the MSRV is the same in
+      # the pins, Cargo.toml and check-msrv.sh.
       - name: Check the pins
         run: |
           pins=.github/ci-pins.env
           fail=0
-          if bad=$(grep -nvE '^(#.*|[A-Z0-9_]+=[0-9A-Za-z.]+)?$' "$pins"); then
+          if bad=$(grep -nvE '^(#.*|[A-Z0-9_]+=[0-9A-Za-z][0-9A-Za-z.-]*)?$' "$pins"); then
             echo "::error::malformed lines in $pins:"; echo "$bad"; fail=1
           fi
           if bad=$(grep -nE '^[A-Z0-9_]+_SHA256=' "$pins" | grep -vE '^[0-9]+:[A-Z0-9_]+_SHA256=[0-9a-f]{64}$'); then
             echo "::error::digests in $pins that aren't 64 lowercase hex digits:"; echo "$bad"; fail=1
+          fi
+          if ! grep -qE '^RUST_FUZZ_NIGHTLY=nightly-[0-9]{4}-[0-9]{2}-[0-9]{2}$' "$pins"; then
+            echo "::error::$pins has no RUST_FUZZ_NIGHTLY=nightly-YYYY-MM-DD"; fail=1
           fi
           if dup=$(grep -oE '^[A-Z0-9_]+=' "$pins" | sort | uniq -d | grep .); then
             echo "::error::names set twice in $pins:"; echo "$dup"; fail=1
@@ -132,6 +141,12 @@ jobs:
             echo "::error::scripts/ci/check-msrv.sh's default toolchain is not $msrv"; fail=1
           fi
           exit $fail
+      # Each fuzz crate's own Cargo.lock still matches its manifests. It
+      # records the fuzzed crate's workspace version and the workspace's
+      # dependency requirements, so a change to either that skipped `fuzz.sh
+      # lock` fails here, not in a scheduled fuzz run (docs/ci.md, "Fuzzing").
+      - name: Fuzz crate lockfiles
+        run: bash scripts/ci/fuzz.sh lock --check
       - name: Rustfmt
         run: cargo fmt --all --check
       - name: File-size cap (700 LOC)
@@ -142,6 +157,11 @@ jobs:
           bash scripts/ci/check-no-secrets.sh
       - name: MSRV script regressions
         run: python3 scripts/ci/test-check-msrv.py
+      - name: Firmware size script regressions
+        run: python3 scripts/ci/test-firmware-size.py
+      # The three private copies of named_codes! (docs/ci.md, "Local checks").
+      - name: named_codes! copies match
+        run: python3 scripts/ci/check-named-codes.py
       - name: Release script tests
         run: python3 -m unittest discover -s scripts/release
       # Entries are changelog.d/ fragments; [Unreleased] in CHANGELOG.md holds none.
@@ -159,6 +179,11 @@ jobs:
       # Windows and macOS compile different code behind their platform cfgs.
       # In the cache key, so a change restarts the cache with their dependencies.
       DEFAULT_FEATURES_TARGETS: x86_64-unknown-linux-gnu x86_64-pc-windows-msvc aarch64-apple-darwin
+      # Bare-metal targets for the no_std check (#1604), in the cache key too.
+      NO_STD_TARGETS: thumbv6m-none-eabi thumbv7em-none-eabihf riscv32imac-unknown-none-elf
+      # Targets the firmware link test builds its images for (#1626), each with
+      # budgets in firmware/link/size-budget.toml; in the cache key too.
+      FIRMWARE_TARGETS: thumbv7m-none-eabi thumbv6m-none-eabi riscv32imc-unknown-none-elf thumbv7em-none-eabihf
       # pcap for bacnet-cli, whose build script loads libpcap.
       APT_PACKAGES: libpcap-dev
     steps:
@@ -187,7 +212,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-bin: false
-          env-vars: LINUX_FEATURES DEFAULT_FEATURES_TARGETS
+          env-vars: LINUX_FEATURES DEFAULT_FEATURES_TARGETS NO_STD_TARGETS FIRMWARE_TARGETS
           save-if: ${{ github.ref == 'refs/heads/dev' }}
       # Warnings are errors for workspace code only; dependencies are unaffected.
       # The workspace includes the samples in examples/rust/samples (#1450).
@@ -203,11 +228,45 @@ jobs:
         run: cargo clippy -p bacnet-cli --no-default-features --all-targets --locked -- -D warnings
       # One cargo run per crate checks the targets side by side, which costs a
       # few seconds more than Linux alone did.
-      - name: Clippy and rustdoc (each published crate, default features; no_std bacnet-types; Linux, Windows, macOS)
+      - name: Clippy and rustdoc (each published crate, default features; no_std types, encoding and services; Linux, Windows, macOS)
         if: ${{ !cancelled() }}
         run: |
           # shellcheck disable=SC2086 # one argument per target
           bash scripts/ci/check-default-features.sh $DEFAULT_FEATURES_TARGETS
+      # The no_std crates with each feature set, on targets with no std and no
+      # allocator unless a crate asks for alloc. Only their core and alloc
+      # libraries are needed: clippy doesn't link. On thumbv6m, the builds
+      # with bytes bring in firmware/nostd-harness for portable-atomic's
+      # backend (#1613).
+      - name: Clippy (no_std crates, bare-metal targets)
+        if: ${{ !cancelled() }}
+        run: |
+          # shellcheck disable=SC2086 # one argument per target
+          rustup target add $NO_STD_TARGETS
+          # shellcheck disable=SC2086
+          bash scripts/ci/check-no-std.sh $NO_STD_TARGETS
+      # bacnet-types, bacnet-encoding and bacnet-services with alloc and
+      # without std, tests included: Test runs those tests, and no run above
+      # lints them (#1613).
+      - name: Clippy (no_std crates with alloc, all targets)
+        if: ${{ !cancelled() }}
+        run: cargo clippy -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --features alloc --all-targets --locked -- -D warnings
+      # Clippy doesn't link, so this builds the stacks into bare-metal images
+      # (firmware/link), one per stack, for each target, and checks their
+      # sizes against the budget: MS/TP (extended frames off and on), the
+      # B/IP codec, node and BBMD, and a router between B/IP and MS/TP with
+      # no allocator (#1664, #1667, #1679), and
+      # bacnet-encoding and bacnet-services with one, its critical section
+      # and, without compare-and-swap, portable-atomic (#1635). It links with
+      # the rust-lld that rustc ships, so the targets' core libraries are all
+      # it needs. Nothing runs the images; the scenarios they link run in Test.
+      - name: Firmware link test (bare-metal images, size budgets)
+        if: ${{ !cancelled() }}
+        run: |
+          # shellcheck disable=SC2086 # one argument per target
+          rustup target add $FIRMWARE_TARGETS
+          # shellcheck disable=SC2086
+          bash scripts/ci/check-firmware-link.sh $FIRMWARE_TARGETS
       # Private and pub(crate) items too, so their intra-doc links can't rot
       # (#1164). This run still flags public docs that link to private items
       # (rustdoc::private_intra_doc_links), so it replaces the public-only run.
@@ -262,11 +321,21 @@ jobs:
       - name: bacnet-cli tests (default features)
         run: cargo nextest run -p bacnet-cli --locked --profile ci
       # And with no default features at all. Until `tui` is on by default again
-      # (0.13.0, #975) this matches the run above; both keep `bacnet tui`'s
+      # (0.14.0, #975) this matches the run above; both keep `bacnet tui`'s
       # rebuild advice tested.
       - name: bacnet-cli tests (no default features)
         if: ${{ !cancelled() }}
         run: cargo nextest run -p bacnet-cli --no-default-features --locked --profile ci
+      # The no_std crates with alloc and their std feature off: the code a
+      # bare-metal build compiles, which every run above leaves out (#1613).
+      # The tests themselves still link std; check-no-std.sh shows the code
+      # needs none.
+      - name: no_std crates' tests (alloc, without std)
+        if: ${{ !cancelled() }}
+        run: cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --features alloc --locked --profile ci
+      - name: no_std crates' doctests (alloc, without std)
+        if: ${{ !cancelled() }}
+        run: cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --features alloc --locked
       - *disk
 
   python:
@@ -335,8 +404,10 @@ jobs:
         with:
           cache-bin: false
           save-if: ${{ github.ref == 'refs/heads/dev' }}
-      # Publishable crates with consumer-visible features, then the ethernet,
-      # serial and serial-gpio transport checks and a linked bacnet-cli pcap build.
+      # Publishable crates with consumer-visible features, the no_std builds
+      # of bacnet-types, bacnet-encoding and bacnet-services (alloc, no std),
+      # then the ethernet, serial and serial-gpio transport checks and a
+      # linked bacnet-cli pcap build.
       - run: bash scripts/ci/check-msrv.sh --linux-native
       - *disk
 

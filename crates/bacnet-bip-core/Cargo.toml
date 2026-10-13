@@ -1,0 +1,31 @@
+[package]
+name = "bacnet-bip-core"
+description = "Portable no-std BACnet/IP behaviour (Annex J): a sans-IO node engine, BBMD tables and broadcast forwarding"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["bacnet", "bip", "bbmd", "embedded", "no-std"]
+categories = ["embedded", "network-programming", "no-std", "no-std::no-alloc"]
+
+# The tables live in caller-sized arrays (const generics), so the crate needs
+# neither std nor an allocator, and has no features.
+[dependencies]
+bacnet-bip-codec = { workspace = true }
+bacnet-time = { workspace = true }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[package.metadata.docs.rs]
+# Built for a bare-metal target too, so the docs show the crate without std.
+# The crate has no features today; all-features and the docsrs cfg (which
+# turns on doc_cfg in lib.rs) show which feature gates an item once one does.
+all-features = true
+targets = ["x86_64-unknown-linux-gnu", "thumbv7em-none-eabihf"]
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true

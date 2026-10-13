@@ -7,12 +7,14 @@
 
 use pyo3::prelude::*;
 
+mod bip_options;
 mod client;
 mod endpoint;
 mod errors;
 mod group_members;
 mod hub;
 mod hub_bindings;
+mod log_records;
 mod mstp_py;
 mod object_audit_policy;
 mod py_async;
@@ -49,8 +51,11 @@ fn rusty_bacnet(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<server::BACnetServer>()?;
     m.add_class::<hub::PyScHub>()?;
     m.add_class::<hub_bindings::PyScHubCertificateBinding>()?;
+    m.add_class::<bip_options::PyForeignDevice>()?;
+    m.add_class::<bip_options::PyBbmd>()?;
     endpoint::register(m)?;
     m.add_function(wrap_pyfunction!(mstp_py::list_serial_ports, m)?)?;
+    m.add_function(wrap_pyfunction!(log_records::decode_log_records, m)?)?;
 
     Ok(())
 }

@@ -18,7 +18,8 @@ pub use action::{BACnetActionCommand, BACnetActionList};
 mod access;
 pub use access::{
     BACnetAccessRule, BACnetAssignedAccessRights, BACnetAuthenticationFactor,
-    BACnetAuthenticationFactorFormat, BACnetCredentialAuthenticationFactor,
+    BACnetAuthenticationFactorFormat, BACnetAuthenticationPolicy, BACnetAuthenticationPolicyEntry,
+    BACnetCredentialAuthenticationFactor,
 };
 mod audit;
 pub use audit::{
@@ -44,6 +45,10 @@ pub use log::{
     BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord, EventLogDatum, LogData,
     LogDatum, LogValue,
 };
+mod name_value;
+pub use name_value::BACnetNameValue;
+mod network_port;
+pub use network_port::{BACnetBDTEntry, BACnetFDTEntry, BACnetHostAddress, BACnetHostNPort};
 mod property_access;
 pub use property_access::{AccessResult, BACnetPropertyAccessResult};
 mod property_value;
@@ -348,10 +353,13 @@ impl BACnetAddress {
     /// if it names a node on some data link. Table 6-2 gives the network-layer
     /// address length of each standard data link, and the longest there is 7
     /// octets (a LonTalk Neuron_ID destination). The data links this stack
-    /// serves address a node in at most 18 octets: 1 for MS/TP, 6 for B/IP,
-    /// Ethernet and B/SC, and 18 for B/IPv6, whose port names a peer by its
-    /// 16-octet IPv6 address and 2-octet UDP port. A longer MAC names no node
-    /// on any of them, nor on a standard data link behind a router.
+    /// serves address a node in at most 6 octets: 1 for MS/TP, 3 for B/IPv6
+    /// (its VMAC, U.1.3) and 6 for B/IP, Ethernet and B/SC. The bound stays at
+    /// 18, the length of a B/IPv6 address (16-octet IPv6 address and 2-octet
+    /// UDP port), which the stack once used as the B/IPv6 MAC: it is a
+    /// defensive ceiling, and lowering it is a decision of its own. A longer
+    /// MAC names no node on any data link the stack serves, nor on a standard
+    /// one behind a router.
     ///
     /// Every codec for this type in bacnet-encoding holds to the bound: the
     /// recipient, ValueSource and AuditLogQuery decoders refuse a longer MAC

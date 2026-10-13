@@ -37,6 +37,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         ack: ComplexAckParams,
         service_ack_data: Bytes,
         pending: Option<PendingConfirmedRequest>,
+        segment_timeout: Duration,
     ) {
         let route = target.route.clone();
         let network = Arc::clone(resources.network);
@@ -45,7 +46,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let source_mac = MacAddr::from_slice(target.source_mac);
         let source_network = target.source_network.cloned();
         request_tasks.spawn(async move {
-            Self::send_segmented_complex_ack(
+            Self::send_segmented_complex_ack_with_options(
                 SegmentedSendResources {
                     network: &network,
                     seg_ack_senders: &seg_ack_senders,
@@ -58,6 +59,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 },
                 ack,
                 &service_ack_data,
+                SegmentedSendOptions {
+                    segment_timeout,
+                    ..Default::default()
+                },
                 pending,
             )
             .await;
@@ -69,6 +74,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Splits the service ack data into segments that fit within the client's
     /// max APDU length, sends each segment, and waits for SegmentAck from
     /// the client before sending the next (window size 1).
+    #[cfg(test)]
     pub(super) async fn send_segmented_complex_ack(
         resources: SegmentedSendResources<'_, T>,
         target: ResponseTarget<'_>,

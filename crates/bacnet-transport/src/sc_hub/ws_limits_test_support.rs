@@ -100,6 +100,9 @@ pub(crate) async fn initiating_pair() -> (WebSocketStream<TlsStream>, crate::sc_
         .unwrap()
     };
     let url = format!("wss://localhost:{}", address.port());
+    // No `connect_loopback` retry here: the production dial races `localhost`'s
+    // addresses and reports the ::1 attempt's refusal ahead of an AddrInUse,
+    // so a test-side retry could not tell a local port collision (#1629).
     let (server, node) = tokio::join!(
         accept,
         crate::sc_tls::TlsWebSocket::connect(&url, tls.node.clone())

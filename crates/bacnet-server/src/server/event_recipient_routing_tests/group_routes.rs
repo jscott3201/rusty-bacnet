@@ -2,7 +2,8 @@
 //! such as a B/IP multicast address or the broadcast IP at another port
 //! (#1493). A confirmed notification goes to one device, so a confirmed
 //! recipient there gets nothing and counts with the confirmed broadcast
-//! recipients, while an unconfirmed one is still sent to that address. A
+//! recipients, while an unconfirmed one is still sent, as the link's local
+//! broadcast, which a group address with no DNET is (#1677). A
 //! Device binding to a group address names no device and is unroutable, one
 //! routed through this network's own number to a group final MAC included.
 
@@ -95,14 +96,13 @@ async fn a_confirmed_recipient_at_a_group_address_gets_nothing_and_is_counted() 
 }
 
 #[tokio::test(start_paused = true)]
-async fn an_unconfirmed_recipient_at_a_group_address_is_still_sent_there() {
+async fn an_unconfirmed_recipient_at_a_group_address_is_sent_as_a_local_broadcast() {
     for group in GROUPS {
         for network in [0, THIS_NETWORK] {
             let (broadcasts, unicasts, counters) =
                 distribute_one(destination_for(address_recipient(network, &group), false)).await;
-            assert!(broadcasts.is_empty(), "{group:?} on {network}");
-            assert_eq!(unicasts.len(), 1, "{group:?} on {network}");
-            assert_eq!(unicasts[0].0, group, "{group:?} on {network}");
+            assert_eq!(broadcasts.len(), 1, "{group:?} on {network}");
+            assert!(unicasts.is_empty(), "{group:?} on {network}");
             assert_eq!(counters, EventNotificationCounters::default());
         }
     }

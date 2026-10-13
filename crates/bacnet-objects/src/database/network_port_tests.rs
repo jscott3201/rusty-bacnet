@@ -3,6 +3,7 @@ use crate::{
     network_port::{BipPortConfig, NetworkPortObject},
     property_metadata::PropertyWriteCapability,
 };
+use bacnet_types::bip_port::BipPortMode;
 use bacnet_types::{enums::PropertyIdentifier as P, primitives::PropertyValue};
 fn oid(instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::NETWORK_PORT, instance).unwrap()
@@ -57,10 +58,10 @@ fn registered_port_reservation_publication_and_final_release() {
     );
     assert!(db.remove(&oid(1)).unwrap().is_some());
     assert!(db
-        .publish_bip_port_internal(oid(2), [127, 0, 0, 2], 1234, 1476)
+        .publish_bip_port_internal(oid(2), [127, 0, 0, 2], 1234, 1476, BipPortMode::Normal)
         .is_err());
     assert_eq!(db.registered_bip_port_internal(), None);
-    db.publish_bip_port_internal(oid(2), [127, 0, 0, 1], 1234, 1476)
+    db.publish_bip_port_internal(oid(2), [127, 0, 0, 1], 1234, 1476, BipPortMode::Normal)
         .unwrap();
     assert_eq!(db.registered_bip_port_internal(), Some(oid(2)));
     let selected = db.get(&oid(2)).unwrap();
@@ -193,7 +194,7 @@ fn network_number_new_reservation_resets_learned_state_from_configured_provenanc
     let (_, lease) = db
         .reserve_bip_port_internal(oid(2), [127, 0, 0, 1], 0)
         .unwrap();
-    db.publish_bip_port_internal(oid(2), [127, 0, 0, 1], 40000, 1476)
+    db.publish_bip_port_internal(oid(2), [127, 0, 0, 1], 40000, 1476, BipPortMode::Normal)
         .unwrap();
     assert_eq!(
         db.network_number_internal(oid(2), Some((19, 1)))
@@ -213,7 +214,7 @@ fn network_number_new_reservation_resets_learned_state_from_configured_provenanc
     let (_, lease) = db
         .reserve_bip_port_internal(oid(2), [127, 0, 0, 1], 40000)
         .unwrap();
-    db.publish_bip_port_internal(oid(2), [127, 0, 0, 1], 40000, 1476)
+    db.publish_bip_port_internal(oid(2), [127, 0, 0, 1], 40000, 1476, BipPortMode::Normal)
         .unwrap();
     assert_eq!(
         db.network_number_internal(oid(2), None).unwrap().snapshot(),

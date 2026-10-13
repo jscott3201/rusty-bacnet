@@ -180,7 +180,7 @@ impl TestTls {
         &self,
         address: SocketAddr,
     ) -> WebSocketStream<tokio_rustls::client::TlsStream<tokio::net::TcpStream>> {
-        let tcp = tokio::net::TcpStream::connect(address).await.unwrap();
+        let tcp = crate::port_ownership::connect_loopback(address).await;
         let tls = boxed(|| self.connect_tls(tcp)).await;
         let request = tokio_tungstenite::tungstenite::client::ClientRequestBuilder::new(
             format!("wss://localhost:{}", address.port())

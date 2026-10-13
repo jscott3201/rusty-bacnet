@@ -165,6 +165,74 @@ class MstpConstructorTests(unittest.TestCase):
                 device_instance=1, serial_port="/tmp/nonexistent", max_apdu=1476
             )
 
+    def test_extended_frames_lift_the_apdu_bound(self):
+        # #1663: extended frames carry APDUs of up to 1476; the default is
+        # unchanged.
+        with self.assertRaisesRegex(ValueError, "mstp_extended_frames=True"):
+            MstpEndpoint(
+                device_instance=1, serial_port="/tmp/nonexistent", max_apdu=1476
+            )
+        endpoint = MstpEndpoint(
+            device_instance=1,
+            serial_port="/tmp/nonexistent",
+            max_apdu=1476,
+            mstp_extended_frames=True,
+        )
+        self.assertEqual(endpoint.device_instance, 1)
+        with self.assertRaises(TypeError):
+            MstpEndpoint(  # type: ignore[misc]
+                1, "/tmp/nonexistent", "BACnet Device", 555, 38400, 1, 127, 1,
+                1476, None, None, None, 16, 6000, 0, 256, 0, True,
+            )
+
+    def test_echo_keywords_follow_the_client_rules(self):
+        # #1663: as BACnetClient's mstp_echo and mstp_echo_grace_ms (#1653).
+        for kwargs in ({}, {"mstp_echo": True}, {"mstp_echo": True, "mstp_echo_grace_ms": 60}):
+            with self.subTest(**kwargs):
+                MstpEndpoint(device_instance=1, serial_port="/tmp/nonexistent", **kwargs)
+        for kwargs, message in (
+            ({"mstp_echo": True, "mstp_echo_grace_ms": 0}, "at least 1"),
+            ({"mstp_echo_grace_ms": 25}, "needs mstp_echo=True"),
+            ({"mstp_echo_grace_ms": 0}, "needs mstp_echo=True"),
+        ):
+            with self.subTest(**kwargs):
+                with self.assertRaisesRegex(ValueError, message):
+                    MstpEndpoint(device_instance=1, serial_port="/tmp/nonexistent", **kwargs)
+        for grace in (-1, 4_294_967_296):
+            with self.subTest(grace=grace):
+                with self.assertRaises(OverflowError):
+                    MstpEndpoint(
+                        device_instance=1,
+                        serial_port="/tmp/nonexistent",
+                        mstp_echo=True,
+                        mstp_echo_grace_ms=grace,
+                    )
+
+    def test_timing_keywords_are_checked_at_construction(self):
+        # #1654, #1655: the pad and the two timeouts, as for BACnetClient.
+        for kwargs in (
+            {"mstp_transmit_latency_pad_ms": 0},
+            {"mstp_transmit_latency_pad_ms": 15},
+            {"mstp_usage_timeout_ms": 20, "mstp_reply_timeout_ms": 255},
+            {"mstp_usage_timeout_ms": 35, "mstp_reply_timeout_ms": 300},
+        ):
+            with self.subTest(**kwargs):
+                MstpEndpoint(device_instance=1, serial_port="/tmp/nonexistent", **kwargs)
+        for kwargs, field in (
+            ({"mstp_transmit_latency_pad_ms": 16}, "transmit_latency_pad"),
+            ({"mstp_usage_timeout_ms": 19}, "usage_timeout"),
+            ({"mstp_usage_timeout_ms": 36}, "usage_timeout"),
+            ({"mstp_reply_timeout_ms": 254}, "reply_timeout"),
+            ({"mstp_reply_timeout_ms": 301}, "reply_timeout"),
+        ):
+            with self.subTest(**kwargs):
+                with self.assertRaisesRegex(ValueError, field):
+                    MstpEndpoint(device_instance=1, serial_port="/tmp/nonexistent", **kwargs)
+        with self.assertRaises(OverflowError):
+            MstpEndpoint(
+                device_instance=1, serial_port="/tmp/nonexistent", mstp_usage_timeout_ms=-1
+            )
+
     def test_queue_zero_rejected(self):
         with self.assertRaisesRegex(ValueError, "queue_capacity"):
             MstpEndpoint(

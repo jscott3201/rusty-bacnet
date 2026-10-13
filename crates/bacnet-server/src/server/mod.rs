@@ -40,7 +40,7 @@ use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::cov::COVNotificationRequest;
 use bacnet_services::cov_multiple::COVNotificationMultipleRequest;
 use bacnet_services::who_is::{DeviceInstanceRange, IAmRequest, WhoIsRequest};
-use bacnet_transport::bip::BipTransport;
+use bacnet_transport::bip::{BipMode, BipTransport};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{
     AbortReason, ConfirmedServiceChoice, ErrorClass, ErrorCode, LifeSafetyOperation,
@@ -60,8 +60,8 @@ pub use crate::cov::{CovCounters, CovPolicy};
 use crate::cov::{
     CovNotificationKind, CovSubscription, CovSubscriptionSnapshot, CovSubscriptionTable,
 };
-use crate::handlers;
 use crate::life_safety::{LifeSafetyOperationAuthorizationContext, LifeSafetyOperationAuthorizer};
+use crate::{handlers, runtime_clock};
 use confirmed_request_tracker::{
     ConfirmedRequestAdmission, ConfirmedRequestTracker, PendingConfirmedRequest,
 };
@@ -99,9 +99,6 @@ const MAX_REQUEST_SEGMENTS: usize = 256;
 
 /// Maximum number of concurrent segmented response send sessions.
 const MAX_SEG_SENDERS: usize = 128;
-
-/// Timeout for idle segmented reassembly sessions.
-const SEG_RECEIVER_TIMEOUT: Duration = Duration::from_secs(4);
 
 /// Maximum negative SegmentAck retries during segmented response send.
 const MAX_NEG_SEGMENT_ACK_RETRIES: u8 = 3;
@@ -176,12 +173,6 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
     pub fn device_binding(mut self, binding: DeviceBinding) -> Result<Self, Error> {
         register_configured_binding(&mut self.configured_device_bindings, binding)?;
         Ok(self)
-    }
-
-    /// Set the password required for ReinitializeDevice requests.
-    pub fn reinit_password(mut self, password: impl Into<String>) -> Self {
-        self.config.reinit_password = Some(password.into());
-        self
     }
 
     /// Set the policy that authorizes inbound LifeSafetyOperation requests.
@@ -293,6 +284,7 @@ pub struct BipServerBuilder {
     config: ServerConfig,
     db: ObjectDatabase,
     configured_device_bindings: Vec<DeviceBinding>,
+    mode: BipMode,
 }
 
 impl BipServerBuilder {
@@ -324,12 +316,6 @@ impl BipServerBuilder {
     pub fn device_binding(mut self, binding: DeviceBinding) -> Result<Self, Error> {
         register_configured_binding(&mut self.configured_device_bindings, binding)?;
         Ok(self)
-    }
-
-    /// Set the password required for ReinitializeDevice requests.
-    pub fn reinit_password(mut self, password: impl Into<String>) -> Self {
-        self.config.reinit_password = Some(password.into());
-        self
     }
 
     /// Set the policy that authorizes inbound LifeSafetyOperation requests.
@@ -422,11 +408,11 @@ impl BipServerBuilder {
 
     /// Build and start the server, constructing a BipTransport from the config.
     pub async fn build(self) -> Result<BACnetServer<BipTransport>, Error> {
-        let transport = BipTransport::new(
-            self.config.interface,
-            self.config.port,
-            self.config.broadcast_address,
-        );
+        let config = &self.config;
+        let mut transport =
+            BipTransport::new(config.interface, config.port, config.broadcast_address);
+        transport.set_share_port_by_address(config.share_port_by_address);
+        transport.set_mode(self.mode);
         BACnetServer::start_with_clock_mode_and_bindings(
             self.config,
             self.db,
@@ -443,7 +429,8 @@ type TransportCleanup<T> = JoinHandle<(NetworkLayer<T>, Result<(), Error>)>;
 /// BACnet server with APDU dispatch and service handling.
 pub struct BACnetServer<T: TransportPort> {
     target_audit: Option<Arc<audit_recipient::TargetAudit<T>>>,
-    config: ServerConfig,
+    /// Shared with dispatch and every task the server starts (#1521).
+    config: Arc<ServerConfig>,
     discovery_limiter: Arc<DiscoveryLimiter>,
     #[allow(dead_code)] // Retained with the server, including direct dispatch tests.
     time_sync_limiter: Arc<TimeSyncLimiter>,
@@ -477,7 +464,6 @@ pub struct BACnetServer<T: TransportPort> {
     /// Invoke-ID ownership and terminal admission for confirmed notifications.
     notification_transactions: Arc<NotificationTransactions>,
     /// Server-lifetime exact inbound ConfirmedRequest duplicate state.
-    #[allow(dead_code)]
     confirmed_request_tracker: Arc<ConfirmedRequestTracker>,
     /// Shared configured and passively observed Device recipient authority.
     device_bindings: Arc<RwLock<DeviceBindingTable>>,
@@ -532,13 +518,16 @@ impl BACnetServer<BipTransport> {
             config: ServerConfig::default(),
             db: ObjectDatabase::new(),
             configured_device_bindings: Vec::new(),
+            mode: BipMode::Normal,
         }
     }
 }
 
 mod clock;
 mod command_runs;
+mod reinitialize;
 mod time_sync_policy;
+pub use reinitialize::{ReinitializeContext, ReinitializeHandler};
 mod write_group;
 #[cfg(test)]
 pub(crate) use clock::clocked_test_database;
@@ -578,6 +567,8 @@ pub(crate) use discovery::{DiscoveryLimiter, PreCheckDecision, WhoHasTarget};
 mod audit_log_purge;
 mod dispatch;
 mod durable_writes;
+#[doc(hidden)]
+pub use durable_writes::settle_endpoint as __endpoint_settle_durable_writes;
 mod event_delivery;
 mod event_enrollment_lifecycle;
 mod event_forwarding;
@@ -662,6 +653,7 @@ mod request_services;
 mod request_tasks;
 pub use request_admission::{RequestAdmissionCounters, RequestAdmissionPolicy};
 mod shutdown;
+pub use shutdown::drop_database_off_runtime;
 
 #[cfg(test)]
 mod access_door_event_tests;
@@ -693,6 +685,10 @@ mod channel_remote_write_tests;
 mod channel_run_tests;
 #[cfg(test)]
 mod channel_wire_tests;
+#[cfg(test)]
+mod color_channel_member_tests;
+#[cfg(test)]
+mod color_engine_task_tests;
 #[cfg(test)]
 mod command_action_run_tests;
 #[cfg(test)]
@@ -849,6 +845,8 @@ mod trailing_octet_wire_tests;
 mod truncated_request_wire_tests;
 #[cfg(test)]
 mod value_cov_increment_tests;
+#[cfg(test)]
+mod value_source_local_tests;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Start a server builder for a caller-supplied transport type, with default configuration and

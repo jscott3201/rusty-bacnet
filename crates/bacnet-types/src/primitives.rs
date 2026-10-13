@@ -4,7 +4,7 @@
 //! [`Time`], and the [`PropertyValue`] sum type.
 
 #[cfg(not(feature = "std"))]
-use alloc::{format, string::String, vec::Vec};
+use alloc::{string::String, vec::Vec};
 
 use crate::enums::ObjectType;
 use crate::error::Error;
@@ -67,14 +67,14 @@ impl ObjectIdentifier {
     /// [`MAX_INSTANCE`](Self::MAX_INSTANCE).
     pub fn new(object_type: ObjectType, instance_number: u32) -> Result<Self, Error> {
         if instance_number > Self::MAX_INSTANCE {
-            return Err(Error::OutOfRange(alloc_or_std_format!(
+            return Err(Error::OutOfRange(format!(
                 "instance number {} exceeds max {}",
                 instance_number,
                 Self::MAX_INSTANCE
             )));
         }
         if object_type.to_raw() > 0x3FF {
-            return Err(Error::OutOfRange(alloc_or_std_format!(
+            return Err(Error::OutOfRange(format!(
                 "object type {} exceeds max 1023",
                 object_type.to_raw()
             )));
@@ -98,7 +98,7 @@ impl ObjectIdentifier {
     pub fn new_addressable(object_type: ObjectType, instance_number: u32) -> Result<Self, Error> {
         let identifier = Self::new(object_type, instance_number)?;
         if instance_number == Self::WILDCARD_INSTANCE {
-            return Err(Error::OutOfRange(alloc_or_std_format!(
+            return Err(Error::OutOfRange(format!(
                 "instance number {} is reserved as the wildcard value; maximum addressable instance is {}",
                 instance_number,
                 Self::MAX_ADDRESSABLE_INSTANCE
@@ -427,23 +427,6 @@ impl PropertyValue {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Formatting helper macro (works in both std and no_std+alloc)
-// ---------------------------------------------------------------------------
-
-/// Format a string using either std or alloc.
-#[cfg(feature = "std")]
-macro_rules! alloc_or_std_format {
-    ($($arg:tt)*) => { format!($($arg)*) }
-}
-
-#[cfg(not(feature = "std"))]
-macro_rules! alloc_or_std_format {
-    ($($arg:tt)*) => { alloc::format!($($arg)*) }
-}
-
-use alloc_or_std_format;
 
 // ---------------------------------------------------------------------------
 // Tests

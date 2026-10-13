@@ -1,5 +1,8 @@
 //! WritePropertyMultiple service per ASHRAE 135-2020 Clause 15.10.
 
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
 use bacnet_encoding::constructed::encode_bacnet_property_value;
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;

@@ -9,6 +9,9 @@
 //! and write-successful `[8]` BOOLEANs. An Action array read whole
 //! concatenates its lists with no further frame.
 
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
 use bacnet_types::constructed::{BACnetActionCommand, BACnetActionList};
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;

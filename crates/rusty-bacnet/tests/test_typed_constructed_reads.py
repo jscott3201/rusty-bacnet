@@ -9,8 +9,9 @@ form their add_* keywords take, and the Device's Audit_Notification_Recipient
 in the form configure_audit_recipient takes. A Schedule's Weekly_Schedule,
 Exception_Schedule and Effective_Period, a Calendar's Date_List and
 Event_Time_Stamps read as typed values too, and an Accumulator's Scale and
-Prescale as the values add_accumulator takes (#1487). Each typed read writes
-back as the octets it was read from.
+Prescale as the values add_accumulator takes (#1487), and an Access Point's
+Authentication_Policy_List as the policies add_access_point takes (#1325).
+Each typed read writes back as the octets it was read from.
 """
 
 from __future__ import annotations
@@ -52,6 +53,13 @@ BADGE = ObjectIdentifier(ObjectType.ACCESS_CREDENTIAL, 1)
 REMOTE_BADGE = ObjectIdentifier(ObjectType.ACCESS_CREDENTIAL, 4)
 TEAM_MEMBER = ObjectIdentifier(ObjectType.ACCESS_USER, 2)
 REMOTE_TEAM = ObjectIdentifier(ObjectType.ACCESS_USER, 5)
+POINT_1 = ObjectIdentifier(ObjectType.ACCESS_POINT, 1)
+CARD_READER = ObjectIdentifier(ObjectType.CREDENTIAL_DATA_INPUT, 1)
+REMOTE_KEYPAD = ObjectIdentifier(ObjectType.CREDENTIAL_DATA_INPUT, 2)
+# A card alone, then a card and a remote keypad's PIN, in order, in 30 s.
+POLICIES: Any = [([(CARD_READER, 1)], False, 0),
+                 ([(CARD_READER, 1), ((REMOTE_DEVICE, REMOTE_KEYPAD), 2)], True, 30)]
+POLICY_NAMES: Any = ["card", "card and PIN"]
 
 # Rules with every key, as a read gives them back.
 BUSINESS_HOURS: Any = {
@@ -114,6 +122,8 @@ def make_server(instance: int = DEVICE) -> BACnetServer:
                            exit_points=EXIT_POINTS)
     server.add_access_user(1, "Jane Doe", credentials=CREDENTIALS, members=MEMBERS,
                            member_of=MEMBER_OF)
+    server.add_access_point(1, "Lobby",
+                            authentication_policies=list(zip(POLICY_NAMES, POLICIES)))
     server.configure_audit_recipient(AUDIT_RECIPIENT)
     server.add_audit_reporter(1, "Reporter")
     server.configure_audit_reporters([{"instance": 1, "audit_level": "none",
@@ -235,6 +245,10 @@ class TypedConstructedReadTests(unittest.IsolatedAsyncioTestCase):
                 await self.assert_list(oid, prop, expected, "device_object_reference",
                                        indexed=False)
 
+    async def test_authentication_policies_read_as_configured(self) -> None:
+        await self.assert_list(POINT_1, P.AUTHENTICATION_POLICY_LIST, POLICIES,
+                               "authentication_policy")
+
     async def test_the_audit_recipient_reads_as_configured(self) -> None:
         await self.assert_single(DEVICE_ID, P.AUDIT_NOTIFICATION_RECIPIENT, AUDIT_RECIPIENT,
                                  "recipient")
@@ -298,6 +312,9 @@ class TypedConstructedReadTests(unittest.IsolatedAsyncioTestCase):
         copy.add_access_user(1, "Jane Doe", credentials=await value(USER_1, P.CREDENTIALS),
                              members=await value(USER_1, P.MEMBERS),
                              member_of=await value(USER_1, P.MEMBER_OF))
+        copy.add_access_point(1, "Lobby", authentication_policies=list(zip(
+            await value(POINT_1, P.AUTHENTICATION_POLICY_NAMES),
+            await value(POINT_1, P.AUTHENTICATION_POLICY_LIST))))
         copy.configure_audit_recipient(await value(DEVICE_ID, P.AUDIT_NOTIFICATION_RECIPIENT))
         copy.add_audit_reporter(1, "Reporter")
         copy.configure_audit_reporters([{"instance": 1, "audit_level": "none",
@@ -319,6 +336,8 @@ class TypedConstructedReadTests(unittest.IsolatedAsyncioTestCase):
                 (USER_1, P.CREDENTIALS),
                 (USER_1, P.MEMBERS),
                 (USER_1, P.MEMBER_OF),
+                (POINT_1, P.AUTHENTICATION_POLICY_LIST),
+                (POINT_1, P.AUTHENTICATION_POLICY_NAMES),
                 (DEVICE_ID, P.AUDIT_NOTIFICATION_RECIPIENT),
                 (ACC_1, P.SCALE),
                 (ACC_1, P.PRESCALE),

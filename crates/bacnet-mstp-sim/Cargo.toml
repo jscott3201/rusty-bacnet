@@ -1,0 +1,17 @@
+[package]
+name = "bacnet-mstp-sim"
+description = "Deterministic virtual-time MS/TP bus simulator that drives bacnet-mstp-core in tests"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+# A host test harness: it uses std freely and is never published.
+publish = false
+
+[dependencies]
+bacnet-mstp-codec.workspace = true
+# AllocQueues lets each simulated node size its queues at run time.
+bacnet-mstp-core = { workspace = true, features = ["alloc"] }
+
+[lints]
+workspace = true

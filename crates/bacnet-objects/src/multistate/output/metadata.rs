@@ -124,8 +124,12 @@ const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
-pub(super) fn for_object(_object: &MultiStateOutputObject) -> Cow<'_, [PropertyMetadata]> {
-    Cow::Borrowed(BASE)
+pub(super) fn for_object(object: &MultiStateOutputObject) -> Cow<'_, [PropertyMetadata]> {
+    let mut rows = Cow::Borrowed(BASE);
+    for row in object.profile.metadata() {
+        rows.to_mut().push(row);
+    }
+    rows
 }
 
 #[cfg(test)]

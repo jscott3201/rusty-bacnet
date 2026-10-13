@@ -35,7 +35,11 @@ fn point() -> AccessPointObject {
 /// Record GRANTED to Access Credential 3 in transaction `tag` at 09:30.
 fn granted_at(point: &mut AccessPointObject, tag: u64) {
     point
-        .set_access_event(AccessEvent::GRANTED, tag, stamp(9), Some(credential()))
+        .set_access_event(AccessEventReport {
+            time: Some(stamp(9)),
+            credential: Some(credential()),
+            ..AccessEventReport::new(AccessEvent::GRANTED, tag)
+        })
         .unwrap();
 }
 
@@ -143,13 +147,14 @@ fn access_point_writes_that_keep_out_of_service_record_nothing() {
 }
 
 #[test]
-fn access_point_out_of_service_event_without_a_clock_stamps_the_tag_as_a_sequence_number() {
+fn access_point_out_of_service_event_without_a_clock_counts_sequence_numbers() {
     let mut point = point();
     point.bind_clock_internal(None);
+    // The time served is a date and time, so the count starts at 1.
     write_out_of_service(&mut point, PropertyValue::Boolean(true)).unwrap();
     assert_eq!(
         served(&point),
-        event(AccessEvent::OUT_OF_SERVICE, 8, sequence(8), true)
+        event(AccessEvent::OUT_OF_SERVICE, 8, sequence(1), true)
     );
     write_out_of_service(&mut point, PropertyValue::Boolean(false)).unwrap();
     assert_eq!(
@@ -157,40 +162,141 @@ fn access_point_out_of_service_event_without_a_clock_stamps_the_tag_as_a_sequenc
         event(
             AccessEvent::OUT_OF_SERVICE_RELINQUISHED,
             9,
-            sequence(9),
+            sequence(2),
             false
         )
     );
 }
 
 #[test]
-fn access_point_sequence_number_folds_a_tag_past_its_range() {
+fn access_point_sequence_number_wraps_back_to_one() {
     let mut point = point();
     point.bind_clock_internal(None);
-    // A tag up to 65535 is its own sequence number; 65536 folds back to 1.
-    granted_at(&mut point, 65_534);
+    // The count follows the sequence number served, whatever the tag, and
+    // wraps from 65535 to 1, never the 0 of no update yet.
+    point
+        .set_access_event(AccessEventReport {
+            time: Some(BACnetTimeStamp::SequenceNumber(65_534)),
+            ..AccessEventReport::new(AccessEvent::GRANTED, 3)
+        })
+        .unwrap();
     write_out_of_service(&mut point, PropertyValue::Boolean(true)).unwrap();
     assert_eq!(
         served(&point),
-        event(AccessEvent::OUT_OF_SERVICE, 65_535, sequence(65_535), true)
+        event(AccessEvent::OUT_OF_SERVICE, 4, sequence(65_535), true)
     );
     write_out_of_service(&mut point, PropertyValue::Boolean(false)).unwrap();
     assert_eq!(
         served(&point),
         event(
             AccessEvent::OUT_OF_SERVICE_RELINQUISHED,
-            65_536,
+            5,
             sequence(1),
             false
         )
     );
-    // The tag's own wrap to 0 gives 1 too, never the 0 of no update yet.
-    granted_at(&mut point, u64::MAX);
-    write_out_of_service(&mut point, PropertyValue::Boolean(true)).unwrap();
+}
+
+#[test]
+fn access_point_events_of_one_transaction_each_move_the_time() {
+    // Two events with one tag (Clause 12.31.27.1), stamped by the point,
+    // never share a time: the second would send no COV report.
+    let read_then_grant = |point: &mut AccessPointObject| {
+        let mut times = Vec::new();
+        for event in [
+            AccessEvent::AUTHENTICATION_FACTOR_READ,
+            AccessEvent::GRANTED,
+        ] {
+            point
+                .set_access_event(AccessEventReport::new(event, 20))
+                .unwrap();
+            times.push(point.read_property(P::ACCESS_EVENT_TIME, None).unwrap());
+        }
+        times
+    };
+    let mut clockless = point();
+    clockless.bind_clock_internal(None);
+    assert_eq!(read_then_grant(&mut clockless), [sequence(1), sequence(2)]);
+
+    // With a clock, the second event in the same hundredth is stamped one
+    // hundredth later.
+    let mut clocked = point();
+    let later = |hundredths: u8| {
+        PropertyValue::ApplicationData(vec![
+            0x2E, 0xA4, 126, 10, 2, 5, 0xB4, 11, 30, 0, hundredths, 0x2F,
+        ])
+    };
+    assert_eq!(read_then_grant(&mut clocked), [stamped(11), later(1)]);
+    // A clock set back is no reason to go back either.
+    clocked.bind_clock_internal(Some(Arc::new(FixedClock(10))));
+    clocked
+        .set_access_event(AccessEventReport::new(AccessEvent::GRANTED, 21))
+        .unwrap();
     assert_eq!(
-        served(&point),
-        event(AccessEvent::OUT_OF_SERVICE, 0, sequence(1), true)
+        clocked.read_property(P::ACCESS_EVENT_TIME, None).unwrap(),
+        later(2)
     );
+}
+
+#[test]
+fn access_point_stamp_after_the_last_hundredth_of_a_day_carries_into_the_next() {
+    use bacnet_types::primitives::{Date, Time};
+    // The clock reads 11:30 on 2026-10-02, before each time served below.
+    let mut point = point();
+    let at = |year: u8, month: u8, day: u8, day_of_week: u8, hour: u8| BACnetTimeStamp::DateTime {
+        date: Date {
+            year,
+            month,
+            day,
+            day_of_week,
+        },
+        time: Time {
+            hour,
+            minute: 59,
+            second: 59,
+            hundredths: 99,
+        },
+    };
+    let midnight = |year: u8, month: u8, day: u8, day_of_week: u8| {
+        PropertyValue::ApplicationData(vec![
+            0x2E,
+            0xA4,
+            year,
+            month,
+            day,
+            day_of_week,
+            0xB4,
+            0,
+            0,
+            0,
+            0,
+            0x2F,
+        ])
+    };
+    for (served, expected) in [
+        // Within the day, one hundredth carries through every field.
+        (at(126, 10, 2, 5, 22), {
+            PropertyValue::ApplicationData(vec![0x2E, 0xA4, 126, 10, 2, 5, 0xB4, 23, 0, 0, 0, 0x2F])
+        }),
+        // The end of a day, a month and a year (2026-12-31 is a Thursday).
+        (at(126, 10, 2, 5, 23), midnight(126, 10, 3, 6)),
+        (at(126, 10, 31, 6, 23), midnight(126, 11, 1, 7)),
+        (at(126, 12, 31, 4, 23), midnight(127, 1, 1, 5)),
+    ] {
+        point
+            .set_access_event(AccessEventReport {
+                time: Some(served),
+                ..AccessEventReport::new(AccessEvent::GRANTED, 1)
+            })
+            .unwrap();
+        point
+            .set_access_event(AccessEventReport::new(AccessEvent::GRANTED, 1))
+            .unwrap();
+        assert_eq!(
+            point.read_property(P::ACCESS_EVENT_TIME, None).unwrap(),
+            expected
+        );
+    }
 }
 
 #[test]

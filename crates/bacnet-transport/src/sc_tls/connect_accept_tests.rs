@@ -80,7 +80,7 @@ async fn check_invalid_accept(recover: bool, field: std::ops::Range<usize>) {
         assert_eq!(conn.hub_vmac, Some([0x22; 6]));
         assert_eq!(conn.hub_device_uuid, Some([0xff; 16]));
         assert_eq!(
-            (conn.hub_max_bvlc_length, conn.hub_max_apdu_length),
+            (conn.hub_max_bvlc_length, conn.hub_max_npdu_length),
             (8192, 4096)
         );
     } else {
@@ -89,7 +89,7 @@ async fn check_invalid_accept(recover: bool, field: std::ops::Range<usize>) {
         assert_eq!(conn.hub_vmac, None);
         assert_eq!(conn.hub_device_uuid, None);
         assert_eq!(
-            (conn.hub_max_bvlc_length, conn.hub_max_apdu_length),
+            (conn.hub_max_bvlc_length, conn.hub_max_npdu_length),
             (1476, 1476)
         );
     }

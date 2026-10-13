@@ -1,5 +1,8 @@
 //! ReadPropertyMultiple service per ASHRAE 135-2020 Clause 15.7.
 
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
 use bacnet_encoding::constructed::tagged::{
     decode_app_enumerated, decode_ctx_object_id, decode_ctx_unsigned, decode_optional_ctx,
     expect_closing, expect_opening,

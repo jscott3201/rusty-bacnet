@@ -39,7 +39,7 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use bacnet_encoding::constructed::is_lighting_command_channel_value;
+use bacnet_encoding::constructed::constructed_channel_value;
 use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
 use bacnet_types::enums::{
     ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier, Reliability, WriteStatus,
@@ -308,12 +308,17 @@ impl ChannelObject {
 }
 
 /// Refuse a Present_Value that isn't a BACnetChannelValue: a primitive, or
-/// one context-\[0\] lighting command.
+/// one of the constructed alternatives, a lighting command in context tag
+/// `[0]` or Addendum 135-2020ca's xy colour in `[1]` and colour command in
+/// `[2]` (#1474). Octets that open one of those tags but don't hold one are
+/// INVALID_DATA_ENCODING.
 fn check_channel_value(value: &PropertyValue) -> Result<(), Error> {
     match value {
         value if value.is_primitive() => Ok(()),
-        PropertyValue::ApplicationData(octets) if octets.first() == Some(&0x0E) => {
-            if is_lighting_command_channel_value(octets) {
+        PropertyValue::ApplicationData(octets)
+            if matches!(octets.first(), Some(0x0E | 0x1E | 0x2E)) =>
+        {
+            if constructed_channel_value(octets).is_some() {
                 Ok(())
             } else {
                 Err(common::invalid_data_encoding_error())

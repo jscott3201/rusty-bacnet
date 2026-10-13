@@ -41,13 +41,13 @@ python examples/python/mstp_mini_device.py \
 
 Replace the serial path, MAC, baud, and device instance before connecting. The example's default baud is `38400`; it is not a universal setting for every trunk. The Python path accepts configured rates of 9600, 19200, 38400, 57600, 76800, and 115200; acceptance of a numeric setting does not establish a tested hardware matrix.
 
-The example passes `serial_port`, `mstp_baud`, `mstp_mac`, `mstp_max_master`, and `mstp_max_info_frames` to `BACnetServer`. The <a href={`${repository}/blob/v${release}/docs/python-api.md`}>Python API</a> documents the same options for `BACnetClient` and the `MstpEndpoint` alternative.
+The example passes `serial_port`, `mstp_baud`, `mstp_mac`, `mstp_max_master`, and `mstp_max_info_frames` to `BACnetServer`. The <a href={`${repository}/blob/v${release}/docs/python-api.md`}>Python API</a> documents the same options for `BACnetClient` and the `MstpEndpoint` alternative, and the rest they all take: `mstp_extended_frames` (off by default) for NPDUs of up to 1497 octets, `mstp_echo` and `mstp_echo_grace_ms` for an adapter that hears its own frames, and `mstp_transmit_latency_pad_ms`, `mstp_usage_timeout_ms` and `mstp_reply_timeout_ms` for USB adapter latency (by default a 4 ms pad on Windows and none elsewhere, and 35 ms and 300 ms waits).
 
 ## Observe before increasing load
 
 Confirm stable discovery and a small property read with a peer. Then qualify under representative host and bus load. Record the operating system/kernel, adapter, driver, baud rate, station count, direction-control mode, and load conditions.
 
-On-wire timing measurements are more informative than an average Rust function duration. USB buffering and host scheduling can change when bytes reach the wire or application. Do not infer full Clause 9 behavior, extended-frame coverage, segmented MS/TP behavior, or a combined client/server endpoint from one successful mini-device demonstration.
+On-wire timing measurements are more informative than an average Rust function duration. USB buffering and host scheduling can change when bytes reach the wire or application. Do not infer full Clause 9 behavior, extended-frame coverage (off unless `mstp_extended_frames=True`), segmented MS/TP behavior, or a combined client/server endpoint from one successful mini-device demonstration.
 
 ## Is a real-time kernel required?
 

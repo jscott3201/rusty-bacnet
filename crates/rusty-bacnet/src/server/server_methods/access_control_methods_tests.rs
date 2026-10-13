@@ -413,6 +413,60 @@ fn python_point_settings_reach_the_access_point_rows() {
 }
 
 #[test]
+fn python_authentication_policies_reach_both_arrays_before_the_count() {
+    use bacnet_types::constructed::{BACnetAuthenticationPolicy, BACnetAuthenticationPolicyEntry};
+    let card = BACnetAuthenticationPolicy {
+        policy: vec![BACnetAuthenticationPolicyEntry {
+            credential_data_input: oid(ObjectType::CREDENTIAL_DATA_INPUT, 1).into(),
+            index: 1,
+        }],
+        order_enforced: false,
+        timeout: 0,
+    };
+    let point = |policies: Vec<(String, BACnetAuthenticationPolicy)>, count| {
+        access_point(
+            1,
+            "AP-1",
+            PointSettings {
+                authentication_policies: Some(policies),
+                number_of_authentication_policies: count,
+                ..PointSettings::default()
+            },
+        )
+    };
+    // The pairs set both arrays and the count.
+    let set = point(vec![("card".into(), card.clone())], None).unwrap();
+    for property in [
+        PropertyIdentifier::AUTHENTICATION_POLICY_LIST,
+        PropertyIdentifier::AUTHENTICATION_POLICY_NAMES,
+    ] {
+        assert_eq!(size(&set, property), PropertyValue::Unsigned(1));
+    }
+    assert_eq!(
+        set.read_property(PropertyIdentifier::AUTHENTICATION_POLICY_NAMES, Some(1))
+            .unwrap(),
+        PropertyValue::CharacterString("card".into())
+    );
+    // A count given as well applies after them, so it resizes both.
+    let grown = point(vec![("card".into(), card)], Some(3)).unwrap();
+    for property in [
+        PropertyIdentifier::AUTHENTICATION_POLICY_LIST,
+        PropertyIdentifier::AUTHENTICATION_POLICY_NAMES,
+        PropertyIdentifier::NUMBER_OF_AUTHENTICATION_POLICIES,
+    ] {
+        let value = if property == PropertyIdentifier::NUMBER_OF_AUTHENTICATION_POLICIES {
+            grown.read_property(property, None).unwrap()
+        } else {
+            size(&grown, property)
+        };
+        assert_eq!(value, PropertyValue::Unsigned(3), "{property:?}");
+    }
+    // No pairs at all is refused.
+    let refused = point(Vec::new(), None).err().unwrap();
+    assert!(is_value_out_of_range(&refused), "{refused:?}");
+}
+
+#[test]
 fn python_door_alarm_lists_reach_the_door() {
     let settings = DoorSettings {
         alarm_values: Some(vec![2, 3]),

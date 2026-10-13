@@ -5,6 +5,10 @@ target/
 *.rlib
 *.rmeta
 bench-output/
+# cargo-fuzz's working directories (docs/ci.md, "Fuzzing")
+/crates/*/fuzz/corpus/
+/crates/*/fuzz/artifacts/
+/crates/*/fuzz/coverage/
 
 # Local SC credentials and certificate build products (never commit private keys)
 examples/docker/sc-certs/

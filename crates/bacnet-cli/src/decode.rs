@@ -5,9 +5,7 @@
 
 use bacnet_encoding::apdu::{self, Apdu};
 use bacnet_encoding::npdu;
-use bacnet_transport::bvll::{self, BvllMessage};
-
-use bacnet_types::enums::BvlcFunction;
+use bacnet_transport::bvll::{self, BvlcFunction};
 use bytes::Bytes;
 use serde::Serialize;
 
@@ -61,13 +59,16 @@ pub struct PacketSummary {
 pub fn decode_packet(data: &[u8]) -> Result<DecodedPacket, String> {
     let bvll = bvll::decode_bvll(data).map_err(|e| format!("BVLC decode error: {e}"))?;
 
-    let forwarded_from = match (bvll.originating_ip, bvll.originating_port) {
-        (Some(ip), Some(port)) => Some((ip, port)),
-        _ => None,
-    };
+    let forwarded_from = bvll
+        .origin()
+        .map(|origin| (origin.ip().octets(), origin.port()));
 
+    // A management frame is shown whatever its payload holds; an NPDU
+    // carrier has to fit its layout for the NPDU to be found.
     let npdu = if is_npdu_carrier(bvll.function) {
-        Some(decode_npdu_layer(&bvll)?)
+        bvll.message()
+            .map_err(|e| format!("BVLC decode error: {e}"))?;
+        Some(decode_npdu_layer(bvll.npdu().unwrap_or_default())?)
     } else {
         None
     };
@@ -165,10 +166,9 @@ fn is_npdu_carrier(f: BvlcFunction) -> bool {
         || f == BvlcFunction::DISTRIBUTE_BROADCAST_TO_NETWORK
 }
 
-/// Decode the NPDU layer from a BVLL message.
-fn decode_npdu_layer(bvll: &BvllMessage) -> Result<DecodedNpdu, String> {
-    let npdu_result =
-        npdu::decode_npdu(bvll.payload.clone()).map_err(|e| format!("NPDU decode error: {e}"))?;
+/// Decode the NPDU layer a BVLL message carries.
+fn decode_npdu_layer(npdu: Bytes) -> Result<DecodedNpdu, String> {
+    let npdu_result = npdu::decode_npdu(npdu).map_err(|e| format!("NPDU decode error: {e}"))?;
 
     let source_network = npdu_result.source.as_ref().map(|a| a.network);
     let dest_network = npdu_result.destination.as_ref().map(|a| a.network);
@@ -266,10 +266,8 @@ mod tests {
     use super::*;
     use bacnet_encoding::apdu::{self, Apdu, ConfirmedRequest, UnconfirmedRequest};
     use bacnet_encoding::npdu::{self, Npdu};
-    use bacnet_transport::bvll;
-    use bacnet_types::enums::{
-        BvlcFunction, ConfirmedServiceChoice, NetworkPriority, UnconfirmedServiceChoice,
-    };
+    use bacnet_transport::bvll::{self, BvlcResultCode, Bvll};
+    use bacnet_types::enums::{ConfirmedServiceChoice, NetworkPriority, UnconfirmedServiceChoice};
     use bytes::{Bytes, BytesMut};
 
     /// Build a complete BVLC-wrapped packet from an NPDU + APDU.
@@ -288,8 +286,15 @@ mod tests {
         npdu::encode_npdu(&mut npdu_buf, &npdu_with_payload).unwrap();
 
         // Wrap in BVLC
+        let message = match function {
+            BvlcFunction::ORIGINAL_BROADCAST_NPDU => Bvll::OriginalBroadcastNpdu(&npdu_buf),
+            BvlcFunction::DISTRIBUTE_BROADCAST_TO_NETWORK => {
+                Bvll::DistributeBroadcastToNetwork(&npdu_buf)
+            }
+            _ => Bvll::OriginalUnicastNpdu(&npdu_buf),
+        };
         let mut bvlc_buf = BytesMut::new();
-        bvll::encode_bvll(&mut bvlc_buf, function, &npdu_buf).expect("valid BVLL encoding");
+        bvll::encode_bvll(&mut bvlc_buf, &message).expect("valid BVLL encoding");
         bvlc_buf.to_vec()
     }
 
@@ -454,8 +459,11 @@ mod tests {
         // BVLC-Result is a management frame with no NPDU.
         // Payload: 2-byte result code (0x0000 = success).
         let mut buf = BytesMut::new();
-        bvll::encode_bvll(&mut buf, BvlcFunction::BVLC_RESULT, &[0x00, 0x00])
-            .expect("valid BVLL encoding");
+        bvll::encode_bvll(
+            &mut buf,
+            &Bvll::BvlcResult(BvlcResultCode::SUCCESSFUL_COMPLETION),
+        )
+        .expect("valid BVLL encoding");
         let data = buf.to_vec();
 
         let packet = decode_packet(&data).unwrap();
@@ -474,6 +482,27 @@ mod tests {
         // Valid header but length exceeds data.
         let result = decode_packet(&[0x81, 0x0A, 0x00, 0xFF]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn decode_forwarded_npdu_reports_its_origin() {
+        // Forwarded-NPDU from 192.168.1.10:47808 carrying a local Who-Is.
+        let data = [
+            0x81, 0x04, 0x00, 0x0E, 192, 168, 1, 10, 0xBA, 0xC0, 0x01, 0x00, 0x10, 0x08,
+        ];
+        let packet = decode_packet(&data).unwrap();
+        assert_eq!(packet.bvlc_function, BvlcFunction::FORWARDED_NPDU);
+        assert_eq!(packet.forwarded_from, Some(([192, 168, 1, 10], 0xBAC0)));
+        assert!(packet.npdu.unwrap().apdu.is_some());
+
+        // Too short for its originating address: no NPDU to find.
+        let error = decode_packet(&[0x81, 0x04, 0x00, 0x07, 192, 168, 1]).unwrap_err();
+        assert!(error.contains("BVLC decode error"), "{error}");
+
+        // A management frame is shown even when its payload is malformed.
+        let packet = decode_packet(&[0x81, 0x05, 0x00, 0x07, 0x00, 0x3C, 0x00]).unwrap();
+        assert_eq!(packet.bvlc_function, BvlcFunction::REGISTER_FOREIGN_DEVICE);
+        assert!(packet.npdu.is_none());
     }
 
     #[test]

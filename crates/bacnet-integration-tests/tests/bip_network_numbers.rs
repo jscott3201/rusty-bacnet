@@ -18,6 +18,7 @@ async fn foreign(gates: Option<std::sync::Arc<Gates>>) -> (Server, SocketAddrV4,
     transport.register_as_foreign_device(ForeignDeviceConfig {
         bbmd_ip: Ipv4Addr::LOCALHOST,
         bbmd_port: address(&bbmd).port(),
+        renewal_interval: None,
         ttl: 60,
     });
     let (server, local) = start(transport, gates).await;
@@ -96,19 +97,25 @@ async fn bip_number_foreign_full_server_wire_and_alternate_sender() {
     expect_number(&bbmd, local, 9, 77).await;
     send(&alternate, local, &frame(0x0a, QUERY)).await;
     expect_number(&bbmd, local, 9, 77).await;
+    // A foreign device takes a Forwarded-NPDU only from its BBMD by unicast
+    // (#1622): the alternate sender's announcement teaches nothing, and its
+    // query draws no reply, so the BBMD's query is answered with 77.
+    forward(&alternate, local, &number(78, 1)).await;
+    forward(&alternate, local, QUERY).await;
+    forward(&bbmd, local, QUERY).await;
+    expect_number(&bbmd, local, 9, 77).await;
     for (value, flag, expected) in [(78, 0, 78), (79, 1, 79), (80, 0, 79), (81, 1, 81)] {
-        // Existing compatibility: valid forwarded traffic is not restricted to
-        // the configured BBMD UDP sender. Its logical group bit is not trust.
-        forward(&alternate, local, &number(value, flag)).await;
-        forward(&alternate, local, QUERY).await;
+        // The BBMD's forwards teach. Their logical group bit is not trust.
+        forward(&bbmd, local, &number(value, flag)).await;
+        forward(&bbmd, local, QUERY).await;
         expect_number(&bbmd, local, 9, expected).await;
     }
     // Too-short forwarded BVLC and a length larger than the datagram are invalid.
-    send(&alternate, local, &[0x81, 4, 0, 9, 127, 0, 0, 1, 0]).await;
-    send(&alternate, local, &[0x81, 4, 0, 30, 127, 0, 0, 1, 0, 1]).await;
-    forward(&alternate, local, QUERY).await;
+    send(&bbmd, local, &[0x81, 4, 0, 9, 127, 0, 0, 1, 0]).await;
+    send(&bbmd, local, &[0x81, 4, 0, 30, 127, 0, 0, 1, 0, 1]).await;
+    forward(&bbmd, local, QUERY).await;
     expect_number(&bbmd, local, 9, 81).await;
-    invalid_controls(&alternate, &bbmd, local, 9, 4).await;
+    invalid_controls(&bbmd, &bbmd, local, 9, 4).await;
     stopped(server, local).await;
 }
 
@@ -185,17 +192,20 @@ async fn bip_number_foreign_registration_loss_and_retry_wire() {
     expect_number(&bbmd, local, 9, 77).await;
     send(&bbmd, local, &frame(0, &[0, 0x30])).await; // registration now refused
     send(&bbmd, local, &frame(0, &[0, 0x60])).await; // distribution refused after loss
-    forward(&bbmd, local, QUERY).await;
-    // DBTN is still attempted after both registration and distribution NAKs.
-    expect_number(&bbmd, local, 9, 77).await;
-    // The completed exchanges gave the spawned registration timer a turn.
-    // Advance only the local test runtime; resume before awaiting real UDP.
+
+    // The distribution NAK brings the next registration forward (#1622). Let
+    // it fall due and read it here, so it can't arrive among the replies
+    // below, however slow the runner. Advance only the local test runtime;
+    // resume before awaiting real UDP.
     tokio::time::pause();
     tokio::time::advance(std::time::Duration::from_secs(31)).await;
     tokio::time::resume();
     let (retry, source) = receive(&bbmd).await;
     assert_eq!(source, local);
     assert_eq!(retry, frame(5, &60u16.to_be_bytes()));
+    forward(&bbmd, local, QUERY).await;
+    // DBTN is still attempted after both NAKs, with the retry unanswered.
+    expect_number(&bbmd, local, 9, 77).await;
     send(&bbmd, local, &frame(0, &[0, 0])).await;
     forward(&bbmd, local, &number(78, 1)).await;
     forward(&bbmd, local, QUERY).await;

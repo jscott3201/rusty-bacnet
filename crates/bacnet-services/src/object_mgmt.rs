@@ -3,6 +3,9 @@
 //! - CreateObject (Clause 15.3)
 //! - DeleteObject (Clause 15.4)
 
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
 use bacnet_encoding::constructed::tagged::{
     decode_app_object_id, decode_ctx_object_id, decode_ctx_unsigned, expect_closing, expect_end,
     expect_opening, misplaced_tag, next_is_context, next_is_opening,

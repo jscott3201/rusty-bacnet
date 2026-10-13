@@ -81,15 +81,15 @@ pub(super) async fn handle_discover<T: TransportPort + 'static>(
     }
 
     let result = if let Some(target_str) = &target {
-        match resolve::parse_target(target_str) {
-            Ok(resolve::Target::Mac(mac)) => {
+        match resolve::address_mac(
+            client.transport(),
+            target_str,
+            resolve::TARGET_NOT_AN_ADDRESS,
+        )
+        .await
+        {
+            Ok(mac) => {
                 commands::discover::discover_directed(client, &mac, range, wait_secs, format).await
-            }
-            Ok(_) => {
-                output::print_error(
-                    "--target requires an IP address, not a device instance or routed address",
-                );
-                return;
             }
             Err(e) => {
                 output::print_error(&e);

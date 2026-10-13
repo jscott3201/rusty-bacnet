@@ -2,8 +2,11 @@
 //!
 //! MAC addresses are opaque byte slices whose format depends on the transport:
 //! - BACnet/IP (Annex J): 6 bytes (4-byte IPv4 + 2-byte port, big-endian)
+//! - BACnet/IPv6 (Annex U): 3 bytes, the node's VMAC (U.1.3); the transport
+//!   maps it to the IPv6 address and port itself
 //! - BACnet/Ethernet (Clause 7): 6 bytes (IEEE 802 MAC)
 //! - MS/TP (Clause 9): 1 byte (station address 0-254)
+//! - BACnet/SC (Annex AB): 6 bytes, the node's VMAC
 
 pub use crate::direct_response::{DirectResponse, DirectResponseScope};
 use bacnet_types::error::Error;
@@ -320,6 +323,48 @@ impl std::fmt::Debug for ReceivedNpdu {
     }
 }
 
+/// What a B/IP transport reports for registration as a Network Port
+/// ([`TransportPort::bip_port`]).
+#[derive(Debug, Clone)]
+pub struct BipPort {
+    /// The IPv4 address and UDP port: configured before start, announced
+    /// after.
+    pub endpoint: std::net::SocketAddrV4,
+    /// The B/IP mode, with what its Network Port properties need.
+    pub mode: bacnet_types::bip_port::BipPortMode,
+}
+
+/// The longest NPDU a link carries, in octets, to one node and to every
+/// node on it ([`TransportPort::max_npdu`]; Table 6-1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NpduLimits {
+    /// To one node.
+    pub unicast: u16,
+    /// To every node on the link.
+    pub broadcast: u16,
+}
+
+impl NpduLimits {
+    /// 1,497 octets each way: what B/IP, B/IPv6, Ethernet and MS/TP with
+    /// extended frames carry (Table 6-1).
+    pub const STANDARD: Self = Self::both(1497);
+
+    /// The same limit both ways.
+    pub const fn both(octets: u16) -> Self {
+        Self {
+            unicast: octets,
+            broadcast: octets,
+        }
+    }
+}
+
+/// [`NpduLimits::STANDARD`].
+impl Default for NpduLimits {
+    fn default() -> Self {
+        Self::STANDARD
+    }
+}
+
 /// Trait for BACnet data-link transports.
 ///
 /// Implementations handle the data-link framing (e.g., BVLL for BACnet/IP)
@@ -346,19 +391,24 @@ pub trait TransportPort: Send + Sync {
         false
     }
 
-    /// Explicit capability for registration as one NORMAL IPv4 Network Port.
+    /// Explicit capability for registration as one IPv4 Network Port, with
+    /// the B/IP mode the port reports (Clause 12.56.21).
     ///
-    /// Before start this is the configured announced interface/UDP port; after
-    /// start it is the actual announced address. BBMD and foreign-device modes
-    /// must return None, including staged configuration. Custom implementations
-    /// asserting this capability must preserve NORMAL mode through ownership.
-    /// The default refuses registration; broadcast support alone is insufficient.
-    fn normal_bip_endpoint(&self) -> Option<std::net::SocketAddrV4> {
+    /// Before start the endpoint is the configured interface and UDP port;
+    /// after start it is the address the transport announces. In BBMD mode
+    /// the tables appear once start creates them, and stay the transport's
+    /// own live state. A transport with no single mode to report, such as a
+    /// BBMD that also registers as a foreign device, returns None. Custom
+    /// implementations asserting this capability must keep the mode they
+    /// report through ownership. The default refuses registration; broadcast
+    /// support alone is insufficient.
+    fn bip_port(&self) -> Option<BipPort> {
         None
     }
 
     /// Retain selected Network Port protection through the last socket owner.
-    /// Must be installed once before start, only on a NORMAL B/IP transport.
+    /// Must be installed once before start, only on a transport that reports
+    /// a [`bip_port`](Self::bip_port).
     /// Successful stop releases it after quiescence; abort/drop must retain it
     /// in every surviving socket worker. Custom implementors own this contract.
     #[doc(hidden)]
@@ -370,6 +420,16 @@ pub trait TransportPort: Send + Sync {
             "transport cannot retain a registered B/IP port".into(),
         ))
     }
+
+    /// Prepare the transport to be a port of a router, before it starts.
+    ///
+    /// `bacnet_network`'s `BACnetRouter` calls it on every port it routes,
+    /// right before starting it. A data link whose standard asks more of a
+    /// routing node than of other nodes turns that on here: MS/TP turns on
+    /// extended frames, which Clause 9.3 requires of routing nodes
+    /// ([`MstpConfig::extended_frames`](crate::mstp::MstpConfig::extended_frames)).
+    /// The default does nothing. Wrappers must delegate.
+    fn prepare_for_routing(&mut self) {}
 
     /// Start the transport. Returns a receiver for incoming NPDUs.
     ///
@@ -390,6 +450,13 @@ pub trait TransportPort: Send + Sync {
     fn abort(&mut self) {}
 
     /// Send NPDU bytes to a specific MAC address (unicast).
+    ///
+    /// B/IP refuses a MAC that is one of its group addresses
+    /// ([`Self::is_group_destination`]) with an error, sending nothing
+    /// (#1677): its receivers drop an Original-Unicast-NPDU that wasn't sent
+    /// to their own address. Send a local broadcast with
+    /// [`Self::send_broadcast`] instead, as `NetworkLayer::send_apdu` and
+    /// `BACnetRouter` do for an Unconfirmed-Request.
     fn send_unicast(
         &self,
         npdu: &[u8],
@@ -442,6 +509,34 @@ pub trait TransportPort: Send + Sync {
         1476
     }
 
+    /// The longest NPDU this link sends, to one node and to every node.
+    ///
+    /// `bacnet_network`'s `BACnetRouter` reads it once, when it starts the
+    /// port, and answers an NPDU it would route here that is longer than
+    /// that with a reject (reason 4, Clause 6.4.4, #1665), where it used to
+    /// hand it to a send that failed. The default,
+    /// [`NpduLimits::STANDARD`], is what B/IPv6 and Ethernet carry; a link
+    /// that carries less must override it, or a router assumes 1,497
+    /// octets. MS/TP reports 501 octets without extended frames, and B/IP
+    /// its node's budget for each kind of send.
+    ///
+    /// BACnet/SC reports, once started, what its hub connection carries
+    /// with no data options: the hub's Max-NPDU-Length within its
+    /// Max-BVLC-Length less the encapsulation. Data attributes a router
+    /// forwards with an NPDU (Table 6-1, note 1) take more of the BVLC, so
+    /// one at this limit with attributes can still fail the transport's
+    /// Max-BVLC-Length check. A router keeps the limit it read at start
+    /// through a failover or reconnect (#1696 tracks a refresh): if the new
+    /// hub takes less, the transport refuses the longer sends with its
+    /// throttled warning, not counted and with no reject; if it takes more,
+    /// the router still answers reason 4 above the old limit until it
+    /// restarts. A direct connection's own limit isn't part of it.
+    ///
+    /// Wrappers must delegate.
+    fn max_npdu(&self) -> NpduLimits {
+        NpduLimits::default()
+    }
+
     /// Whether `mac` is this data link's broadcast address.
     ///
     /// A destination can spell a broadcast two ways: the network-layer form
@@ -459,14 +554,29 @@ pub trait TransportPort: Send + Sync {
     /// Whether a send to `mac` with no DNET reaches a group of nodes rather
     /// than one: this link's broadcast MAC, or any other broadcast or
     /// multicast address the medium carries, such as a B/IP limited
-    /// broadcast, an IPv6 multicast group or an Ethernet multicast MAC
-    /// (#1493). Such a send is a local broadcast, which may carry only an
-    /// Unconfirmed-Request (Clause 6.3), so a sender that takes a
-    /// caller-chosen MAC refuses anything else to it (#1479). The server binds
+    /// broadcast or an Ethernet multicast MAC (#1493). A B/IPv6 MAC is a
+    /// 3-octet VMAC, which never names a group. Such a send is a local
+    /// broadcast, which may carry only an Unconfirmed-Request (Clause 6.3),
+    /// so a sender that takes a caller-chosen MAC refuses anything else to it
+    /// (#1479). The server binds
     /// no device to one, and the confirmed requests it starts itself, to
     /// event recipients, Channel and Command targets, audit recipients and
     /// bound devices, never go to one (#1493). Its replies and COV
-    /// notifications go to the source a request came from.
+    /// notifications go to the source a request came from, and the server,
+    /// the client and the endpoint ignore a confirmed request whose source
+    /// MAC is one (#1504), so those don't go to a group on this link. A
+    /// routed request's SADR names a node on another network, which this
+    /// link can't judge: a reply to a group SADR is dropped only where the
+    /// final router is a `BACnetRouter`, which delivers only an
+    /// Unconfirmed-Request to a DADR that is a group on its delivery port,
+    /// as that port's local broadcast when it is one of
+    /// [`Self::local_broadcast_destinations`], and drops anything else,
+    /// network messages included.
+    ///
+    /// B/IP refuses [`Self::send_unicast`] to a group address (#1677), so a
+    /// sender must broadcast there: `NetworkLayer::send_apdu` sends an
+    /// Unconfirmed-Request for one of [`Self::local_broadcast_destinations`]
+    /// through [`Self::send_broadcast`] itself.
     ///
     /// [`Self::is_broadcast_mac`] keeps its narrower meaning, this link's own
     /// broadcast, which routing and recipient checks rely on. The default is
@@ -481,5 +591,16 @@ pub trait TransportPort: Send + Sync {
     /// [`GroupDestinations::unknown`], which leaves the check to the send path.
     fn group_destinations(&self) -> GroupDestinations {
         GroupDestinations::unknown()
+    }
+
+    /// The group destinations a send with no DNET may reach as this link's
+    /// local broadcast instead: `NetworkLayer::send_apdu` and `BACnetRouter`
+    /// send an Unconfirmed-Request for one through [`Self::send_broadcast`]
+    /// (#1677). It is a part of [`Self::group_destinations`], and the default
+    /// is all of it. B/IP keeps the groups at the link's own UDP port: one
+    /// at another port belongs to another B/IP network, so a send there is
+    /// refused, not turned into this one's broadcast.
+    fn local_broadcast_destinations(&self) -> GroupDestinations {
+        self.group_destinations()
     }
 }

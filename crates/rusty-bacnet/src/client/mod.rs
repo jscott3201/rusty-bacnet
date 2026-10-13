@@ -44,17 +44,30 @@ use bacnet_types::primitives::BACnetTimeStamp;
 use crate::errors::to_py_err;
 use crate::types::{
     audit_log_query_ack_to_py, audit_log_query_request_from_py, audit_notification_request_from_py,
-    decode_read_ack, parse_address, py_to_rpm_specs, py_to_wpm_specs, rpm_ack_to_py,
-    PyAcknowledgmentFilter, PyBACnetTimeStamp, PyCovNotificationIterator, PyDeviceWrite,
-    PyDiscoveredDevice, PyEnableDisable, PyEnrollmentSummaryEventStateFilter, PyEventState,
-    PyEventType, PyLifeSafetyOperation, PyMessagePriority, PyObjectIdentifier, PyObjectType,
-    PyPropertyIdentifier, PyPropertyValue, PyPropertyWrite, PyReadAccessSpec, PyReinitializedState,
-    PyWriteAccessSpec,
+    decode_read_ack, parse_bip6_address, py_to_rpm_specs, py_to_wpm_specs, rpm_ack_to_py,
+    PeerAddresses, PyAcknowledgmentFilter, PyBACnetTimeStamp, PyCovNotificationIterator,
+    PyDeviceWrite, PyDiscoveredDevice, PyEnableDisable, PyEnrollmentSummaryEventStateFilter,
+    PyEventState, PyEventType, PyLifeSafetyOperation, PyMessagePriority, PyObjectIdentifier,
+    PyObjectType, PyPropertyIdentifier, PyPropertyValue, PyPropertyWrite, PyReadAccessSpec,
+    PyReinitializedState, PyWriteAccessSpec,
 };
 
 fn validate_write_priority(priority: Option<u8>) -> PyResult<()> {
     bacnet_services::write_property::validate_priority(priority)
         .map_err(|error| PyValueError::new_err(error.to_string()))
+}
+
+/// The `min_request_interval_ms` keyword, as `BACnetClient` and the endpoint
+/// owners take it (#1535, #1542): more than an hour raises `ValueError` at
+/// construction, before any I/O.
+pub(crate) fn parse_min_request_interval_ms(interval_ms: u64) -> PyResult<u64> {
+    if interval_ms > client::MAX_MIN_REQUEST_INTERVAL_MS {
+        return Err(PyValueError::new_err(format!(
+            "min_request_interval_ms must be 0..={}, got {interval_ms}",
+            client::MAX_MIN_REQUEST_INTERVAL_MS
+        )));
+    }
+    Ok(interval_ms)
 }
 
 /// The Who-Is or Who-Has range the `low_limit` and `high_limit` keywords
@@ -83,7 +96,8 @@ fn device_range(
 ///
 /// Supports multiple transports via the `transport` parameter:
 /// - `"bip"` (default): BACnet/IP over UDP
-/// - `"ipv6"`: BACnet/IPv6 over UDP multicast
+/// - `"ipv6"`: BACnet/IPv6 over UDP multicast. Peers are named by VMAC
+///   (`"bip6:1234"`); `resolve_vmac` finds the VMAC at an `"[ip]:port"`.
 /// - `"sc"`: BACnet/SC over TLS WebSocket (requires `sc_hub`, `sc_vmac`,
 ///   `sc_ca_cert`, `sc_client_cert`, `sc_client_key`, and persistent `sc_device_uuid`)
 /// - `"mstp"`: BACnet MS/TP over RS-485 (requires `serial_port`)
@@ -99,6 +113,10 @@ pub struct BACnetClient {
     interface: String,
     port: u16,
     broadcast_address: String,
+    /// See `BipTransport::set_share_port_by_address` (#1538).
+    share_port_by_address: bool,
+    /// The B/IP mode `bbmd=` or `foreign_device=` asked for (#938).
+    bip_mode: bacnet_transport::bip::BipMode,
     apdu_timeout_ms: u64,
     // SC config
     sc_hub: Option<String>,
@@ -111,19 +129,22 @@ pub struct BACnetClient {
     sc_heartbeat_timeout_ms: Option<u64>,
     // IPv6 config
     ipv6_interface: Option<String>,
-    // MS/TP config
-    serial_port: Option<String>,
-    mstp_baud: u32,
-    mstp_mac: u8,
-    mstp_max_master: u8,
-    mstp_max_info_frames: u8,
+    /// The device instance whose VMAC an ipv6 client uses (H.7.2); `None`
+    /// picks a random VMAC at each start.
+    ipv6_device_instance: Option<u32>,
+    /// The MS/TP keywords, `serial_port` included.
+    mstp: crate::mstp_py::MstpOptions,
+    /// Least time between confirmed requests to one destination (#1535).
+    min_request_interval_ms: u64,
 }
 
 mod client_methods {
     mod cov_discovery;
     mod enrollment_alarm_covmulti_who_writegroup;
     mod file_list_private_text_life;
+    mod foreign_registration;
     mod lifecycle;
+    mod log_read;
     mod object_device_alarm;
     mod read_write;
     mod vt_audit_time_directed;

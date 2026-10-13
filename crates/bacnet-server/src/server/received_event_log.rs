@@ -29,16 +29,16 @@
 //! [`ObjectDatabase::log_received_event_notification`]).
 
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bacnet_encoding::constructed::decode_event_notification_tolerant;
 use bacnet_endpoint_core::coordinator::CanonicalPeer;
 use bacnet_objects::database::ObjectDatabase;
 use tokio::sync::RwLock;
-use tokio::time::Instant;
 use tracing::debug;
 
 use super::event_suppression::{EventSuppression, EventSuppressions};
+use super::runtime_clock;
 
 /// The records one source may add to the Event Logs that collect received
 /// notifications in each one-second window.
@@ -173,7 +173,7 @@ pub(super) async fn log_received_event_notification(
         }
         notification
     };
-    if !allowances.admit(&source, Instant::now()) {
+    if !allowances.admit(&source, runtime_clock::now()) {
         suppressions.record(EventSuppression::ReceivedNotLogged);
         debug!(
             ?source,

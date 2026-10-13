@@ -30,7 +30,11 @@ async fn audit_reporter_read_range_pages_identity_value_free_and_response_parity
         let mut data = BytesMut::new();
         request.encode(&mut data).unwrap();
         if case == "item cap" {
-            fixture.server.config.read_range_budget.max_returned_items = 1;
+            fixture
+                .server
+                .config_mut()
+                .read_range_budget
+                .max_returned_items = 1;
         } else if case == "byte cap" {
             let mut one = BytesMut::new();
             ReadRangeAck {
@@ -45,11 +49,11 @@ async fn audit_reporter_read_range_pages_identity_value_free_and_response_parity
             .encode(&mut one);
             fixture
                 .server
-                .config
+                .config_mut()
                 .read_range_budget
                 .max_service_ack_bytes = one.len();
         }
-        plain.server.config.read_range_budget = fixture.server.config.read_range_budget;
+        plain.server.config_mut().read_range_budget = fixture.server.config.read_range_budget;
         let data = data.freeze();
         let response = dispatch(&fixture.server, Kind::Range.service(), data.clone()).await;
         let baseline = dispatch(&plain.server, Kind::Range.service(), data).await;

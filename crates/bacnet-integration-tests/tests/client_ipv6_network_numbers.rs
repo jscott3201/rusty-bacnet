@@ -10,7 +10,7 @@ mod support;
 mod wire;
 
 use bacnet_client::client::{BACnetClient, ClientConfig};
-use bacnet_transport::bip6::{decode_bip6_mac, Bip6ForeignDeviceConfig, Bip6Transport};
+use bacnet_transport::bip6::{Bip6ForeignDeviceConfig, Bip6Transport};
 use std::net::{Ipv6Addr, SocketAddrV6};
 use support::{fixture, udp, DEADLINE, GROUP};
 use tokio::net::UdpSocket;
@@ -42,8 +42,11 @@ async fn start(transport: Bip6Transport) -> (Client, SocketAddrV6) {
     let client = bounded(BACnetClient::start(ClientConfig::default(), transport))
         .await
         .unwrap();
-    let (ip, port) = decode_bip6_mac(client.local_mac()).unwrap();
-    (client, SocketAddrV6::new(ip, port, 0, 0))
+    let address = client.transport().local_address().unwrap();
+    (
+        client,
+        SocketAddrV6::new(*address.ip(), address.port(), 0, 0),
+    )
 }
 
 async fn send(peer: &UdpSocket, target: SocketAddrV6, group: bool, npdu: &[u8]) {

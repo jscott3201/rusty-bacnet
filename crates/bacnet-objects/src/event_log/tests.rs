@@ -229,6 +229,31 @@ fn unencodable_record_is_refused_at_add_and_the_rest_still_serve() {
     );
 }
 
+/// A restore (#1537) refuses a record that would not encode as `add_record`
+/// does, and keeps the log as it was.
+#[test]
+fn restore_refuses_an_unencodable_record() {
+    let mut el = EventLogObject::new(1, "EL-1", 5).unwrap();
+    el.add_record(make_record(10, 72.5)).unwrap();
+    let records = el.records().clone();
+    let open = BACnetEventLogRecord {
+        date: make_date(),
+        time: make_time(11),
+        log_datum: EventLogDatum::Notification(notification(
+            EventType::COMMAND_FAILURE,
+            Some(NotificationParameters::CommandFailure {
+                command_value: vec![0x3E, 0x19, 0x05],
+                status_flags: StatusFlags::empty(),
+                feedback_value: vec![0x91, 0x00],
+            }),
+        )),
+    };
+    el.restore_log_buffer(7, [make_record(12, 73.0), open])
+        .unwrap_err();
+    assert_eq!(el.records(), &records);
+    assert_eq!(el.total_record_count(), 1);
+}
+
 #[test]
 fn ring_buffer_wraps() {
     let mut el = EventLogObject::new(1, "EL-1", 3).unwrap();
@@ -486,7 +511,7 @@ fn event_log_disabled_ordinary_rejection_does_not_consume_identity() {
 #[test]
 fn event_log_total_record_count_is_u32_and_wraps_max_to_one() {
     let mut el = EventLogObject::new(1, "EL-1", 1).unwrap();
-    el.log_buffer.set_total_record_count_for_test(u32::MAX);
+    el.restore_log_buffer(u32::MAX, []).unwrap();
     assert_eq!(
         el.read_property(PropertyIdentifier::TOTAL_RECORD_COUNT, None)
             .unwrap(),

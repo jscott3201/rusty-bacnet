@@ -37,9 +37,13 @@ and its headers (`libpcap-dev` on Debian and Ubuntu).
 | `-p, --port <PORT>` | `47808` | BACnet UDP port |
 | `-b, --broadcast <IP>` | `255.255.255.255` | Broadcast address for WhoIs |
 | `-t, --timeout <MS>` | `6000` | APDU timeout in milliseconds |
+| `--min-interval-ms <MS>` | `0` | Least time from the latest confirmed request to a device finishing (or being sent, while it is still outstanding) to the next, at most 3600000, so paging or polling leaves a slow device room for others |
+| `--foreign-bbmd <ADDR>` | | Run as a foreign device registered with this BBMD (`ip` or `ip:port`), so broadcasts reach its network; BACnet/IP only. See [Foreign-device mode](#foreign-device-mode) |
+| `--ttl <N>` | `300` | Time-to-live in seconds of a foreign-device registration, for `--foreign-bbmd`, `register` and `discover --bbmd` |
+| `--renewal <SECS>` | half the TTL | Seconds between `--foreign-bbmd` registrations, less than `--ttl` |
 | `--ipv6` | | Use BACnet/IPv6 transport |
 | `--ipv6-interface <IP>` | | IPv6 interface address |
-| `--device-instance <N>` | | Device instance for BIP6 VMAC derivation |
+| `--device-instance <N>` | | Device instance whose VMAC the CLI uses on `--ipv6`; needed where the link has no multicast, such as Linux loopback |
 | `--sc` | | Use BACnet/SC transport |
 | `--sc-url <URL>` | | SC hub WebSocket URL |
 | `--sc-ca <FILE>` | required for SC | Trusted site CA certificate(s) in PEM; no system-root fallback |
@@ -63,12 +67,29 @@ Commands that take a `<target>` argument accept several formats:
 |--------|---------|-------------|
 | IPv4 address | `192.168.1.100` | Direct BIP target (default port 47808) |
 | IPv4:port | `10.0.1.5:47809` | Direct BIP target with explicit port |
-| IPv6 bracket | `[fe80::1]` | Direct BIP6 target (default port 47808) |
-| IPv6:port | `[fe80::1]:47809` | Direct BIP6 target with explicit port |
+| B/IPv6 device | `bip6:1234` | The VMAC of device instance 1234 (0 to 4194303), with `--ipv6` |
+| B/IPv6 VMAC | `bip6:0x40ABCD` | Any 3-octet VMAC, as the CLI prints B/IPv6 addresses |
+| IPv6 bracket | `[2001:db8::10]` | B/IPv6 address (port 47808), resolved to the VMAC of the node there |
+| IPv6:port | `[fe80::1%3]:47809` | The same with a port; a link-local address takes a numeric zone |
 | Device instance | `1234` | Looks up address from discovered device cache |
 | DNET:instance | `2:1234` | Routed device (network:instance) |
 
 When using a device instance number, the device must have been previously found via `discover`. In the shell, you can set a default target with the `target` command to omit the target argument from subsequent commands.
+
+**B/IPv6 targets are VMACs.** A B/IPv6 node is addressed by its 3-octet VMAC,
+not its IPv6 address (Clause U.1.3), and a device's VMAC is its device instance
+(Clause H.7.2), so `bip6:1234` reaches device 1234 without discovery. The CLI
+turns an `[IPv6]` or `[IPv6]:port` target into a VMAC before the command runs,
+asking the node there with a unicast Virtual-Address-Resolution (Clause U.5);
+it fails after three seconds when nothing answers. Device tables, COV output
+and `status` show B/IPv6 addresses as `bip6:0x0004D2`, which every target
+argument takes back. A `bip6:` target without `--ipv6` is refused.
+
+`--device-instance` gives the CLI the VMAC of that instance on `--ipv6`.
+Without it the CLI picks a random VMAC at each start, and must first ask the
+link whether another node already has it, by multicast. A link with no
+multicast, such as Linux loopback (`--ipv6-interface ::1`), can't carry that
+question, so pass `--device-instance` there.
 
 ## Commands
 
@@ -157,7 +178,7 @@ interfaces (one interface is used without asking, as in the shell).
 | Field | Values |
 |---|---|
 | Scope | Local broadcast, global broadcast, directed (one address), or remote network |
-| Target | For directed: `IP`, `IP:port`, `[IPv6]:port`, or an SC VMAC as 12 hex digits. For remote network: the network number |
+| Target | For directed: `IP` or `IP:port` on BACnet/IP; `bip6:N`, `bip6:0xVMAC` or `[IPv6]:port` on BACnet/IPv6, where the address is resolved to the VMAC of the node there before the Who-Is goes; an SC VMAC as 12 hex digits on BACnet/SC. For remote network: the network number |
 | Range | Blank for every instance, `N`, or `LOW-HIGH` (0 to 4194303) |
 | Listen | Seconds to show the request as running while replies arrive (1 to 60, default 3) |
 
@@ -185,7 +206,7 @@ client's discovery table afterwards.
 | `q` | Quit |
 
 The `tui` cargo feature is off by default until the terminal UI ships in
-0.13.0 (#975), so the release binaries and a plain `cargo install bacnet-cli`
+0.14.0 (#975), so the release binaries and a plain `cargo install bacnet-cli`
 leave it out. Build it with `cargo install bacnet-cli --features tui`, or with
 `--features bacnet-cli/tui` in a workspace checkout. Without it, ratatui and
 crossterm aren't built and `bacnet tui` prints that rebuild advice. The
@@ -200,8 +221,8 @@ bacnet discover 1000-2000                # discover devices in instance range
 bacnet discover --wait 5                 # wait 5 seconds for responses (default: 3)
 bacnet discover --target 192.168.1.100   # directed (unicast) WhoIs
 bacnet discover --dnet 2                 # target a specific remote network
-bacnet discover --bbmd 10.0.0.1          # register as foreign device before discovering
-bacnet discover --bbmd 10.0.0.1 --ttl 300  # BBMD registration with TTL (default: 300s)
+bacnet discover --bbmd 10.0.0.1          # register once as a foreign device, then discover
+bacnet --foreign-bbmd 10.0.0.1 discover  # discover through the BBMD as a foreign device
 ```
 
 **Discover flags:**
@@ -211,8 +232,7 @@ bacnet discover --bbmd 10.0.0.1 --ttl 300  # BBMD registration with TTL (default
 | `--wait <N>` | `3` | Seconds to wait for responses |
 | `--target <ADDR>` | | Send directed WhoIs to a specific IP address |
 | `--dnet <N>` | | Target a specific remote network number |
-| `--bbmd <ADDR>` | | Register as foreign device with BBMD before discovering (BIP only) |
-| `--ttl <N>` | `300` | TTL in seconds for BBMD foreign device registration |
+| `--bbmd <ADDR>` | | Register once as a foreign device with this BBMD, for the global `--ttl`, before discovering (BIP only). The Who-Is still goes out as a local broadcast; `--foreign-bbmd` sends it through the BBMD |
 
 ```bash
 bacnet find --name "Zone Temp"           # find objects by name (WhoHas)
@@ -239,14 +259,43 @@ bacnet readm 192.168.1.100 ai:1 pv,object-name ao:1 pv
 # Read range (trend logs, lists)
 bacnet read-range 192.168.1.100 trend-log:1 log-buffer
 bacnet read-range 192.168.1.100 trend-log:1     # defaults to log-buffer
+bacnet read-range 192.168.1.100 trend-log:1 --position 1 --count 50
+bacnet read-range 192.168.1.100 trend-log:1 --sequence 1200 --count -20   # backward
+bacnet read-range 192.168.1.100 trend-log:1 --time 2026-10-05T09:00 --count 50
+bacnet read-range 192.168.1.100 trend-log:1 --all --count 100            # the whole log
+bacnet --min-interval-ms 50 read-range 192.168.1.100 trend-log:1 --all --sequence 1201
 ```
+
+`read` and `readm` interpret Tags as named values: a whole array looks like
+`["exhaust", "floor"=3]`, an indexed element like `"floor"=3`, and index zero
+prints the count. An empty array prints `[]`. Names and text values are quoted
+and escaped; a semantic tag has no equals sign, while a valued NULL prints
+`"name"=null`. Invalid Tags bytes produce one `[invalid Tags; raw: ...]`
+marker for the complete payload. JSON keeps the existing `object`, `property`
+and string `value` fields, with an array index included in the property name.
+Other properties and `read-range` retain their existing formatting.
+
+`--position`, `--sequence` and `--time` pick the range, each with `--count`
+(default 100; negative reads backward). `--time` takes the device's local time
+as `YYYY-MM-DDTHH:MM[:SS[.hh]]`. The heading shows the result flags
+(FIRST_ITEM, LAST_ITEM, MORE_ITEMS) and the first sequence number, so a page
+that left items out says so. A read shows an answer that breaks a ReadRange
+rule anyway and names the rules under `violations` (in the heading and the
+JSON); `--strict` refuses such an answer instead. `--all` pages through a
+log's Log_Buffer from the oldest record, or from the start given, `--count`
+records a page, and ends with `pages=` and `next:`, the flags that resume the
+read later; JSON adds `pages`, `next` and `gaps`. When an error stops it part
+way, such as a timeout, it prints what it read and `next:` first. A device
+whose sequence numbers are inconsistent (it answers from before the record
+asked for) fails; read it with `--all --position 1`.
 
 `read-range` decodes the Log_Buffer of a Trend Log, Event Log, Trend Log
 Multiple or Audit Log record by record, showing each record's timestamp, datum
 (a value, log status, time change, event notification or audit notification)
 and, for a Trend Log, status flags (blank when none is set). JSON output
-lists them under `records`, with the hex of anything from the first record
-that doesn't decode under `undecoded`. Other properties decode as application
+lists them under `records`, with `result_flags` and `first_sequence_number`,
+and the hex of anything from the first record that doesn't decode under
+`undecoded`. Other properties decode as application
 values under `items`, where anything that doesn't decode ends the list as
 `[raw: ..]` hex.
 
@@ -458,6 +507,29 @@ bacnet unregister 192.168.1.1       # unregister from BBMD
 
 In the interactive shell, `register` also starts a background auto-renewal task that re-registers at 80% of the TTL (e.g., every 240 seconds for a 300-second TTL). The renewal runs silently in the background and prints a dimmed confirmation on each renewal. Use `unregister` or `status` to check registration state.
 
+#### Foreign-device mode
+
+`register` sends one registration from an otherwise normal node, so the
+CLI's own broadcasts stay on the local subnet. With the global
+`--foreign-bbmd ADDR`, the CLI's transport is a foreign device instead: it
+registers with that BBMD when it starts, renews on its own (every `--renewal`
+seconds, half the `--ttl` by default) and sends its broadcasts through the
+BBMD, so `discover` reaches the BBMD's network (#938).
+
+```bash
+bacnet --foreign-bbmd 203.0.113.7 discover                 # Who-Is through the BBMD
+bacnet --foreign-bbmd 203.0.113.7:47808 --ttl 600 --renewal 20 discover 1000-2000
+```
+
+A one-shot command waits for the BBMD to answer the first registration and
+fails if it refuses or doesn't answer. The shell reports the outcome when it
+starts, keeps trying either way, and shows the registration in `status`.
+Behind NAT, keep `--renewal` short so the mapping the BBMD's replies come back
+on stays open; the TTL can stay long. While the transport manages the
+registration, `register` and `unregister` to that BBMD are refused; use
+another BBMD or a normal-mode CLI. With `--foreign-bbmd`, log lines go to
+stderr so they can't corrupt JSON output.
+
 ### Packet Capture
 
 Requires the `pcap` feature (included in Linux pre-built binaries). Live capture requires root/sudo on most systems.
@@ -526,7 +598,8 @@ Note: `--read` and `--device` are mutually exclusive; `--quiet` requires `--save
 ```bash
 # BACnet/IPv6
 bacnet --ipv6 discover
-bacnet --ipv6 read [fe80::1]:47808 ai:1 pv
+bacnet --ipv6 read bip6:1234 ai:1 pv                # device 1234's VMAC
+bacnet --ipv6 read [2001:db8::10]:47808 ai:1 pv     # resolved to its VMAC first
 
 # BACnet/SC (requires sc-tls feature)
 bacnet --sc --sc-url wss://hub:443 --sc-ca site-ca.pem --sc-cert cert.pem --sc-key key.pem --sc-vmac 22:01:02:03:04:05 --sc-device-uuid 00112233-4455-6677-8899-aabbccddeeff discover

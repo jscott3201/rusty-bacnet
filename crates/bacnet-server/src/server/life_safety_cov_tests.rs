@@ -110,7 +110,7 @@ impl ExactFixture {
                 cov_in_flight: &self.cov_in_flight,
                 notification_transactions: &self.transactions,
                 comm_state: &self.comm_state,
-                config: &ServerConfig::default(),
+                config: &Arc::default(),
             },
             &point_oid(),
             changes,
@@ -360,7 +360,7 @@ struct DispatchFixture {
     device_bindings: Arc<RwLock<DeviceBindingTable>>,
     comm_state: Arc<CommState>,
     dcc_timer: Arc<Mutex<crate::server::dcc_timer::TimerSlot>>,
-    config: ServerConfig,
+    config: Arc<ServerConfig>,
     source_mac: MacAddr,
 }
 
@@ -391,10 +391,10 @@ impl DispatchFixture {
             device_bindings: Arc::new(RwLock::new(DeviceBindingTable::new())),
             comm_state: Arc::new(CommState::default()),
             dcc_timer: Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default())),
-            config: ServerConfig {
+            config: Arc::new(ServerConfig {
                 life_safety_operation_authorizer: Some(Arc::new(|_| true)),
                 ..ServerConfig::default()
-            },
+            }),
             source_mac: MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xD0]),
         }
     }

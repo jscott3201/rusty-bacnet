@@ -11,8 +11,11 @@
 //!
 //! - A member's datatype is that of the value its property holds now (see
 //!   [`MemberDatatype::of`]); a NULL or constructed value counts as unknown,
-//!   which takes any value but a lighting command, as the table's first
-//!   column does.
+//!   which takes any value but a constructed one, as the table's first
+//!   column does. The exceptions are the properties whose datatype is one of
+//!   the constructed alternatives: Lighting_Command, Color_Command, and the
+//!   xy colours of a Color object (Addendum 135-2020ca's rows and columns of
+//!   the table, #1474). Each takes only its own alternative.
 //! - Where the table passes a value on between two different datatypes
 //!   (Unsigned and ENUMERATED, Unsigned and BACnetObjectIdentifier), the
 //!   number is kept and only the datatype changes. A number the target can't
@@ -40,15 +43,17 @@
 //!   what that precision means, and the rounding never fails the write. Only
 //!   the range bounds fail it.
 
-use bacnet_encoding::constructed::is_lighting_command_channel_value;
-use bacnet_types::enums::PropertyIdentifier;
+use bacnet_encoding::constructed::{
+    constructed_channel_value, decode_xy_color, ConstructedChannelValue,
+};
+use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 /// The datatype of a Channel member's property, as Table 12-63's columns
 /// name them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemberDatatype {
-    /// Not known: any value but a lighting command passes on unchanged.
+    /// Not known: any primitive value passes on unchanged.
     Unknown,
     /// BOOLEAN.
     Boolean,
@@ -76,19 +81,38 @@ pub enum MemberDatatype {
     ObjectIdentifier,
     /// BACnetLightingCommand.
     LightingCommand,
+    /// BACnetColorCommand (Addendum 135-2020ca).
+    ColorCommand,
+    /// BACnetxyColor (Addendum 135-2020ca).
+    XyColor,
 }
 
 impl MemberDatatype {
-    /// The datatype of member property `property`, whose value is `current`
-    /// (`None` when it can't be read).
+    /// The datatype of member property `property` of an object of type
+    /// `object_type`, whose value is `current` (`None` when it can't be
+    /// read).
     ///
-    /// Lighting_Command is a BACnetLightingCommand whatever form the object
-    /// keeps it in. Any other property takes the datatype of the primitive
-    /// it holds; NULL, constructed values and unreadable properties are
+    /// A few properties have a constructed datatype whatever form the object
+    /// keeps them in: Lighting_Command is a BACnetLightingCommand,
+    /// Color_Command a BACnetColorCommand, and Default_Color and a Color
+    /// object's Present_Value and Tracking_Value a BACnetxyColor. Any other
+    /// property takes the datatype of the primitive it holds; NULL,
+    /// constructed values and unreadable properties are
     /// [`MemberDatatype::Unknown`].
-    pub fn of(property: PropertyIdentifier, current: Option<&PropertyValue>) -> Self {
-        if property == PropertyIdentifier::LIGHTING_COMMAND {
-            return Self::LightingCommand;
+    pub fn of(
+        object_type: ObjectType,
+        property: PropertyIdentifier,
+        current: Option<&PropertyValue>,
+    ) -> Self {
+        use PropertyIdentifier as P;
+        match property {
+            P::LIGHTING_COMMAND => return Self::LightingCommand,
+            P::COLOR_COMMAND => return Self::ColorCommand,
+            P::DEFAULT_COLOR => return Self::XyColor,
+            P::PRESENT_VALUE | P::TRACKING_VALUE if object_type == ObjectType::COLOR => {
+                return Self::XyColor
+            }
+            _ => {}
         }
         match current {
             Some(PropertyValue::Boolean(_)) => Self::Boolean,
@@ -229,27 +253,38 @@ fn float_to_integer(value: f64) -> Option<i32> {
 /// The value a member of datatype `target` gets when a Channel holding
 /// `value` distributes it (Table 12-63).
 ///
-/// A lighting command, held as its context-\[0\] octets, reaches a
-/// BACnetLightingCommand member as the SEQUENCE inside that tag, the way a
-/// WriteProperty to Lighting_Command carries it.
+/// A constructed channel value, held as its framed octets, reaches only a
+/// member of its own datatype, the way a WriteProperty of that member's
+/// property would carry it: a lighting or colour command as the SEQUENCE
+/// inside its tag, and an xy colour as its two REALs.
 pub fn coerce_channel_value(
     value: &PropertyValue,
     target: MemberDatatype,
 ) -> Result<PropertyValue, CoercionFailure> {
+    use ConstructedChannelValue as C;
     use MemberDatatype as D;
 
     if let PropertyValue::ApplicationData(octets) = value {
-        // The only constructed channel value: it goes to a lighting command
-        // member and nowhere else, not even an unknown one.
-        if target == D::LightingCommand && is_lighting_command_channel_value(octets) {
-            return Ok(PropertyValue::ApplicationData(
-                octets[1..octets.len() - 1].to_vec(),
-            ));
-        }
-        return Err(CoercionFailure);
+        // A constructed value goes to a member of its own datatype and
+        // nowhere else, not even an unknown one.
+        let inner = || octets[1..octets.len() - 1].to_vec();
+        return match (constructed_channel_value(octets), target) {
+            (Some(C::LightingCommand), D::LightingCommand)
+            | (Some(C::ColorCommand), D::ColorCommand) => {
+                Ok(PropertyValue::ApplicationData(inner()))
+            }
+            (Some(C::XyColor), D::XyColor) => {
+                let (color, _) = decode_xy_color(octets, 1).map_err(|_| CoercionFailure)?;
+                Ok(PropertyValue::List(vec![
+                    PropertyValue::Real(color.x),
+                    PropertyValue::Real(color.y),
+                ]))
+            }
+            _ => Err(CoercionFailure),
+        };
     }
     match target {
-        D::LightingCommand => return Err(CoercionFailure),
+        D::LightingCommand | D::ColorCommand | D::XyColor => return Err(CoercionFailure),
         D::Unknown => return Ok(value.clone()),
         _ => {}
     }

@@ -26,6 +26,9 @@
 //! well-formed event with a priority outside 1 through 16 decodes, and the
 //! consumer range-checks it (#1087).
 
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
 use bacnet_types::constructed::{BACnetSpecialEvent, BACnetTimeValue, SpecialEventPeriod};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::Time;

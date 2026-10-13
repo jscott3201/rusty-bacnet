@@ -1,9 +1,16 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/bacnet-time",
     "crates/bacnet-types",
     "crates/bacnet-encoding",
     "crates/bacnet-services",
+    "crates/bacnet-mstp-codec",
+    "crates/bacnet-mstp-core",
+    "crates/bacnet-mstp-sim",
+    "crates/bacnet-bip-codec",
+    "crates/bacnet-bip-core",
+    "crates/bacnet-router-core",
     "crates/bacnet-transport",
     "crates/bacnet-network",
     "crates/bacnet-endpoint-core",
@@ -15,6 +22,14 @@ members = [
     "crates/rusty-bacnet",
     "crates/bacnet-cli",
     "benchmarks",
+    # The firmware link test (publish = false, #1626, #1635): bare-metal images
+    # with and without an allocator. Its runtimes are bare-metal dependencies
+    # only; on a host its binaries are stubs.
+    "firmware/link",
+    # Chooses a portable-atomic backend for check-no-std.sh's ARMv6-M lint of
+    # the bytes builds (publish = false, #1613). Its dependencies are for that
+    # target only; on a host it is an empty crate.
+    "firmware/nostd-harness",
     # The sample programs (publish = false), which share this Cargo.lock (#1450).
     # Listed one by one: with a glob, a leftover directory there without a
     # Cargo.toml would break every cargo command in the workspace.
@@ -26,12 +41,20 @@ members = [
 ]
 # rusty-bacnet's tests link libpython, so they need a Python with its shared library.
 # bacnet-cli has heavy deps (rustyline, clap) — excluded from default builds.
-# Use `cargo nextest run -p rusty-bacnet`. The samples are left out too:
-# `--workspace` runs build them, and `-p <sample>` picks one.
+# Use `cargo nextest run -p rusty-bacnet`. The samples, the firmware link test
+# and the no_std harness are left out too: `--workspace` runs build them, and
+# `-p` picks one.
 default-members = [
+    "crates/bacnet-time",
     "crates/bacnet-types",
     "crates/bacnet-encoding",
     "crates/bacnet-services",
+    "crates/bacnet-mstp-codec",
+    "crates/bacnet-mstp-core",
+    "crates/bacnet-mstp-sim",
+    "crates/bacnet-bip-codec",
+    "crates/bacnet-bip-core",
+    "crates/bacnet-router-core",
     "crates/bacnet-transport",
     "crates/bacnet-network",
     "crates/bacnet-endpoint-core",
@@ -44,7 +67,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.12.0"
+version = "0.13.0"
 edition = "2021"
 rust-version = "1.93"
 license = "MIT"
@@ -55,19 +78,31 @@ keywords = ["bacnet", "building-automation", "ashrae", "iot", "protocol"]
 categories = ["network-programming", "embedded"]
 
 [workspace.dependencies]
-bacnet-types = { version = "0.12.0", path = "crates/bacnet-types" }
-bacnet-encoding = { version = "0.12.0", path = "crates/bacnet-encoding" }
-bacnet-services = { version = "0.12.0", path = "crates/bacnet-services" }
-bacnet-transport = { version = "0.12.0", path = "crates/bacnet-transport" }
-bacnet-network = { version = "0.12.0", path = "crates/bacnet-network" }
-bacnet-endpoint-core = { version = "0.12.0", path = "crates/bacnet-endpoint-core" }
-bacnet-client = { version = "0.12.0", path = "crates/bacnet-client" }
-bacnet-objects = { version = "0.12.0", path = "crates/bacnet-objects" }
-bacnet-server = { version = "0.12.0", path = "crates/bacnet-server" }
-bacnet-endpoint = { version = "0.12.0", path = "crates/bacnet-endpoint" }
-thiserror = "2"
+# The no_std crates build without std on bare-metal targets (#1604), so their
+# entries, and those of thiserror and bytes, leave default features off:
+# cargo ignores `default-features = false` on a member's `workspace = true`
+# edge, so only the entry can. Hosted crates turn std back on with
+# `features = ["std"]` on each edge. tracing keeps its defaults: only
+# bacnet-encoding's `std` feature brings it into a no_std crate.
+bacnet-time = { version = "0.13.0", path = "crates/bacnet-time" }
+bacnet-types = { version = "0.13.0", path = "crates/bacnet-types", default-features = false }
+bacnet-encoding = { version = "0.13.0", path = "crates/bacnet-encoding", default-features = false }
+bacnet-services = { version = "0.13.0", path = "crates/bacnet-services", default-features = false }
+bacnet-mstp-codec = { version = "0.13.0", path = "crates/bacnet-mstp-codec", default-features = false }
+bacnet-mstp-core = { version = "0.13.0", path = "crates/bacnet-mstp-core", default-features = false }
+bacnet-bip-codec = { version = "0.13.0", path = "crates/bacnet-bip-codec", default-features = false }
+bacnet-bip-core = { version = "0.13.0", path = "crates/bacnet-bip-core" }
+bacnet-router-core = { version = "0.13.0", path = "crates/bacnet-router-core" }
+bacnet-transport = { version = "0.13.0", path = "crates/bacnet-transport" }
+bacnet-network = { version = "0.13.0", path = "crates/bacnet-network" }
+bacnet-endpoint-core = { version = "0.13.0", path = "crates/bacnet-endpoint-core" }
+bacnet-client = { version = "0.13.0", path = "crates/bacnet-client" }
+bacnet-objects = { version = "0.13.0", path = "crates/bacnet-objects" }
+bacnet-server = { version = "0.13.0", path = "crates/bacnet-server" }
+bacnet-endpoint = { version = "0.13.0", path = "crates/bacnet-endpoint" }
+thiserror = { version = "2", default-features = false }
 bitflags = "2"
-bytes = "1"
+bytes = { version = "1", default-features = false }
 tracing = "0.1"
 tokio = "1"
 socket2 = "0.6"
@@ -90,6 +125,34 @@ criterion = { version = "0.8", features = ["async_tokio"] }
 sysinfo = "0.39"
 libc = "0.2"
 getrandom = "0.3"
+# 0.9.0 was yanked.
+heapless = "0.9.1"
+proptest = "1"
+# Startup code for the firmware link test's images (#1626): Cortex-M and RISC-V.
+cortex-m-rt = "0.7.7"
+riscv-rt = "0.18.0"
+# The atomics backend on targets without compare-and-swap, for the no_std
+# harness on ARMv6-M (#1613) and the firmware link test's apdu image
+# (#1635). Without default features, as bytes asks for it: `fallback` only
+# adds atomics wider than bytes uses.
+portable-atomic = { version = "1.3", default-features = false }
+# The apdu image's global allocator (#1635): a linked-list first fit over a
+# fixed arena, without the TLSF allocator the default features add.
+embedded-alloc = { version = "0.7.0", default-features = false, features = ["llff"] }
+# The critical section the apdu image's allocator, and its atomics on
+# targets without compare-and-swap, lock with (#1635). On RISC-V the image
+# takes riscv's `critical-section-single-hart` implementation; on Cortex-M it
+# implements one itself, since cortex-m's depends on the unmaintained
+# bare-metal crate (RUSTSEC-2026-0110).
+critical-section = "1.2.0"
+riscv = "0.16.1"
+# The host test of the apdu image's arena (#1635): the allocator
+# embedded-alloc's `llff` heap wraps, here with its own spin lock.
+linked_list_allocator = "0.10.6"
+# The firmware link test's emulation build (#1651): its images print and
+# exit under QEMU through semihosting, on Cortex-M and RISC-V alike, without
+# cortex-m and the unmaintained bare-metal crate it depends on.
+semihosting = { version = "0.1.25", features = ["stdio"] }
 
 [workspace.lints.rust]
 # Workspace floor. `bacnet-transport` overrides nothing: each FFI site
@@ -107,3 +170,20 @@ todo = "deny"
 dbg_macro = "deny"
 print_stderr = "deny"
 print_stdout = "deny"
+
+# The firmware link test's images (#1626, #1635), which
+# scripts/ci/check-firmware-link.sh builds for bare-metal targets with
+# `--profile firmware` and checks against firmware/link/size-budget.toml.
+[profile.firmware]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+
+# The same images built to run under QEMU (#1651), which
+# scripts/emu/emulate-firmware.sh builds with the `emulate` feature and a
+# board's. A profile of their own keeps them out of target/<triple>/firmware,
+# where the link test reads the images it measures.
+[profile.emulate]
+inherits = "firmware"

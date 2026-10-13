@@ -1,23 +1,21 @@
 //! Concrete B/IP endpoint builder (no generic-trait erasure).
 //!
-//! Closes the server-BIP-builder gap: `BipServerBuilder` lacks BDT/FDT
-//! controls while [`BipTransport`] + [`bbmd`](bacnet_transport::bbmd) own
-//! them. This builder exposes them first-class on the endpoint composition
-//! above the sibling roles (concrete `BipTransport`, never `impl
-//! TransportPort`).
+//! It builds one concrete [`BipTransport`] (never `impl TransportPort`)
+//! under the endpoint's roles, in the B/IP mode [`BipEndpointBuilder::mode`]
+//! sets: a normal node, a foreign device or a BBMD (#938).
 //!
 //! # Evidence level
 //!
 //! Plain B/IP (unicast + local broadcast over one real UDP socket) is proven
 //! on real loopback UDP (RB-16): one socket per session, bidirectional
 //! confirmed traffic, I-Am identical to Device ReadProperty. BBMD and foreign
-//! modes have bounded local Network Number wire coverage: ServerOnly BBMD
-//! admission and Original-Broadcast replies, ClientOnly foreign DBTN/retry and
+//! modes have local Network Number wire coverage: ServerOnly BBMD admission
+//! and Original-Broadcast replies, ClientOnly foreign DBTN/retry and
 //! alternate forwarders, and Both requester/responder progress with cleanup.
-//! Broader BBMD/foreign behavior remains experimental. Management ACL,
-//! persistence and fanout controls retain construction-only endpoint coverage.
-//! Live BVLC queries (`read_bdt` / `write_bdt` / `read_fdt` / …) stay on
-//! [`BipTransport`].
+//! The modes themselves run on the same transport as the standalone client
+//! and server. [`EndpointSession::foreign_registration`] reports a foreign
+//! device's registration. Live BVLC queries (`read_bdt` / `write_bdt` /
+//! `read_fdt` / …) stay on [`BipTransport`].
 //!
 //! ```no_run
 //! use std::net::Ipv4Addr;
@@ -41,9 +39,7 @@
 use std::net::{Ipv4Addr, SocketAddrV4};
 
 use bacnet_objects::database::ObjectDatabase;
-use bacnet_transport::bbmd::BdtEntry;
-use bacnet_transport::bbmd::ForeignDevicePolicy;
-use bacnet_transport::bip::{BipTransport, FanoutPolicy, ForeignDeviceConfig};
+use bacnet_transport::bip::{BipMode, BipTransport};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 
@@ -51,56 +47,61 @@ use crate::session::{EndpointSession, SessionConfig, SessionRole};
 
 /// Concrete B/IP endpoint builder.
 ///
-/// Pre-start BBMD/FDT controls mirror `transport/bip` + `bbmd.rs`; live
-/// BVLC queries (`read_bdt`/`write_bdt`/`read_fdt`/…) stay on
-/// [`BipTransport`] for real-transport proofs (RB-16/17).
-///
-/// Plain mode is proven on real loopback UDP; BBMD/foreign-device setters are
-/// experimental beyond the bounded Number wire cases described above.
+/// [`mode`](Self::mode) sets the B/IP mode, as on the standalone client and
+/// server builders; live BVLC queries (`read_bdt`/`write_bdt`/`read_fdt`/…)
+/// stay on [`BipTransport`].
 pub struct BipEndpointBuilder {
     interface: Ipv4Addr,
     port: u16,
     broadcast_address: Ipv4Addr,
+    share_port_by_address: bool,
     role: SessionRole,
     session: SessionConfig,
     database: Option<ObjectDatabase>,
     registered_network_port: Option<ObjectIdentifier>,
     identity: Option<crate::identity::DeviceIdentity>,
     device_write_authorizer: Option<bacnet_server::mutation::MutationAuthorizer>,
+    reinitialize: Option<bacnet_server::server::ReinitializeHandler>,
+    reinit_password: Option<String>,
     source_audit_bindings: Vec<(ObjectIdentifier, SocketAddrV4)>,
-    bbmd_bdt: Option<Vec<BdtEntry>>,
-    foreign_policy: Option<ForeignDevicePolicy>,
-    management_acl: Option<Vec<[u8; 4]>>,
-    bdt_persist_path: Option<std::path::PathBuf>,
-    fanout_policy: Option<FanoutPolicy>,
-    foreign_device: Option<ForeignDeviceConfig>,
+    mode: BipMode,
 }
 
 impl BipEndpointBuilder {
     /// Creates a B/IP endpoint builder with interface/port/broadcast.
     ///
     /// `port = 0` selects an ephemeral port (tests); production uses 47808.
-    /// `interface` is the announced MAC IP; the socket binds `INADDR_ANY` so
-    /// subnet/limited broadcast reaches it.
+    /// `interface` is the announced MAC IP; the socket binds `INADDR_ANY`
+    /// unless [`share_port_by_address`](Self::share_port_by_address) asks for
+    /// the interface address.
     pub fn new(interface: Ipv4Addr, port: u16, broadcast_address: Ipv4Addr) -> Self {
         Self {
             interface,
             port,
             broadcast_address,
+            share_port_by_address: false,
             role: SessionRole::Both,
             session: SessionConfig::default(),
             database: None,
             registered_network_port: None,
             identity: None,
             device_write_authorizer: None,
+            reinitialize: None,
+            reinit_password: None,
             source_audit_bindings: Vec::new(),
-            bbmd_bdt: None,
-            foreign_policy: None,
-            management_acl: None,
-            bdt_persist_path: None,
-            fanout_policy: None,
-            foreign_device: None,
+            mode: BipMode::Normal,
         }
+    }
+
+    /// Binds the interface address itself, so endpoints on other addresses
+    /// of this host can share the port, each getting only its own unicast
+    /// (#1538). Off by default. Needs an explicit interface and a nonzero
+    /// port, or starting fails. Broadcasts and unicast are then received in
+    /// no fixed order; see
+    /// [`BipTransport::set_share_port_by_address`](bacnet_transport::bip::BipTransport::set_share_port_by_address).
+    pub fn share_port_by_address(mut self, enabled: bool) -> Self {
+        self.share_port_by_address = enabled;
+        self
     }
 
     /// Selects the composed roles (default [`Both`](SessionRole::Both)).
@@ -134,6 +135,15 @@ impl BipEndpointBuilder {
         self
     }
 
+    /// Least time between the client role's confirmed requests to one
+    /// destination (default 0: no pacing). See
+    /// [`SessionConfig::min_request_interval_ms`]; more than an hour fails
+    /// [`build_session`](Self::build_session).
+    pub fn min_request_interval_ms(mut self, ms: u64) -> Self {
+        self.session.min_request_interval_ms = ms;
+        self
+    }
+
     /// Attaches the object database for the server responder.
     ///
     /// Build it from the same identity passed to
@@ -143,8 +153,9 @@ impl BipEndpointBuilder {
         self
     }
 
-    /// Explicitly associate the selected concrete built-in port with this NORMAL
-    /// B/IP transport. Declaring an identity entry alone does not register it.
+    /// Explicitly associate the selected concrete built-in port with this B/IP
+    /// transport, in whichever single mode it runs (normal, foreign device or
+    /// BBMD). Declaring an identity entry alone does not register it.
     pub fn registered_network_port(mut self, oid: ObjectIdentifier) -> Self {
         self.registered_network_port = Some(oid);
         self
@@ -174,6 +185,31 @@ impl BipEndpointBuilder {
         self
     }
 
+    /// Enables ReinitializeDevice. The handler must reply before restarting
+    /// and stay quick, or it stalls the session; see
+    /// [`EndpointSession::with_reinitialize`]. Requires `build_session()`.
+    pub fn reinitialize<F>(mut self, handler: F) -> Self
+    where
+        F: Fn(
+                &bacnet_server::server::ReinitializeContext,
+                &mut ObjectDatabase,
+            ) -> Result<(), Error>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.reinitialize = Some(std::sync::Arc::new(handler));
+        self
+    }
+
+    /// Sets the password a ReinitializeDevice request must carry. Requires
+    /// [`reinitialize`](Self::reinitialize) and `build_session()`; see
+    /// [`EndpointSession::with_reinit_password`].
+    pub fn reinit_password(mut self, password: impl Into<String>) -> Self {
+        self.reinit_password = Some(password.into());
+        self
+    }
+
     /// Register one trusted direct IPv4 B/IP route for source Audit delivery.
     /// This is route data only; provision the recipient on the actual Device.
     /// Multiple entries may resolve old/new Device choices. Duplicate keys,
@@ -191,72 +227,23 @@ impl BipEndpointBuilder {
         self
     }
 
-    /// Enables BBMD mode with the initial BDT (before start).
-    ///
-    /// With a `0.0.0.0` interface, the BBMD's own B/IP address comes from the
-    /// BDT row at one of the host's addresses and the bound port, as described
-    /// at [`BipTransport::enable_bbmd`]; bind an explicit interface address to
-    /// avoid that choice.
-    ///
-    /// Local Number controls have BBMD wire coverage; broader BBMD behavior
-    /// remains experimental. BBMD controls require this first:
-    /// [`foreign_device_policy`](Self::foreign_device_policy) /
-    /// [`bbmd_management_acl`](Self::bbmd_management_acl) without it fail
-    /// [`build_transport`](Self::build_transport) with a typed
-    /// [`Error::Encoding`].
-    pub fn enable_bbmd(mut self, bdt: Vec<BdtEntry>) -> Self {
-        self.bbmd_bdt = Some(bdt);
-        self
-    }
-
-    /// Enables foreign-device registration policy (after `enable_bbmd`).
-    ///
-    /// **Experimental / unproven**: see [`enable_bbmd`](Self::enable_bbmd).
-    pub fn foreign_device_policy(mut self, policy: ForeignDevicePolicy) -> Self {
-        self.foreign_policy = Some(policy);
-        self
-    }
-
-    /// Sets the BBMD Delete-FDT-Entry management ACL (fail-closed when empty).
-    ///
-    /// **Experimental / unproven**: see [`enable_bbmd`](Self::enable_bbmd).
-    pub fn bbmd_management_acl(mut self, acl: Vec<[u8; 4]>) -> Self {
-        self.management_acl = Some(acl);
-        self
-    }
-
-    /// Sets the externally provisioned persisted-BDT path (wire format).
-    ///
-    /// **Experimental / unproven**: see [`enable_bbmd`](Self::enable_bbmd).
-    pub fn bdt_persist_path(mut self, path: std::path::PathBuf) -> Self {
-        self.bdt_persist_path = Some(path);
-        self
-    }
-
-    /// Sets the broadcast fanout policy.
-    ///
-    /// **Experimental / unproven**: staged pre-start only, no wire proof.
-    pub fn fanout_policy(mut self, policy: FanoutPolicy) -> Self {
-        self.fanout_policy = Some(policy);
-        self
-    }
-
-    /// Registers this endpoint as a foreign device (before start).
-    ///
-    /// Local Number controls have foreign DBTN/retry wire coverage; broader
-    /// foreign-device behavior remains experimental.
-    pub fn register_as_foreign_device(mut self, config: ForeignDeviceConfig) -> Self {
-        self.foreign_device = Some(config);
+    /// Sets the B/IP mode: a normal node (the default), a foreign device or
+    /// a BBMD (#938). See [`BipMode`]. With a `0.0.0.0` interface, a BBMD's
+    /// own B/IP address comes from its BDT, as described at
+    /// [`BipTransport::enable_bbmd`]. A registered Network Port reports the
+    /// mode in `BACnet_IP_Mode`.
+    pub fn mode(mut self, mode: BipMode) -> Self {
+        self.mode = mode;
         self
     }
 
     /// Builds the concrete B/IP transport with all pre-start controls applied.
     ///
-    /// Returns a typed [`Error::Encoding`]
-    /// when BBMD-dependent controls are set without
-    /// [`enable_bbmd`](Self::enable_bbmd), or a source Audit route data
-    /// is set (it requires [`build_session`](Self::build_session), not a bare
-    /// transport that would discard the endpoint-owned configuration).
+    /// Returns a typed [`Error::Encoding`] when any session-owned
+    /// configuration is set, since a bare transport would discard it: a
+    /// Network Port registration, Device writes, a ReinitializeDevice handler
+    /// or password (a password alone included), or source Audit route data.
+    /// Those require [`build_session`](Self::build_session).
     pub fn build_transport(self) -> Result<BipTransport, Error> {
         if self.registered_network_port.is_some() {
             return Err(Error::Encoding(
@@ -268,46 +255,19 @@ impl BipEndpointBuilder {
                 "Device writes require build_session()".into(),
             ));
         }
+        if self.reinitialize.is_some() || self.reinit_password.is_some() {
+            return Err(Error::Encoding(
+                "ReinitializeDevice and its password require build_session()".into(),
+            ));
+        }
         if !self.source_audit_bindings.is_empty() {
             return Err(Error::Encoding(
                 "source Audit route data requires build_session()".into(),
             ));
         }
-        let Self {
-            interface,
-            port,
-            broadcast_address,
-            bbmd_bdt,
-            foreign_policy,
-            management_acl,
-            bdt_persist_path,
-            fanout_policy,
-            foreign_device,
-            ..
-        } = self;
-        let mut transport = BipTransport::new(interface, port, broadcast_address);
-        if let Some(bdt) = bbmd_bdt {
-            transport.enable_bbmd(bdt);
-            if let Some(policy) = foreign_policy {
-                transport.enable_foreign_device_registration(policy);
-            }
-            if let Some(acl) = management_acl {
-                transport.set_bbmd_management_acl(acl);
-            }
-        } else if foreign_policy.is_some() || management_acl.is_some() {
-            return Err(Error::Encoding(
-                "B/IP endpoint: BBMD controls require enable_bbmd() first".into(),
-            ));
-        }
-        if let Some(path) = bdt_persist_path {
-            transport.set_bdt_persist_path(path);
-        }
-        if let Some(policy) = fanout_policy {
-            transport.set_fanout_policy(policy);
-        }
-        if let Some(config) = foreign_device {
-            transport.register_as_foreign_device(config);
-        }
+        let mut transport = BipTransport::new(self.interface, self.port, self.broadcast_address);
+        transport.set_share_port_by_address(self.share_port_by_address);
+        transport.set_mode(self.mode);
         Ok(transport)
     }
 
@@ -319,6 +279,8 @@ impl BipEndpointBuilder {
     /// plus real-socket corroboration (single nonzero local MAC/port).
     pub fn build_session(mut self) -> Result<EndpointSession<BipTransport>, Error> {
         let device_write_authorizer = self.device_write_authorizer.take();
+        let reinitialize = self.reinitialize.take();
+        let reinit_password = self.reinit_password.take();
         let bindings = std::mem::take(&mut self.source_audit_bindings);
         crate::source_audit::recipient::SourceRoutes::new(
             &bindings,
@@ -330,7 +292,9 @@ impl BipEndpointBuilder {
         let identity = self.identity.take();
         let registered_network_port = self.registered_network_port.take();
         let transport = self.build_transport()?;
+        let bip_status = transport.bvlc_client_status();
         let mut endpoint = EndpointSession::new(transport, role, session)?;
+        endpoint.bip_status = Some(bip_status);
         if let Some(db) = database {
             endpoint = endpoint.with_database(db);
         }
@@ -343,7 +307,94 @@ impl BipEndpointBuilder {
         if let Some(oid) = registered_network_port {
             endpoint = endpoint.with_registered_network_port(oid);
         }
+        endpoint.reinitialize = reinitialize;
+        endpoint.reinit_password = reinit_password;
         endpoint.source_audit_bindings = bindings;
         Ok(endpoint)
+    }
+}
+
+#[cfg(test)]
+mod share_port_tests {
+    use super::*;
+
+    /// The builder hands `share_port_by_address` to its transport, which
+    /// refuses it without an explicit interface (#1538).
+    #[tokio::test]
+    async fn the_builder_shares_the_port_by_address_only_with_an_address() {
+        let mut endpoint =
+            BipEndpointBuilder::new(Ipv4Addr::UNSPECIFIED, 0xBAC0, Ipv4Addr::BROADCAST)
+                .role(SessionRole::ClientOnly)
+                .share_port_by_address(true)
+                .build_session()
+                .unwrap();
+        let Err(Error::Transport(refused)) = endpoint.start().await else {
+            panic!("start must refuse");
+        };
+        assert_eq!(refused.kind(), std::io::ErrorKind::InvalidInput);
+    }
+}
+
+#[cfg(test)]
+mod mode_tests {
+    use super::*;
+    use crate::session::SessionConfig;
+    use bacnet_transport::bip::{ForeignDeviceConfig, ForeignRegistrationOutcome};
+    use bacnet_transport::bvll::BvlcResultCode;
+    use std::time::Duration;
+
+    /// The session reports its transport's registration (#938) while it
+    /// runs, a BBMD's refusal included, and the totals after stop.
+    #[tokio::test]
+    async fn the_session_reports_a_refused_foreign_registration() {
+        let bbmd = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let mut endpoint = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
+            .role(SessionRole::ClientOnly)
+            .mode(BipMode::Foreign(ForeignDeviceConfig {
+                bbmd_ip: Ipv4Addr::LOCALHOST,
+                bbmd_port: bbmd.local_addr().unwrap().port(),
+                renewal_interval: None,
+                ttl: 60,
+            }))
+            .build_session()
+            .unwrap();
+        assert_eq!(endpoint.foreign_registration().unwrap().attempts, 0);
+        endpoint.start().await.unwrap();
+        let mut packet = [0; 64];
+        let (len, from) = bbmd.recv_from(&mut packet).await.unwrap();
+        assert_eq!(&packet[..len], &[0x81, 5, 0, 6, 0, 60]);
+        bbmd.send_to(&[0x81, 0, 0, 6, 0, 0x30], from).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while endpoint.foreign_registration().unwrap().refused == 0 {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("the refusal reached the session's status");
+        let registration = endpoint.foreign_registration().unwrap();
+        assert!(!registration.registered);
+        assert_eq!(
+            registration.last_result,
+            Some(BvlcResultCode::REGISTER_FOREIGN_DEVICE_NAK)
+        );
+        assert_eq!(
+            registration.last_outcome,
+            Some(ForeignRegistrationOutcome::Refused)
+        );
+        endpoint.stop().await.unwrap();
+        let registration = endpoint.foreign_registration().unwrap();
+        assert_eq!((registration.refused, registration.last_outcome), (1, None));
+    }
+
+    /// Only a session the B/IP builder built has a registration to report.
+    #[test]
+    fn a_session_built_without_the_builder_reports_none() {
+        let (transport, _peer) =
+            bacnet_transport::loopback::LoopbackTransport::pair(vec![1], vec![2]);
+        let session =
+            EndpointSession::new(transport, SessionRole::Both, SessionConfig::default()).unwrap();
+        assert!(session.foreign_registration().is_none());
     }
 }

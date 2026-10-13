@@ -19,9 +19,9 @@ use bacnet_server::server::BACnetServer;
 use bacnet_services::who_is::WhoIsRequest;
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_transport::bip::BipTransport;
-use bacnet_transport::bvll::{decode_bip_mac, decode_bvll};
+use bacnet_transport::bvll::{decode_bip_mac, decode_bvll, BvlcFunction};
 use bacnet_types::enums::{
-    BvlcFunction, ConfirmedServiceChoice, ObjectType, PropertyIdentifier, UnconfirmedServiceChoice,
+    ConfirmedServiceChoice, ObjectType, PropertyIdentifier, UnconfirmedServiceChoice,
 };
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use bytes::BytesMut;

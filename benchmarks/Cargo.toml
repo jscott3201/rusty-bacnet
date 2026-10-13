@@ -85,5 +85,9 @@ harness = false
 name = "sc_mtls_throughput"
 harness = false
 
+[[bench]]
+name = "read_range"
+harness = false
+
 [lints]
 workspace = true

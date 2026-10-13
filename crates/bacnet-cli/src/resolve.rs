@@ -1,9 +1,19 @@
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::any::Any;
+use std::net::{Ipv4Addr, SocketAddrV6};
+
+use bacnet_transport::bip6::{
+    parse_vmac_text, Bip6Transport, DEFAULT_BACNET6_PORT, VMAC_TEXT_PREFIX,
+};
+use bacnet_transport::port::TransportPort;
+use bacnet_types::error::Error;
 
 /// A parsed target for a BACnet command.
 pub enum Target {
     /// Direct MAC address (already resolved).
     Mac(Vec<u8>),
+    /// A B/IPv6 address. The node there is addressed by its VMAC, which
+    /// [`bip6_vmac`] finds.
+    Bip6(SocketAddrV6),
     /// Device instance number (needs discovery lookup).
     Instance(u32),
     /// Routed device: (dnet, device_instance).
@@ -26,25 +36,23 @@ pub fn ip_to_bip_mac(ip: Ipv4Addr, port: u16) -> Vec<u8> {
 /// Supported formats:
 /// - `dnet:instance` — routed device (e.g., `2:1234`)
 /// - `ip` or `ip:port` — direct BIP MAC (e.g., `192.168.1.100` or `192.168.1.100:47808`)
+/// - `bip6:instance` or `bip6:0xHHHHHH` — a B/IPv6 VMAC: a device instance's
+///   (Clause H.7.2), or any three octets, as
+///   [`format_vmac_text`](bacnet_transport::bip6::format_vmac_text) prints them
+/// - `[ipv6]` or `[ipv6]:port` — a B/IPv6 address (port 47808 when absent),
+///   whose VMAC [`bip6_vmac`] finds
 /// - `instance` — device instance number (e.g., `1234`)
 pub fn parse_target(s: &str) -> Result<Target, String> {
-    // Try IPv6 bracket notation: [addr]:port or [addr]
+    if s.starts_with(VMAC_TEXT_PREFIX) {
+        return parse_vmac_text(s)
+            .map(|vmac| Target::Mac(vmac.octets().to_vec()))
+            .map_err(|error| match error {
+                Error::Encoding(message) | Error::OutOfRange(message) => message,
+                other => other.to_string(),
+            });
+    }
     if s.starts_with('[') {
-        if let Some(bracket_end) = s.find(']') {
-            let ip_str = &s[1..bracket_end];
-            let ip: Ipv6Addr = ip_str
-                .parse()
-                .map_err(|_| format!("invalid IPv6 address in '{s}'"))?;
-            let port = if s.len() > bracket_end + 1 && s.as_bytes()[bracket_end + 1] == b':' {
-                s[bracket_end + 2..]
-                    .parse::<u16>()
-                    .map_err(|_| format!("invalid port in target '{s}'"))?
-            } else {
-                0xBAC0
-            };
-            let mac = bacnet_transport::bip6::encode_bip6_mac(ip, port);
-            return Ok(Target::Mac(mac.to_vec()));
-        }
+        return parse_bip6_address(s).map(Target::Bip6);
     }
 
     // Try parsing as dnet:instance (both parts must be numeric).
@@ -76,84 +84,85 @@ pub fn parse_target(s: &str) -> Result<Target, String> {
     }
 
     Err(format!(
-        "invalid target '{s}': expected IP[:port], device instance, or dnet:instance"
+        "invalid target '{s}': expected IP[:port], bip6:INSTANCE, bip6:0xVMAC, \
+         [IPv6][:port], device instance, or dnet:instance"
     ))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// `[ipv6]` or `[ipv6]:port`, port 47808 when absent. A link-local address
+/// may carry its interface as a numeric zone, `[fe80::1%3]`.
+fn parse_bip6_address(s: &str) -> Result<SocketAddrV6, String> {
+    let with_port;
+    let text = if s.ends_with(']') {
+        with_port = format!("{s}:{DEFAULT_BACNET6_PORT}");
+        &with_port
+    } else {
+        s
+    };
+    text.parse()
+        .map_err(|_| format!("invalid B/IPv6 address '{s}': expected [IPv6] or [IPv6]:port"))
+}
 
-    #[test]
-    fn test_ip_to_bip_mac() {
-        let mac = ip_to_bip_mac(Ipv4Addr::new(192, 168, 1, 100), 47808);
-        assert_eq!(mac, vec![192, 168, 1, 100, 0xBA, 0xC0]);
+/// `transport` as the B/IPv6 transport, when it is one. The commands are
+/// generic over the transport; only B/IPv6 maps addresses to VMACs.
+pub fn as_bip6<T: TransportPort + 'static>(transport: &T) -> Option<&Bip6Transport> {
+    (transport as &dyn Any).downcast_ref()
+}
+
+/// [`parse_target`] for a command on `transport`. A `bip6:` VMAC names a
+/// B/IPv6 node, so any other transport refuses it here, rather than hand
+/// its link a 3-octet MAC it can't send to.
+pub fn parse_target_on<T: TransportPort + 'static>(
+    transport: &T,
+    s: &str,
+) -> Result<Target, String> {
+    if s.starts_with(VMAC_TEXT_PREFIX) && as_bip6(transport).is_none() {
+        return Err(format!(
+            "'{s}' is a B/IPv6 VMAC: bip6: addresses need the --ipv6 transport"
+        ));
     }
+    parse_target(s)
+}
 
-    #[test]
-    fn test_parse_target_ip_no_port() {
-        let target = parse_target("192.168.1.100").unwrap();
-        match target {
-            Target::Mac(mac) => assert_eq!(mac, vec![192, 168, 1, 100, 0xBA, 0xC0]),
-            _ => panic!("expected Mac target"),
-        }
-    }
+/// Find the VMAC of the B/IPv6 node at `peer`, the MAC a command sends to.
+///
+/// A B/IPv6 node is addressed by its VMAC, not its IPv6 address (Clause
+/// U.1.3), so the CLI asks the node once, with a Virtual-Address-Resolution
+/// (Clause U.5), unless the transport already knows which VMAC is there.
+/// Fails on any transport but B/IPv6, and when nothing answers within three
+/// seconds.
+pub async fn bip6_vmac<T: TransportPort + 'static>(
+    transport: &T,
+    peer: SocketAddrV6,
+) -> Result<Vec<u8>, String> {
+    let bip6 = as_bip6(transport)
+        .ok_or_else(|| format!("{peer} is a B/IPv6 address: use it with --ipv6"))?;
+    let vmac = bip6
+        .resolve_virtual_address(peer)
+        .await
+        .map_err(|e| format!("could not find the VMAC at {peer}: {e}"))?;
+    Ok(vmac.octets().to_vec())
+}
 
-    #[test]
-    fn test_parse_target_ip_with_port() {
-        let target = parse_target("10.0.1.100:47809").unwrap();
-        match target {
-            Target::Mac(mac) => assert_eq!(mac, vec![10, 0, 1, 100, 0xBA, 0xC1]),
-            _ => panic!("expected Mac target"),
-        }
-    }
+/// Why a directed Who-Is refuses a device instance or routed target.
+pub const TARGET_NOT_AN_ADDRESS: &str =
+    "--target requires an address, not a device instance or routed address";
 
-    #[test]
-    fn test_parse_target_instance() {
-        let target = parse_target("1234").unwrap();
-        match target {
-            Target::Instance(id) => assert_eq!(id, 1234),
-            _ => panic!("expected Instance target"),
-        }
-    }
-
-    #[test]
-    fn test_parse_target_routed() {
-        let target = parse_target("2:1234").unwrap();
-        match target {
-            Target::Routed(dnet, id) => {
-                assert_eq!(dnet, 2);
-                assert_eq!(id, 1234);
-            }
-            _ => panic!("expected Routed target"),
-        }
-    }
-
-    #[test]
-    fn test_parse_target_invalid() {
-        assert!(parse_target("not-a-target").is_err());
-    }
-
-    #[test]
-    fn test_parse_target_ipv6_with_port() {
-        let target = parse_target("[::1]:47808").unwrap();
-        match target {
-            Target::Mac(mac) => assert_eq!(mac.len(), 18),
-            _ => panic!("expected Mac target"),
-        }
-    }
-
-    #[test]
-    fn test_parse_target_ipv6_no_port() {
-        let target = parse_target("[fe80::1]").unwrap();
-        match target {
-            Target::Mac(mac) => {
-                assert_eq!(mac.len(), 18);
-                // Default port should be 0xBAC0
-                assert_eq!(mac[16], 0xBA);
-                assert_eq!(mac[17], 0xC0);
-            }
-            _ => panic!("expected Mac target"),
-        }
+/// The MAC of a target that must be an address, such as a directed
+/// Who-Is's: a MAC as written, or the VMAC [`bip6_vmac`] finds for a
+/// B/IPv6 address. A device instance or routed target fails with `refusal`.
+pub async fn address_mac<T: TransportPort + 'static>(
+    transport: &T,
+    text: &str,
+    refusal: &str,
+) -> Result<Vec<u8>, String> {
+    match parse_target_on(transport, text)? {
+        Target::Mac(mac) => Ok(mac),
+        Target::Bip6(peer) => bip6_vmac(transport, peer).await,
+        Target::Instance(_) | Target::Routed(..) => Err(refusal.to_string()),
     }
 }
+
+#[cfg(test)]
+#[path = "resolve_tests.rs"]
+mod tests;

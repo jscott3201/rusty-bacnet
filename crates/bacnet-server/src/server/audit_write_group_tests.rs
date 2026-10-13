@@ -186,7 +186,7 @@ async fn a_channel_write_the_authorizer_denies_makes_no_record() {
         };
         target.channel.instance_number() == 2
     });
-    fixture.server.config.mutation_authorizer = Some(authorizer);
+    fixture.server.config_mut().mutation_authorizer = Some(authorizer);
     send(&fixture, SOURCE).await;
     let device30 = BACnetRecipient::Device(oid(ObjectType::DEVICE, 30));
     assert_eq!(untimed(records(&fixture)), [expected(2, device30)]);

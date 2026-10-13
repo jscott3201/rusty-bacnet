@@ -9,6 +9,9 @@
 //! numbers. `record` names the record kind in error messages, and `what`
 //! names the record kind and the field.
 
+#[cfg(not(feature = "std"))]
+use alloc::{string::ToString, vec::Vec};
+
 use super::tagged::{contents, decode_ctx_constructed, expect_end};
 use super::validate_tlv_sequence;
 use crate::{primitives, tags};

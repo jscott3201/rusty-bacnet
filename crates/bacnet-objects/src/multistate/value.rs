@@ -1,6 +1,8 @@
 use super::*;
+use crate::object_profile::{ObjectProfile, ProfileState, TagsPersistence};
 use crate::present_value_access::PresentValueAccess;
 use crate::property_metadata::PropertyMetadata;
+use std::sync::Arc;
 
 mod metadata;
 
@@ -12,6 +14,7 @@ mod metadata;
 ///
 /// Present_Value is Unsigned, range 1..=number_of_states.
 pub struct MultiStateValueObject {
+    profile: ProfileState,
     oid: ObjectIdentifier,
     name: String,
     description: String,
@@ -36,6 +39,8 @@ pub struct MultiStateValueObject {
     pub(crate) event_history: EventHistory,
     /// Implemented paired command-source tracking (Clause 19.5).
     value_source: crate::command_source::ValueSourceTracking,
+    /// The last writer of a noncommandable Present_Value, once tracked (#1552).
+    write_source: crate::command_source::SingleValueSource,
 }
 
 impl MultiStateValueObject {
@@ -63,6 +68,7 @@ impl MultiStateValueObject {
         let oid = ObjectIdentifier::new(ObjectType::MULTI_STATE_VALUE, instance)?;
         require_nonzero_states(number_of_states)?;
         Ok(Self {
+            profile: ProfileState::default(),
             oid,
             name: name.into(),
             description: String::new(),
@@ -84,7 +90,46 @@ impl MultiStateValueObject {
             event_detection_enable: true,
             event_history: EventHistory::default(),
             value_source: crate::command_source::ValueSourceTracking::default(),
+            write_source: crate::command_source::SingleValueSource::default(),
         })
+    }
+
+    /// Build with application-owned Tags storage and the requested Present_Value access.
+    /// Saved Tags override configured Tags only while [`Self::set_profile`]
+    /// provisions the row. Loaded data must satisfy the shared Tags rules and
+    /// the opt-in 1 MiB snapshot limit.
+    pub fn with_tags_persistence(
+        instance: u32,
+        name: impl Into<String>,
+        number_of_states: u32,
+        access: PresentValueAccess,
+        persistence: Arc<dyn TagsPersistence>,
+    ) -> Result<Self, Error> {
+        let mut object = Self::with_access(instance, name, number_of_states, access)?;
+        object.profile = ProfileState::persistent(object.oid, persistence)?;
+        Ok(object)
+    }
+
+    /// Provision independent optional Tags, Profile_Location and Profile_Name
+    /// rows before registration, in every Present_Value access mode. Tags is
+    /// writable; the text rows are network read-only. Invalid configuration
+    /// leaves the previous profile and its attached storage unchanged.
+    pub fn set_profile(&mut self, profile: ObjectProfile) -> Result<(), Error> {
+        self.profile.provision(profile)
+    }
+
+    /// Wait for queued save attempts to finish; writes report their own outcomes.
+    /// This is not a success receipt. Unstaged synchronous writes block their caller.
+    pub fn wait_for_tag_saves(&self) {
+        self.profile.wait_for_saves();
+    }
+
+    /// Track the source of a noncommandable Present_Value (Clause 19.5,
+    /// #1552), as [`AnalogValueObject::set_value_source_tracking`] does.
+    ///
+    /// [`AnalogValueObject::set_value_source_tracking`]: crate::analog::AnalogValueObject::set_value_source_tracking
+    pub fn set_value_source_tracking(&mut self, enabled: bool) {
+        self.write_source.set_enabled(enabled);
     }
 
     /// Set the description string.
@@ -199,6 +244,25 @@ impl MultiStateValueObject {
             .chain(self.event_detector.alarm_values.iter().copied())
     }
 
+    /// A noncommandable Present_Value write, network-equivalent.
+    fn write_direct_present_value(
+        &mut self,
+        array_index: Option<u32>,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        if array_index.is_some() {
+            return Err(common::property_is_not_an_array_error());
+        }
+        if self.access == PresentValueAccess::ReadOnly && !self.out_of_service {
+            return Err(common::write_access_denied_error());
+        }
+        // Clause 19.2: an otherwise permitted noncommandable NULL is a no-op.
+        if value == PropertyValue::Null {
+            return Ok(());
+        }
+        self.set_present_value_directly(value)
+    }
+
     fn set_present_value_directly(&mut self, value: PropertyValue) -> Result<(), Error> {
         self.present_value = Self::checked_present_value(self.number_of_states, value)?;
         let _ = self.recompute_reliability();
@@ -254,10 +318,17 @@ impl BACnetObject for MultiStateValueObject {
         if metadata::excludes(self, property) {
             return Err(common::unknown_property_error());
         }
-        if let Some(result) = self
-            .value_source
-            .read(property, array_index, &self.priority_array)
-        {
+        let source = match self.access {
+            PresentValueAccess::Commandable => {
+                self.value_source
+                    .read(property, array_index, &self.priority_array)
+            }
+            _ => self.write_source.read(property, array_index),
+        };
+        if let Some(result) = source {
+            return result;
+        }
+        if let Some(result) = self.profile.read(property, array_index) {
             return result;
         }
 
@@ -344,10 +415,13 @@ impl BACnetObject for MultiStateValueObject {
         {
             return Err(common::property_is_not_an_array_error());
         }
-        if property == PropertyIdentifier::VALUE_SOURCE
-            && self.access == PresentValueAccess::Commandable
-        {
-            return self.value_source.correct(value, priority, origin);
+        if property == PropertyIdentifier::VALUE_SOURCE {
+            return match self.access {
+                PresentValueAccess::Commandable => {
+                    self.value_source.correct(value, priority, origin)
+                }
+                _ => self.write_source.correct(array_index, value, origin),
+            };
         }
         if property == PropertyIdentifier::PRESENT_VALUE {
             let number_of_states = self.number_of_states;
@@ -362,7 +436,14 @@ impl BACnetObject for MultiStateValueObject {
                     )
                 }
                 PresentValueAccess::ReadOnly | PresentValueAccess::Writable => {
-                    self.write_property(property, array_index, value, priority)
+                    self.write_source.admit(origin)?;
+                    // A NULL is a no-op (Clause 19.2), so it has no writer.
+                    let null = value == PropertyValue::Null;
+                    self.write_direct_present_value(array_index, value)?;
+                    if !null {
+                        self.write_source.record(origin);
+                    }
+                    Ok(())
                 }
             };
         }
@@ -379,21 +460,16 @@ impl BACnetObject for MultiStateValueObject {
         if metadata::excludes(self, property) {
             return Err(common::unknown_property_error());
         }
+        if let Some(result) = self.profile.write(property, array_index, &value) {
+            return result;
+        }
         if property == PropertyIdentifier::PRESENT_VALUE {
             if self.access == PresentValueAccess::Commandable {
                 return Err(common::write_access_denied_error());
             }
-            if array_index.is_some() {
-                return Err(common::property_is_not_an_array_error());
-            }
-            if self.access == PresentValueAccess::ReadOnly && !self.out_of_service {
-                return Err(common::write_access_denied_error());
-            }
-            // Clause 19.2: an otherwise permitted noncommandable NULL is a no-op.
-            if value == PropertyValue::Null {
-                return Ok(());
-            }
-            return self.set_present_value_directly(value);
+            // A tracked source needs the writer (`write_property_from`).
+            self.write_source.unsourced()?;
+            return self.write_direct_present_value(array_index, value);
         }
         if property == PropertyIdentifier::VALUE_SOURCE {
             return Err(common::write_access_denied_error());
@@ -495,6 +571,15 @@ impl BACnetObject for MultiStateValueObject {
         ))
     }
 
+    fn durable_writes_internal(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
+        self.profile.capability()
+    }
+
+    fn advance_monotonic_time_internal(&mut self, now: std::time::Duration) -> bool {
+        self.profile.expire(now);
+        false
+    }
+
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         metadata::for_object(self)
     }
@@ -548,9 +633,22 @@ impl BACnetObject for MultiStateValueObject {
             }
             _ if self.out_of_service => Err(common::write_access_denied_error()),
             PresentValueAccess::ReadOnly | PresentValueAccess::Writable => {
-                self.set_present_value_directly(value)
+                self.set_present_value_directly(value)?;
+                self.write_source.forget();
+                Ok(())
             }
         }
+    }
+
+    fn set_present_value_from_internal(
+        &mut self,
+        value: PropertyValue,
+        origin: &crate::command_source::CommandOrigin,
+    ) -> Result<(), Error> {
+        self.write_source.admit(origin)?;
+        self.set_present_value_internal(value)?;
+        self.write_source.record(origin);
+        Ok(())
     }
 
     fn reliability_evaluation_inhibited_internal(&self) -> bool {

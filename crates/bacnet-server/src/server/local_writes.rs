@@ -4,11 +4,13 @@ use crate::command_lists::TakenRuns;
 use crate::handlers::{WriteCommitObserver, WriteTarget};
 use bacnet_objects::staging::StagingWritePlan;
 use bacnet_types::constructed::BACnetRecipient;
-use futures_util::FutureExt;
-use tracing::error;
 
 #[path = "local_write_finish.rs"]
 mod finish;
+
+#[path = "local_access_inputs.rs"]
+mod access_inputs;
+use finish::local_runtime;
 pub(super) use finish::Committed;
 
 #[cfg(test)]
@@ -31,7 +33,7 @@ mod local_index_staged_release_tests;
 ///
 /// Inputs and noncommandable Values distinguish application updates from
 /// network-equivalent writes, including their Out_Of_Service ownership checks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) enum LocalWrite<'s> {
     /// A trusted local program performing a network-equivalent property write.
     Property {
@@ -50,6 +52,9 @@ pub(super) enum LocalWrite<'s> {
     ApplicationAveragingMiss,
     /// The application supplying a Life Safety object's `Tracking_Value`.
     ApplicationTrackingValue,
+    /// The application reporting an access-control object's input: an
+    /// access event, a credential read or a door's hardware state (#1132).
+    ApplicationAccessInput(&'s bacnet_objects::access_control::AccessControlInput),
     /// One value of an inbound WriteGroup for a Channel's `Present_Value`, at
     /// the priority the request gave it (Clause 15.11). Under the write guard
     /// the Channel takes it only while its Control_Groups still holds `group`
@@ -76,34 +81,45 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// forge `Operation_Expected`. After the lock is released, an actual
     /// `Operation_Expected` readback change uses the exact Life Safety COV path;
     /// rearming to the current value emits no notification.
+    ///
+    /// Like [`write_local`](Self::write_local), it must be awaited inside a
+    /// Tokio runtime, failing before anything changes outside one. Once the
+    /// object holds the operation, the timestamped capture and the COV
+    /// fanout the change owes run as a task of their own in the server's
+    /// request task set, which this future only waits for, so a caller
+    /// dropped then skips none of it (#1520). `stop()` aborts that task with
+    /// the other request tasks.
     pub async fn set_life_safety_operation_expected_local(
         &self,
         oid: &ObjectIdentifier,
         operation: LifeSafetyOperation,
     ) -> Result<(), Error> {
+        let runtime = local_runtime()?;
         self.active_network()?;
-        let changes = {
-            let mut db = self.db.write().await;
-            let snapshots = crate::life_safety_cov::LifeSafetyCovSnapshots::capture_oid(&db, *oid);
-            let object = db.get_mut(oid).ok_or_else(|| Error::Protocol {
-                class: ErrorClass::OBJECT.to_raw() as u32,
-                code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
-            })?;
-            object.set_life_safety_operation_expected_internal(operation)?;
-            let changes = snapshots.changes(&db, std::slice::from_ref(oid));
-            let capture = self.cov_table.read().await.timed_capture_exact(&changes);
-            capture.run(&db);
-            changes
-        };
-        for change in changes {
-            Self::fire_life_safety_cov_notifications(
-                &self.local_cov_context(),
-                &change.object_identifier,
-                &change.changed_properties,
-            )
-            .await;
+        // Owned, so the fanout can take it to a task of its own with no wait
+        // between the change and the hand-off.
+        let mut db = Arc::clone(&self.db).write_owned().await;
+        let mut commit = crate::committed_cov::BackgroundCommit::new();
+        commit.before_change(&db, *oid);
+        let object = db.get_mut(oid).ok_or_else(|| Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
+        })?;
+        object.set_life_safety_operation_expected_internal(operation)?;
+        // Only a Life Safety Point or Zone reports the change. Another object
+        // whose setter takes the operation owes no COV, as before (#1520).
+        if crate::life_safety_cov::is_life_safety_object(*oid) {
+            commit.changed(*oid);
         }
-        Ok(())
+        let fanout =
+            super::cov_fanout::CovFanout::new(&self.local_cov_context(), &self.event_suppressions);
+        self.finish_in_task(&runtime, async move {
+            // Under the change's guard: the database, then the COV table.
+            let committed = commit.finish(&fanout.db, &mut db, &fanout.cov_table).await;
+            drop(db);
+            fanout.fire(&committed).await;
+        })
+        .await
     }
 
     /// Write a property on a local object and fire the same post-write COV
@@ -195,7 +211,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// invalid application value. Other object families fail closed; use
     /// [`BACnetServer::write_local`] for network-equivalent writes and sourced
     /// commands on commandable objects. The Python binding exposes this as
-    /// `BACnetServer.set_present_value_local`.
+    /// `BACnetServer.set_present_value_local`. A noncommandable Value that
+    /// tracks its source (`set_value_source_tracking`, #1552) then publishes
+    /// this server's Device as Value_Source, as Clause 19.5 asks of a write
+    /// the local device makes.
     ///
     /// A Life Safety Point or Zone takes an Enumerated BACnetLifeSafetyState,
     /// a standard value or one from 256 to 65535, in or out of service, since
@@ -369,8 +388,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         value: PropertyValue,
         source: Option<crate::LocalCommandSource>,
     ) -> Result<(), Error> {
-        let runtime = tokio::runtime::Handle::try_current()
-            .map_err(|_| Error::Encoding("Local writes require a Tokio runtime".into()))?;
+        let runtime = local_runtime()?;
         self.active_network()?;
         let Some(committed) = self
             .local_writer()
@@ -380,38 +398,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             return Ok(());
         };
         let runner = super::command_runs::CommandRunner::for_server(self);
-        let (done, finished) = oneshot::channel();
         // A closed set (the server is stopping) drops the task, and with it
         // the guard and the runs, which then end unsuccessful (#1324).
-        self.request_tasks.spawn_on(
-            async move {
-                let work = std::panic::AssertUnwindSafe(async {
-                    let runs = runner.writer().finish(committed).await;
-                    if !runs.is_empty() {
-                        runner.start(runs);
-                    }
-                });
-                // A panic goes back to the caller. With the caller gone, it
-                // is logged here, as this write's, and goes no further.
-                if let Err(Err(panic)) = done.send(work.catch_unwind().await) {
-                    let message = panic
-                        .downcast_ref::<&str>()
-                        .copied()
-                        .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
-                        .unwrap_or("a non-text payload");
-                    error!(
-                        panic = message,
-                        "A local write's post-commit work panicked after its caller went away"
-                    );
-                }
-            },
-            &runtime,
-        );
-        match finished.await {
-            Ok(Err(panic)) => std::panic::resume_unwind(panic),
-            // Done, or aborted by `stop()`: either way the write was made.
-            Ok(Ok(())) | Err(_) => Ok(()),
-        }
+        self.finish_in_task(&runtime, async move {
+            let runs = runner.writer().finish(committed).await;
+            if !runs.is_empty() {
+                runner.start(runs);
+            }
+        })
+        .await
     }
 
     /// Borrow the handles a local write uses, once the caller has checked
@@ -582,7 +577,9 @@ pub(super) struct LocalWriter<'a, T: TransportPort + 'static> {
     pub(super) learned_routers: &'a Arc<Mutex<LearnedRouterCache>>,
     pub(super) device_bindings: &'a Arc<RwLock<DeviceBindingTable>>,
     pub(super) event_suppressions: &'a Arc<super::event_suppression::EventSuppressions>,
-    pub(super) config: &'a ServerConfig,
+    /// The server's config, which a run's task shares rather than copies
+    /// (#1521).
+    pub(super) config: &'a Arc<ServerConfig>,
 }
 
 impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
@@ -770,7 +767,8 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
                 | LocalWrite::ApplicationControlledVariableValue
                 | LocalWrite::ApplicationAveragingSample
                 | LocalWrite::ApplicationAveragingMiss
-                | LocalWrite::ApplicationTrackingValue => None,
+                | LocalWrite::ApplicationTrackingValue
+                | LocalWrite::ApplicationAccessInput(_) => None,
             };
             let value = match write {
                 LocalWrite::Property { property, .. } => {
@@ -805,8 +803,13 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
                 | LocalWrite::ApplicationAveragingSample
                 | LocalWrite::ApplicationAveragingMiss
                 | LocalWrite::ApplicationTrackingValue
+                | LocalWrite::ApplicationAccessInput(_)
                 | LocalWrite::WriteGroup { .. } => None,
             };
+            // The application's own Present_Value comes from this Device, which
+            // a tracked noncommandable Value publishes as its source (#1552).
+            let source = source.or(matches!(write, LocalWrite::ApplicationPresentValue)
+                .then_some(crate::LocalCommandSource::ServerDevice));
             let command_origin =
                 source.and_then(|source| crate::command_source::resolve_local(&db, source).ok());
             let result = prepared.unwrap_or_else(|| {
@@ -827,7 +830,10 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
                             command_origin.as_ref(),
                         )
                     }
-                    LocalWrite::ApplicationPresentValue => object.set_present_value_internal(value),
+                    LocalWrite::ApplicationPresentValue => match &command_origin {
+                        Some(origin) => object.set_present_value_from_internal(value, origin),
+                        None => object.set_present_value_internal(value),
+                    },
                     LocalWrite::ApplicationControlledVariableValue => {
                         object.set_controlled_variable_value_internal(value)
                     }
@@ -839,6 +845,9 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
                     }
                     LocalWrite::ApplicationTrackingValue => {
                         object.set_tracking_value_internal(value)
+                    }
+                    LocalWrite::ApplicationAccessInput(input) => {
+                        object.report_access_input_internal(input.clone())
                     }
                     LocalWrite::WriteGroup { priority, .. } => object.write_property(
                         PropertyIdentifier::PRESENT_VALUE,

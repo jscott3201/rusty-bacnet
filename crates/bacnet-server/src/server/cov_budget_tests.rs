@@ -39,10 +39,10 @@ async fn in_flight_failure_does_not_consume_event_budget() {
         max_confirmed_in_flight_per_peer: 1,
         ..Default::default()
     };
-    let config = ServerConfig {
+    let config = Arc::new(ServerConfig {
         cov_policy: policy,
         ..ServerConfig::default()
-    };
+    });
     let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::with_policy(
         config.cov_policy.clone(),
         Arc::new(AtomicCovCounters::default()),
@@ -108,10 +108,10 @@ async fn fair_distribution_between_single_and_multiple_notifications() {
         max_notifications_per_event: 2,
         ..Default::default()
     };
-    let config = ServerConfig {
+    let config = Arc::new(ServerConfig {
         cov_policy: policy,
         ..ServerConfig::default()
-    };
+    });
     let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::with_policy(
         config.cov_policy.clone(),
         Arc::new(AtomicCovCounters::default()),
@@ -383,10 +383,10 @@ async fn expired_subscription_purged_before_cov_property_multiple_admission() {
 async fn unlimited_policy_half_cap_computation_does_not_overflow() {
     let (transport, sent) = recording_transport();
     let (db, ao_oid) = test_db_with_ao();
-    let config = ServerConfig {
+    let config = Arc::new(ServerConfig {
         cov_policy: CovPolicy::unlimited(),
         ..ServerConfig::default()
-    };
+    });
     let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::with_policy(
         config.cov_policy.clone(),
         Arc::new(AtomicCovCounters::default()),
@@ -491,10 +491,10 @@ async fn life_safety_fair_budget_partitioning_between_single_and_multiple() {
         max_notifications_per_event: 2,
         ..Default::default()
     };
-    let config = ServerConfig {
+    let config = Arc::new(ServerConfig {
         cov_policy: policy,
         ..ServerConfig::default()
-    };
+    });
     let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::with_policy(
         config.cov_policy.clone(),
         Arc::new(AtomicCovCounters::default()),

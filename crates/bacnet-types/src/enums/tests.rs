@@ -69,9 +69,18 @@ fn property_identifiers_508_to_511_are_network_port_and_color_is_extended() {
         (509, "CERTIFICATE_SIGNING_REQUEST_FILE"),
         (510, "COMMAND_VALIDATION_RESULT"),
         (511, "ISSUER_CERTIFICATE_FILES"),
+        // The lighting outputs' colour links (#1527) and the colour
+        // objects' rows, in numeric order.
+        (4_194_328, "COLOR_OVERRIDE"),
+        (4_194_329, "COLOR_REFERENCE"),
         (4_194_330, "DEFAULT_COLOR"),
         (4_194_331, "DEFAULT_COLOR_TEMPERATURE"),
+        (4_194_332, "OVERRIDE_COLOR_REFERENCE"),
         (4_194_334, "COLOR_COMMAND"),
+        // Lighting Output's trims (#1528), numbered by the errata.
+        (4_194_335, "HIGH_END_TRIM"),
+        (4_194_336, "LOW_END_TRIM"),
+        (4_194_337, "TRIM_FADE_TIME"),
     ];
     for (raw, name) in cases {
         let property = PropertyIdentifier::from_raw(raw);
@@ -102,12 +111,6 @@ fn confirmed_service_choice_values() {
 fn unconfirmed_service_choice_values() {
     assert_eq!(UnconfirmedServiceChoice::WHO_IS.to_raw(), 8);
     assert_eq!(UnconfirmedServiceChoice::I_AM.to_raw(), 0);
-}
-
-#[test]
-fn bvlc_function_values() {
-    assert_eq!(BvlcFunction::ORIGINAL_UNICAST_NPDU.to_raw(), 0x0A);
-    assert_eq!(BvlcFunction::ORIGINAL_BROADCAST_NPDU.to_raw(), 0x0B);
 }
 
 #[test]

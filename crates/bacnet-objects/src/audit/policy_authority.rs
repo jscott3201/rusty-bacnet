@@ -1,4 +1,5 @@
-//! Concrete AV/BV policy preparation; no generic object callbacks during commit.
+//! Concrete object-policy preparation (AV/BV and the colour objects); no
+//! generic object callbacks during commit.
 use super::ObjectAuditPolicy;
 use bacnet_types::{enums::PropertyIdentifier, error::Error, primitives::PropertyValue};
 

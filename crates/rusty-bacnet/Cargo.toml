@@ -12,17 +12,17 @@ name = "rusty_bacnet"
 crate-type = ["cdylib"]
 
 [dependencies]
-bacnet-types.workspace = true
-bacnet-encoding.workspace = true
+bacnet-types = { workspace = true, features = ["std"] }
+bacnet-encoding = { workspace = true, features = ["std"] }
 bacnet-client.workspace = true
 bacnet-server.workspace = true
 bacnet-endpoint = { workspace = true, features = ["sc-tls"] }
 bacnet-transport = { workspace = true, features = ["sc-tls", "ipv6", "serial"] }
 bacnet-objects.workspace = true
-bacnet-services.workspace = true
+bacnet-services = { workspace = true, features = ["std"] }
 pyo3.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
-bytes.workspace = true
+bytes = { workspace = true, features = ["std"] }
 tokio-rustls.workspace = true
 
 [lints]

@@ -61,8 +61,17 @@ MSTP_KEYWORD_ONLY = [
     "mstp_mac",
     "mstp_max_master",
     "mstp_max_info_frames",
+    "mstp_extended_frames",
+    "mstp_echo",
+    "mstp_echo_grace_ms",
+    "mstp_transmit_latency_pad_ms",
+    "mstp_usage_timeout_ms",
+    "mstp_reply_timeout_ms",
 ]
-CLIENT_KEYWORD_ONLY = MSTP_KEYWORD_ONLY + ["sc_device_uuid"]
+CLIENT_KEYWORD_ONLY = MSTP_KEYWORD_ONLY + [
+    "sc_device_uuid", "share_port_by_address", "min_request_interval_ms", "ipv6_device_instance",
+    "bbmd", "foreign_device",
+]
 SERVER_KEYWORD_ONLY = ["mutation_policy", "dcc_policy", "dcc_source_restriction", "dcc_disable_rate_limit"] + MSTP_KEYWORD_ONLY + [
     "max_confirmed_in_flight", "max_unconfirmed_in_flight",
     "max_confirmed_in_flight_per_peer", "max_unconfirmed_in_flight_per_peer",
@@ -78,6 +87,8 @@ SERVER_KEYWORD_ONLY = ["mutation_policy", "dcc_policy", "dcc_source_restriction"
     "event_information_max_objects", "event_information_max_returned_summaries",
     "event_information_max_service_ack_bytes",
     "sc_device_uuid", "registered_network_port", "cov_policy", "time_sync_policy",
+    "share_port_by_address", "segmentation_supported", "apdu_segment_timeout_ms",
+    "bbmd", "foreign_device",
 ]
 SUPPORTED_BAUD_RATES = (9_600, 19_200, 38_400, 57_600, 76_800, 115_200)
 SUPPORTED_BAUD_ERROR = (
@@ -162,7 +173,7 @@ class SignatureCompatibilityTests(unittest.TestCase):
         )
         self.assertEqual(
             [p.default for p in parameters if p.name in MSTP_KEYWORD_ONLY],
-            [None, 38_400, 1, 127, 1],
+            [None, 38_400, 1, 127, 1, False, False, None, None, None, None],
         )
 
     def test_runtime_and_stub_signatures_match_compatibility_contract(self) -> None:
@@ -259,6 +270,151 @@ class MstpRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 await server.start()
             self.assertTrue(str(caught.exception).startswith("Serial open failed"))
 
+    async def test_extended_frames_reach_serial_open_for_client_and_server(
+        self,
+    ) -> None:
+        # Extended frames (#1611) need nothing the standard ones don't
+        # before the port opens, at the slowest and fastest rates alike.
+        path = nonexistent_serial_path()
+        for baud in (9_600, 115_200):
+            client = make_client(path, mstp_baud=baud, mstp_extended_frames=True)
+            with self.subTest(kind="client", baud=baud), self.assertRaises(
+                RuntimeError
+            ) as caught:
+                await client.__aenter__()
+            self.assertTrue(str(caught.exception).startswith("Serial open failed"))
+
+            server = make_server(path, mstp_baud=baud, mstp_extended_frames=True)
+            with self.subTest(kind="server", baud=baud), self.assertRaises(
+                RuntimeError
+            ) as caught:
+                await server.start()
+            self.assertTrue(str(caught.exception).startswith("Serial open failed"))
+
+    async def test_echo_options_reach_serial_open_for_client_and_server(
+        self,
+    ) -> None:
+        # An echoing adapter (#1653), with the default grace or one given,
+        # needs nothing more before the port opens.
+        path = nonexistent_serial_path()
+        for grace in (None, 1, 60):
+            options = {"mstp_echo": True, "mstp_echo_grace_ms": grace}
+            client = make_client(path, **options)
+            with self.subTest(kind="client", grace=grace), self.assertRaises(
+                RuntimeError
+            ) as caught:
+                await client.__aenter__()
+            self.assertTrue(str(caught.exception).startswith("Serial open failed"))
+
+            server = make_server(path, **options)
+            with self.subTest(kind="server", grace=grace), self.assertRaises(
+                RuntimeError
+            ) as caught:
+                await server.start()
+            self.assertTrue(str(caught.exception).startswith("Serial open failed"))
+
+    async def test_invalid_echo_grace_fails_before_open_for_client_and_server(
+        self,
+    ) -> None:
+        path = nonexistent_serial_path()
+        cases = [
+            (
+                {"mstp_echo": True, "mstp_echo_grace_ms": 0},
+                "mstp_echo_grace_ms must be at least 1",
+            ),
+            (
+                {"mstp_echo_grace_ms": 40},
+                "mstp_echo_grace_ms needs mstp_echo=True",
+            ),
+            (
+                {"mstp_echo": False, "mstp_echo_grace_ms": 0},
+                "mstp_echo_grace_ms needs mstp_echo=True",
+            ),
+        ]
+        for overrides, message in cases:
+            client = make_client(path, **overrides)
+            with self.subTest(kind="client", overrides=overrides), self.assertRaisesRegex(
+                ValueError, f"^{re.escape(message)}$"
+            ):
+                await client.__aenter__()
+
+            server = make_server(path, **overrides)
+            server.add_binary_value(1, "Pending")
+            with self.subTest(kind="server", overrides=overrides), self.assertRaisesRegex(
+                ValueError, f"^{re.escape(message)}$"
+            ):
+                await server.start()
+            # Refused before anything started: registration stays open.
+            server.add_binary_input(1, "After failure")
+
+    async def test_timing_options_reach_serial_open_for_client_and_server(
+        self,
+    ) -> None:
+        # The pad and the two timeouts (#1654, #1655) at the ends of their
+        # ranges need nothing more before the port opens.
+        path = nonexistent_serial_path()
+        for options in (
+            {"mstp_transmit_latency_pad_ms": 0, "mstp_usage_timeout_ms": 20, "mstp_reply_timeout_ms": 255},
+            {"mstp_transmit_latency_pad_ms": 15, "mstp_usage_timeout_ms": 35, "mstp_reply_timeout_ms": 300},
+        ):
+            client = make_client(path, **options)
+            with self.subTest(kind="client", **options), self.assertRaises(
+                RuntimeError
+            ) as caught:
+                await client.__aenter__()
+            self.assertTrue(str(caught.exception).startswith("Serial open failed"))
+
+            server = make_server(path, **options)
+            with self.subTest(kind="server", **options), self.assertRaises(
+                RuntimeError
+            ) as caught:
+                await server.start()
+            self.assertTrue(str(caught.exception).startswith("Serial open failed"))
+
+    async def test_out_of_range_timing_fails_before_open_for_client_and_server(
+        self,
+    ) -> None:
+        path = nonexistent_serial_path()
+        cases = [
+            ({"mstp_transmit_latency_pad_ms": 16}, "transmit_latency_pad"),
+            ({"mstp_usage_timeout_ms": 19}, "usage_timeout"),
+            ({"mstp_usage_timeout_ms": 36}, "usage_timeout"),
+            ({"mstp_reply_timeout_ms": 254}, "reply_timeout"),
+            ({"mstp_reply_timeout_ms": 301}, "reply_timeout"),
+        ]
+        for overrides, field in cases:
+            client = make_client(path, **overrides)
+            with self.subTest(kind="client", **overrides), self.assertRaisesRegex(
+                ValueError, field
+            ):
+                await client.__aenter__()
+
+            server = make_server(path, **overrides)
+            with self.subTest(kind="server", **overrides), self.assertRaisesRegex(
+                ValueError, field
+            ):
+                await server.start()
+
+    def test_negative_timing_is_refused_at_construction(self) -> None:
+        path = nonexistent_serial_path()
+        for keyword in (
+            "mstp_transmit_latency_pad_ms",
+            "mstp_usage_timeout_ms",
+            "mstp_reply_timeout_ms",
+        ):
+            with self.subTest(keyword=keyword):
+                with self.assertRaises(OverflowError):
+                    make_client(path, **{keyword: -1})
+                with self.assertRaises(OverflowError):
+                    make_server(path, **{keyword: -1})
+
+    def test_negative_echo_grace_is_refused_at_construction(self) -> None:
+        path = nonexistent_serial_path()
+        with self.assertRaises(OverflowError):
+            make_client(path, mstp_echo=True, mstp_echo_grace_ms=-1)
+        with self.assertRaises(OverflowError):
+            make_server(path, mstp_echo=True, mstp_echo_grace_ms=-1)
+
     async def test_unsupported_baud_rates_fail_before_io_for_client_and_server(
         self,
     ) -> None:
@@ -289,7 +445,7 @@ class MstpRuntimeTests(unittest.IsolatedAsyncioTestCase):
                     )
         for address in (
             "192.168.1.100:47808",
-            "[::1]:47808",
+            "00:04:d2",
             "01:02:03:04:05:06",
         ):
             with self.subTest(address=address), self.assertRaisesRegex(

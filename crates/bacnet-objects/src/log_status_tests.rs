@@ -22,6 +22,8 @@ use crate::trend::{TrendLogMultipleObject, TrendLogObject};
 
 #[path = "log_insertion_tests.rs"]
 mod insertion;
+#[path = "log_restore_tests.rs"]
+mod restore;
 
 const LOG_DISABLED: LogStatus = LogStatus::LOG_DISABLED;
 const BUFFER_PURGED: LogStatus = LogStatus::BUFFER_PURGED;
@@ -85,6 +87,26 @@ impl Family {
             Self::Event(object) => object.add_record(event(record)),
             Self::Trend(object) => object.add_record(record),
             Self::TrendMultiple(object) => object.add_record(multiple(record)),
+        }
+    }
+
+    /// The family's `restore_log_buffer` (#1537).
+    fn restore(&mut self, total: u32, records: Vec<BACnetLogRecord>) -> Result<(), Error> {
+        match self {
+            Self::Event(object) => object.restore_log_buffer(total, records.into_iter().map(event)),
+            Self::Trend(object) => object.restore_log_buffer(total, records),
+            Self::TrendMultiple(object) => {
+                object.restore_log_buffer(total, records.into_iter().map(multiple))
+            }
+        }
+    }
+
+    /// The family's `record_interruption` (#1537).
+    fn interrupt(&mut self, date: Date, time: Time) -> Result<(), Error> {
+        match self {
+            Self::Event(object) => object.record_interruption(date, time),
+            Self::Trend(object) => object.record_interruption(date, time),
+            Self::TrendMultiple(object) => object.record_interruption(date, time),
         }
     }
 

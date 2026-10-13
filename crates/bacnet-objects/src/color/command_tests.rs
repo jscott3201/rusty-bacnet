@@ -3,7 +3,12 @@
 //! takes (Addendum 135-2020ca).
 
 use super::*;
-use bacnet_types::enums::{ColorOperation as Op, ErrorClass, ErrorCode};
+use crate::traits::BACnetObject;
+use bacnet_types::constructed::BACnetColorCommand;
+use bacnet_types::enums::{ColorOperation as Op, ErrorClass, ErrorCode, PropertyIdentifier};
+
+/// D65 white, where a new Color object starts.
+const D65: BACnetXyColor = BACnetXyColor::new(0.3127, 0.3290);
 
 const CC: PropertyIdentifier = PropertyIdentifier::COLOR_COMMAND;
 
@@ -64,7 +69,8 @@ fn color_commands_start_at_none_and_serve_what_was_written() {
         color.read_property(CC, None).unwrap(),
         octets(&[0x09, 0x06])
     );
-    // The object stores commands without carrying them out.
+    // With no clock bound, STOP comes at the instant the fade started, so
+    // the colour stays where the fade began.
     assert_eq!(
         color
             .read_property(PropertyIdentifier::PRESENT_VALUE, None)
@@ -93,17 +99,19 @@ fn color_commands_start_at_none_and_serve_what_was_written() {
             ..command(Op::FADE_TO_CCT)
         }
     );
+    // The fade is under way: Present_Value holds its target, and
+    // In_Progress is FADE_ACTIVE.
     assert_eq!(
         temperature
             .read_property(PropertyIdentifier::PRESENT_VALUE, None)
             .unwrap(),
-        PropertyValue::Unsigned(4000)
+        PropertyValue::Unsigned(2_700)
     );
     assert_eq!(
         temperature
             .read_property(PropertyIdentifier::IN_PROGRESS, None)
             .unwrap(),
-        PropertyValue::Enumerated(0)
+        PropertyValue::Enumerated(1)
     );
 }
 
@@ -319,7 +327,7 @@ fn color_temperature_object_takes_the_cct_operations_and_stop() {
         command(Op::STEP_UP_CCT),
         command(Op::STOP),
         // A target outside Min_Pres_Value and Max_Pres_Value is taken: the
-        // object would clamp it when carrying the command out.
+        // object clamps it when carrying the command out.
         target(Op::FADE_TO_CCT, 1_000),
         // A field the operation doesn't use isn't checked.
         BACnetColorCommand {
@@ -334,7 +342,7 @@ fn color_temperature_object_takes_the_cct_operations_and_stop() {
             ..command(Op::STEP_DOWN_CCT)
         },
     ];
-    temperature.set_min_max(2_000, 6_500);
+    temperature.set_min_max(2_000, 6_500).unwrap();
     for value in accepted {
         temperature.set_color_command(value).unwrap();
         assert_eq!(temperature.color_command(), value);

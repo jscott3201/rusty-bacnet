@@ -41,9 +41,10 @@ impl NpduAddress {
     ///
     /// A length octet could announce up to 255 octets, yet no standard data
     /// link in Table 6-2 (Clause 6.2.2.2) needs more than 7, and the longest
-    /// MAC this stack serves is the 18-octet B/IPv6 form (IPv6 address plus
-    /// UDP port). A longer DLEN or SLEN names no node on a standard data link
-    /// or on any data link this stack serves.
+    /// MAC this stack serves is 6 octets (a B/IPv6 node's is its 3-octet
+    /// VMAC). The bound is the defensive 18 of [`BACnetAddress::MAX_MAC_LEN`].
+    /// A longer DLEN or SLEN names no node on a standard data link or on any
+    /// data link this stack serves.
     pub const MAX_MAC_LEN: usize = BACnetAddress::MAX_MAC_LEN;
 }
 
@@ -215,6 +216,8 @@ pub fn decode_npdu(data: Bytes) -> Result<Npdu, NpduDecodeError> {
     let expecting_reply = control & 0x04 != 0;
     let priority = NetworkPriority::from_raw(control & 0x03);
 
+    // Only hosted builds log; tracing is a std-only dependency.
+    #[cfg(feature = "std")]
     if control & 0x50 != 0 {
         tracing::warn!(
             control_byte = control,

@@ -2,8 +2,8 @@
 
 `rusty_bacnet` provides Python bindings for the Rust BACnet protocol stack via PyO3. All I/O operations are async (`asyncio`-based).
 
-This reference follows the `dev` branch. At the `v0.12.0` tag it describes the
-[published 0.12.0 package](https://pypi.org/project/rusty-bacnet/0.12.0/), which
+This reference follows the `dev` branch. At the `v0.13.0` tag it describes the
+[published 0.13.0 package](https://pypi.org/project/rusty-bacnet/0.13.0/), which
 the site's tutorials also target; see the [installation guidance](../README.md#install).
 Changes merged after the release wait in [`changelog.d/`](../changelog.d/); to
 use them, follow [Build from source](../README.md#build-from-source).
@@ -34,10 +34,10 @@ that yields a notification or raises `StopAsyncIteration` when the channel close
 
 ## Installation
 
-Install the published 0.12.0 package with:
+Install the published 0.13.0 package with:
 
 ```bash
-pip install "rusty-bacnet==0.12.0"
+pip install "rusty-bacnet==0.13.0"
 ```
 
 Wheels cover CPython 3.11 to 3.14 on Linux (glibc 2.17 or newer; x86_64,
@@ -370,6 +370,7 @@ its octets.
 | Group | Present_Value | `"read_access_result"` | a `read_property_multiple` result: `{"object_id": ..., "results": [...]}` | none: the members' results |
 | Command | Action | `"action_list"` | a list of `ActionCommand` mappings with every key | `add_command(action=...)`, which ignores `write_successful` |
 | Access Door, Access Point, Staging | Door_Members, Access_Doors, Target_References | `"device_object_reference"` | an `ObjectIdentifier`, or `(device, object)` when the reference names a device | `door_members=`, `access_doors=`; `target_references=` takes the `ObjectIdentifier` form only |
+| Access Point | Authentication_Policy_List | `"authentication_policy"` | `([(credential_data_input, index), ...], order_enforced, timeout)`, each reference an `ObjectIdentifier` or `(device, object)` | `add_access_point(authentication_policies=...)`, paired with the Authentication_Policy_Names element |
 | Credential Data Input | Supported_Formats | `"authentication_factor_format"` | the format type, or `(format_type, vendor_id, vendor_format)` when it has vendor members (a missing one is `None`, which the write also takes) | `add_credential_data_input(supported_formats=...)`, paired with Supported_Format_Classes |
 | Staging | Stages | `"stage_limit_value"` | `(limit, values, deadband)`, `values` a `list[bool]` | `add_staging(stages=...)` |
 | Access Rights | Positive_Access_Rules, Negative_Access_Rules | `"access_rule"` | an `AccessRule` mapping with every key; `None` stands for ALWAYS and ALL | `add_access_rights(positive_access_rules=..., negative_access_rules=...)` |
@@ -377,6 +378,8 @@ its octets.
 | Access Zone, Access User | Entry_Points, Exit_Points; Credentials, Members, Member_Of | `"device_object_reference"` | an `ObjectIdentifier`, or `(device, object)` | `add_access_zone(entry_points=..., exit_points=...)`, `add_access_user(credentials=..., members=..., member_of=...)` |
 | Life Safety Point, Life Safety Zone | Member_Of; Zone_Members | `"device_object_reference"` | an `ObjectIdentifier`, or `(device, object)` | none |
 | Global Group, Schedule, Channel, Trend Log Multiple | Group_Members; List_Of_Object_Property_References; Log_DeviceObjectProperty | `"device_object_property_reference"` | a `DeviceObjectPropertyReference` mapping with every key | `add_channel(members=...)`, `add_trend_log_multiple(members=...)` |
+| Trend Log; Averaging, Event Enrollment | Log_DeviceObjectProperty; Object_Property_Reference (one value) | `"device_object_property_reference"` | a `DeviceObjectPropertyReference` mapping with every key | existing property writes where writable |
+| Access Point; Lift, Escalator | Access_Event_Credential; Energy_Meter_Ref (one value) | `"device_object_reference"` | an `ObjectIdentifier`, or `(device, object)` | none |
 | Global Group | Present_Value | `"property_access_result"` | the member's `DeviceObjectPropertyReference` keys, then `"value"` (shaped as a read of the member) and `"error"` (`(ErrorClass, ErrorCode)`), one of them `None` | none |
 | Device | Audit_Notification_Recipient (one value) | `"recipient"` | an `AuditRecipientInput` mapping | `configure_audit_recipient(...)` |
 | Device | Active_COV_Subscriptions | `"cov_subscription"` | `{"recipient", "process_identifier", "object_identifier", "property_identifier", "property_array_index", "issue_confirmed_notifications", "time_remaining", "cov_increment"}`; `recipient` an `AuditRecipientInput` mapping, `cov_increment` a `float` or `None` | none |
@@ -389,6 +392,31 @@ its octets.
 | any | Value_Source_Array; Value_Source (one value) | `"value_source"` | `None` (none), an `ObjectIdentifier` or `(device, object)` (an object), or an `AuditRecipientAddress` mapping, `{"kind": "address", "network_number", "mac_address"}` (an address) | none |
 | Accumulator | Scale (one value) | `"scale"` | a `float` for a float scale, an `int` for a power-of-ten scale | `add_accumulator(scale=...)` |
 | Accumulator | Prescale (one value) | `"prescale"` | `(multiplier, modulo_divide)` | `add_accumulator(prescale=...)` |
+| any object serving Tags | Tags | `"name_value"` | `{"name": str, "value": None or PropertyValue}` | no new constructor; read values can be written back |
+
+Single reference reads use these forms through local reads, client and endpoint
+RP/RPM, and device-aware singular and batch reads. A property-reference mapping
+always includes `object_identifier`, `property_identifier`,
+`property_array_index` and `device_identifier`; omitted optional fields are
+`None`. Reserved instance 4194303 stays an explicit `ObjectIdentifier`, including
+unset references. These values retain the complete original octets through
+copying, pickling and existing property writes where the property is writable.
+A framed value that fails reference decoding follows existing generic/raw
+behavior. Broken framing remains a read error; an RPM service envelope may be
+rejected before per-value conversion. An indexed read of a single reference
+does not acquire a typed form. Trend Log Multiple remains a collection, including
+empty and one-element reads.
+
+Tags reads use the same form through client RP/RPM, endpoint client roles,
+batch reads and the shared local-read decoder. A whole read is a `list` of
+name/value mappings; an indexed element is a `name_value`, and index zero is
+an `unsigned` count. A semantic tag's value is `None`; a valued NULL carries
+`PropertyValue.null()`, so they remain distinct. Date and Time remain separate
+primitive `PropertyValue` values. The corrected NameValue grammar refuses a
+combined pair. Each element retains its original bytes, including through
+pickling and `PropertyValue.list` reassembly. A failed typed decode leaves the
+complete value to the existing raw fallback; it never returns a typed prefix.
+Broken framing retains the existing RP error and RPM raw-byte fallback rules.
 
 A date in these forms is a `(year, month, day, day_of_week)` tuple as
 [Dates](#dates) gives it: the full year, and 255 in any field left
@@ -443,7 +471,7 @@ Read-only device information from WhoIs/IAm discovery (frozen).
 | Property | Type | Description |
 |----------|------|-------------|
 | `.object_identifier` | `ObjectIdentifier` | Device object ID |
-| `.mac_address` | `list[int]` | Raw MAC bytes |
+| `.mac_address` | `bytes` | The MAC the I-Am came from: IPv4 and port on B/IP, the 3-octet VMAC on B/IPv6, the station on MS/TP |
 | `.max_apdu_length` | `int` | Max APDU the device accepts |
 | `.segmentation_supported` | `Segmentation` | Segmentation capability |
 | `.vendor_id` | `int` | Vendor identifier |
@@ -507,9 +535,13 @@ client = BACnetClient(
     port=47808,                  # UDP port
     broadcast_address="255.255.255.255",
     apdu_timeout_ms=6000,
-    transport="bip",             # "bip", "ipv6", or "sc"
+    transport="bip",             # "bip", "ipv6", "sc" or "mstp"
+    share_port_by_address=False, # Keyword-only; B/IP, see "Sharing a port by address"
+    bbmd=None,                   # Keyword-only; B/IP, a Bbmd: see "BBMD and foreign-device modes"
+    foreign_device=None,         # Keyword-only; B/IP, a ForeignDevice; not with bbmd
     # IPv6 options:
     ipv6_interface=None,         # IPv6 selected local address; None means ::
+    ipv6_device_instance=None,   # Keyword-only; 0..=4194303 for the VMAC of that instance, None for random
     # SC options:
     sc_hub=None,                 # WebSocket hub URL
     sc_vmac=None,                # 6-byte VMAC
@@ -519,16 +551,179 @@ client = BACnetClient(
     sc_client_key=None,          # Matching private key PEM path (required for SC)
     sc_heartbeat_interval_ms=None,  # 3000..=300000 ms when configured
     sc_heartbeat_timeout_ms=None,   # must be greater than interval
+    min_request_interval_ms=0,   # Keyword-only; least ms between confirmed requests to one destination
 )
 ```
+
+`min_request_interval_ms` paces the confirmed requests the client sends to
+each destination (#1535). Each waits until that long after the latest one
+sent to the same destination finished, by a reply, an error or the caller
+giving up, or until that long after it was sent while it is still
+outstanding, checking again when it wakes. Requests waiting together go one
+at a time, in no promised order. Paging a log or polling then leaves a slow
+device room for its
+other clients. Requests to different destinations don't wait on each other;
+0, the default, sends at once, and more than 3,600,000 (an hour) raises
+`ValueError`. Behind a router the pause after a reply holds for requests made
+one after another only. `BipEndpoint`, `ScEndpoint` and `MstpEndpoint` take the
+same keyword-only `min_request_interval_ms`, validated the same way, and pace
+their `EndpointClient`'s confirmed requests with the same pacer (#1542). On
+both, only new confirmed requests wait: a retry keeps its request's turn, and
+replies, notifications and unconfirmed requests go at once.
+
+### Sharing a port by address
+
+By default a B/IP client, server or `BipEndpoint` binds `0.0.0.0` on its port,
+whatever `interface` says, so two devices on two addresses of one host can't
+both use 47808. With the keyword-only `share_port_by_address=True`, each binds
+its own `interface` address instead and gets only the unicast sent there, so
+several devices on one host share the port (#1538). It needs an explicit
+`interface` and a nonzero `port`; `start()` fails otherwise, and another
+transport raises `ValueError`.
+
+In this mode every send leaves from the interface address, and broadcasts
+and unicast are received in **no fixed order**: on Linux and macOS
+broadcasts arrive on separate receive-only sockets, so a unicast that depends
+on a broadcast sent just before it can be handled first. Those sockets keep
+only broadcasts that arrived on the interface's own link, as identified
+when the device starts: restart it after its interface changes. The
+`broadcast_address` must be the interface's subnet broadcast or
+`255.255.255.255` (a loopback `interface` may also name itself), or
+`start()` fails. On Windows the address is claimed
+exclusively, though the bind still succeeds beside another program's socket
+on `0.0.0.0` at that port. See
+[Sharing a port by address](rust-api.md#sharing-a-port-by-address) for each
+OS.
+
+### BBMD and foreign-device modes
+
+A B/IP `BACnetClient`, `BACnetServer` or `BipEndpoint` is a normal node by
+default. The keyword-only `bbmd=` makes it a BBMD, and `foreign_device=`
+registers it with a BBMD on another subnet as a foreign device, so its
+broadcasts, Who-Is among them, reach that subnet (#938). Each takes a typed
+object; giving both, or either on another transport, raises `ValueError`.
+
+```python
+from rusty_bacnet import BACnetClient, BACnetServer, Bbmd, ForeignDevice
+
+# A BBMD that forwards to the BBMD of another subnet and takes foreign devices.
+server = BACnetServer(
+    1234, interface="192.168.1.10", broadcast_address="192.168.1.255",
+    bbmd=Bbmd(["10.0.5.2:47808"], accept_foreign_devices=True),
+)
+
+# A client behind NAT, registered with that BBMD for ten minutes and
+# renewing every 20 seconds so the NAT mapping the BBMD's replies use stays open.
+async with BACnetClient(port=0, foreign_device=ForeignDevice(
+        "203.0.113.7:47808", ttl=600, renewal=20)) as client:
+    await client.who_is()
+    status = await client.foreign_registration()
+```
+
+`ForeignDevice(bbmd, ttl=300, renewal=None)` takes the BBMD as `"ip"` or
+`"ip:port"` (port 47808 by default), how many seconds the BBMD keeps the entry (at least
+1), and the seconds between registrations, at least 0.1 and less than
+`ttl`; `None` renews at half the TTL. The owner registers when it starts and renews
+on its own; its first broadcasts wait for the first registration to be
+answered.
+
+`Bbmd(bdt=None, *, accept_foreign_devices=False, management_acl=None,
+bdt_persist_path=None)` takes the BDT as `"ip:port"` rows (forwarded to by
+unicast) or `("ip:port", "mask")` pairs; the BBMD's own row is added when
+missing. Without `accept_foreign_devices=True` every registration is
+refused, and `management_acl` lists the addresses allowed to delete Foreign
+Device Table entries (none by default). `bdt_persist_path` names a file
+holding a BDT, 10 octets per row, to start with instead when it loads;
+Write-BDT from the network is always refused. Both classes check their
+values when built and raise `ValueError`, or `OverflowError` for an integer
+out of range (a `ttl` outside 1 to 65535, say).
+
+`foreign_registration()`, on all three owners, returns how the registration
+is going without sending anything: `registered`, `lease_remaining` and
+`next_attempt_in` in seconds (or None), the latest attempt's `last_bbmd`,
+`last_result` (the BVLC result code, 0x0030 when the BBMD refused it) and
+`last_outcome` (`"pending"`, `"accepted"`, `"refused"`, `"timed_out"`,
+`"local_error"` or `"cancelled"`), and the `attempts`, `accepted`, `refused`,
+`lapses` (leases that ran out with no newer success) and `renewal_hints`
+(the BBMD's Distribute-Broadcast-To-Network NAKs, each bringing the next
+attempt forward) totals. The latest attempt clears when the owner stops; the
+totals stay. It raises `RuntimeError` before start and after stop. See
+[B/IP modes on the builders](rust-api.md#bip-modes-on-the-builders) for the
+Rust side.
 
 ### MS/TP serial ports
 
 `transport="mstp"` takes the keyword-only `serial_port` (required),
 `mstp_baud` (9600, 19200, 38400, 57600, 76800 or 115200; default 38400),
-`mstp_mac` (default 1), `mstp_max_master` (default 127) and
-`mstp_max_info_frames` (default 1). `BACnetServer` takes the same options, and
-`MstpEndpoint` its own `serial_port`.
+`mstp_mac` (default 1), `mstp_max_master` (default 127),
+`mstp_max_info_frames` (default 1), `mstp_extended_frames` (default False),
+`mstp_echo` (default False), `mstp_echo_grace_ms` (default None),
+`mstp_transmit_latency_pad_ms`, `mstp_usage_timeout_ms` and
+`mstp_reply_timeout_ms` (each default None).
+`BACnetServer` and `MstpEndpoint` take the same options; `MstpEndpoint` takes
+`serial_port` through `mstp_max_info_frames` by position or keyword, and the
+others by keyword only.
+`mstp_extended_frames=True` turns on extended frames (Types 32 and 33), which
+carry NPDUs of up to 1497 octets, so the link carries APDUs of up to 1476
+instead of 480; without it, an extended frame the link hears counts as an
+invalid frame. Routers need them (Clause 9.3); for a device they are
+optional, and every node on the link must take them. `MstpEndpoint` checks
+its `max_apdu` against the link: up to 480 by default, up to 1476 with
+`mstp_extended_frames=True`, and a `ValueError` beyond. The memory cost is in
+the transmit queues each port reserves: 768 KiB of slots with extended frames
+against 272 KiB without, which become resident as the queues fill. The link
+runs the same Clause 9 master core as the Rust transport.
+
+The three timing options are in milliseconds, and None keeps the transport's
+own value (see [MS/TP](rust-api.md#mstp-serial-rs-485) for why).
+`mstp_transmit_latency_pad_ms` is added to a frame's time on the wire when
+the port can't say when its last octet left: 4 ms on Windows, whose serial
+port has no drain and is usually a USB adapter, and 0 elsewhere; raise it,
+up to 15 ms, for a slower adapter or driver. `mstp_usage_timeout_ms` (20 to
+35, default 35) is how long the station waits to hear its successor or a
+polled station, and `mstp_reply_timeout_ms` (255 to 300, default 300) how
+long it waits for an answer to a request; the defaults leave room for a USB
+adapter's receive latency. A value outside those ranges raises `ValueError`
+at start, before the port opens (`MstpEndpoint` raises it when it is built);
+a negative one raises `OverflowError` when the object is built.
+
+The port is taken not to hear its own frames (transceiver receiver off while
+transmitting). `mstp_echo=True` declares an adapter that returns every octet
+the station sends, as a transceiver whose receiver stays on does: the link
+then drops that echo instead of taking its own frames for another station's
+traffic, as `TokioSerialPort::with_echo` does from Rust (see
+[Echo](rust-api.md#echo)). `mstp_echo_grace_ms` is how long after a frame its
+echo may still be arriving, 40 ms when not given, enough for a USB adapter's
+receive latency. A grace of 0, or one given without `mstp_echo=True`, raises
+`ValueError` at start, before the port opens (`MstpEndpoint` raises it when
+it is built); a negative grace, or one above 4294967295, raises
+`OverflowError` when the client, server or endpoint is built.
+
+```python
+from rusty_bacnet import BACnetClient
+
+client = BACnetClient(
+    transport="mstp",
+    serial_port="/dev/ttyUSB0",
+    mstp_baud=38400,
+    mstp_mac=3,
+    mstp_echo=True,          # this adapter echoes what it sends
+    mstp_echo_grace_ms=60,   # its echo can lag a frame by up to 60 ms
+)
+```
+
+```python
+from rusty_bacnet import MstpEndpoint
+
+endpoint = MstpEndpoint(
+    device_instance=3001,
+    serial_port="/dev/ttyUSB0",
+    mstp_mac=3,
+    max_apdu=1476,               # needs extended frames on the link
+    mstp_extended_frames=True,
+    mstp_echo=True,
+)
+```
 
 `rusty_bacnet.list_serial_ports()` returns the names of the serial ports the
 operating system reports, to pass as `serial_port`: macOS lists them through
@@ -558,8 +753,18 @@ await client.stop()
 
 All `address` parameters accept:
 - IPv4: `"192.168.1.100:47808"` (4-byte IP + 2-byte port)
-- IPv6: `"[::1]:47808"` (16-byte IP + 2-byte port)
-- Hex MAC: `"01:02:03:04:05:06"` (raw bytes, for SC/Ethernet)
+- B/IPv6: `"bip6:1234"`, the VMAC of device instance 1234 (0 to 4194303,
+  Clause H.7.2), or `"bip6:0x40ABCD"`, any 3-octet VMAC. A B/IPv6 node is
+  addressed by its VMAC (Clause U.1.3); `"bip6:0x0004D2"` is the form
+  `resolve_vmac` and `BACnetServer.local_address()` return. Only a
+  `transport="ipv6"` client takes it; any other raises `ValueError`.
+- Hex MAC: `"01:02:03:04:05:06"` (raw bytes, for SC/Ethernet, or `"00:04:d2"`
+  for a B/IPv6 VMAC)
+- MS/TP: `"7"` or `"mstp:7"` (a station, 0 to 254)
+
+An IPv6 address in brackets, `"[::1]:47808"`, raises `ValueError`: it says
+where a node is, not which VMAC it has. Find the VMAC with
+[`resolve_vmac`](#resolve_vmacaddress---str).
 
 ---
 
@@ -845,6 +1050,30 @@ Reset the discovered devices table.
 await client.clear_devices()
 ```
 
+#### `resolve_vmac(address) -> str`
+
+Find the VMAC of the B/IPv6 node at `address`, written `"[ip]:port"`, and
+return it as `"bip6:0x0004D2"`, the form every other method takes. A B/IPv6
+node is addressed by its VMAC, not its IPv6 address (Clause U.1.3), so this
+is how an IPv6 address becomes a target. It sends the node a
+Virtual-Address-Resolution by unicast, up to three times a second apart
+(Clause U.5), unless the client already knows which VMAC is at that address.
+The request itself is unicast, so it reaches a node that multicast doesn't,
+but a client without `ipv6_device_instance` still needs a multicast-capable
+link to start (see [BACnet/IPv6](#bacnetipv6)). A link-local address may carry
+its interface as a numeric zone, `"[fe80::1%3]:47808"`.
+
+It needs a started client with `transport="ipv6"` (`RuntimeError` otherwise),
+and any other address form raises `ValueError`. When nothing answers within
+three seconds, or the node refuses, it raises `BacnetTransportError` (errno
+`ETIMEDOUT` for the timeout).
+
+```python
+async with BACnetClient(transport="ipv6", port=0, ipv6_device_instance=4321) as client:
+    vmac = await client.resolve_vmac("[2001:db8::10]:47808")  # "bip6:0x0004D2"
+    name = await client.read_property(vmac, device, PropertyIdentifier.OBJECT_NAME)
+```
+
 #### `discover(timeout_ms=3000, low_limit=None, high_limit=None) -> list[DiscoveredDevice]`
 
 Convenience method: send WhoIs, wait, return devices.
@@ -1068,11 +1297,11 @@ raw = await client.get_event_information("192.168.1.100:47808")
 
 ### ReadRange
 
-#### `read_range(address, object_id, property_id, array_index=None, range_type=None, reference_index=None, reference_seq=None, count=None) -> dict`
+#### `read_range(address, object_id, property_id, array_index=None, range_type=None, reference_index=None, reference_seq=None, count=None, *, reference_time=None, validation="strict") -> dict`
 
 Read a range of items from a list or log object. This method is shared by
 `BACnetClient` and `EndpointClient`. Python supports all-items (`range_type=None`),
-position and sequence forms; ByTime remains Rust-only. Invalid selectors,
+position, sequence and time forms. Invalid selectors,
 array index zero and omitted or zero counts for a selected range raise
 `ValueError` before address parsing or I/O. A count outside INTEGER16
 (-32768 to 32767) raises `OverflowError` before address parsing or I/O (#1360). Omitted reference values default
@@ -1080,6 +1309,24 @@ to zero; zero position/sequence references are valid and may return no matches.
 The typed `ReadRangeResult` dictionary preserves raw item bytes, the three-boolean
 flags tuple and optional first sequence number. Endpoint responses must be
 unsegmented; the standalone client's existing segmentation support is unchanged.
+
+`range_type="time"` (#1533) reads the `count` items logged after
+`reference_time`, or before it for a negative count. `reference_time` is a
+`datetime.datetime` or a `((year, month, day, day_of_week), (hour, minute,
+second, hundredths))` pair, and must name a specific instant. A device
+timestamps its records in its own local time and the request carries no zone,
+so a `datetime` must be naive and in the device's local time; an aware one
+raises `ValueError` (convert it first with
+`dt.astimezone(device_zone).replace(tzinfo=None)`). Hundredths come from the
+microseconds, rounded down.
+
+`validation="strict"` (the default) refuses an answer that breaks a ReadRange
+rule with `BacnetReadRangeViolationError`, whose `rule` names it: an echo
+mismatch, a first sequence number missing, zero or unexpected, MORE_ITEMS
+with the flag for the end a ranged read moves toward (with no range, with
+both FIRST_ITEM and LAST_ITEM), or more items than `count`. `validation="lenient"` (#1531)
+keeps such an answer and lists the rules in `"violations"`, so a device that
+numbers the record after its sequence wrap 0 doesn't cost the page.
 
 ```python
 # Read by position
@@ -1094,8 +1341,9 @@ result = await client.read_range(
 print(result["item_count"])     # number of items returned
 print(result["result_flags"])   # (first_item, last_item, more_items)
 print(result["item_data"])      # raw bytes
+print(rusty_bacnet.decode_log_records(result))  # typed records
 
-# Read by sequence number
+# Read by sequence number, keeping a page that breaks a rule
 result = await client.read_range(
     "192.168.1.100:47808",
     ObjectIdentifier(ObjectType.TREND_LOG, 1),
@@ -1103,6 +1351,18 @@ result = await client.read_range(
     range_type="sequence",
     reference_seq=100,
     count=10,
+    validation="lenient",
+)
+print(result["violations"])     # e.g. ["zero_first_sequence_number"]
+
+# Read the records logged since a time, in the device's local time
+result = await client.read_range(
+    "192.168.1.100:47808",
+    ObjectIdentifier(ObjectType.TREND_LOG, 1),
+    PropertyIdentifier.LOG_BUFFER,
+    range_type="time",
+    reference_time=datetime.datetime(2026, 10, 5, 9, 0),
+    count=50,
 )
 
 # Read all (no range)
@@ -1113,7 +1373,57 @@ result = await client.read_range(
 )
 ```
 
-Return dict keys: `"object_id"`, `"property_id"`, `"array_index"`, `"result_flags"` (tuple of 3 bools), `"item_count"` (int), `"item_data"` (bytes), and `"first_sequence_number"` (int or `None`).
+Return dict keys: `"object_id"`, `"property_id"`, `"array_index"`, `"result_flags"` (tuple of 3 bools), `"item_count"` (int), `"item_data"` (bytes), `"first_sequence_number"` (int or `None`), and `"violations"` (list of rule names; empty unless lenient).
+
+#### `decode_log_records(result) -> list[dict]`
+
+Decodes the records of a `read_range` result of a Trend Log, Event Log, Trend
+Log Multiple or Audit Log's Log_Buffer (#1534). Each record is a dict with
+`"timestamp"` (a `(date, time)` pair) and `"datum"`, whose `"kind"` names the
+choice and whose key of the same name holds the value, for example
+`{"kind": "real", "real": 72.5}`; a Trend Log record adds `"status_flags"`.
+It raises `ValueError` for any other result, or when the item data doesn't
+decode as `item_count` records, naming the first record that fails by index
+and offset.
+
+#### `read_log_page(address, object_id, cursor=None, page_size=100) -> dict`
+
+Reads one page of a log's Log_Buffer (#1530), on `BACnetClient` and
+`EndpointClient`. `cursor` is `None` or `"oldest"` (the oldest record, from
+Record_Count and Total_Record_Count), `("sequence", n)`, `("position", n)` or
+`("time", reference_time)`. The page is a dict: `"records"` (as
+`decode_log_records` gives them), `"first_sequence_number"`, `"result_flags"`,
+`"gap"` (`None`, or `{"expected", "first", "skipped"}` when the log no longer
+holds the records asked for), `"violations"`, `"next"` (the cursor to read
+from next), `"done"` and `"wrapped"` (the page reached the top of the
+sequence range, so `next` wrapped to 1). Loop until `done`, then keep `next`
+as the checkpoint; lists in place of the tuples work, so it survives
+`json.dumps` and `json.loads`, a time cursor included. One request is
+outstanding at a time, and sequence numbers wrap from the top of their range
+to 1. A page whose records don't decode raises `BacnetError` naming the
+first that fails, and the records before it are dropped; read that range with
+`read_range` and `decode_log_records` to see them. An answer that breaks a rule
+the reader can't tolerate, such as an echo that doesn't match the request,
+raises `BacnetReadRangeViolationError`.
+
+```python
+cursor = None
+while True:
+    page = await client.read_log_page(address, trend_log, cursor, page_size=100)
+    store(page["records"])
+    cursor = page["next"]
+    if page["done"]:
+        break
+save_checkpoint(cursor)
+```
+
+A device that answers with records from before the one asked for (bacnet-stack
+1.6.1 does past its sequence wrap), or with none where its counts say it holds
+records, raises `BacnetLogNotAdvancingError` instead of looping. Its sequence
+numbers are inconsistent: read it from `("position", 1)`. A log that is merely
+full doesn't need that; the reader starts over from the oldest record when
+the log drops the one it asked for. A non-log object or a `page_size` outside
+1..=32767 raises `ValueError` before I/O.
 
 ---
 
@@ -1387,8 +1697,10 @@ answers, so the call returns once the request is sent.
     `bytearray` holding the encoded octets (#1359). Either way it must be one
     BACnetChannelValue with no wrapper tag: a single application-tagged
     primitive (`PropertyValue.real(72.0)`, `PropertyValue.null()`), or a
-    context-0 lighting command, given as `bytes` or as the same octets in
-    `PropertyValue.application_data(...)`. Anything else, such as a
+    constructed one given as `bytes` or as the same octets in
+    `PropertyValue.application_data(...)`: a context-0 lighting command, or
+    Addendum 135-2020ca's context-1 xy colour or context-2 colour command
+    (#1474). Anything else, such as a
     `PropertyValue.list(...)`, raises `ValueError`, and a value of another
     type, a list of ints included, raises `TypeError`.
 - `inhibit_delay`: optional Boolean. TRUE skips the execution delays of Channels whose
@@ -1679,7 +1991,7 @@ await client.who_am_i(260, "Controller-X", "SN-0001")
 
 The full server constructs its owned
 Device with the selected transport's stable local receive capacity: 1476 for
-B/IP, B/IPv6 and SC, or 480 for MS/TP. Device
+B/IP, B/IPv6 and SC, or 480 for MS/TP (1476 with `mstp_extended_frames=True`). Device
 `Max_APDU_Length_Accepted` and I-Am therefore match the effective server
 acceptance; negotiated SC egress does not change that declaration. This adds no
 Python capacity argument and does not rewrite application-owned Rust Devices.
@@ -1704,7 +2016,12 @@ server = BACnetServer(
     interface="0.0.0.0",
     port=47808,
     broadcast_address="255.255.255.255",
-    transport="bip",             # "bip", "ipv6", or "sc"
+    transport="bip",             # "bip", "ipv6", "sc" or "mstp"
+    share_port_by_address=False, # keyword-only; B/IP, see "Sharing a port by address"
+    bbmd=None,                   # keyword-only; B/IP, see "BBMD and foreign-device modes"
+    foreign_device=None,         # keyword-only; B/IP; not with bbmd
+    segmentation_supported=Segmentation.NONE, # keyword-only; full-server capabilities
+    apdu_segment_timeout_ms=5000, # keyword-only; shared Device/runtime segment timeout
     # SC options same as BACnetClient
     mutation_policy="permissive", # keyword-only; "deny_all" denies covered network mutations
     dcc_password=None,           # password alone does not enable DCC
@@ -1716,6 +2033,13 @@ server = BACnetServer(
     time_sync_policy=None,       # keyword-only dict of clock limits; see Time synchronization policy below
 )
 ```
+
+`segmentation_supported` accepts `Segmentation.NONE`, `TRANSMIT`, `RECEIVE` or
+`BOTH`. When active, `apdu_segment_timeout_ms` must be positive and appears as
+the Device's `APDU_Segment_Timeout`. Incoming inactivity uses `4 * Tseg`;
+outgoing SegmentACK waits use Tseg. The independent 16-second no-progress cap
+ends an incoming transfer with a local `OTHER` Abort. See [server timing](server-segmentation.md)
+for startup validation, equality, resource limits and endpoint restrictions.
 
 `dcc_disable_rate_limit` is keyword-only and defaults OFF. When configured, one
 global native-server bucket charges only authorized DISABLE_INITIATION requests;
@@ -1947,8 +2271,16 @@ await server.write_property_local(
 Peers can write each of these properties; writing Trigger TRUE to a polled
 log raises NOT_CONFIGURED_FOR_TRIGGERED_LOGGING.
 
-`add_trend_log` and `add_event_log` take no such keyword arguments, but their
-objects serve the same rows over the network and through
+All three logs take a keyword-only `total_record_count` (default 0) that
+seeds Total_Record_Count, an Unsigned32 (#1537). The first record is numbered
+one past it, so a log seeded at `2**32 - 2` numbers its records `2**32 - 1`,
+then 1, 2 and on: a reader's handling of the wrap can be tested without
+logging four billion records first. A value outside Unsigned32 raises
+`OverflowError`. Restoring saved records is Rust-only, through
+`restore_log_buffer`.
+
+`add_trend_log` and `add_event_log` take none of the other keyword arguments,
+but their objects serve the same rows over the network and through
 `write_property_local`: a Trend Log has Logging_Type (POLLED or TRIGGERED),
 Log_Interval, Start_Time, Stop_Time, Align_Intervals, Interval_Offset and
 Trigger, and an Event Log has Start_Time and Stop_Time. The server can't log
@@ -1956,8 +2288,9 @@ by COV yet (#1480), so a Trend Log refuses a COV Logging_Type, and a polled
 log's Log_Interval written from nonzero to zero (the older way to ask for
 COV), with OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
 
-A Trend Log's Log_DeviceObjectProperty reads as `application_data` holding the
-context-tagged BACnetDeviceObjectPropertyReference. Without a reference it
+A Trend Log's Log_DeviceObjectProperty reads as one
+`device_object_property_reference` value with a `DeviceObjectPropertyReference`
+mapping. Without a reference it
 reads as Analog Input 4194303's Present_Value (`0c 00 3f ff ff 19 55`), the
 empty element a Trend Log Multiple grows by, and the log polls nothing.
 Writing a reference whose object or Device is at instance 4194303 removes the
@@ -2147,8 +2480,8 @@ finally:
   **direct configured B/IP** Device binding, only on a `transport="bip"` server.
   It reuses the client address parser but requires exactly six bytes: four IPv4
   octets followed by two big-endian UDP port octets. IPv4 `"127.0.0.1:47808"` and
-  its equivalent colon-separated hex `"7f:00:00:01:ba:c0"` are accepted. IPv6
-  (18 bytes), MS/TP (one byte), and other incompatible lengths raise `ValueError`
+  its equivalent colon-separated hex `"7f:00:00:01:ba:c0"` are accepted. A
+  B/IPv6 VMAC (3 bytes), MS/TP (one byte), and other incompatible lengths raise `ValueError`
   before retaining a binding. Non-B/IP servers also raise `ValueError`, even for
   six-byte input. The shared parser's broader IPv6/hex/MS/TP grammar remains used
   by other APIs; it does not imply forwarding support here. Parsing is not
@@ -2381,7 +2714,7 @@ the property remains unchanged. This is a local admission policy, not a delivery
 guarantee. Equal-value, NULL and ordinary writes retain their existing behavior;
 other failed writes retain ordinary filters.
 AV/BV absent/NULL priority filters inherit the Reporter under the object-specific
-clauses, despite conflicting generic wording. See the [Rust policy contract](rust-api.md#object-owned-avbv-audit-policy)
+clauses, despite conflicting generic wording. See the [Rust policy contract](rust-api.md#object-owned-audit-policy)
 for the interpretation, WPM/local-write behavior, and bounded lifecycle support.
 
 #### Building Control
@@ -2538,7 +2871,7 @@ as unset, and write the unset form (for example the octets a fresh object
 reads) to clear one.
 
 An Event Enrollment's Object_Property_Reference, which peers can only read,
-reads as Analog Input 4194303's Present_Value (`0c 00 3f ff ff 19 55`) while
+reads as a `device_object_property_reference` mapping. It names Analog Input 4194303's Present_Value (`0c 00 3f ff ff 19 55`) while
 the enrollment has no reference, instead of null (#1417). Its
 Fault_Parameters reads as the context-tagged `none` choice (`08`) while no
 fault algorithm is set, and writing that clears it; a null written to it,
@@ -2590,7 +2923,8 @@ empties the window; out-of-range values raise VALUE_OUT_OF_RANGE. An
 Object_Property_Reference written with the server's own Device in it is kept
 as the local reference it names, and one naming another device is refused with
 OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED (#1153). Peers read and write it as the
-context-tagged BACnetDeviceObjectPropertyReference; the flat application-tagged
+context-tagged BACnetDeviceObjectPropertyReference, returned as one typed
+`device_object_property_reference` mapping; the flat application-tagged
 form is refused with INVALID_DATA_TYPE (#1182). Writing a reference whose
 object or Device is at instance 4194303 removes the reference, and a null
 succeeds and changes nothing (#1417); it used to remove it. The
@@ -2786,6 +3120,22 @@ Active_Authentication_Policy (1 to the policy count) and the mode by writing
 Authorization_Mode (one of the supported modes). Another value is refused
 with VALUE_OUT_OF_RANGE, and another datatype with INVALID_DATA_TYPE.
 
+`authentication_policies` describes the policies as `(name, policy)` pairs
+(#1325), a policy being `([(credential_data_input, index), ...],
+order_enforced, timeout)`, each Credential Data Input in the forms
+`access_doors` takes and the timeout in seconds (0 for none). The point then
+serves Authentication_Policy_List and Authentication_Policy_Names, read-only
+over the network, and the policy count becomes the number of pairs; a
+`number_of_authentication_policies` given too is applied after and resizes
+both arrays. An empty list, more than 256 pairs, or a count above 256 with
+the pairs raises VALUE_OUT_OF_RANGE. A policy with no entries, a reference to
+anything but a Credential Data Input, or indexes that don't start at 1 and
+climb by at most one is kept but can't be in effect: peers can't select it,
+and while it is the one in effect Active_Authentication_Policy reads 0.
+While any such policy is listed, or the active policy is 0, Reliability reads
+CONFIGURATION_ERROR and the point takes no access events. The point's
+Reliability then takes simulated writes while it is out of service.
+
 `add_access_door` also takes `alarm_values`, `fault_values` and
 `masked_alarm_values`, the door's starting Alarm_Values, Fault_Values and
 Masked_Alarm_Values as BACnetDoorAlarmState numbers other than NORMAL (1 to
@@ -2930,8 +3280,8 @@ an Accompaniment the object refuses raises `BacnetProtocolError`.
 Access Door, Access Point, Credential Data Input and Load Control take
 SubscribeCOV, and each report carries the values their Table 13-1 rows name:
 Door_Alarm_State on a door; Access_Event (in place of Present_Value),
-Access_Event_Tag, Access_Event_Time and Access_Event_Credential on an Access
-Point; Update_Time on a
+Access_Event_Tag, Access_Event_Time, Access_Event_Credential and
+Access_Event_Authentication_Factor on an Access Point; Update_Time on a
 Credential Data Input; and Requested_Shed_Level, Start_Time and Shed_Duration
 on a Load Control. While a door's Out_Of_Service is TRUE, clients can write
 its Door_Status, Lock_Status and Door_Alarm_State to simulate it (Table 12-30
@@ -2950,6 +3300,24 @@ each sends the point's COV report. Supported_Formats,
 Supported_Format_Classes, Door_Members and Access_Doors read as arrays (index
 0 is the size), each reference and format in the form its keyword argument
 takes (see [typed constructed values](#typed-constructed-values)).
+
+A running server takes these objects' inputs from the application (#1132):
+`await server.report_access_event_local(point, event, tag, time=...,
+credential=..., authentication_factor=...)` records an access event,
+`await server.report_credential_read_local(reader, (format_type,
+format_class, value), update_time=...)` a reader's read, and
+`await server.report_door_state_local(door, door_status=...,
+lock_status=..., door_alarm_state=...)` the door's hardware state. A time
+left out is the Device clock's, a credential left out the no-credential
+reference and a factor left out the UNDEFINED one. Each changes its values
+together, sends the object's COV report when its trigger moves and runs the
+door's event algorithm at once. A value the object refuses raises
+VALUE_OUT_OF_RANGE with nothing changed, and another object raises
+OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. While an object's Out_Of_Service is
+TRUE, the point refuses an event with WRITE_ACCESS_DENIED, and the door and
+the reader keep the reported values aside in place of the device's earlier
+ones: a client's simulated values stay served, with no COV report, and the
+return to service serves the latest values reported.
 
 #### Transportation
 
@@ -3064,25 +3432,31 @@ raw `add_network_port(network_type=...)` API is removed.
 
 ### Registered B/IP Network Port
 
-This receiving-port association remains a bounded single NORMAL B/IP profile. Local Network Number behavior is described below; complete Network Port conformance, BBMD/foreign-device registration authority and multiport routing remain outside this registration contract.
+A registered port follows its owner's B/IP mode (#939): `BACnet_IP_Mode` reads
+0 for a normal node, 1 for a foreign device and 2 for a BBMD (`bbmd=` and
+`foreign_device=`, see [BBMD and foreign-device modes](#bbmd-and-foreign-device-modes)),
+and a BBMD's port serves its live BDT and FDT, a foreign device's its BBMD and
+time-to-live. Local Network Number behavior is described below; complete
+Network Port conformance and multiport routing remain outside this
+registration contract.
 
 ### Local Network Number controls
 
-Three Python owners consume the two local nonrouter controls automatically, one per transport: `BACnetServer`, the endpoint classes and `BACnetClient`. `BACnetServer` and `BACnetClient` own them with `transport="bip"` (NORMAL B/IP), `"ipv6"` (normal multicast B/IPv6), `"sc"` and `"mstp"`; `BipEndpoint`, `ScEndpoint` and `MstpEndpoint` own them on their links. Python has no BBMD, foreign-device or Ethernet constructor, so the B/IP BBMD/foreign-device, B/IPv6 foreign-device and Ethernet paragraphs below describe Rust-only modes. A valid local unicast or broadcast What-Is-Network-Number receives a local-broadcast Network-Number-Is when the owner knows its number (Clauses 6.4.19–6.4.20). There is no proactive startup announcement: the Standard asks that of configured routers, not of every nonrouter node. An explicit registered Network Port with a nonzero configured number reports `CONFIGURED` and never replaces that number from an announcement. Zero starts `UNKNOWN`; an owner without registration also starts unknown, regardless of other declared objects.
+Three Python owners consume the two local nonrouter controls automatically, one per transport: `BACnetServer`, the endpoint classes and `BACnetClient`. `BACnetServer` and `BACnetClient` own them with `transport="bip"` (NORMAL B/IP), `"ipv6"` (normal multicast B/IPv6), `"sc"` and `"mstp"`; `BipEndpoint`, `ScEndpoint` and `MstpEndpoint` own them on their links. Python's B/IP owners take `bbmd=` and `foreign_device=` for those two modes; the B/IPv6 foreign-device and Ethernet paragraphs below describe Rust-only modes. A valid local unicast or broadcast What-Is-Network-Number receives a local-broadcast Network-Number-Is when the owner knows its number (Clauses 6.4.19–6.4.20). There is no proactive startup announcement: the Standard asks that of configured routers, not of every nonrouter node. An explicit registered Network Port with a nonzero configured number reports `CONFIGURED` and never replaces that number from an announcement. Zero starts `UNKNOWN`; an owner without registration also starts unknown, regardless of other declared objects.
 
 A valid local-broadcast announcement with flag zero updates an unknown/learned owner to `LEARNED`. Flag one sets `LEARNED_CONFIGURED` and takes precedence over all subsequent flag-zero announcements. Further flag-one announcements may replace that learned value, including conflicts; an equal value still upgrades its quality. Both learned qualities transmit flag zero in their own responses. Selected-object `Network_Number` and `Network_Number_Quality` reads use the same database-owned state. Configuration remains immutable, so a new registration resets the pair from configured provenance; a new unregistered runtime starts unknown. There is no persistence of learned state across constructing a new runtime. After stop, the object retains the last observed pair until reconstruction or a new registration.
 
 Routed controls, malformed payloads and unicast Network-Number-Is are ignored. A BBMD Forwarded-NPDU is a logical broadcast even when its UDP hop is unicast and remains eligible. Ignoring number zero, 65535 and flags outside zero/one is this implementation's validation policy, rather than an additional quoted Standard mandate. Conflicting announcements against a locally configured number produce a debug diagnostic without changing configuration.
 
-Standalone clients start UNKNOWN on transports that opt into local nonrouter Number controls. They learn and reply using the same validation and precedence rules, without a Device object, registered Network Port, configured-number setter or persistence. One 256-entry serial worker owns this state; full or closed admission drops only Number controls. A held Number send leaves routed reason-4 Reject correlation and independent APDU dispatch available. Stop aborts and joins both the Number worker and dispatch before transport cleanup, retaining their joins across a canceled stop waiter. Drop aborts both. Already transmitted bytes cannot be retracted. Controlled-client tests qualify the shared intake/lifecycle behavior; Linux NORMAL-B/IP loopback and Ethernet virtual-link tests independently observe actual reply frames. Constrained-TLS SC tests observe Hub broadcast VMAC and exact Number bytes, including replies to direct-peer queries, while ordinary confirmed client requests complete. SC stop/drop retires client connections; the external DirectListener must separately be stopped and joined before its bind is released. Pending-send/queue cancellation remains covered by the generic controlled-client tests, rather than inferred from wire silence. Rust standalone-client B/IPv6 tests independently capture normal selected-link OriginalBroadcast and configured-foreign DBTN with exact source, destination, interface and Number bytes. Positive reply fences cover UNKNOWN, precedence and invalid/admission refusal; stop and eventual Drop release the socket, and reconstruction starts UNKNOWN. These external ignored Linux tests require the integration `ipv6` feature and isolated observer; ordinary hosted CI does not execute them. They add no Python foreign-device API, configured-client authority or physical-LAN claim. Separate isolated Linux standalone-client BBMD/foreign tests capture own Original-Broadcast versus forwarding traffic and exact DBTN to the configured BBMD. Positive Number fences cover UNKNOWN, BDT/FDT admission/refusal, alternate-sender compatibility, precedence and representative invalid/routed controls; registration NAKs retain DBTN attempts and the timer retries registration. An ordinary client ReadProperty completes during live Number controls, and awaited stop permits exclusive socket rebind before client Drop. No configured client number, new registration policy or complete Annex J claim is added. Rust MS/TP LoopbackSerial tests also cover the standalone client in both execution modes; see the MS/TP paragraph below.
+Standalone clients start UNKNOWN on transports that opt into local nonrouter Number controls. They learn and reply using the same validation and precedence rules, without a Device object, registered Network Port, configured-number setter or persistence. One 256-entry serial worker owns this state; full or closed admission drops only Number controls. A held Number send leaves routed reason-4 Reject correlation and independent APDU dispatch available. Stop aborts and joins both the Number worker and dispatch before transport cleanup, retaining their joins across a canceled stop waiter. Drop aborts both. Already transmitted bytes cannot be retracted. Controlled-client tests qualify the shared intake/lifecycle behavior; Linux NORMAL-B/IP loopback and Ethernet virtual-link tests independently observe actual reply frames. Constrained-TLS SC tests observe Hub broadcast VMAC and exact Number bytes, including replies to direct-peer queries, while ordinary confirmed client requests complete. SC stop/drop retires client connections; the external DirectListener must separately be stopped and joined before its bind is released. Pending-send/queue cancellation remains covered by the generic controlled-client tests, rather than inferred from wire silence. Rust standalone-client B/IPv6 tests independently capture normal selected-link OriginalBroadcast and configured-foreign DBTN with exact source, destination, interface and Number bytes. Positive reply fences cover UNKNOWN, precedence and invalid/admission refusal; stop and eventual Drop release the socket, and reconstruction starts UNKNOWN. These external ignored Linux tests require the integration `ipv6` feature and isolated observer; ordinary hosted CI does not execute them. They add no Python B/IPv6 foreign-device API, configured-client authority or physical-LAN claim. Separate isolated Linux standalone-client BBMD/foreign tests capture own Original-Broadcast versus forwarding traffic and exact DBTN to the configured BBMD. Positive Number fences cover UNKNOWN, BDT/FDT admission/refusal, the refusal of another sender's Forwarded-NPDU in foreign mode, precedence and representative invalid/routed controls; registration NAKs retain DBTN attempts and the timer retries registration. An ordinary client ReadProperty completes during live Number controls, and awaited stop permits exclusive socket rebind before client Drop. No configured client number, new registration policy or complete Annex J claim is added. Rust MS/TP LoopbackSerial tests also cover the standalone client in both execution modes; see the MS/TP paragraph below.
 
 Once `BACnetClient` has learned its network's number, a device its table holds as routed through a network with that number is on the client's own network (#1358). `read_property_from_device`, `write_property_to_device` and the other `_from_device` and `_to_device` methods send to it as a local request: a unicast to the device's own address with no DNET, not through the router it was heard through. An answer from that address completes the request, and so does one a router relays back with that number as its SNET and that address as its SADR (#1465): network numbers are unique, so both name the same device. While the number is unknown, these requests go through the router as before.
 
 SC starts UNKNOWN with no configured SC Network Port API; unrelated configured objects provide no authority. SC logical broadcast is the BVLC broadcast destination VMAC. A direct unicast What-Is is valid, but its Number reply uses the Hub broadcast path, never the saved original-direct APDU response capability. Hub-relayed controls do not identify an originating TLS leaf; SC control-origin authorization remains separate (#518). A message from a direct-connection peer is never a logical broadcast, so it can ask but cannot teach.
 
-B/IP BBMD and configured foreign modes start UNKNOWN with no registered Network Port authority. BBMD mode learns admitted Original-Broadcast, BDT Forwarded-NPDU and registered foreign-device DBTN announcements; its own Number reply is a local Original-Broadcast, which it also forwards as a Forwarded-NPDU to its BDT peers and registered foreign devices like its other broadcasts (#937). It rejects an exact self UDP source tuple before forwarded delivery or fanout, preserving the self BDT row and admitted peers on the same IP at different ports. Configured foreign mode accepts structurally valid Forwarded-NPDU from alternate UDP senders under its existing compatibility policy and answers by DBTN to its configured BBMD. Logical broadcast conveys no authenticated origin. Registration rejection does not suppress DBTN attempts; the existing periodic registration loop continues. Shared-endpoint Number wire tests cover BBMD ServerOnly admission and Original-Broadcast replies, foreign ClientOnly alternate forwarding and DBTN through registration rejection/retry, and Both requester/responder progress during live controls plus stop/drop socket release. Linux loopback supplies the independent BBMD broadcast capture; foreign direct capture also runs on macOS. Existing controlled endpoint tests separately prove held-send cancellation and resumed stop. Broader shared-endpoint BBMD/foreign behavior remains experimental; these modes add no configured Network Port authority.
+B/IP BBMD and configured foreign-mode owners without a registered Network Port start UNKNOWN; a registered port in either mode reports its configured number as above. BBMD mode learns admitted Original-Broadcast, BDT Forwarded-NPDU and registered foreign-device DBTN announcements; its own Number reply is a local Original-Broadcast, which it also forwards as a Forwarded-NPDU to its BDT peers and registered foreign devices like its other broadcasts (#937). It rejects an exact self UDP source tuple before forwarded delivery or fanout, preserving the self BDT row and admitted peers on the same IP at different ports. Configured foreign mode accepts a Forwarded-NPDU only from its configured BBMD by unicast, and drops any other, counting it in `ReceiveCounters::forwarded_untrusted` (#1622); it answers by DBTN to its configured BBMD. Logical broadcast conveys no authenticated origin. Registration rejection does not suppress DBTN attempts; the registration retries continue. Shared-endpoint Number wire tests cover BBMD ServerOnly admission and Original-Broadcast replies, foreign ClientOnly forwarding from the BBMD (another sender's forwards teach nothing) and DBTN through registration rejection/retry, and Both requester/responder progress during live controls plus stop/drop socket release. Linux loopback supplies the independent BBMD broadcast capture; foreign direct capture also runs on macOS. Existing controlled endpoint tests separately prove held-send cancellation and resumed stop.
 
-B/IPv6 starts UNKNOWN with no configured IPv6 Network Port authority. Normal mode learns admitted OriginalBroadcast announcements and answers by multicast OriginalBroadcast on the selected link. In the Rust configured foreign-device mode, an admitted Forwarded-NPDU from the configured BBMD is a logical broadcast despite its unicast UDP hop; replies use DBTN to that BBMD. A different BBMD endpoint cannot teach. Unicast NNI, routed controls and malformed payloads remain ineligible. Existing selected-link, source-address, destination/interface and VMAC checks still apply. There is no new IPv6 endpoint builder, number setter or Python foreign-device API.
+B/IPv6 starts UNKNOWN with no configured IPv6 Network Port authority. Normal mode learns admitted OriginalBroadcast announcements and answers by multicast OriginalBroadcast on the selected link. In the Rust configured foreign-device mode, an admitted Forwarded-NPDU from the configured BBMD is a logical broadcast despite its unicast UDP hop; replies use DBTN to that BBMD. A different BBMD endpoint cannot teach. Unicast NNI, routed controls and malformed payloads remain ineligible. Existing selected-link, source-address, destination/interface and VMAC checks still apply. There is no new IPv6 endpoint builder, number setter or Python B/IPv6 foreign-device API.
 
 Linux Ethernet full servers and standalone Rust clients start UNKNOWN with no configured Ethernet Network Port authority. The AF_PACKET receive path admits only the bound MAC and all-FF broadcast, before UI, XID or TEST handling; only all-FF is a logical group. This is the local single-link admission policy, not an additional quoted Clause 7 mandate. Existing self-source refusal remains. Actual isolated Docker Ethernet tests independently inspect destination/source, 802.3 length, LLC bytes, exact learned reply flag zero and padding, and verify stop/drop raw-FD release plus canceled transport-stop resumption. No privileged host interface or physical LAN is involved. The [opt-in fixture](../crates/bacnet-integration-tests/tests/ethernet_network_numbers/README.md) requires Linux and CAP_NET_RAW and is excluded from ordinary CI. There is no Ethernet endpoint builder or Python Ethernet API in this slice.
 
@@ -3094,7 +3468,8 @@ Tests cover actual inbound BVLL controls through both B/IP owners and outgoing N
 
 
 `BipEndpoint(..., network_port_instance=2, registered_network_port=2)` explicitly
-associates its declared port 2 with one owned NORMAL B/IP transport. Omitting
+associates its declared port 2 with one owned B/IP transport, in normal mode or with
+`foreign_device=` or `bbmd=`. Omitting
 `registered_network_port` leaves the declaration unbound. Selection requires a
 concrete unicast `interface`, matching declared instances 1–255 and a matching
 configured IP/UDP snapshot; `port=0` is supported. The full server accepts the same
@@ -3104,8 +3479,8 @@ start. Declaring or adding an object alone never selects a live port.
 
 Successful start publishes actual announced IP/UDP/derived MAC and `APDU_Length` (399) = 1476.
 The selected configuration and Out_Of_Service are read-only while its lifetime
-lease survives; pending activation, BBMD/foreign modes, rebind and same-device
-multiport routing remain unsupported. Other configured rows remain unbound.
+lease survives; pending activation, rebind and same-device multiport routing
+remain unsupported. Other configured rows remain unbound.
 
 `BipEndpoint.local_address()` and `status()["local_address"]` report the same
 active announced address and actual ephemeral port for **all** active B/IP
@@ -3446,7 +3821,10 @@ counters[1]["failed_saves"]  # refused saves of forwarder 1's lists
 
 #### `local_address() -> str`
 
-Get the server's bound address after start.
+Get the server's bound address after start: `"ip:port"` on B/IP, the station
+on MS/TP and the colon-hex VMAC on SC. On B/IPv6 it is the VMAC peers address
+the server by, which is its device instance: `"bip6:0x0004D2"` for
+`device_instance=1234` (see [BACnet/IPv6](#bacnetipv6)).
 
 ```python
 addr = await server.local_address()  # "0.0.0.0:47808"
@@ -3465,6 +3843,8 @@ All BACnet errors are raised as Python exceptions:
 | `BacnetTimeoutError` | Request timed out (APDU retries exhausted) |
 | `BacnetRejectError` | Remote device rejected the request |
 | `BacnetAbortError` | Remote device aborted the request |
+| `BacnetReadRangeViolationError` | A strict `read_range` refused an answer that breaks a ReadRange rule; `rule` names it (for example `"zero_first_sequence_number"`) |
+| `BacnetLogNotAdvancingError` | A paged log read can't advance: the device answered from before the record asked for, or with none its counts say it holds. `requested` and `returned` (`None` when it sent none) name the sequence numbers |
 | `BacnetTransportError` | A socket or I/O failure: a bind or listen that fails (B/IP, B/IPv6, `ScHub.start`), a failed SC dial. Also an `OSError` |
 
 ```python
@@ -3612,7 +3992,9 @@ async with endpoint:
 
 `await endpoint.status()` returns a redacted snapshot (`is_running`,
 `device_instance`, `vendor_id`, `max_apdu`, `transport`, `local_address`,
-`active_leases`, plus policy counters). `local_address()` is `"ip:port"`
+`active_leases`, plus policy counters). `BipEndpoint` also takes `bbmd=` and
+`foreign_device=`, and reports a registration with `foreign_registration()`
+(see [BBMD and foreign-device modes](#bbmd-and-foreign-device-modes)). `local_address()` is `"ip:port"`
 (BIP), VMAC hex (SC), or station string (MS/TP). Roles expose no callbacks;
 the client initiates `read_property`, `read_range` and `read_property_multiple`; concurrent use is
 `asyncio.gather` over these reads plus
@@ -3620,10 +4002,11 @@ the client initiates `read_property`, `read_range` and `read_property_multiple`;
 finalization only seals forcefully; always await `close()` or context exit.
 BIPv6/Ethernet have no endpoint owner; use the standalone path there.
 
-Endpoint server roles advertise their actual RP or explicitly enabled RP+WP
-profile and expose neither Device COV list property. A supplied `services` list
-must include RP and cannot claim unsupported execution; incompatible server-role
-profiles fail startup before ingress, including when Device writes are disabled.
+Python endpoint server roles execute and advertise ReadProperty only (the Rust
+Device-write and ReinitializeDevice opt-ins have no Python binding) and expose
+neither Device COV list property. A supplied `services` list must include RP and
+cannot claim unsupported execution; incompatible server-role profiles fail
+startup before ingress.
 ClientOnly has no responder and keeps its service list as a local declaration.
 
 ### Endpoint lifecycle and cancellation
@@ -3687,6 +4070,12 @@ carrying OUT_OF_RESOURCES (a peer `BACnetClient` raises `BacnetAbortError` with
 native-overflow values raise `OverflowError`, all in the constructor. It is the
 endpoint counterpart of `BACnetServer`'s `rpm_max_result_elements`; see
 [RPM budgets](rpm-budget.md).
+
+Each owner also takes a keyword-only `min_request_interval_ms=0`, the least
+time between the client role's confirmed requests to one device, as for
+`BACnetClient` (see [the client constructor](#bacnetclient)). More than
+3,600,000 raises `ValueError` and a negative value `OverflowError`, in the
+constructor, exactly as `BACnetClient` raises them.
 
 ```python
 endpoint = BipEndpoint(device_instance=1001, port=0, read_work_limit=2)
@@ -4124,21 +4513,39 @@ frames. Incoming packets must belong to that interface and the selected unicast
 address or BACnet multicast group before they can populate the VMAC table or
 reach the application. Link-local addresses retain the interface zone internally;
 multicast scope does not make them routable beyond their link. There is no Python
-foreign-device entry point in this change.
+B/IPv6 foreign-device entry point in this change.
 
 Fresh installed Linux tests cover default and explicit ULA server Who-Is/I-Am and
 client discovery. macOS loopback covers transport multicast intake and
 unicast/control source preservation; Windows has compile evidence only. Full
 Annex U conformance and deployment-network reachability remain unqualified.
 
-```python
-# Client
-client = BACnetClient(
-    transport="ipv6",
-    ipv6_interface="::",
-    port=47808,
-)
+**Peers are named by VMAC.** On B/IPv6 the network and application layers
+address a node by its 3-octet VMAC, not its IPv6 address (Clause U.1.3), and a
+device's VMAC is its device instance (Clause H.7.2). So every `address`
+parameter takes `"bip6:1234"` (the VMAC of device 1234), `"bip6:0x40ABCD"` (any
+VMAC, such as a client's random one) or the raw hex `"00:04:d2"`, and
+`DiscoveredDevice.mac_address` and a COV notification's source MAC hold the
+3-octet VMAC. A bracketed `"[ip]:port"` raises `ValueError`; turn it into a
+VMAC once with [`resolve_vmac`](#resolve_vmacaddress---str). A `bip6:` address
+given to a client on another transport raises `ValueError` too. A send to a
+VMAC the client hasn't heard from yet first asks the link who has it, and
+fails after three seconds when nobody answers.
 
+**A server's VMAC is its `device_instance`**, so `local_address()` returns
+`"bip6:0x0004D2"` for instance 1234. The server checks at startup that no
+other node on its link and port answers for that VMAC, and `start()` fails if
+one does.
+
+**A client's VMAC comes from `ipv6_device_instance`** when you give it one.
+Give a client an instance to get a stable VMAC; without one it picks a random
+VMAC at each start, and that needs a multicast-capable link at start: the
+client must ask the link whether another node already has the random VMAC,
+and Linux loopback (`::1`) carries no multicast, so there `__aenter__` fails.
+A client with an instance, like a server, still checks for a duplicate where
+multicast works, but starts where it doesn't.
+
+```python
 # Server
 server = BACnetServer(
     device_instance=1234,
@@ -4147,7 +4554,25 @@ server = BACnetServer(
     ipv6_interface="::",
     port=47808,
 )
+await server.start()
+await server.local_address()  # "bip6:0x0004D2"
+
+# Client
+async with BACnetClient(transport="ipv6", ipv6_interface="::", port=47809,
+                        ipv6_device_instance=4321) as client:
+    vmac = await client.resolve_vmac("[2001:db8::10]:47808")  # "bip6:0x0004D2"
+    await client.read_property(vmac, device, PropertyIdentifier.OBJECT_NAME)
+    await client.read_property("bip6:1234", device, PropertyIdentifier.OBJECT_NAME)
 ```
+
+**Migrating from 0.12:** replace `"[ip]:port"` strings with a `bip6:` form or a
+`resolve_vmac` result, read `"bip6:0x…"` from an ipv6 server's
+`local_address()`, and rewrite stored 18-octet B/IPv6 MACs (recipients, COV
+subscriptions) as the peer's VMAC. `DiscoveredDevice.mac_address` and COV
+source MACs are now 3 octets on B/IPv6. Give each ipv6 server a device
+instance no other node on its link and port uses, since `start()` now fails
+on a duplicate, and give an ipv6 client `ipv6_device_instance` where the link
+has no multicast.
 
 ### BACnet/SC (Secure Connect)
 

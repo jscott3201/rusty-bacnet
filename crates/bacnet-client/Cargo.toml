@@ -10,13 +10,13 @@ keywords = ["bacnet", "building-automation", "client", "async"]
 categories = ["network-programming"]
 
 [dependencies]
-bacnet-types.workspace = true
-bacnet-encoding.workspace = true
-bacnet-services.workspace = true
+bacnet-types = { workspace = true, features = ["std"] }
+bacnet-encoding = { workspace = true, features = ["std"] }
+bacnet-services = { workspace = true, features = ["std"] }
 bacnet-transport.workspace = true
 bacnet-network.workspace = true
 bacnet-endpoint-core.workspace = true
-bytes.workspace = true
+bytes = { workspace = true, features = ["std"] }
 tracing.workspace = true
 tokio = { workspace = true, features = ["net", "rt", "sync", "macros", "time"] }
 tokio-rustls = { workspace = true, optional = true }

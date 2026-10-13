@@ -237,12 +237,3 @@ fn migration_adapters_build_unstarted() {
     let mstp = MstpEndpointBuilder::new(serial, 5).build_session().unwrap();
     assert_eq!(mstp.active_leases(), 0);
 }
-
-#[test]
-fn bbmd_mode_without_enable_stays_fail_closed_experimental() {
-    // BBMD-mode is experimental/construction-only: ordering violations fail
-    // fast with a typed error instead of silently ignoring the controls.
-    let builder = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
-        .foreign_device_policy(bacnet_transport::bbmd::ForeignDevicePolicy::default());
-    assert!(builder.build_transport().is_err());
-}

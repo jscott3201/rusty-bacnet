@@ -219,8 +219,18 @@ pub(super) async fn handle_read_range<T: TransportPort + 'static>(
     args: &[String],
     format: OutputFormat,
 ) {
+    let (range, args) = match commands::read_range::RangeOptions::from_words(args) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            output::print_error(&e);
+            return;
+        }
+    };
     if args.len() < 2 {
-        output::print_error("Usage: read-range <target> <object> [property]");
+        output::print_error(
+            "Usage: read-range <target> <object> [property] \
+             [--position N | --sequence N | --time T] [--count N] [--all]",
+        );
         return;
     }
 
@@ -260,6 +270,7 @@ pub(super) async fn handle_read_range<T: TransportPort + 'static>(
         instance,
         property,
         index,
+        &range,
         format,
     )
     .await

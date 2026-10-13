@@ -54,9 +54,11 @@ fn python_add_trend_log_multiple_settings_reach_every_row() {
             stop_time: None,
             align_intervals: Some(true),
             interval_offset: Some(300),
+            total_record_count: u32::MAX - 1,
         },
     )
     .unwrap();
+    assert_eq!(log.total_record_count(), u32::MAX - 1);
     let mut expected = TrendLogMultipleObject::new(9, "expected", 1).unwrap();
     for instance in [1, 2] {
         expected.add_property_reference(member(instance)).unwrap();

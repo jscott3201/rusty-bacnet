@@ -56,6 +56,7 @@ KEYWORDS = (
         [
             "access_doors",
             "number_of_authentication_policies",
+            "authentication_policies",
             "supported_authorization_modes",
             "priority_for_writing",
         ],

@@ -1,5 +1,8 @@
 //! Incremental WritePropertyMultiple request grammar.
 
+#[cfg(not(feature = "std"))]
+use alloc::{string::String, string::ToString, vec::Vec};
+
 use bacnet_encoding::constructed::tagged::misplaced_kind;
 use bacnet_encoding::constructed::{
     decode_bacnet_property_value_in_list_detailed, PropertyValueDecodeError,

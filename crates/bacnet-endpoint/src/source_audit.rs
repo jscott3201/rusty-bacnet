@@ -41,7 +41,9 @@ mod delivery;
 mod failures;
 
 pub(crate) struct SourceAudit {
-    db: Arc<RwLock<ObjectDatabase>>,
+    /// Released off the runtime by whichever caller, worker or session
+    /// drops the source last (#1561).
+    db: crate::held_database::HeldDatabase,
     selected: ObjectIdentifier,
     device: ObjectIdentifier,
     runtime: Weak<SourceRecipient>,
@@ -95,7 +97,7 @@ impl SourceAudit {
             failures: Arc::clone(&failures),
         });
         let source = Arc::new(Self {
-            db: Arc::clone(&db),
+            db: crate::held_database::HeldDatabase::new(Arc::clone(&db)),
             selected,
             device,
             runtime: Arc::downgrade(&runtime),
@@ -197,6 +199,13 @@ impl SourceAudit {
             }
             _ => None,
         };
+        // Wait for the destination's turn first (#1542), in the caller's
+        // task: a wait holds no admission permit and no database guard, a
+        // caller giving up then cancels nothing admitted, and the record's
+        // timestamp below is taken once the request may go.
+        let operation = requester
+            .pace_operation(destination, attributes, request)
+            .await?;
         // Bound every retained operation, including time before lease acquisition
         // and after dispatch releases the request lease. Never spawn permit waiters.
         let permit = Arc::clone(&self.operations)
@@ -261,11 +270,7 @@ impl SourceAudit {
             drop(db);
             drop(runtime);
             drop(permit);
-            return requester
-                .prepare_operation(destination, attributes, request)?
-                .execute()
-                .await
-                .result;
+            return operation.prepare()?.execute().await.result;
         }
         let status = reporter.status_internal();
         let confirmed = reporter.confirmed_internal();
@@ -275,21 +280,18 @@ impl SourceAudit {
             drop(db);
             drop(runtime);
             drop(permit);
-            return requester
-                .prepare_operation(destination, attributes, request)?
-                .execute()
-                .await
-                .result;
+            return operation.prepare()?.execute().await.result;
         };
         // A routed destination on this network goes to the station directly
-        // (#1403), so it is audited as the direct operation it is.
-        let destination = destination.localized(self.egress.local_network_number().get());
-        let EndpointApduDestination::Direct { destination_mac } = &destination else {
+        // (#1403), as pacing localized it, so it is audited as the direct
+        // operation it is.
+        let EndpointApduDestination::Direct { destination_mac } = operation.destination() else {
             return Err(Error::Encoding(
                 "audited operation requires direct B/IP IPv4 unicast".into(),
             ));
         };
-        let (ip, port) = decode_bip_mac(destination_mac)?;
+        let destination_mac = destination_mac.clone();
+        let (ip, port) = decode_bip_mac(&destination_mac)?;
         let ip = Ipv4Addr::from(ip);
         if ip.is_unspecified()
             || ip.is_multicast()
@@ -306,7 +308,7 @@ impl SourceAudit {
             status.set_configured(false);
             return Err(Error::Encoding("source Device is unavailable".into()));
         }
-        let operation = requester.prepare_operation(destination.clone(), attributes, request)?;
+        let operation = operation.prepare()?;
         let timestamp = match db
             .clock_frame()
             .filter(|frame| frame.is_valid_actual_datetime())
@@ -342,7 +344,7 @@ impl SourceAudit {
             source_user_role: None,
             target_device: BACnetRecipient::Address(BACnetAddress {
                 network_number: 0,
-                mac_address: destination_mac.clone(),
+                mac_address: destination_mac,
             }),
             target_object: None,
             target_property: None,

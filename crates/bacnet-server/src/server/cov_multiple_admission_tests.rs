@@ -231,7 +231,7 @@ async fn the_reference_past_the_subscription_cap_is_named_and_the_ones_before_it
                     subscriber_process_identifier: process,
                     monitored_object_identifier: av(1),
                     issue_confirmed_notifications: false,
-                    expires_at: Some(Instant::now() + Duration::from_secs(3600)),
+                    expires_at: Some(runtime_clock::now() + Duration::from_secs(3600)),
                     last_notified_observation: None,
                     monitored_property: None,
                     monitored_property_array_index: None,

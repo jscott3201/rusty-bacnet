@@ -4,8 +4,8 @@ use super::*;
 use bacnet_encoding::apdu::{decode_apdu, encode_apdu, Apdu, ConfirmedRequest};
 use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
 use bacnet_services::read_property::ReadPropertyRequest;
+use bacnet_transport::mstp::codec::{self, FrameType};
 use bacnet_transport::mstp::{LoopbackSerial, SerialPort};
-use bacnet_transport::mstp_frame::{decode_frame, encode_frame, FrameType, MstpFrame};
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use bacnet_types::enums::{AbortReason, ConfirmedServiceChoice, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
@@ -28,13 +28,36 @@ pub(super) struct TrackedSerial {
     serial: LoopbackSerial,
     _peer: LoopbackSerial,
     live: Arc<AtomicUsize>,
+    /// The echo declared for it; the injected port itself returns nothing.
+    echo: Echo,
 }
 impl Drop for TrackedSerial {
     fn drop(&mut self) {
         self.live.fetch_sub(1, Ordering::SeqCst);
     }
 }
+impl TestSerial {
+    /// Declare the echo, as `TokioSerialPort::with_echo` does. A peer
+    /// loopback then hears its own writes.
+    pub(super) fn with_echo(self, echo: Echo) -> Self {
+        match self {
+            Self::Real(port) => Self::Real(port.with_echo(echo)),
+            Self::Injected(mut port) => {
+                port.echo = echo;
+                Self::Injected(port)
+            }
+            Self::Peer(port) => Self::Peer(port.with_echo(echo)),
+        }
+    }
+}
 impl SerialPort for TestSerial {
+    fn echo(&self) -> Echo {
+        match self {
+            Self::Real(port) => port.echo(),
+            Self::Injected(port) => port.echo,
+            Self::Peer(port) => port.echo(),
+        }
+    }
     async fn write(&self, data: &[u8]) -> Result<(), Error> {
         match self {
             Self::Real(port) => port.write(data).await,
@@ -80,6 +103,13 @@ fn mstp_python_wrapper_owns_one_serial_and_returns_none() {
         6000,
         0,
         256,
+        0,
+        false,
+        false,
+        None,
+        None,
+        None,
+        None,
     )
     .unwrap();
     endpoint.config.serial_opener = Some(Arc::new({
@@ -93,6 +123,7 @@ fn mstp_python_wrapper_owns_one_serial_and_returns_none() {
                 serial,
                 _peer: peer,
                 live: live.clone(),
+                echo: Echo::None,
             })))
         }
     }));
@@ -174,16 +205,44 @@ fn group_read_frame(invoke_id: u8, instance: u32) -> MstpFrame {
     )
     .unwrap();
     MstpFrame {
-        frame_type: FrameType::BACnetDataExpectingReply,
+        frame_type: FrameType::BACNET_DATA_EXPECTING_REPLY,
         destination: SESSION_MAC,
         source: PEER_MAC,
         data: npdu.freeze(),
     }
 }
 
+/// A frame the test peer sends or reads, owning its data.
+struct MstpFrame {
+    frame_type: FrameType,
+    destination: u8,
+    source: u8,
+    data: Bytes,
+}
+
+fn decode_frame(wire: &[u8]) -> Result<(MstpFrame, usize), codec::FrameError> {
+    let (frame, consumed) = codec::decode_frame(wire)?;
+    Ok((
+        MstpFrame {
+            frame_type: frame.header.frame_type,
+            destination: frame.header.destination,
+            source: frame.header.source,
+            data: Bytes::copy_from_slice(frame.data),
+        },
+        consumed,
+    ))
+}
+
 async fn peer_send(peer: &LoopbackSerial, frame: &MstpFrame) {
-    let mut wire = BytesMut::new();
-    encode_frame(&mut wire, frame).unwrap();
+    let mut wire = Vec::new();
+    codec::Frame::new(
+        frame.frame_type,
+        frame.destination,
+        frame.source,
+        &frame.data,
+    )
+    .encode_to_sink(&mut wire)
+    .unwrap();
     peer.write(&wire).await.unwrap();
 }
 
@@ -206,16 +265,16 @@ async fn read_group(peer: &LoopbackSerial, invoke_id: u8, instance: u32) -> Apdu
                 continue;
             }
             match frame.frame_type {
-                FrameType::ReplyPostponed => {
+                FrameType::REPLY_POSTPONED => {
                     let token = MstpFrame {
-                        frame_type: FrameType::Token,
+                        frame_type: FrameType::TOKEN,
                         destination: SESSION_MAC,
                         source: PEER_MAC,
                         data: Bytes::new(),
                     };
                     peer_send(peer, &token).await;
                 }
-                FrameType::BACnetDataNotExpectingReply => {
+                FrameType::BACNET_DATA_NOT_EXPECTING_REPLY => {
                     let npdu = decode_npdu(frame.data).unwrap();
                     let apdu = decode_apdu(npdu.payload).unwrap();
                     let answered = match &apdu {
@@ -261,6 +320,13 @@ fn mstp_python_wrapper_applies_its_read_work_limit() {
         6000,
         0,
         2,
+        0,
+        false,
+        false,
+        None,
+        None,
+        None,
+        None,
     )
     .unwrap();
     assert_eq!(endpoint.config.read_work_limit, 2);

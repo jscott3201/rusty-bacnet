@@ -6,12 +6,13 @@
 //! (#1394). Each is read-only over the network, so these keyword arguments
 //! are the Python route to it. The Access Point's policy count,
 //! supported authorization modes and Priority_For_Writing are read-only
-//! too, and take keyword arguments the same way (#1307). The Access Door's
-//! Alarm_Values, Fault_Values and Masked_Alarm_Values (#1149), and the
-//! Access Zone's Alarm_Values (#1421), are writable over the network as
-//! well; their keyword arguments set the starting lists.
+//! too, and take keyword arguments the same way (#1307), as do its
+//! Authentication_Policy_List and Authentication_Policy_Names (#1325). The
+//! Access Door's Alarm_Values, Fault_Values and Masked_Alarm_Values (#1149),
+//! and the Access Zone's Alarm_Values (#1421), are writable over the network
+//! as well; their keyword arguments set the starting lists.
 use super::super::*;
-use bacnet_types::constructed::BACnetAuthenticationFactorFormat;
+use bacnet_types::constructed::{BACnetAuthenticationFactorFormat, BACnetAuthenticationPolicy};
 use bacnet_types::enums::{
     AccessZoneOccupancyState, AuthenticationFactorType, AuthorizationMode, DoorAlarmState,
 };
@@ -160,12 +161,30 @@ impl BACnetServer {
     /// 65535), and `priority_for_writing` the door command priority (16 when
     /// omitted, else 1 to 16). A value outside those raises
     /// VALUE_OUT_OF_RANGE.
+    ///
+    /// `authentication_policies` sets Authentication_Policy_List and
+    /// Authentication_Policy_Names as `(name, policy)` pairs, and the policy
+    /// count to their number (#1325). A policy is `(entries, order_enforced,
+    /// timeout)`, the form a read of a list element gives: `entries` lists
+    /// `(reference, index)` pairs naming the Credential Data Inputs and the
+    /// step each serves, from 1, and `timeout` is in seconds, 0 for no limit.
+    /// A reference takes the element forms of `door_members`. An empty list,
+    /// or more than 256 pairs, raises VALUE_OUT_OF_RANGE. A policy with no
+    /// entries, a reference to anything but a Credential Data Input, or
+    /// indexes that don't start at 1 and climb by at most one is kept but
+    /// can't be in effect: while it is, Active_Authentication_Policy reads 0.
+    /// While any such policy is listed, or the active policy is 0,
+    /// Reliability reads CONFIGURATION_ERROR. A
+    /// `number_of_authentication_policies` given too is applied afterwards,
+    /// resizes both arrays and can be at most 256 (VALUE_OUT_OF_RANGE
+    /// above).
     #[pyo3(signature = (
         instance,
         name,
         *,
         access_doors=None,
         number_of_authentication_policies=None,
+        authentication_policies=None,
         supported_authorization_modes=None,
         priority_for_writing=None
     ))]
@@ -175,12 +194,21 @@ impl BACnetServer {
         name: &str,
         access_doors: Option<Vec<PyDeviceObjectReference>>,
         number_of_authentication_policies: Option<u32>,
+        authentication_policies: Option<Bound<'_, PyAny>>,
         supported_authorization_modes: Option<Vec<u32>>,
         priority_for_writing: Option<u8>,
     ) -> PyResult<()> {
         let settings = PointSettings {
             access_doors: device_references(access_doors, "access_doors")?,
             number_of_authentication_policies,
+            authentication_policies: authentication_policies
+                .map(|policies| {
+                    crate::types::authentication_policies_from_py(
+                        &policies,
+                        "authentication_policies",
+                    )
+                })
+                .transpose()?,
             supported_authorization_modes,
             priority_for_writing,
         };
@@ -321,6 +349,7 @@ fn access_door(
 struct PointSettings {
     access_doors: Option<Vec<BACnetDeviceObjectReference>>,
     number_of_authentication_policies: Option<u32>,
+    authentication_policies: Option<Vec<(String, BACnetAuthenticationPolicy)>>,
     supported_authorization_modes: Option<Vec<u32>>,
     priority_for_writing: Option<u8>,
 }
@@ -334,6 +363,9 @@ fn access_point(
     let mut obj = AccessPointObject::new(instance, name)?;
     if let Some(doors) = settings.access_doors {
         obj.set_access_doors(doors)?;
+    }
+    if let Some(policies) = settings.authentication_policies {
+        obj.set_authentication_policies(policies)?;
     }
     if let Some(count) = settings.number_of_authentication_policies {
         obj.set_number_of_authentication_policies(count)?;

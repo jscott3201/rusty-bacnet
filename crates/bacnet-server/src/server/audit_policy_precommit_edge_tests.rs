@@ -106,7 +106,7 @@ async fn mandatory_policy_late_encoding_denial_releases_confirmed_lease_and_perm
     install(&f, policy()).await;
     // 50 is a supported maximum-APDU setting. This real record does not fit,
     // after its permit and confirmed operation have already been reserved.
-    f.server.config.max_apdu_length = 50;
+    f.server.config_mut().max_apdu_length = 50;
     let response = write(
         &f,
         ObjectType::ANALOG_VALUE,

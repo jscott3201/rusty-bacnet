@@ -4,7 +4,7 @@
 //! plain data with no transport type parameter, so `App` and the views stay
 //! non-generic and only the worker is instantiated per transport.
 
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{Ipv4Addr, SocketAddrV6};
 use std::time::{Duration, Instant};
 
 use bacnet_services::who_is::DeviceInstanceRange;
@@ -25,13 +25,23 @@ pub(crate) enum WhoIsScope {
     Global,
     /// Unicast to one address.
     Directed {
-        /// The destination MAC.
-        mac: Vec<u8>,
+        /// The destination.
+        to: DirectedTo,
         /// The address as the user typed it, for display.
         label: String,
     },
     /// Broadcast on one remote network.
     Network(u16),
+}
+
+/// The destination of a directed Who-Is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DirectedTo {
+    /// A MAC on the local network.
+    Mac(Vec<u8>),
+    /// A B/IPv6 address. The worker finds the VMAC of the node there before
+    /// sending, since a B/IPv6 node is addressed by its VMAC (Clause U.1.3).
+    Bip6(SocketAddrV6),
 }
 
 /// A validated Who-Is request from the form.
@@ -50,6 +60,15 @@ impl WhoIsSpec {
     pub(crate) fn is_full_range(&self) -> bool {
         self.range
             .is_none_or(|range| (range.low(), range.high()) == (0, MAX_INSTANCE))
+    }
+
+    /// This request with a directed B/IPv6 destination replaced by the VMAC
+    /// found for it; the label the user typed stays.
+    pub(crate) fn with_vmac(mut self, vmac: Vec<u8>) -> Self {
+        if let WhoIsScope::Directed { to, .. } = &mut self.scope {
+            *to = DirectedTo::Mac(vmac);
+        }
+        self
     }
 
     /// True for a global broadcast.
@@ -182,24 +201,27 @@ pub(crate) enum WorkerEvent {
 pub(crate) enum AddressStyle {
     /// 4-byte IPv4 address and 2-byte port.
     Bip,
-    /// 16-byte IPv6 address and 2-byte port.
+    /// 3-byte B/IPv6 VMAC, as `bip6:0x0004D2` (Clause U.1.3).
     Bip6,
     /// Hex bytes (BACnet/SC VMACs and anything else).
     Hex,
 }
 
 impl AddressStyle {
-    /// Format a MAC for display.
+    /// Format a MAC for display, in a form the directed Who-Is reads back.
     pub(crate) fn format(self, mac: &[u8]) -> String {
         match (self, mac.len()) {
-            (Self::Bip, 6) => crate::output::format_mac(mac),
-            (Self::Bip6, 18) => {
-                let mut ip = [0u8; 16];
-                ip.copy_from_slice(&mac[..16]);
-                let port = u16::from_be_bytes([mac[16], mac[17]]);
-                format!("[{}]:{port}", Ipv6Addr::from(ip))
-            }
+            (Self::Bip, 6) | (Self::Bip6, 3) => crate::output::format_mac(mac),
             _ => hex(mac),
+        }
+    }
+
+    /// The addresses a directed Who-Is takes on this transport.
+    pub(crate) fn directed_forms(self) -> &'static str {
+        match self {
+            Self::Bip => "IP or IP:port",
+            Self::Bip6 => "bip6:N, bip6:0xVMAC or [IPv6]:port",
+            Self::Hex => "VMAC as 12 hex digits",
         }
     }
 }
@@ -246,9 +268,12 @@ mod tests {
             AddressStyle::Bip.format(&[10, 0, 0, 1, 0xBA, 0xC0]),
             "10.0.0.1:47808"
         );
-        let mut v6 = Ipv6Addr::LOCALHOST.octets().to_vec();
-        v6.extend_from_slice(&47808u16.to_be_bytes());
-        assert_eq!(AddressStyle::Bip6.format(&v6), "[::1]:47808");
+        // A B/IPv6 MAC is the node's VMAC (Clause U.1.3).
+        assert_eq!(AddressStyle::Bip6.format(&[0, 4, 0xD2]), "bip6:0x0004D2");
+        assert_eq!(
+            AddressStyle::Bip6.format(&[2, 0, 0, 0, 0, 1]),
+            "02:00:00:00:00:01"
+        );
         assert_eq!(
             AddressStyle::Hex.format(&[2, 0, 0, 0, 0, 1]),
             "02:00:00:00:00:01"

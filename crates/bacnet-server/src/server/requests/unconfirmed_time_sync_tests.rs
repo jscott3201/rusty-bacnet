@@ -1,4 +1,9 @@
 //! Time synchronization handler controls.
+//!
+//! The async tests run on tokio's paused clock, which the time-sync limiter
+//! reads ([`runtime_clock::now`], #1550). Time moves only when a test
+//! advances it, so its windows close at exact instants and a stalled runner
+//! can't close one under a test.
 use super::*;
 use crate::server::test_transport::{SendMode, StartMode, TestTransport};
 use bacnet_network::layer::ReceivedApdu;
@@ -109,7 +114,7 @@ async fn dispatch(
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn time_sync_disabled_empty_allowlist_and_step_denials_leave_clock_and_observer_untouched() {
     for policy in [
         TimeSyncPolicy {
@@ -153,7 +158,7 @@ async fn time_sync_disabled_empty_allowlist_and_step_denials_leave_clock_and_obs
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn time_sync_allowlist_accepts_exact_direct_routed_and_sc_vmac_with_callback_provenance() {
     for kind in 0..3 {
         for is_utc in [false, true] {
@@ -205,7 +210,7 @@ async fn time_sync_allowlist_accepts_exact_direct_routed_and_sc_vmac_with_callba
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn time_sync_malformed_denied_sources_and_oversteps_do_not_starve_valid_requests() {
     let policy = TimeSyncPolicy {
         source_restriction: Some(
@@ -260,7 +265,7 @@ async fn time_sync_malformed_denied_sources_and_oversteps_do_not_starve_valid_re
     assert_eq!(clock.read_clock().unwrap().local_time.hour, 10);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn time_sync_panicking_observer_keeps_change_and_live_ingress_continues() {
     let (tx, rx) = mpsc::channel(8);
     let (observed, mut observations) = mpsc::unbounded_channel();
@@ -389,7 +394,7 @@ async fn synced_from(
 /// A routed allowlist entry on the server's own network number also names
 /// the station's direct requests once that number is known (#1458); only
 /// the routed entry widens.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn time_sync_routed_entry_on_this_network_names_the_stations_direct_request() {
     const THIS_NETWORK: u16 = 7;
     let (station, other_station, router) = ([10, 0, 0, 3], [10, 0, 0, 4], [10, 0, 0, 9]);
@@ -414,4 +419,79 @@ async fn time_sync_routed_entry_on_this_network_names_the_stations_direct_reques
     let direct = || TimeSyncSource::Direct(station.to_vec());
     assert!(synced_from(direct(), known, &station, None).await);
     assert!(!synced_from(direct(), known, &router, relayed(THIS_NETWORK)).await);
+}
+
+/// Each window the limiter keeps closes exactly at its length (#1550): a
+/// repeat 1 ms inside a coalescing window, or 1 ms before a rate bucket earns
+/// its next token, is refused and leaves the clock alone; one at the edge is
+/// taken. The request path reads the clock itself, so this needs the limiter
+/// on tokio's paused clock.
+#[tokio::test(start_paused = true)]
+async fn time_sync_windows_close_exactly_at_their_length() {
+    let rate = Some(TimeSyncRateLimit {
+        max_per_second: 1.0,
+        burst_capacity: 1,
+    });
+    let window = Duration::from_secs(2);
+    let token = Duration::from_secs(1);
+    // The global rate goes first, while the paused clock still reads the
+    // instant the runtime started: a global bucket built on the system clock,
+    // which has run on since, would then hold its next token back past the
+    // edge.
+    let cases = [
+        (
+            "global rate",
+            TimeSyncPolicy {
+                global_rate: rate,
+                ..Default::default()
+            },
+            token,
+        ),
+        (
+            "source rate",
+            TimeSyncPolicy {
+                per_source_rate: rate,
+                ..Default::default()
+            },
+            token,
+        ),
+        (
+            "source coalescing",
+            TimeSyncPolicy {
+                coalesce_window: window,
+                ..Default::default()
+            },
+            window,
+        ),
+        (
+            "global coalescing",
+            TimeSyncPolicy {
+                global_coalesce_window: window,
+                ..Default::default()
+            },
+            window,
+        ),
+    ];
+    for (name, policy, edge) in cases {
+        let clock = clock();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let config = config(policy.clone(), &calls);
+        let limiter = Arc::new(TimeSyncLimiter::new(policy));
+        let synced = || {
+            (
+                calls.load(Ordering::SeqCst),
+                clock.read_clock().unwrap().local_time.hour,
+            )
+        };
+        dispatch(&config, &clock, &limiter, false, &received(0), encoded(10)).await;
+        assert_eq!(synced(), (1, 10), "{name}: first request");
+
+        tokio::time::advance(edge - Duration::from_millis(1)).await;
+        dispatch(&config, &clock, &limiter, false, &received(0), encoded(11)).await;
+        assert_eq!(synced(), (1, 10), "{name}: 1 ms inside");
+
+        tokio::time::advance(Duration::from_millis(1)).await;
+        dispatch(&config, &clock, &limiter, false, &received(0), encoded(12)).await;
+        assert_eq!(synced(), (2, 12), "{name}: at the edge");
+    }
 }

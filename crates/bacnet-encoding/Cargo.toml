@@ -7,12 +7,23 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 keywords = ["bacnet", "asn1", "encoding", "apdu", "npdu"]
-categories = ["network-programming", "encoding"]
+categories = ["network-programming", "encoding", "no-std"]
+
+# One of `std` or `alloc` is required; with neither the crate refuses to build.
+# Leaving both off is reserved for a future allocation-free subset.
+[features]
+default = ["std"]
+# Hosted builds: std in the dependencies, and a tracing warning for an NPDU
+# with reserved control bits set. tracing-core needs atomic compare-and-swap,
+# which some bare-metal targets lack, so only std brings it in.
+std = ["alloc", "bacnet-types/std", "bytes/std", "dep:tracing"]
+# no_std with a global allocator.
+alloc = ["bacnet-types/alloc"]
 
 [dependencies]
 bacnet-types = { workspace = true }
 bytes = { workspace = true }
-tracing = { workspace = true }
+tracing = { workspace = true, optional = true }
 
 [lints]
 workspace = true

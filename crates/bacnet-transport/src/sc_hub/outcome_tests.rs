@@ -4,9 +4,9 @@ use super::deadline_test_support::*;
 use super::shutdown_blocked_tests::ControlledPeer;
 use super::unknown_transit_tests::{barrier, raw, send, stopped};
 use super::*;
+use crate::port_ownership::connect_loopback;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
-use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Error;
 
 #[tokio::test]
@@ -26,9 +26,9 @@ async fn ordered_accept_capacity_counts_only_selected_total_limit() {
     assert!(
         matches!(poll_io(established.next()).await, Some(Ok(Message::Binary(data))) if data[0] == 7)
     );
-    let _idle = TcpStream::connect(hub.address).await.unwrap();
+    let _idle = connect_loopback(hub.address).await;
     until(|| hub.active.load(Ordering::Acquire) == 2).await;
-    let mut refused = TcpStream::connect(hub.address).await.unwrap();
+    let mut refused = connect_loopback(hub.address).await;
     assert!(matches!(
         poll_io(refused.read(&mut [0; 1])).await,
         Ok(0) | Err(_)

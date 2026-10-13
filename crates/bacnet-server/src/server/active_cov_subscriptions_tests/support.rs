@@ -254,7 +254,6 @@ impl Wire {
     }
 
     pub(super) async fn start_with_devices(config: ServerConfig, instances: &[u32]) -> Self {
-        let (tx, rx) = mpsc::channel(16);
         let mut db = ObjectDatabase::new();
         for &instance in instances {
             db.add(Box::new(
@@ -272,6 +271,11 @@ impl Wire {
         db.add(Box::new(first)).unwrap();
         db.add(Box::new(AnalogValueObject::new(2, "AV-2", 62).unwrap()))
             .unwrap();
+        Self::start_with_database(config, db).await
+    }
+
+    pub(super) async fn start_with_database(config: ServerConfig, db: ObjectDatabase) -> Self {
+        let (tx, rx) = mpsc::channel(16);
         let transport = TestTransport::builder()
             .local_mac(&[0x0A, 0, 0, 2, 0xBA, 0xC0])
             .inbound(rx)
@@ -491,7 +495,7 @@ pub(super) fn spec(
     }
 }
 
-/// A context with `time_remaining` zeroed; lifetimes are checked by range.
+/// A context with `time_remaining` zeroed; [`untimed`] checks lifetimes.
 pub(super) fn context(
     peer: &Peer,
     process: u32,
@@ -511,21 +515,19 @@ pub(super) fn context(
     }
 }
 
-/// Zero every lifetime after checking it against its `(low, high)` bound.
+/// Zero every lifetime after checking it is exactly the one expected. The
+/// tests that call this run on tokio's paused clock, which COV lifetimes are
+/// measured on (#1556), so no time passes that they don't step.
 pub(super) fn untimed(
     contexts: &[BACnetCOVMultipleSubscription],
-    lifetimes: &[(u32, u32)],
+    lifetimes: &[u32],
 ) -> Vec<BACnetCOVMultipleSubscription> {
     assert_eq!(contexts.len(), lifetimes.len(), "{contexts:?}");
     contexts
         .iter()
         .zip(lifetimes)
-        .map(|(context, (low, high))| {
-            assert!(
-                (*low..=*high).contains(&context.time_remaining),
-                "{} outside {low}..={high}",
-                context.time_remaining
-            );
+        .map(|(context, lifetime)| {
+            assert_eq!(context.time_remaining, *lifetime, "{context:?}");
             BACnetCOVMultipleSubscription {
                 time_remaining: 0,
                 ..context.clone()

@@ -17,10 +17,17 @@ use super::*;
 /// one level down and one level up a hierarchy of users (a department and
 /// the people in it, say). The application sets all three; they are
 /// read-only over the network.
+///
+/// Global_Identifier names the user across devices: every Access User
+/// standing for the same person, team or item carries the same nonzero
+/// value, and 0 means none is assigned (Clause 12.33.5). It is the W row of
+/// Table 12-38, so clients write it as they write an Access Credential's
+/// (#1463).
 pub struct AccessUserObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
+    global_identifier: u32,
     user_type: AccessUserType,
     credentials: Vec<BACnetDeviceObjectReference>,
     members: Vec<BACnetDeviceObjectReference>,
@@ -37,6 +44,7 @@ impl AccessUserObject {
             oid,
             name: name.into(),
             description: String::new(),
+            global_identifier: 0,
             user_type: AccessUserType::ASSET,
             credentials: Vec::new(),
             members: Vec::new(),
@@ -44,6 +52,11 @@ impl AccessUserObject {
             status_flags: StatusFlags::empty(),
             reliability: Reliability::NO_FAULT_DETECTED,
         })
+    }
+
+    /// Set Global_Identifier; 0 means none is assigned (Clause 12.33.5).
+    pub fn set_global_identifier(&mut self, value: u32) {
+        self.global_identifier = value;
     }
 
     /// Set Credentials, the Access Credential objects the user holds
@@ -111,6 +124,9 @@ impl BACnetObject for AccessUserObject {
             p if p == PropertyIdentifier::USER_TYPE => {
                 Ok(PropertyValue::Enumerated(self.user_type.to_raw()))
             }
+            p if p == PropertyIdentifier::GLOBAL_IDENTIFIER => {
+                Ok(PropertyValue::Unsigned(self.global_identifier.into()))
+            }
             p if p == PropertyIdentifier::CREDENTIALS => {
                 Ok(crate::device_reference::reference_list(&self.credentials))
             }
@@ -135,6 +151,13 @@ impl BACnetObject for AccessUserObject {
             return result;
         }
         match property {
+            p if p == PropertyIdentifier::GLOBAL_IDENTIFIER => {
+                let PropertyValue::Unsigned(raw) = value else {
+                    return Err(common::invalid_data_type_error());
+                };
+                self.global_identifier = common::u64_to_u32(raw)?;
+                Ok(())
+            }
             p if p == PropertyIdentifier::USER_TYPE => {
                 if let PropertyValue::Enumerated(v) = value {
                     self.user_type = AccessUserType::from_raw(v);

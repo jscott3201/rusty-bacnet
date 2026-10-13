@@ -56,7 +56,7 @@ async fn audit_forwarding_configuration_recovers_only_on_next_changed_batch() {
                 oid(ObjectType::DEVICE, 20),
                 &[2],
                 None,
-                Instant::now(),
+                runtime_clock::now(),
                 |_| false,
             );
         }

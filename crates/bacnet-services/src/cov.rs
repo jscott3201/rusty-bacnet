@@ -1,5 +1,8 @@
 //! COV (Change of Value) services per ASHRAE 135-2020 Clauses 13.6, 13.7, 13.14 and 13.15.
 
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
 use bacnet_encoding::constructed::tagged::{
     decode_ctx_boolean, decode_ctx_object_id, decode_ctx_real, decode_ctx_unsigned, expect_end,
     misplaced_tag, next_is_context, unclosed_kind,

@@ -4,6 +4,9 @@
 //! acknowledgment fields use APPLICATION tags; the VT-Data acknowledgment is
 //! the one construct that uses context tags (Clause 21.2.5).
 
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;
 use bacnet_types::enums::VTClass;

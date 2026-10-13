@@ -66,10 +66,11 @@ pub async fn make_bip_client() -> Result<BACnetClient<BipTransport>, Error> {
         .await
 }
 
-/// Create a BIP6 server with a populated database on an ephemeral port.
+/// Create a BIP6 server with a populated database on an ephemeral port. Its
+/// VMAC is the one its device instance, 2345, gives (U.1.3).
 pub async fn make_bip6_server() -> Result<BACnetServer<Bip6Transport>, Error> {
     let db = make_benchmark_db(2345);
-    let transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, None);
+    let transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, Some(2345));
 
     BACnetServer::<Bip6Transport>::generic_builder()
         .transport(transport)
@@ -87,6 +88,22 @@ pub async fn make_bip6_client() -> Result<BACnetClient<Bip6Transport>, Error> {
         .apdu_timeout_ms(2000)
         .build()
         .await
+}
+
+/// The MAC a BIP6 client addresses `server` by: the server's VMAC, which the
+/// client finds from the server's B/IPv6 address with
+/// Virtual-Address-Resolution (U.5). The client then knows where that VMAC
+/// is, so no request waits on resolution.
+pub async fn resolve_bip6_server(
+    client: &BACnetClient<Bip6Transport>,
+    server: &BACnetServer<Bip6Transport>,
+) -> Result<Vec<u8>, Error> {
+    let address = server
+        .transport()
+        .and_then(Bip6Transport::local_address)
+        .ok_or_else(|| Error::Encoding("the BIP6 server is not running".into()))?;
+    let vmac = client.transport().resolve_virtual_address(address).await?;
+    Ok(vmac.octets().to_vec())
 }
 
 /// Get current process RSS in bytes.

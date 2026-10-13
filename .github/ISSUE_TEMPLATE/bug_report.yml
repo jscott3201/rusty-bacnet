@@ -11,7 +11,7 @@ body:
     attributes:
       label: Crate and version
       description: The crate, the `bacnet` CLI or the `rusty-bacnet` Python package, and its version or the commit you built.
-      placeholder: bacnet-client 0.12.0
+      placeholder: bacnet-client 0.13.0
     validations:
       required: true
   - type: dropdown

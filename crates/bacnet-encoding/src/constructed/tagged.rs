@@ -84,6 +84,10 @@
 //! # Ok::<(), Error>(())
 //! ```
 
+#[cfg(not(feature = "std"))]
+use alloc::{string::String, vec::Vec};
+use core::fmt;
+
 use bacnet_types::error::{DecodingKind, Error};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
@@ -632,12 +636,37 @@ fn app_kind(number: u8) -> &'static str {
 /// A BOOLEAN is refused with [`Error::Decoding`] whatever the data holds: its
 /// value is the tag's length field, so it has no contents to return (see
 /// [`Tag::is_boolean_true`]).
-pub fn decode_app_primitive<'a>(
-    data: &'a [u8],
+///
+/// `what` may be any [`Display`](fmt::Display), not only a `&str`, for a
+/// label that carries a value, such as a list element's index: pass
+/// [`format_args!`], and the label is formatted only if an error names it,
+/// so a read that succeeds builds none (#1645).
+///
+/// ```
+/// use bacnet_encoding::constructed::tagged::decode_app_primitive;
+/// use bacnet_encoding::tags::app_tag;
+///
+/// // Two records, the second an Unsigned rather than an OCTET STRING.
+/// let data = [0x61, 0xAB, 0x21, 0x01];
+/// let mut offset = 0;
+/// let mut error = None;
+/// for i in 0..2 {
+///     match decode_app_primitive(&data, offset, app_tag::OCTET_STRING, format_args!("record {i}")) {
+///         Ok((_, end)) => offset = end,
+///         Err(e) => error = Some(e.to_string()),
+///     }
+/// }
+/// assert_eq!(
+///     error.as_deref(),
+///     Some("decoding error at offset 2: record 1: expected application-tagged OCTET STRING"),
+/// );
+/// ```
+pub fn decode_app_primitive(
+    data: &[u8],
     offset: usize,
     number: u8,
-    what: &str,
-) -> Result<(&'a [u8], usize), Error> {
+    what: impl fmt::Display,
+) -> Result<(&[u8], usize), Error> {
     let (t, start) = app_header(data, offset, number, what)?;
     contents(data, start, t.length)
 }
@@ -645,7 +674,12 @@ pub fn decode_app_primitive<'a>(
 /// Require an application tag `number` at `offset`; return its header and
 /// the offset of its contents. A BOOLEAN has none (see
 /// [`decode_app_primitive`]).
-fn app_header(data: &[u8], offset: usize, number: u8, what: &str) -> Result<(Tag, usize), Error> {
+fn app_header(
+    data: &[u8],
+    offset: usize,
+    number: u8,
+    what: impl fmt::Display,
+) -> Result<(Tag, usize), Error> {
     if number == tags::app_tag::BOOLEAN {
         return Err(Error::decoding(
             offset,

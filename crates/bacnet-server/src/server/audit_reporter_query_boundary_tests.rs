@@ -178,7 +178,7 @@ async fn audit_reporter_query_outbound_segmentation_and_divergence_are_silent() 
         let (reads, _) = add_log(&fixture, 1, "large").await;
         add_log(&plain, 1, "large").await;
         for fixture in [&mut fixture, &mut plain] {
-            fixture.server.config.segmentation_supported = Segmentation::BOTH;
+            fixture.server.config_mut().segmentation_supported = Segmentation::BOTH;
             let mut req = request(encode(&query(None, 1)));
             req.segmented_response_accepted = segmented;
             let (tx, rx) = oneshot::channel();

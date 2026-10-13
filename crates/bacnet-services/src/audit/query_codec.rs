@@ -221,7 +221,7 @@ fn decode_by_target(data: &[u8]) -> Result<BACnetAuditLogQueryParameters, Error>
 
     let mut target_device_address = None;
     if next_is_opening(data, offset, 1)? {
-        let (address, end) = decode_address(data, offset, 1, "AuditLogQuery by-target address")?;
+        let (address, end) = decode_address(data, offset, 1, &BY_TARGET_ADDRESS)?;
         target_device_address = Some(address);
         offset = end;
     }
@@ -318,7 +318,7 @@ fn decode_by_source(data: &[u8]) -> Result<BACnetAuditLogQueryParameters, Error>
 
     let mut source_device_address = None;
     if next_is_opening(data, offset, 1)? {
-        let (address, end) = decode_address(data, offset, 1, "AuditLogQuery by-source address")?;
+        let (address, end) = decode_address(data, offset, 1, &BY_SOURCE_ADDRESS)?;
         source_device_address = Some(address);
         offset = end;
     }
@@ -360,12 +360,36 @@ fn decode_by_source(data: &[u8]) -> Result<BACnetAuditLogQueryParameters, Error>
     })
 }
 
+/// What a query's device-address filter and its members are called in
+/// errors, each written out whole, so a query that decodes builds no label
+/// (#1645).
+struct AddressLabels {
+    field: &'static str,
+    network_number: &'static str,
+    mac_address: &'static str,
+}
+
+/// The by-target choice's.
+const BY_TARGET_ADDRESS: AddressLabels = AddressLabels {
+    field: "AuditLogQuery by-target address",
+    network_number: "AuditLogQuery by-target address network-number",
+    mac_address: "AuditLogQuery by-target address mac-address",
+};
+
+/// The by-source choice's.
+const BY_SOURCE_ADDRESS: AddressLabels = AddressLabels {
+    field: "AuditLogQuery by-source address",
+    network_number: "AuditLogQuery by-source address network-number",
+    mac_address: "AuditLogQuery by-source address mac-address",
+};
+
 fn decode_address(
     data: &[u8],
     offset: usize,
     expected_tag: u8,
-    field: &str,
+    labels: &AddressLabels,
 ) -> Result<(BACnetAddress, usize), Error> {
+    let field = labels.field;
     let (opening, content_start) = tags::decode_tag(data, offset)?;
     if !opening.is_opening_tag(expected_tag) {
         return Err(misplaced_tag(
@@ -378,12 +402,8 @@ fn decode_address(
     }
     let (content, end) = tags::extract_context_value(data, content_start, expected_tag)?;
 
-    let (network_bytes, inner_offset) = decode_app_primitive(
-        content,
-        0,
-        tags::app_tag::UNSIGNED,
-        &format!("{field} network-number"),
-    )?;
+    let (network_bytes, inner_offset) =
+        decode_app_primitive(content, 0, tags::app_tag::UNSIGNED, labels.network_number)?;
     let network_number = decode_canonical_unsigned(network_bytes, offset, field)?;
     let network_number = u16::try_from(network_number)
         .map_err(|_| Error::out_of_range(offset, format!("{field} network-number exceeds u16")))?;
@@ -393,7 +413,7 @@ fn decode_address(
         content,
         inner_offset,
         tags::app_tag::OCTET_STRING,
-        &format!("{field} mac-address"),
+        labels.mac_address,
     )?;
     check_decoded_mac_len(mac_address.len(), content_start + mac_offset, field)?;
     expect_end(content, inner_offset, offset + inner_offset, field)?;

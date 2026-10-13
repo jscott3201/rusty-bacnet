@@ -15,7 +15,7 @@ use tokio::sync::{mpsc, watch, Mutex};
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
-use crate::port::{DataAttribute, ReceivedNpdu, TransportPort};
+use crate::port::{DataAttribute, NpduLimits, ReceivedNpdu, TransportPort};
 #[cfg(test)]
 use crate::sc_frame::{decode_sc_bvlc_result, ScMessage};
 use crate::sc_frame::{decode_sc_message, encode_sc_message, ScFunction, Vmac, BROADCAST_VMAC};
@@ -35,6 +35,7 @@ pub(crate) mod direct_membership;
 mod direct_pool;
 pub(crate) mod direct_receive;
 pub(crate) mod direct_socket;
+mod egress_limits;
 mod empty_npdu;
 mod errors;
 mod failover;
@@ -54,7 +55,7 @@ mod unknown_function;
 pub use connection::{ScConnection, ScConnectionState};
 use connector::{dial_failover_ws, WebSocketConnector};
 pub use errors::{ScConnectError, ScWebSocketErrorKind};
-use failover::{attempt_primary_restore, ActiveHub, PrimaryRestoreContext};
+use failover::{ActiveHub, PrimaryRestoreContext};
 use handshake::perform_handshake;
 pub use loopback::LoopbackWebSocket;
 pub use npdu_admission::{ScNpduAdmissionPolicy, ScNpduDropCounts};
@@ -64,8 +65,7 @@ pub(crate) use random48::set_test_random48_vmac_generator;
 pub use reconnect::ScReconnectConfig;
 
 const DEFAULT_MAX_APDU_LENGTH: u16 = 1476;
-use crate::sc_limits::LOCAL_NPDU_HEADER_LEN;
-const SC_ENCAPSULATED_NPDU_BASE_HEADER_LEN: u16 = 10;
+use egress_limits::publish_effective_max_apdu_length;
 
 // ---------------------------------------------------------------------------
 // WebSocket abstraction
@@ -250,31 +250,6 @@ impl<W: WebSocketPort> ScTransport<W> {
     }
 }
 
-fn effective_max_apdu_length(conn: &ScConnection) -> u16 {
-    let bvlc_npdu_budget = conn
-        .hub_max_bvlc_length
-        .saturating_sub(SC_ENCAPSULATED_NPDU_BASE_HEADER_LEN);
-    let effective_npdu = conn.hub_max_apdu_length.min(bvlc_npdu_budget);
-    effective_npdu.saturating_sub(LOCAL_NPDU_HEADER_LEN)
-}
-
-fn publish_effective_max_apdu_length(store: &AtomicU16, conn: &ScConnection) {
-    store.store(effective_max_apdu_length(conn), Ordering::Relaxed);
-}
-
-async fn connect_probe_from(conn: &Arc<Mutex<ScConnection>>) -> Arc<Mutex<ScConnection>> {
-    Arc::new(Mutex::new(conn.lock().await.connect_probe()))
-}
-
-async fn absorb_failed_connect_probe(
-    conn: &Arc<Mutex<ScConnection>>,
-    probe_conn: &Arc<Mutex<ScConnection>>,
-) {
-    let probe = probe_conn.lock().await;
-    let mut c = conn.lock().await;
-    c.absorb_failed_probe(&probe);
-}
-
 async fn publish_connected_ws<W: WebSocketPort>(
     conn: &Arc<Mutex<ScConnection>>,
     active_ws: &Arc<Mutex<Arc<W>>>,
@@ -419,8 +394,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
         let mut direct_intake = std::mem::take(&mut self.direct_intake);
         let task = tokio::spawn(async move {
             let mut primary_restore_interval =
-                tokio::time::interval(Duration::from_millis(restore_interval_ms));
-            primary_restore_interval.tick().await;
+                failover::restore_interval(Duration::from_millis(restore_interval_ms));
             // Last solicited-Advertisement send for the AB.3.2 anti-storm
             // rate policy. Kept across reconnects so a flap cannot reset
             // the budget into a storm.
@@ -436,6 +410,10 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
 
             'transport: loop {
                 let mut current_reusable = true;
+                // One candidate per active-connection epoch. Dropping this
+                // future cancels dial/handshake without a detached task.
+                let mut primary_attempt: Option<failover::PrimaryAttempt<W>> = None;
+                let mut connection_states = state_tx.subscribe();
                 // Idle time is on tokio's clock, like `hb_interval`, so the two
                 // agree under a paused test clock too.
                 let mut hb_interval =
@@ -666,15 +644,25 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                 }
                             }
                         }
-                        _ = primary_restore_interval.tick(), if restore_enabled && active_hub == ActiveHub::Failover => {
-                            if !conn.lock().await.connect_retry_allowed {
-                                debug!("SC primary restore skipped without retry eligibility");
+                        _ = connection_states.changed() => {
+                            if *connection_states.borrow_and_update() != ScConnectionState::Connected {
+                                primary_attempt = None;
+                            }
+                        }
+                        _ = primary_restore_interval.tick(), if restore_enabled && active_hub == ActiveHub::Failover && primary_attempt.is_none() => {
+                            let c = conn.lock().await;
+                            if c.state != ScConnectionState::Connected || !c.connect_retry_allowed {
                                 continue;
                             }
-                            match attempt_primary_restore(
+                            primary_attempt = Some(Box::pin(failover::prepare_primary_restore(
+                                primary_ws.clone(), primary_connector.clone(),
+                                c.connect_probe(), connect_timeout_ms,
+                            )));
+                        }
+                        candidate = async { primary_attempt.as_mut().unwrap().await }, if primary_attempt.is_some() => {
+                            primary_attempt = None;
+                            match failover::publish_primary_restore(
                                 &PrimaryRestoreContext {
-                                    primary_ws: primary_ws.as_ref(),
-                                    primary_connector: primary_connector.as_ref(),
                                     active_ws: &active_ws,
                                     conn: &conn,
                                     restore_disconnect_task: &restore_disconnect_task,
@@ -683,20 +671,23 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                     effective_max_apdu_length: &effective_max_apdu_length,
                                 },
                                 &ws_clone,
-                            )
-                            .await
-                            {
-                                Ok(restored_ws) => {
+                                candidate,
+                            ).await {
+                                Ok(Some(restored_ws)) => {
                                     ws_clone = restored_ws;
                                     active_hub = ActiveHub::Primary;
                                     last_bvlc_received = tokio::time::Instant::now();
                                     pending_heartbeat_id = None;
                                     info!("SC restored primary hub while failover was active");
                                 }
+                                Ok(None) => {}
                                 Err(e) => {
                                     debug!(%e, "SC primary restore attempt failed while failover active");
                                 }
                             }
+                            // A full interval follows completion, however
+                            // long its dial/handshake took (#1555).
+                            primary_restore_interval.reset();
                         }
                         _ = hb_interval.tick() => {
                             let idle_for = last_bvlc_received.elapsed();
@@ -730,6 +721,8 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                     }
                 }
 
+                // Cancel before recovery can replace the active socket.
+                drop(primary_attempt);
                 // After recv loop exits (ws closed/error) — attempt reconnection
                 let config = match &reconnect_config {
                     Some(cfg) => cfg,
@@ -755,6 +748,11 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                     Some((ws, hub)) => {
                         ws_clone = ws;
                         active_hub = hub;
+                        // Restore ticks are off while the primary is active
+                        // and wait out a reconnect. Restarting them here
+                        // puts the first attempt after reaching the failover
+                        // hub one interval away, not due at once (#1555).
+                        primary_restore_interval.reset();
                     }
                     None => break 'transport,
                 }
@@ -815,6 +813,13 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
 
     fn egress_apdu_limit(&self) -> u16 {
         self.effective_max_apdu_length.load(Ordering::Relaxed)
+    }
+
+    /// Once started, what the hub connection carries: the hub's
+    /// Max-NPDU-Length, within its Max-BVLC-Length less the encapsulation,
+    /// both ways. Before start, the default.
+    fn max_npdu(&self) -> NpduLimits {
+        self.hub_npdu_limits()
     }
 
     fn is_broadcast_mac(&self, mac: &[u8]) -> bool {
@@ -884,6 +889,9 @@ mod primary_restore_tests;
 mod redial_tests;
 
 #[cfg(test)]
+mod restore_progress_tests;
+
+#[cfg(test)]
 mod rejection_deadline_tests;
 
 #[cfg(test)]
@@ -891,6 +899,9 @@ mod reconnect_validation_tests;
 
 #[cfg(test)]
 mod rb11_npdu_fairness_tests;
+
+#[cfg(test)]
+mod test_waits;
 
 #[cfg(test)]
 mod tests;

@@ -123,6 +123,38 @@ fn who_is_form_directed_with_an_error() {
     }
 }
 
+/// On B/IPv6 the target hint names the VMAC forms and the IPv6 address the
+/// worker resolves, and the status bar shows the VMAC as the table would.
+#[test]
+fn who_is_form_on_bip6_hints_vmac_targets() {
+    let mut app = App::new(
+        AppConfig {
+            transport: "BIP6",
+            style: AddressStyle::Bip6,
+            color: false,
+            picker: None,
+            now: t0(),
+        },
+        LogRing::new(100),
+    );
+    worker(
+        &mut app,
+        WorkerEvent::Connected {
+            local: "bip6:0x40ABCD ([::1]:47808)".into(),
+        },
+    );
+    press(&mut app, KeyCode::Char('d'));
+    press(&mut app, KeyCode::Left);
+    press(&mut app, KeyCode::Left);
+    let text = screen(&mut app, 120, 40);
+    assert!(text.contains("Directed (one address)"), "{text}");
+    assert!(
+        text.contains("bip6:N, bip6:0xVMAC or [IPv6]:port"),
+        "{text}"
+    );
+    assert!(!text.contains("IP or IP:port"), "{text}");
+}
+
 #[test]
 fn help_overlay() {
     for (w, h) in SIZES {

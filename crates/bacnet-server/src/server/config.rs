@@ -4,8 +4,10 @@ use crate::mutation::{MutationAuthorizationContext, MutationAuthorizer, Mutation
 /// Server configuration.
 #[derive(Clone)]
 pub struct ServerConfig {
-    /// Explicit concrete Network Port for one owned NORMAL B/IP transport.
-    /// None leaves configured objects unbound and receiving-port wildcard unavailable.
+    /// Explicit concrete Network Port for one owned B/IP transport, in
+    /// NORMAL, FOREIGN or BBMD mode (a BBMD that also registers as a foreign
+    /// device is refused at start). None leaves configured objects unbound
+    /// and receiving-port wildcard unavailable.
     pub registered_network_port: Option<ObjectIdentifier>,
     /// Optional target Audit Reporter profile. Its recipient is provisioned on
     /// the built-in Device and becomes writable while the runtime is installed.
@@ -30,6 +32,13 @@ pub struct ServerConfig {
     pub port: u16,
     /// Directed broadcast address.
     pub broadcast_address: Ipv4Addr,
+    /// B/IP only: bind the interface address itself, so devices on other
+    /// addresses of this host can share the port (#1538). Off by default.
+    /// Needs an explicit interface and a nonzero port; see
+    /// `BipTransport::set_share_port_by_address` for what changes, including
+    /// that broadcasts and unicast are then received in no fixed order. Only
+    /// the B/IP builder reads it; a transport passed to `start` has its own.
+    pub share_port_by_address: bool,
     /// Raw local APDU receive ceiling, clamped to the transport's stable capacity.
     /// The effective value must be at least 50 and equal the selected Device's
     /// `Max_APDU_Length_Accepted`. I-Am retains this raw value; only originated
@@ -45,6 +54,10 @@ pub struct ServerConfig {
     /// traffic in both directions — set this to what the device should
     /// actually honor.
     pub segmentation_supported: Segmentation,
+    /// Segment timeout (Tseg) in milliseconds; shared by request receive
+    /// (4 * Tseg) and response SegmentACK waits. Default: 5000 ms. When
+    /// segmentation is active it must be positive and match the selected Device.
+    pub apdu_segment_timeout_ms: u64,
     /// Vendor identifier.
     pub vendor_id: u16,
     /// APDU timeout in ms of confirmed COV and event notifications and of the
@@ -60,6 +73,25 @@ pub struct ServerConfig {
     /// A panic is caught (with unwind builds); the change stands and ingress
     /// continues. This callback cannot authorize or roll back synchronization.
     pub on_time_sync: Option<Arc<dyn Fn(TimeSyncData) + Send + Sync>>,
+    /// Optional ReinitializeDevice handler, called with the requester's
+    /// [`ReinitializeContext`] once the request passes its password and state
+    /// checks. Without it every such request is refused with
+    /// SERVICES / SERVICE_REQUEST_DENIED.
+    ///
+    /// The rules are on [`ReinitializeHandler`]. In short: the SimpleACK goes
+    /// out only after the handler returns, so schedule any restart for after
+    /// the reply rather than restarting inline. Nothing yet signals when the
+    /// reply has left (#1565), so a delay is best effort, and stopping the
+    /// server before then drops the reply. It runs synchronously with the
+    /// object database write-locked, so keep it quick and hand slow work to a
+    /// task; its database edits skip the COV, event and Audit work of
+    /// [`BACnetServer::write_local`], so apply changes that need it there
+    /// afterwards. Without [`reinit_password`](Self::reinit_password) any peer
+    /// reaches it, and neither the mutation policy nor the mutation authorizer
+    /// covers this service, so restrict sources through the context. Refuse
+    /// with [`Error::Protocol`]: a panic or an [`Error::Reject`] is answered
+    /// SERVICES / OTHER.
+    pub on_reinitialize: Option<ReinitializeHandler>,
     /// Local mutation authorization mode (default: permissive). SC mTLS channel/peer
     /// authentication is not service authorization; addresses here are claimed,
     /// never certificate principals. See [`MutationPolicy`]. Each decision also
@@ -182,8 +214,10 @@ impl std::fmt::Debug for ServerConfig {
             .field("interface", &self.interface)
             .field("port", &self.port)
             .field("broadcast_address", &self.broadcast_address)
+            .field("share_port_by_address", &self.share_port_by_address)
             .field("max_apdu_length", &self.max_apdu_length)
             .field("segmentation_supported", &self.segmentation_supported)
+            .field("apdu_segment_timeout_ms", &self.apdu_segment_timeout_ms)
             .field("vendor_id", &self.vendor_id)
             .field("cov_retry_timeout_ms", &self.cov_retry_timeout_ms)
             .field("time_sync_policy", &self.time_sync_policy)
@@ -191,6 +225,10 @@ impl std::fmt::Debug for ServerConfig {
             .field(
                 "on_time_sync",
                 &self.on_time_sync.as_ref().map(|_| "<callback>"),
+            )
+            .field(
+                "on_reinitialize",
+                &self.on_reinitialize.as_ref().map(|_| "<callback>"),
             )
             .field(
                 "mutation_authorizer",
@@ -254,12 +292,15 @@ impl Default for ServerConfig {
             get_event_information_budget: GetEventInformationBudget::default(),
             port: 0xBAC0,
             broadcast_address: Ipv4Addr::BROADCAST,
+            share_port_by_address: false,
             max_apdu_length: 1476,
             segmentation_supported: Segmentation::NONE,
+            apdu_segment_timeout_ms: 5000,
             vendor_id: 0,
             cov_retry_timeout_ms: 3000,
             time_sync_policy: TimeSyncPolicy::default(),
             on_time_sync: None,
+            on_reinitialize: None,
             mutation_policy: MutationPolicy::default(),
             mutation_authorizer: None,
             life_safety_operation_authorizer: None,
@@ -302,6 +343,37 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
 }
 
 impl BipServerBuilder {
+    /// Set the B/IP mode: a normal node (the default), a foreign device or
+    /// a BBMD (#938). A foreign device's `build()` doesn't wait for its BBMD
+    /// to accept the registration; poll
+    /// [`BACnetServer::foreign_registration`] for how it went. A registered
+    /// Network Port reports the mode in `BACnet_IP_Mode`.
+    ///
+    /// ```
+    /// use bacnet_server::server::BACnetServer;
+    /// use bacnet_transport::bbmd::ForeignDevicePolicy;
+    /// use bacnet_transport::bip::{BbmdOptions, BipMode};
+    /// let builder = BACnetServer::bip_builder().mode(BipMode::Bbmd(BbmdOptions {
+    ///     foreign_device_policy: Some(ForeignDevicePolicy::default()),
+    ///     ..BbmdOptions::default()
+    /// }));
+    /// ```
+    pub fn mode(mut self, mode: bacnet_transport::bip::BipMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
+    /// Bind the interface address itself, so devices on other addresses of
+    /// this host can share the port, each getting only its own unicast
+    /// (#1538). Off by default, which binds `0.0.0.0`. Needs an explicit
+    /// [`interface`](Self::interface) and a nonzero port, or `build` fails.
+    /// Broadcasts and unicast are then received in no fixed order; see
+    /// [`BipTransport::set_share_port_by_address`].
+    pub fn share_port_by_address(mut self, enabled: bool) -> Self {
+        self.config.share_port_by_address = enabled;
+        self
+    }
+
     /// Select local mutation authorization (default: [`MutationPolicy::Permissive`]).
     /// SC mTLS channel/peer authentication is not service authorization; identities
     /// here are claimed link/routed addresses, never certificate principals.
@@ -348,6 +420,22 @@ impl ScServerBuilder {
         F: Fn(&MutationAuthorizationContext) -> bool + Send + Sync + 'static,
     {
         self.config.mutation_authorizer = Some(Arc::new(authorizer));
+        self
+    }
+}
+
+impl<T: TransportPort + 'static> ServerBuilder<T> {
+    /// Sets the segment timeout in milliseconds for receive and response transfers.
+    pub fn apdu_segment_timeout_ms(mut self, timeout_ms: u64) -> Self {
+        self.config.apdu_segment_timeout_ms = timeout_ms;
+        self
+    }
+}
+
+impl BipServerBuilder {
+    /// Sets the segment timeout in milliseconds for receive and response transfers.
+    pub fn apdu_segment_timeout_ms(mut self, timeout_ms: u64) -> Self {
+        self.config.apdu_segment_timeout_ms = timeout_ms;
         self
     }
 }

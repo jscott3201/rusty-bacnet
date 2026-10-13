@@ -12,8 +12,8 @@ use bacnet_encoding::apdu::{decode_apdu, Apdu, SimpleAck};
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_server::server::BACnetServer;
 use bacnet_transport::bip6::{
-    decode_bip6_mac, decode_bvlc6, encode_bvlc6_original_broadcast, encode_bvlc6_original_unicast,
-    Bip6Transport, BACNET_IPV6_MULTICAST_LINK_LOCAL,
+    decode_bvll6, encode_bvll6, vmac_from_device_instance, Bip6Transport, Bip6Vmac, Bvll6,
+    BACNET_IPV6_MULTICAST_LINK_LOCAL,
 };
 use bacnet_types::enums::{ObjectType, PropertyIdentifier, UnconfirmedServiceChoice};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
@@ -23,7 +23,7 @@ use std::net::{Ipv6Addr, SocketAddrV6};
 use tokio::net::UdpSocket;
 use tokio::time::{timeout, Duration};
 
-const CLIENT_VMAC: [u8; 3] = [0x0A, 0x0B, 0x0C];
+const CLIENT_VMAC: Bip6Vmac = Bip6Vmac::new([0x0A, 0x0B, 0x0C]);
 /// The OS whose loopback carries FF02::BAC0, where the test has to run.
 const EVIDENCE_OS: bool = cfg!(target_os = "macos");
 
@@ -87,8 +87,8 @@ async fn loopback_multicast_is_delivered(index: u32) -> bool {
 
 /// The APDU in one datagram the server sent, if it carries one.
 fn apdu_of(datagram: &[u8]) -> Option<Apdu> {
-    let frame = decode_bvlc6(datagram).ok()?;
-    let npdu = decode_npdu(Bytes::copy_from_slice(&frame.payload)).ok()?;
+    let frame = decode_bvll6(datagram).ok()?;
+    let npdu = decode_npdu(Bytes::copy_from_slice(frame.npdu()?)).ok()?;
     decode_apdu(npdu.payload).ok()
 }
 
@@ -124,20 +124,24 @@ async fn an_original_unicast_sent_to_the_multicast_group_is_not_answered() {
         .build()
         .await
         .unwrap();
-    let (_, port) = decode_bip6_mac(server.local_mac()).unwrap();
-    let server_vmac = {
-        let bytes = DEVICE.to_be_bytes();
-        [bytes[1], bytes[2], bytes[3]]
-    };
+    let port = server.transport().unwrap().local_address().unwrap().port();
+    let server_vmac = vmac_from_device_instance(DEVICE).unwrap();
+    assert_eq!(
+        server.local_mac(),
+        server_vmac.octets(),
+        "the MAC is the VMAC"
+    );
     let client = socket(Ipv6Addr::LOCALHOST, index).unwrap();
     let to_group = SocketAddrV6::new(BACNET_IPV6_MULTICAST_LINK_LOCAL, port, 0, index);
     let to_server = SocketAddrV6::new(Ipv6Addr::LOCALHOST, port, 0, 0);
     let mut request = BytesMut::new();
-    encode_bvlc6_original_unicast(
+    encode_bvll6(
         &mut request,
-        &CLIENT_VMAC,
-        &server_vmac,
-        &npdu(&write_present_value(42.0), true),
+        &Bvll6::OriginalUnicastNpdu {
+            source: CLIENT_VMAC,
+            destination: server_vmac,
+            npdu: &npdu(&write_present_value(42.0), true),
+        },
     )
     .unwrap();
 
@@ -146,7 +150,14 @@ async fn an_original_unicast_sent_to_the_multicast_group_is_not_answered() {
     // taken both datagrams off the socket.
     client.send_to(&request, to_group).await.unwrap();
     let mut fence = BytesMut::new();
-    encode_bvlc6_original_broadcast(&mut fence, &CLIENT_VMAC, &npdu(&who_is(), false)).unwrap();
+    encode_bvll6(
+        &mut fence,
+        &Bvll6::OriginalBroadcastNpdu {
+            source: CLIENT_VMAC,
+            npdu: &npdu(&who_is(), false),
+        },
+    )
+    .unwrap();
     client.send_to(&fence, to_group).await.unwrap();
     timeout(Duration::from_secs(5), async {
         let mut datagram = [0u8; 1500];

@@ -72,3 +72,19 @@ impl NetworkNumberOwner {
         number_is_reply(state).map(|npdu| npdu.to_vec())
     }
 }
+
+impl Drop for NetworkNumberOwner {
+    /// A registered owner's handle on the database goes through
+    /// [`drop_database_off_runtime`](crate::server::drop_database_off_runtime),
+    /// so the task owning it, finished or aborted, never drops the objects
+    /// on a runtime worker should it hold the last handle (#1561).
+    fn drop(&mut self) {
+        let state = std::mem::replace(
+            &mut self.state,
+            State::Unregistered(NetworkNumber::default()),
+        );
+        if let State::Registered(db, _) = state {
+            drop(crate::server::drop_database_off_runtime(db));
+        }
+    }
+}

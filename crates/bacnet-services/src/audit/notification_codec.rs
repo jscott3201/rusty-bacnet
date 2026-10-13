@@ -1,3 +1,6 @@
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
 use super::AuditNotificationRequest;
 use crate::common::MAX_DECODED_ITEMS;
 use bacnet_encoding::constructed::tagged::{expect_end, misplaced_tag};

@@ -1,5 +1,6 @@
 //! Real TLS peer identity and accepted capacity regressions (#851).
 use super::*;
+use crate::port_ownership::connect_loopback;
 use crate::sc_tls::TlsWebSocket;
 
 async fn connect_claim(
@@ -199,13 +200,9 @@ async fn pending_saturation_timeout_and_stop_release_both_bounds() {
             .with_connect_timeout(Duration::from_millis(150))
     })
     .await;
-    let first = tokio::net::TcpStream::connect(listener.local_addr())
-        .await
-        .unwrap();
+    let first = connect_loopback(listener.local_addr()).await;
     wait_counts(&listener, 1, 1).await;
-    let mut refused = tokio::net::TcpStream::connect(listener.local_addr())
-        .await
-        .unwrap();
+    let mut refused = connect_loopback(listener.local_addr()).await;
     let mut byte = [0];
     let result = tokio::time::timeout(Duration::from_secs(3), refused.read(&mut byte))
         .await

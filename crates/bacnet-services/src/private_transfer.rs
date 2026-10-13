@@ -1,6 +1,9 @@
 //! ConfirmedPrivateTransfer / UnconfirmedPrivateTransfer services
 //! per ASHRAE 135-2020 Clauses 16.2 and 16.3.
 
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
 use bacnet_encoding::constructed::tagged::{
     decode_ctx_constructed, decode_ctx_unsigned, expect_end, next_is_opening,
 };
@@ -12,20 +15,49 @@ use bytes::{BufMut, BytesMut};
 mod error;
 pub use error::PrivateTransferError;
 
+/// What the request or the acknowledgment calls itself and its members in
+/// errors, each written out whole, so a decode that succeeds builds no label
+/// (#1645).
+struct MemberLabels {
+    what: &'static str,
+    vendor_id: &'static str,
+    service_number: &'static str,
+}
+
+/// The request's.
+const REQUEST: MemberLabels = MemberLabels {
+    what: "PrivateTransfer",
+    vendor_id: "PrivateTransfer vendorID",
+    service_number: "PrivateTransfer serviceNumber",
+};
+
+/// The acknowledgment's.
+const ACK: MemberLabels = MemberLabels {
+    what: "PrivateTransferAck",
+    vendor_id: "PrivateTransferAck vendorID",
+    service_number: "PrivateTransferAck serviceNumber",
+};
+
 /// The `[0]` vendor identifier, `[1]` service number and optional `[2]`
 /// block that the request and the acknowledgment share, and nothing after
 /// them.
-fn decode_members(data: &[u8], what: &str) -> Result<(u32, u32, Option<Vec<u8>>), Error> {
-    let (vendor_id, offset) = decode_ctx_unsigned::<u32>(data, 0, 0, &format!("{what} vendorID"))?;
+fn decode_members(
+    data: &[u8],
+    labels: &MemberLabels,
+) -> Result<(u32, u32, Option<Vec<u8>>), Error> {
+    let (vendor_id, offset) = decode_ctx_unsigned::<u32>(data, 0, 0, labels.vendor_id)?;
     let (service_number, offset) =
-        decode_ctx_unsigned::<u32>(data, offset, 1, &format!("{what} serviceNumber"))?;
+        decode_ctx_unsigned::<u32>(data, offset, 1, labels.service_number)?;
     let (block, end) = if next_is_opening(data, offset, 2)? {
-        let (body, end) = decode_ctx_constructed(data, offset, 2, &format!("{what} block"))?;
+        // The opening tag is there, so the only refusals left are the
+        // frame's own (cut short, mismatched or nested too deep), which
+        // carry no label: `labels.what` only fills the argument.
+        let (body, end) = decode_ctx_constructed(data, offset, 2, labels.what)?;
         (Some(body.to_vec()), end)
     } else {
         (None, offset)
     };
-    expect_end(data, end, end, what)?;
+    expect_end(data, end, end, labels.what)?;
     Ok((vendor_id, service_number, block))
 }
 
@@ -62,8 +94,7 @@ impl PrivateTransferRequest {
 
     /// Decode the request from service-request octets; fails on malformed or truncated input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let (vendor_id, service_number, service_parameters) =
-            decode_members(data, "PrivateTransfer")?;
+        let (vendor_id, service_number, service_parameters) = decode_members(data, &REQUEST)?;
         Ok(Self {
             vendor_id,
             service_number,
@@ -105,7 +136,7 @@ impl PrivateTransferAck {
     /// Decode the acknowledgment from its service-ack octets; fails on malformed or truncated
     /// input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let (vendor_id, service_number, result_block) = decode_members(data, "PrivateTransferAck")?;
+        let (vendor_id, service_number, result_block) = decode_members(data, &ACK)?;
         Ok(Self {
             vendor_id,
             service_number,

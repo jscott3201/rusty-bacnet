@@ -241,11 +241,17 @@ async fn cov_order_specialized_whole_tuple_is_never_partially_replaced() {
         f.fire(false, &[]).await;
         let newest = observation(&f, &sub).await;
         assert_eq!(
-            newest.command().unwrap().0.value(),
+            newest.source_companions().unwrap().0.value(),
             &PropertyValue::Real(20.0)
         );
         assert_eq!(
-            newest.command().unwrap().1.value(),
+            newest
+                .source_companions()
+                .unwrap()
+                .1
+                .as_ref()
+                .unwrap()
+                .value(),
             &PropertyValue::Unsigned(4)
         );
         assert_eq!(newest.status_flags(), Some(1));

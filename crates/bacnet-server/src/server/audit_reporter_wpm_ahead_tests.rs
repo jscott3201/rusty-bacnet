@@ -107,7 +107,7 @@ async fn deciding_attempts_ahead_counts_and_audits_only_the_attempts_reached() {
         .unwrap();
     let calls = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&calls);
-    fixture.server.config.mutation_authorizer = Some(Arc::new(move |_| {
+    fixture.server.config_mut().mutation_authorizer = Some(Arc::new(move |_| {
         counted.fetch_add(1, Ordering::SeqCst);
         true
     }));

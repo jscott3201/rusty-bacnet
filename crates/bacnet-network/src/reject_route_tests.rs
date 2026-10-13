@@ -27,7 +27,7 @@ use crate::loopback_fixture::{
     ORIGIN, REMOTE, TOO_LONG,
 };
 use crate::router::{BACnetRouter, RouterOptions, RouterPort, StartedRouter};
-use crate::router_table::ReachabilityStatus;
+use crate::router_table::{Mac, PortId, Reachability};
 
 /// A network the fixture router has no route to.
 const UNKNOWN: u16 = 5000;
@@ -362,14 +362,10 @@ async fn router_hands_a_reject_addressed_to_itself_to_its_control_receiver() {
         assert_eq!(control.source_mac.as_slice(), [0x0B], "{case}");
         assert_eq!(control.ingress_sequence, 1, "{case}");
         assert_eq!(fixture.router.network_control_ingress_sequence(), 1);
+        let now = fixture.router.now();
         assert_eq!(
-            fixture
-                .router
-                .table()
-                .lock()
-                .await
-                .effective_reachability(REMOTE),
-            Some(ReachabilityStatus::Busy),
+            fixture.router.table().effective_reachability(REMOTE, now),
+            Some(Reachability::Busy),
             "{case}: the table still learns from it"
         );
         // A reject for device 0C on 1000 is the next frame on port A, so
@@ -423,10 +419,9 @@ async fn chained_routers_carry_a_reject_back_to_the_originating_device() {
     .await
     .unwrap();
     // R1 sends traffic for 5000 to R2, which has no route there.
+    let now = r1.now();
     r1.table()
-        .lock()
-        .await
-        .add_learned(UNKNOWN, 1, MacAddr::from_slice(&[0x03]));
+        .add_learned(UNKNOWN, PortId(1), Mac::from_array([0x03]), now);
 
     device
         .send_unicast(&wire(Some((UNKNOWN, 0)), None, None), &[0x01])

@@ -22,8 +22,6 @@ use bacnet_services::wpm::WriteAccessSpecification;
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};
 use bacnet_types::constructed::BACnetDestination;
-use std::future::{poll_fn, Future};
-use std::task::Poll;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
@@ -190,6 +188,41 @@ async fn comes_to_hold(storage: &Arc<ClassStorage>, expected: NotificationClassS
     .unwrap()
 }
 
+/// Stop `server` while storage holds a request's staged save, and let the
+/// save through, by dropping `go`, only once stop() has joined every request.
+///
+/// stop() aborts its requests on its first poll, but an abort lands only
+/// when the request's task next yields. A request still running on another
+/// worker can find its save done and make its write before then (#1457):
+/// stop() has sealed responses, so nobody hears of it, but the object serves
+/// that write and storage holds it. A request whose save storage still holds
+/// can't get past its wait for it, so once stop() has joined the request, its
+/// staged write is never made, and stop() puts storage back.
+pub(super) async fn stop_then_release(
+    mut server: BACnetServer<TestTransport>,
+    go: std::sync::mpsc::Sender<()>,
+) -> BACnetServer<TestTransport> {
+    let requests = Arc::clone(&server.request_tasks);
+    let stopping = tokio::spawn(async move {
+        server.stop().await.unwrap();
+        server
+    });
+    tokio::time::timeout(WAIT, async {
+        while !requests.is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("stop() joined the request");
+    // It goes on to wait for the save storage holds.
+    assert!(
+        !stopping.is_finished(),
+        "stop() returned before the save ran"
+    );
+    drop(go);
+    stopping.await.unwrap()
+}
+
 /// The Recipient_List class `instance` serves in `db`.
 async fn served(db: &Arc<RwLock<ObjectDatabase>>, instance: u32) -> PropertyValue {
     db.read()
@@ -204,7 +237,7 @@ async fn served(db: &Arc<RwLock<ObjectDatabase>>, instance: u32) -> PropertyValu
 async fn a_server_stopped_mid_request_leaves_storage_with_the_served_lists() {
     let landed = holding(&[destination(1)]);
     let held = holding(&[destination(2)]);
-    let (mut server, inbound) = server(&[&landed, &held]).await;
+    let (server, inbound) = server(&[&landed, &held]).await;
     let (started, go) = held.hold();
     // One WritePropertyMultiple writes both classes and stages them in
     // object order: class 1's save lands, then the request waits for class
@@ -221,16 +254,9 @@ async fn a_server_stopped_mid_request_leaves_storage_with_the_served_lists() {
     .await;
     save_started(started).await;
     assert_eq!(landed.load_saved(), Some(snapshot(&[destination(11)])));
-    {
-        let mut stopping = std::pin::pin!(server.stop());
-        // The first poll aborts every request, this one included, so
-        // neither staged write is ever made or released.
-        let first = poll_fn(|cx| Poll::Ready(stopping.as_mut().poll(cx))).await;
-        assert!(first.is_pending());
-        // Class 2's save lands only after its request has gone.
-        drop(go);
-        stopping.await.unwrap();
-    }
+    // stop() aborts the request, so neither staged write is ever made or
+    // released; class 2's save lands only after the request has gone.
+    let server = stop_then_release(server, go).await;
     // Storage holds the lists the classes serve once stop returns, though
     // the database outlives the stop.
     assert_eq!(landed.load_saved(), Some(snapshot(&[destination(1)])));

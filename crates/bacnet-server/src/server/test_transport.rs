@@ -29,7 +29,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use bacnet_encoding::apdu::{decode_apdu, Apdu};
 use bacnet_encoding::npdu::{decode_npdu, Npdu};
-use bacnet_transport::port::{ReceivedNpdu, TransportPort};
+use bacnet_transport::port::{BipPort, ReceivedNpdu, TransportPort};
+use bacnet_types::bip_port::BipPortMode;
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 use bytes::Bytes;
@@ -293,8 +294,8 @@ pub(crate) struct TestTransport {
     shared: Arc<Shared>,
     /// See [`TestTransportBuilder::number_controls`].
     number_controls: bool,
-    /// See [`TestTransportBuilder::normal_bip`].
-    normal_bip: Option<SocketAddrV4>,
+    /// See [`TestTransportBuilder::bip_port`].
+    bip_port: Option<BipPort>,
     /// A registered Network Port's lease, held until the transport drops.
     port_lease: Option<Arc<()>>,
 }
@@ -331,7 +332,7 @@ impl TestTransport {
                 state: None,
                 shared: Arc::default(),
                 number_controls: false,
-                normal_bip: None,
+                bip_port: None,
                 port_lease: None,
             },
         }
@@ -391,17 +392,17 @@ impl TransportPort for TestTransport {
         self.number_controls
     }
 
-    fn normal_bip_endpoint(&self) -> Option<SocketAddrV4> {
-        self.normal_bip
+    fn bip_port(&self) -> Option<BipPort> {
+        self.bip_port.clone()
     }
 
     fn retain_network_port_lease_internal(&mut self, lease: Arc<()>) -> Result<(), Error> {
-        match self.normal_bip {
+        match self.bip_port {
             Some(_) => {
                 self.port_lease = Some(lease);
                 Ok(())
             }
-            None => Err(Error::Encoding("not a NORMAL B/IP test link".into())),
+            None => Err(Error::Encoding("not a B/IP test link".into())),
         }
     }
 
@@ -556,8 +557,18 @@ impl TestTransportBuilder {
 
     /// Report `endpoint` as a NORMAL B/IP bind, so a server can register a
     /// Network Port on this link; the transport then holds the port's lease.
-    pub(crate) fn normal_bip(mut self, endpoint: SocketAddrV4) -> Self {
-        self.transport.normal_bip = Some(endpoint);
+    pub(crate) fn normal_bip(self, endpoint: SocketAddrV4) -> Self {
+        self.bip_port(BipPort {
+            endpoint,
+            mode: BipPortMode::Normal,
+        })
+    }
+
+    /// Report `port`, a B/IP bind in any mode, for a server to register a
+    /// Network Port on; the transport then holds the port's lease. A BBMD
+    /// mode's tables are whatever view the test lends.
+    pub(crate) fn bip_port(mut self, port: BipPort) -> Self {
+        self.transport.bip_port = Some(port);
         self
     }
 

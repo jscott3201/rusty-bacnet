@@ -413,7 +413,8 @@ async fn effective_group_destinations_reject_confirmed_and_malformed_apdus_witho
         Err(mpsc::error::TryRecvError::Empty)
     ));
 
-    // An Unconfirmed-Request still goes to the broadcast MAC.
+    // An Unconfirmed-Request still goes to the broadcast MAC: this link
+    // gives no group rule for the network layer to judge by (#1677).
     egress
         .send_apdu(
             encoded_unconfirmed_request(),

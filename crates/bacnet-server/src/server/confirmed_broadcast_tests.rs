@@ -175,9 +175,16 @@ async fn a_segment_sent_by_broadcast_draws_no_segment_ack_or_abort() {
             segmentation_supported: segmentation,
             ..ServerConfig::default()
         };
-        let mut server = BACnetServer::start(config, database(Vec::new()), transport)
-            .await
-            .unwrap();
+        let mut db = ObjectDatabase::new();
+        db.add(Box::new(
+            bacnet_objects::device::DeviceObject::new(bacnet_objects::device::DeviceConfig {
+                segmentation_supported: segmentation,
+                ..Default::default()
+            })
+            .unwrap(),
+        ))
+        .unwrap();
+        let mut server = BACnetServer::start(config, db, transport).await.unwrap();
         // The first of several segments of a ReadProperty, by local
         // broadcast, then a ReadProperty to this device alone as the fence.
         let mut first =

@@ -1,5 +1,6 @@
 //! Shared non-recursive state transitions for BACnet log objects.
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use bacnet_types::bitstring::LogStatus;
@@ -8,7 +9,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, Time};
 use bytes::BytesMut;
 
-use crate::clock::ClockReader;
+use crate::clock::{ClockFrame, ClockReader};
 use crate::common::protocol_error;
 use crate::log_buffer::{LogRecordBuffer, OrdinaryAdmission, ResidentLogRecord};
 use crate::log_reporting::BufferReadyReporting;
@@ -247,6 +248,52 @@ impl<'a, R: ResidentLogRecord> LogLifecycle<'a, R> {
         let mut status = LogStatus::BUFFER_PURGED;
         status.set(LogStatus::LOG_DISABLED, disabled);
         self.insert_status(timestamp, status);
+        Ok(())
+    }
+
+    /// Restore the buffer: `records`, oldest first, the newest numbered
+    /// `total_record_count` (see `LogRecordBuffer::restore` for what is
+    /// refused). BUFFER_READY then counts from the restored count. Nothing
+    /// is recorded for the restore itself.
+    pub(crate) fn restore(
+        &mut self,
+        total_record_count: u32,
+        records: VecDeque<R>,
+    ) -> Result<(), Error> {
+        let stops_when_full = *self.enabled && *self.stop_when_full;
+        self.buffer
+            .restore(total_record_count, records, stops_when_full)?;
+        self.reporting.restart_from(total_record_count);
+        Ok(())
+    }
+
+    /// Record a LOG_INTERRUPTED status stamped `at`, which has to be an
+    /// actual date and time as the clock's must be for any status record
+    /// (#1537). The window is looked at `at` first, as an ordinary record's
+    /// is. The status also carries LOG_DISABLED while collection is off:
+    /// Enable FALSE, the window shut, or the record filling a Stop_When_Full
+    /// buffer, which then turns Enable FALSE, as a purge's status does.
+    pub(crate) fn record_interruption(&mut self, at: (Date, Time)) -> Result<(), Error> {
+        let frame = ClockFrame {
+            local_date: at.0,
+            local_time: at.1,
+            utc_offset: 0,
+            daylight_savings_status: false,
+        };
+        if !frame.is_valid_actual_datetime() {
+            return Err(Error::OutOfRange(
+                "a LOG_INTERRUPTED record needs an actual date and time".into(),
+            ));
+        }
+        self.refresh_window_at(Some(at));
+        let fills = *self.stop_when_full && self.buffer.next_record_would_fill_positive_capacity();
+        let disabled = !*self.enabled || fills || !self.window_open();
+        if fills {
+            *self.enabled = false;
+        }
+        let mut status = LogStatus::LOG_INTERRUPTED;
+        status.set(LogStatus::LOG_DISABLED, disabled);
+        self.insert_status(at, status);
         Ok(())
     }
 

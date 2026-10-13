@@ -66,7 +66,9 @@ fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
             (P::EVENT_STATE, false, false),
             (P::STATUS_FLAGS, false, false),
             (P::OUT_OF_SERVICE, false, true),
-            (P::RELIABILITY, false, false),
+            // Writable while out of service, since a zero active policy
+            // moves it (Clause 12.31.8, #1325).
+            (P::RELIABILITY, false, true),
             // The Table 12-36 required rows #1284 added.
             (P::AUTHENTICATION_STATUS, false, false),
             (P::ACCESS_EVENT_CREDENTIAL, false, false),
@@ -76,6 +78,8 @@ fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
             (P::NUMBER_OF_AUTHENTICATION_POLICIES, false, false),
             (P::AUTHORIZATION_MODE, false, true),
             (P::PRIORITY_FOR_WRITING, false, false),
+            // Optional and read-only over the network (#1132).
+            (P::ACCESS_EVENT_AUTHENTICATION_FACTOR, true, false),
             (P::PROPERTY_LIST, false, false),
         ],
         _ => vec![

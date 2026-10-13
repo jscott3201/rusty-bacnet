@@ -29,11 +29,13 @@ The range limits the requested device instances; it does not make a broadcast in
 
 ## Work across subnet boundaries
 
-A documented CLI path registers as a foreign device with an authorized BACnet/IP BBMD before discovery:
+The CLI can run as a foreign device of an authorized BACnet/IP BBMD. It registers before the command, renews the registration (every `--renewal` seconds, half the `--ttl` by default) and sends the Who-Is through the BBMD:
 
 ```sh
-bacnet discover --bbmd 192.168.1.1 --ttl 300 --wait 3
+bacnet --foreign-bbmd 192.168.1.1 --ttl 300 discover --wait 3
 ```
+
+`discover --bbmd` only registers once before discovering; its Who-Is still goes out as a local broadcast.
 
 Use a BBMD designated by the site owner. Registration changes BBMD foreign-device state. It is not a generic VPN or NAT workaround, and it is not part of BACnet/SC or IPv6 setup.
 

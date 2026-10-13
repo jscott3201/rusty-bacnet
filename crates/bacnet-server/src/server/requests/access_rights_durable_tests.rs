@@ -7,7 +7,7 @@
 //!
 //! DEVICE 0; OPERATIONAL_PROBLEM 25.
 
-use super::durable_stop_tests::send;
+use super::durable_stop_tests::{send, stop_then_release};
 use super::durable_write_wire_tests::{
     while_saving, HeldStorage, ERROR_PDU, SIMPLE_ACK_WPM, SIMPLE_ACK_WRITE, WAIT,
 };
@@ -26,9 +26,7 @@ use bacnet_services::wpm::WriteAccessSpecification;
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::constructed::{BACnetAccessRule, BACnetDeviceObjectPropertyReference};
 use bacnet_types::enums::{AccessRuleLocationSpecifier, AccessRuleTimeRangeSpecifier};
-use std::future::{poll_fn, Future};
 use std::sync::atomic::Ordering;
-use std::task::Poll;
 use std::time::Duration;
 use PropertyIdentifier as P;
 
@@ -506,7 +504,7 @@ async fn a_paused_clock_stands_still_while_a_rights_save_runs() {
 async fn a_server_stopped_mid_save_leaves_storage_with_the_served_rules() {
     let served = positive_only(&[zone_rule(1)]);
     let storage = holding(served.clone());
-    let (mut server, inbound) = server(&storage).await;
+    let (server, inbound) = server(&storage).await;
     let (started, go) = storage.hold();
     let request = write_property(
         rights_oid(),
@@ -519,16 +517,9 @@ async fn a_server_stopped_mid_save_leaves_storage_with_the_served_rules() {
         .await
         .unwrap()
         .expect("the save started");
-    {
-        let mut stopping = std::pin::pin!(server.stop());
-        // The first poll aborts every request, this one included, so its
-        // staged write is never made or released.
-        let first = poll_fn(|cx| Poll::Ready(stopping.as_mut().poll(cx))).await;
-        assert!(first.is_pending());
-        // The staged save lands only after its request has gone.
-        drop(go);
-        stopping.await.unwrap();
-    }
+    // stop() aborts the request, so its staged write is never made or
+    // released; the staged save lands only after the request has gone.
+    let server = stop_then_release(server, go).await;
     // Storage holds the rules the object serves once stop returns, though
     // the database outlives the stop.
     assert_eq!(storage.load_saved(), Some(served.clone()));

@@ -1,4 +1,5 @@
 //! One real serial/MAC owner; gates observe admission without replacing transport behavior.
+use crate::mstp_wire::{decode_frame, encode_frame, FrameType, MstpFrame};
 use bacnet_client::client::{BACnetClient, ClientConfig};
 use bacnet_endpoint::session::{EndpointSession, SessionRole};
 use bacnet_objects::{analog::AnalogInputObject, database::ObjectDatabase};
@@ -6,7 +7,6 @@ use bacnet_server::server::{BACnetServer, ServerConfig};
 use bacnet_transport::{
     any::AnyTransport,
     mstp::{LoopbackSerial, MstpConfig, MstpExecutionMode, MstpTransport, SerialPort},
-    mstp_frame::{decode_frame, encode_frame, FrameType, MstpFrame},
     port::{ReceivedNpdu, TransportPort},
 };
 use bacnet_types::error::Error;
@@ -109,8 +109,8 @@ impl TransportPort for GatedTransport {
     fn supports_local_nonrouter_number_controls(&self) -> bool {
         self.inner.supports_local_nonrouter_number_controls()
     }
-    fn normal_bip_endpoint(&self) -> Option<std::net::SocketAddrV4> {
-        self.inner.normal_bip_endpoint()
+    fn bip_port(&self) -> Option<bacnet_transport::port::BipPort> {
+        self.inner.bip_port()
     }
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
         self.inner.start().await
@@ -232,45 +232,109 @@ impl Peer {
         self.serial.write(&wire).await
     }
     pub async fn control(&self, destination: u8, data: &[u8]) {
-        bounded(self.frame(FrameType::BACnetDataNotExpectingReply, destination, data))
-            .await
-            .unwrap();
+        bounded(self.frame(
+            FrameType::BACNET_DATA_NOT_EXPECTING_REPLY,
+            destination,
+            data,
+        ))
+        .await
+        .unwrap();
     }
     pub async fn number(&mut self, number: u16) {
         let frame = self.data().await;
-        assert_eq!(frame.frame_type, FrameType::BACnetDataNotExpectingReply);
+        assert_eq!(frame.frame_type, FrameType::BACNET_DATA_NOT_EXPECTING_REPLY);
         assert_eq!(frame.destination, BROADCAST);
         assert_eq!(
             frame.data.as_ref(),
             [1, 0x80, 0x13, (number >> 8) as u8, number as u8, 0]
         );
     }
+    /// The node's next data frame. The peer plays the node's only other
+    /// master: it hands over the token, answers a Poll For Master addressed
+    /// to it, and passes back every token it is given. A poll for another
+    /// address is left to time out; a token sent while the node polls would
+    /// be an unexpected frame there (Clause 9.5.6.8) and cost the token.
     pub async fn data(&mut self) -> MstpFrame {
         bounded(async {
+            self.frame(FrameType::TOKEN, NODE, &[]).await.unwrap();
             loop {
-                self.frame(FrameType::Token, NODE, &[]).await.unwrap();
-                loop {
-                    let frame = self.writes.recv().await.expect("serial owner disappeared");
-                    assert_eq!(frame.source, NODE);
-                    match frame.frame_type {
-                        FrameType::BACnetDataNotExpectingReply
-                        | FrameType::BACnetDataExpectingReply => return frame,
-                        FrameType::PollForMaster | FrameType::Token => break,
-                        FrameType::ReplyPostponed => {}
-                        other => panic!("unexpected frame {other:?}"),
+                let frame = self.writes.recv().await.expect("serial owner disappeared");
+                assert_eq!(frame.source, NODE);
+                match frame.frame_type {
+                    FrameType::BACNET_DATA_NOT_EXPECTING_REPLY
+                    | FrameType::BACNET_DATA_EXPECTING_REPLY => return frame,
+                    FrameType::POLL_FOR_MASTER if frame.destination == PEER => {
+                        self.frame(FrameType::REPLY_TO_POLL_FOR_MASTER, NODE, &[])
+                            .await
+                            .unwrap();
                     }
+                    FrameType::TOKEN if frame.destination == PEER => {
+                        self.frame(FrameType::TOKEN, NODE, &[]).await.unwrap();
+                    }
+                    FrameType::POLL_FOR_MASTER | FrameType::REPLY_POSTPONED => {}
+                    other => panic!("unexpected frame {other:?}"),
                 }
             }
         })
         .await
     }
+    /// Wait until the node passes the token to the peer, answering its
+    /// polls on the way: a master sends a request only while it holds the
+    /// token.
+    pub async fn await_token(&mut self) {
+        bounded(async {
+            loop {
+                let frame = self.writes.recv().await.expect("serial owner disappeared");
+                assert_eq!(frame.source, NODE);
+                match frame.frame_type {
+                    FrameType::POLL_FOR_MASTER if frame.destination == PEER => {
+                        self.frame(FrameType::REPLY_TO_POLL_FOR_MASTER, NODE, &[])
+                            .await
+                            .unwrap();
+                    }
+                    FrameType::TOKEN if frame.destination == PEER => return,
+                    _ => {}
+                }
+            }
+        })
+        .await
+    }
+
+    /// The node's answer to a request the peer sent while holding the
+    /// token. After Reply Postponed the peer passes the token on, so the
+    /// node can send the answer with it.
+    pub async fn answer(&mut self) -> MstpFrame {
+        bounded(async {
+            loop {
+                let frame = self.writes.recv().await.expect("serial owner disappeared");
+                assert_eq!(frame.source, NODE);
+                match frame.frame_type {
+                    FrameType::BACNET_DATA_NOT_EXPECTING_REPLY => return frame,
+                    FrameType::REPLY_POSTPONED => {
+                        self.frame(FrameType::TOKEN, NODE, &[]).await.unwrap();
+                    }
+                    FrameType::POLL_FOR_MASTER if frame.destination == PEER => {
+                        self.frame(FrameType::REPLY_TO_POLL_FOR_MASTER, NODE, &[])
+                            .await
+                            .unwrap();
+                    }
+                    FrameType::TOKEN if frame.destination == PEER => {
+                        self.frame(FrameType::TOKEN, NODE, &[]).await.unwrap();
+                    }
+                    _ => {}
+                }
+            }
+        })
+        .await
+    }
+
     pub async fn assert_released(&mut self, gates: &Gates) {
         bounded(gates.serial_dropped.acquire())
             .await
             .unwrap()
             .forget();
         assert!(
-            bounded(self.frame(FrameType::Token, NODE, &[]))
+            bounded(self.frame(FrameType::TOKEN, NODE, &[]))
                 .await
                 .is_err(),
             "no receive owner after stop/drop"
@@ -302,10 +366,7 @@ pub async fn transport(mode: MstpExecutionMode, gates: Arc<Gates>) -> (GatedTran
     let inner = AnyTransport::Mstp(transport);
     assert_eq!(inner.local_receive_apdu_capacity(), 480);
     assert_eq!(inner.egress_apdu_limit(), 480);
-    assert!(
-        inner.normal_bip_endpoint().is_none(),
-        "no configured B/IP authority"
-    );
+    assert!(inner.bip_port().is_none(), "no configured B/IP authority");
     let serial = Arc::new(peer);
     let drain_serial = serial.clone();
     let drain = tokio::spawn(async move {

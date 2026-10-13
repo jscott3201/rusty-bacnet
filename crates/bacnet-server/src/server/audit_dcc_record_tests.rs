@@ -94,7 +94,7 @@ fn this_device() -> BACnetRecipient {
 #[tokio::test(start_paused = true)]
 async fn disable_initiation_and_enable_are_audited_with_their_requester() {
     let mut f = server(dcc_reporter()).await;
-    f.server.config.dcc_policy = DccPolicy::LegacyPermissive;
+    f.server.config_mut().dcc_policy = DccPolicy::LegacyPermissive;
     let disable = carried_out(dcc(&f, EnableDisable::DISABLE_INITIATION, Some(5), None).await);
     settle().await;
     // The record goes out under the state it reports.
@@ -128,7 +128,7 @@ async fn disable_initiation_and_enable_are_audited_with_their_requester() {
 #[tokio::test(start_paused = true)]
 async fn a_timed_disable_running_out_is_audited_as_this_devices_enable() {
     let mut f = server(dcc_reporter()).await;
-    f.server.config.dcc_policy = DccPolicy::LegacyPermissive;
+    f.server.config_mut().dcc_policy = DccPolicy::LegacyPermissive;
     carried_out(dcc(&f, EnableDisable::DISABLE_INITIATION, Some(1), None).await);
     settle().await;
     assert_eq!(audit_frames(&f).len(), 1);
@@ -148,7 +148,7 @@ async fn a_timed_disable_running_out_is_audited_as_this_devices_enable() {
 #[tokio::test(start_paused = true)]
 async fn an_enables_own_timer_reports_nothing_more() {
     let mut f = server(dcc_reporter()).await;
-    f.server.config.dcc_policy = DccPolicy::LegacyPermissive;
+    f.server.config_mut().dcc_policy = DccPolicy::LegacyPermissive;
     let enable = carried_out(dcc(&f, EnableDisable::ENABLE, Some(1), None).await);
     tokio::time::advance(Duration::from_secs(61)).await;
     settle().await;
@@ -177,8 +177,8 @@ async fn refused_dcc_requests_write_no_record() {
     };
     // Policy: the default denies every mode.
     refused(dcc(&f, EnableDisable::ENABLE, None, None).await, "deny all");
-    f.server.config.dcc_policy = DccPolicy::RequirePassword;
-    f.server.config.dcc_password = Some("required".into());
+    f.server.config_mut().dcc_policy = DccPolicy::RequirePassword;
+    f.server.config_mut().dcc_password = Some("required".into());
     refused(
         dcc(&f, EnableDisable::DISABLE_INITIATION, None, Some("wrong")).await,
         "password",
@@ -187,13 +187,13 @@ async fn refused_dcc_requests_write_no_record() {
         dcc(&f, EnableDisable::DISABLE, None, Some("required")).await,
         "DISABLE",
     );
-    f.server.config.dcc_source_restriction =
+    f.server.config_mut().dcc_source_restriction =
         Some(crate::server::DccSourceRestriction::new(vec![]).unwrap());
     refused(
         dcc(&f, EnableDisable::ENABLE, None, Some("required")).await,
         "source",
     );
-    f.server.config.dcc_source_restriction = None;
+    f.server.config_mut().dcc_source_restriction = None;
     // Rate: a one-token bucket refuses the second DISABLE_INITIATION.
     let tasks = RequestTasks::for_server(&ServerConfig {
         dcc_disable_rate_limit: Some(DccDisableRateLimit {
@@ -244,7 +244,7 @@ async fn refused_dcc_requests_write_no_record() {
 async fn dcc_records_follow_the_reporters_operations_delay_and_confirmation() {
     // A Reporter that audits neither DCC operation writes no DCC record.
     let mut f = server(reporter()).await;
-    f.server.config.dcc_policy = DccPolicy::LegacyPermissive;
+    f.server.config_mut().dcc_policy = DccPolicy::LegacyPermissive;
     carried_out(dcc(&f, EnableDisable::DISABLE_INITIATION, Some(1), None).await);
     expire_dcc(&f).await;
     assert!(audit_frames(&f).is_empty());
@@ -258,7 +258,7 @@ async fn dcc_records_follow_the_reporters_operations_delay_and_confirmation() {
     reporter.set_auditable_operations(operations).unwrap();
     reporter.set_issue_confirmed_notifications(true).unwrap();
     let mut f = server(reporter).await;
-    f.server.config.dcc_policy = DccPolicy::LegacyPermissive;
+    f.server.config_mut().dcc_policy = DccPolicy::LegacyPermissive;
     carried_out(dcc(&f, EnableDisable::DISABLE_INITIATION, None, None).await);
     settle().await;
     assert!(audit_frames(&f).is_empty(), "waits for its send delay");
@@ -278,7 +278,7 @@ async fn dcc_records_follow_the_reporters_operations_delay_and_confirmation() {
 #[tokio::test(start_paused = true)]
 async fn a_dropped_dcc_record_is_summarized() {
     let mut f = server(dcc_reporter()).await;
-    f.server.config.dcc_policy = DccPolicy::LegacyPermissive;
+    f.server.config_mut().dcc_policy = DccPolicy::LegacyPermissive;
     let permits: Vec<_> = (0..64)
         .map(|_| {
             f.server

@@ -1,4 +1,5 @@
 //! Private defensive no-progress cleanup (#527), not a SegmentTimer transition.
+//! SegmentTimer expiry is separate from this inclusive local retention cap.
 
 use super::*;
 use request_peer_quota::{assert_positive_ack, next_routed_apdu};
@@ -6,9 +7,9 @@ use request_reassembly::{
     expect_positive_ack, inject_routed_segment, present_value, recv_apdu, send_segment_with_window,
     split_into, start_reassembly_server, start_routed_reassembly_server, write_property_payload,
 };
-use tokio::time::{sleep_until, timeout, Instant as TokioInstant};
+use tokio::time::{advance, timeout, Instant as TokioInstant};
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn request_progress_reclaims_128_stalled_slots_before_admission() {
     timeout(Duration::from_secs(25), async {
         let (server, incoming, sent) = start_routed_reassembly_server().await;
@@ -44,7 +45,7 @@ async fn request_progress_reclaims_128_stalled_slots_before_admission() {
         // baseline produces a NAK for each, providing a dispatch barrier and
         // proving that every original session remains live without new saves.
         for second in 1..=15 {
-            sleep_until(started + Duration::from_secs(second)).await;
+            advance(Duration::from_secs(1)).await;
             for invoke_id in 0..128 {
                 let peer = routed_address(400, invoke_id / 16);
                 let seq = if second % 2 == 0 { 0 } else { 2 };
@@ -60,15 +61,32 @@ async fn request_progress_reclaims_128_stalled_slots_before_admission() {
                 }
             }
         }
-        assert!(
-            started.elapsed() < Duration::from_secs(16),
-            "setup too slow"
-        );
-        sleep_until(started + Duration::from_secs(17)).await;
+        assert_eq!(started.elapsed(), Duration::from_secs(15));
+        advance(Duration::from_secs(2)).await;
+
+        // Quiet dispatch proactively retires all 128, each with a local OTHER
+        // Abort. HashMap order is unspecified; validate original routes by ID.
+        wait_for_sent_len(&sent, index + 128).await;
+        let mut retired = std::collections::HashSet::new();
+        for _ in 0..128 {
+            let (npdu, mac) = request_reassembly::sent_routed_frame(&sent, index);
+            index += 1;
+            let Apdu::Abort(abort) = decode_apdu(npdu.payload).unwrap() else {
+                panic!("expected local retention Abort");
+            };
+            assert!(abort.sent_by_server);
+            assert_eq!(abort.abort_reason, AbortReason::OTHER);
+            assert_eq!(mac, router);
+            assert_eq!(
+                npdu.destination,
+                Some(routed_address(400, abort.invoke_id / 16))
+            );
+            assert!(retired.insert(abort.invoke_id));
+        }
 
         // Protocol activity is only two seconds old. Under the old activity-only
         // policy all 128 slots are still occupied and this gets BUFFER_OVERFLOW.
-        // No manually pruned map or test clock participates in this dispatch.
+        // The real dispatch loop performs cleanup before admitting this request.
         inject_routed_segment(&incoming, &router, &remote, 128, 0, true, &admitted[0]).await;
         assert_positive_ack(
             next_routed_apdu(&sent, &mut index, &router, &remote).await,
@@ -77,7 +95,7 @@ async fn request_progress_reclaims_128_stalled_slots_before_admission() {
         );
         assert_eq!(present_value(&server).await, initial_value);
 
-        // Cleanup itself emits nothing. A current noninitial segment still gets
+        // After the policy Abort, a current noninitial segment still gets
         // the existing invalid-state Abort, rather than resurrecting old data.
         inject_routed_segment(&incoming, &router, &remote, 0, 1, false, &discarded[1]).await;
         match next_routed_apdu(&sent, &mut index, &router, &remote).await {
@@ -122,7 +140,8 @@ async fn request_progress_reclaims_128_stalled_slots_before_admission() {
             Apdu::SimpleAck(ack) if ack.invoke_id == 0)
         );
         assert_eq!(present_value(&server).await, "new-incarnation");
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        advance(Duration::from_millis(100)).await;
+        tokio::task::yield_now().await;
         assert_eq!(
             sent_count(&sent),
             index,
@@ -133,7 +152,7 @@ async fn request_progress_reclaims_128_stalled_slots_before_admission() {
     .expect("bounded hostile repetition test exceeded 25 seconds");
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn request_progress_new_in_order_saves_sustain_transfer_beyond_16_seconds() {
     timeout(Duration::from_secs(25), async {
         let (server, client, mut rx) = start_reassembly_server(Segmentation::BOTH).await;
@@ -144,7 +163,7 @@ async fn request_progress_new_in_order_saves_sustain_transfer_beyond_16_seconds(
         let started = TokioInstant::now();
         let mut last_seq = 0;
         for second in 1..=18 {
-            sleep_until(started + Duration::from_secs(second)).await;
+            advance(Duration::from_secs(1)).await;
             if second == 9 || second == 18 {
                 last_seq += 1;
                 send_segment_with_window(
@@ -166,7 +185,7 @@ async fn request_progress_new_in_order_saves_sustain_transfer_beyond_16_seconds(
                         && ack.invoke_id == 42 && ack.sequence_number == last_seq));
             }
         }
-        assert!(started.elapsed() >= Duration::from_secs(18));
+        assert_eq!(started.elapsed(), Duration::from_secs(18));
         assert!(
             matches!(recv_apdu(&mut rx, "progressing write completes").await,
             Apdu::SimpleAck(ack) if ack.invoke_id == 42)

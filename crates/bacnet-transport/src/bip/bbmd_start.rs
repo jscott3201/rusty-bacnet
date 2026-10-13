@@ -168,6 +168,32 @@ pub(super) fn warn_if_broadcast_may_leave_another_interface(
     risky
 }
 
+/// The mask of the subnet `ip`, this BBMD's own address, is on, as the
+/// host reports it; `None`, logged at debug, when it can't say. A peer's
+/// Forwarded-NPDU sent from that subnet at the BBMD's own port isn't
+/// broadcast on it again (Annex J.4.5). An all-zero mask would put every sender on the subnet, so it
+/// counts as unknown. Listing adapters can be slow, so it runs on a
+/// blocking thread.
+pub(super) async fn subnet_mask_of(ip: Ipv4Addr) -> Option<Ipv4Addr> {
+    let lookup = tokio::task::spawn_blocking(move || crate::local_addresses::interface_of(ip));
+    let mask = match lookup.await {
+        Ok(Ok(found)) => found.and_then(|local| local.netmask),
+        Ok(Err(error)) => {
+            debug!(%ip, %error, "Could not look up the BBMD's subnet");
+            None
+        }
+        Err(error) => {
+            debug!(%ip, %error, "Could not look up the BBMD's subnet");
+            None
+        }
+    };
+    let mask = mask.filter(|mask| !mask.is_unspecified());
+    if mask.is_none() {
+        debug!(%ip, "BBMD subnet mask unknown: a forward from its own subnet is rebroadcast");
+    }
+    mask
+}
+
 /// Read and validate the persisted BDT. `None`, after a warning when the file
 /// is unusable, means the configured BDT is used.
 fn load_persisted_bdt(path: &Path) -> Option<Vec<BdtEntry>> {
@@ -239,7 +265,7 @@ pub(super) fn refresh_own_address(
     state: &mut BbmdState,
     ctx: &OwnAddressContext<'_>,
 ) -> Result<(), Error> {
-    let ip = ctx.own_ip(state.configured_bdt(), BdtSource::Current)?;
+    let ip = ctx.own_ip(&state.configured_bdt(), BdtSource::Current)?;
     let (old_ip, old_port) = state.local_address();
     state.set_local_address(ip.octets(), ctx.port).map_err(|e| {
         Error::Encoding(format!(

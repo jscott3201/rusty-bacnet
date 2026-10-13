@@ -10,8 +10,11 @@ use crate::property_metadata::{
 
 /// How peers and the local application write a Value object's Present_Value.
 ///
-/// Priority_Array, Relinquish_Default, Current_Command_Priority and the
-/// command-source properties are present only under [`Commandable`](Self::Commandable).
+/// Priority_Array, Relinquish_Default, Current_Command_Priority,
+/// Value_Source_Array and Last_Command_Time are present only under
+/// [`Commandable`](Self::Commandable). Value_Source is too, unless the object
+/// tracks the source of its noncommandable Present_Value (`set_value_source_tracking`
+/// on each Value object, #1552).
 /// Under every access, Out_Of_Service TRUE keeps the local application from
 /// changing Present_Value and lets peers write it for testing (Clause 12,
 /// Out_Of_Service of each Value object).
@@ -30,22 +33,33 @@ pub enum PresentValueAccess {
 
 impl PresentValueAccess {
     /// Whether a row with this presence condition exists under this access.
-    pub(crate) fn includes(self, condition: Option<PropertyPresenceCondition>) -> bool {
+    /// `source_tracked` says whether a noncommandable object tracks its
+    /// Present_Value's source, which keeps its Value_Source row.
+    pub(crate) fn includes(
+        self,
+        condition: Option<PropertyPresenceCondition>,
+        source_tracked: bool,
+    ) -> bool {
+        use PropertyPresenceCondition as C;
         self == Self::Commandable
-            || !matches!(
-                condition,
+            || match condition {
                 Some(
-                    PropertyPresenceCondition::Commandable
-                        | PropertyPresenceCondition::CommandableAuditReporting
-                        | PropertyPresenceCondition::ValueSourceTracking
-                        | PropertyPresenceCondition::CommandableValueSourceTracking
-                )
-            )
+                    C::Commandable
+                    | C::CommandableAuditReporting
+                    | C::CommandableValueSourceTracking,
+                ) => false,
+                Some(C::ValueSourceTracking) => source_tracked,
+                _ => true,
+            }
     }
 
     /// `rows` as this access presents them: the rows it excludes removed, and
     /// Present_Value's write capability set to match.
-    pub(crate) fn project(self, rows: Cow<'_, [PropertyMetadata]>) -> Cow<'_, [PropertyMetadata]> {
+    pub(crate) fn project(
+        self,
+        rows: Cow<'_, [PropertyMetadata]>,
+        source_tracked: bool,
+    ) -> Cow<'_, [PropertyMetadata]> {
         let present_value = match self {
             Self::Commandable => return rows,
             Self::Writable => PropertyWriteCapability::Always,
@@ -54,7 +68,7 @@ impl PresentValueAccess {
 
         Cow::Owned(
             rows.iter()
-                .filter(|row| self.includes(row.presence_condition))
+                .filter(|row| self.includes(row.presence_condition, source_tracked))
                 .map(|row| {
                     if row.property_identifier == PropertyIdentifier::PRESENT_VALUE {
                         PropertyMetadata::new(
@@ -72,10 +86,16 @@ impl PresentValueAccess {
     }
 
     /// Whether `rows` hold `property` under a condition this access excludes.
-    pub(crate) fn excludes(self, rows: &[PropertyMetadata], property: PropertyIdentifier) -> bool {
+    pub(crate) fn excludes(
+        self,
+        rows: &[PropertyMetadata],
+        property: PropertyIdentifier,
+        source_tracked: bool,
+    ) -> bool {
         self != Self::Commandable
             && rows.iter().any(|row| {
-                row.property_identifier == property && !self.includes(row.presence_condition)
+                row.property_identifier == property
+                    && !self.includes(row.presence_condition, source_tracked)
             })
     }
 }

@@ -2,14 +2,14 @@ use std::ops::Range;
 
 use super::group_present_value::GroupMembers;
 use super::*;
-use bacnet_objects::log_buffer::LogRecordIdentity;
+use bacnet_objects::log_buffer::{LogRecordIdentity, TimestampKey};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::read_range::{RangeSpec, ReadRangeAck, ReadRangeRequest};
 use bacnet_types::primitives::{Date, Time};
 
 #[path = "read_range_logs.rs"]
 mod logs;
-pub(crate) use logs::RangeItems;
+pub(crate) use logs::{LogIdentities, RangeItems};
 #[path = "read_range_items.rs"]
 mod items;
 #[path = "read_range_page.rs"]
@@ -82,38 +82,15 @@ fn list_item_not_timestamped() -> Error {
     }
 }
 
-type CivilDateTime = (u16, u8, u8, u8, u8, u8, u8);
-
-fn civil_datetime(date: Date, time: Time) -> Option<CivilDateTime> {
-    let year = date.actual_year()?;
-    if !(1..=12).contains(&date.month)
-        || !(1..=31).contains(&date.day)
-        || !(1..=7).contains(&date.day_of_week)
-        || !(0..=23).contains(&time.hour)
-        || !(0..=59).contains(&time.minute)
-        || !(0..=59).contains(&time.second)
-        || !(0..=99).contains(&time.hundredths)
-    {
-        return None;
-    }
-    Some((
-        year,
-        date.month,
-        date.day,
-        time.hour,
-        time.minute,
-        time.second,
-        time.hundredths,
-    ))
-}
-
 /// Select a signed ReadRange window around the resident timestamp anchor.
 ///
-/// Identity validation is all-or-nothing. The endpoint scan follows resident
-/// order, while timestamp comparison ignores day-of-week after validating it.
+/// Timestamp validation is all-or-nothing. The anchor follows resident
+/// order, while timestamp comparison ignores day-of-week after validating it
+/// ([`TimestampKey`]); [`LogIdentities::time_anchor`] bisects a log whose
+/// timestamps run in order and visits each record of any other.
 pub(super) fn select_time_range(
     item_count: usize,
-    identities: Option<&[LogRecordIdentity]>,
+    identities: Option<&LogIdentities<'_>>,
     reference_time: (Date, Time),
     count: i32,
 ) -> Result<(SignedRangeSelection, Option<u64>), Error> {
@@ -121,27 +98,12 @@ pub(super) fn select_time_range(
     if identities.len() != item_count {
         return Err(list_item_not_timestamped());
     }
-    let reference =
-        civil_datetime(reference_time.0, reference_time.1).ok_or_else(list_item_not_timestamped)?;
-    let timestamps = identities
-        .iter()
-        .map(|identity| civil_datetime(identity.date(), identity.time()))
-        .collect::<Option<Vec<_>>>()
+    let reference = TimestampKey::of(reference_time.0, reference_time.1)
         .ok_or_else(list_item_not_timestamped)?;
-    let anchor = if count > 0 {
-        timestamps
-            .iter()
-            .position(|timestamp| *timestamp > reference)
-    } else {
-        timestamps
-            .iter()
-            .rposition(|timestamp| *timestamp < reference)
-    };
+    let anchor = identities.time_anchor(reference, count)?;
     let selection = select_signed_range(item_count, anchor, count);
-    let first_sequence_number = identities
-        .get(selection.range.start)
-        .filter(|_| !selection.range.is_empty())
-        .map(LogRecordIdentity::sequence_number);
+    let first_sequence_number =
+        (!selection.range.is_empty()).then(|| identities.sequence_number(selection.range.start));
     Ok((selection, first_sequence_number))
 }
 
@@ -275,7 +237,7 @@ struct PreparedReadRange<'a> {
     items: RangeItems<'a>,
     selection: SignedRangeSelection,
     first_sequence_number: Option<u64>,
-    identities: Option<Vec<LogRecordIdentity>>,
+    identities: Option<LogIdentities<'a>>,
 }
 
 /// Resolve the ReadRange target to its list items, in the order the service
@@ -344,9 +306,11 @@ fn prepare_read_range<'a>(
         ),
     };
     let mut log_identities = || {
-        buffer_identities
-            .take()
-            .unwrap_or_else(|| object.log_record_identities_internal())
+        buffer_identities.take().or_else(|| {
+            object
+                .log_record_identities_internal()
+                .map(LogIdentities::Listed)
+        })
     };
 
     let mut resident_identities = None;
@@ -375,12 +339,10 @@ fn prepare_read_range<'a>(
             if identities.len() != items.len() {
                 return Err(list_item_not_numbered().into());
             }
-            let reference = identities
-                .iter()
-                .position(|identity| identity.sequence_number() == *reference_seq);
+            let reference = identities.position(*reference_seq)?;
             let selection = select_signed_range(items.len(), reference, *count);
             let first_sequence_number = (!selection.range.is_empty())
-                .then(|| identities[selection.range.start].sequence_number());
+                .then(|| identities.sequence_number(selection.range.start));
             resident_identities = Some(identities);
             (selection, first_sequence_number)
         }
@@ -394,7 +356,7 @@ fn prepare_read_range<'a>(
             resident_identities = log_identities();
             select_time_range(
                 items.len(),
-                resident_identities.as_deref(),
+                resident_identities.as_ref(),
                 *reference_time,
                 *count,
             )?

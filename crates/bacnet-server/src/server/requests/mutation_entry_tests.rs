@@ -696,3 +696,7 @@ async fn direct_channel_allows_where_unknown_leaf_denies() {
     assert_eq!(decisions.snapshot().write_property.deny_total, 1);
     listener.stop().await;
 }
+
+#[cfg(feature = "sc-tls")]
+#[path = "segment_retention_direct_tests.rs"]
+mod segment_retention_direct_tests;

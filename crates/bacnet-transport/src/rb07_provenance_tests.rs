@@ -9,8 +9,8 @@
 
 use super::bip::BipTransport;
 use super::loopback::LoopbackTransport;
-use super::mstp::{LoopbackSerial, MasterNode, MstpConfig};
-use super::mstp_frame::{FrameType, MstpFrame};
+use super::mstp::codec::{Frame, FrameType};
+use super::mstp::{LoopbackSerial, MstpConfig, MstpTransport, SerialPort};
 use super::port::{ReceivedNpdu, TransportPort, TransportProvenance};
 use super::sc::{LoopbackWebSocket, ScTransport, WebSocketPort};
 use super::sc_frame::{decode_sc_message, encode_sc_message, ScFunction, ScMessage};
@@ -84,28 +84,35 @@ async fn loopback_yields_unverified_legacy_origin() {
     assert!(received.provenance.is_unverified());
 }
 
-#[test]
-fn mstp_frame_path_yields_unverified() {
-    let (tx, mut rx) = mpsc::channel(16);
+#[tokio::test]
+async fn mstp_frame_path_yields_unverified() {
+    let (serial, peer) = LoopbackSerial::pair();
     let config = MstpConfig {
         this_station: 3,
         max_master: 127,
         max_info_frames: 1,
         baud_rate: 9600,
+        ..MstpConfig::default()
     };
-    let mut node = MasterNode::new(config).unwrap();
-    let frame = MstpFrame {
-        frame_type: FrameType::BACnetDataNotExpectingReply,
-        destination: 3,
-        source: 7,
-        data: Bytes::from_static(&[0x01, 0x00, 0x30]),
-    };
-    let _ = node.handle_received_frame(&frame, &tx);
-    let received = rx
-        .try_recv()
+    let mut transport = MstpTransport::new(serial, config);
+    let mut rx = transport.start().await.unwrap();
+    let mut wire = Vec::new();
+    Frame::new(
+        FrameType::BACNET_DATA_NOT_EXPECTING_REPLY,
+        3,
+        7,
+        &[0x01, 0x00, 0x30],
+    )
+    .encode_to_sink(&mut wire)
+    .unwrap();
+    peer.write(&wire).await.unwrap();
+    let received = timeout(Duration::from_secs(2), rx.recv())
+        .await
+        .unwrap()
         .expect("MSTP must deliver DataNotExpectingReply");
     assert!(received.provenance.is_unverified());
     assert_eq!(received.source_mac.as_slice(), &[7]);
+    transport.stop().await.unwrap();
 }
 
 #[tokio::test]

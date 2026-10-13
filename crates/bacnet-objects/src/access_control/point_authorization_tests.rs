@@ -205,22 +205,35 @@ fn access_point_supported_modes_refuse_sets_without_authorize_or_the_mode_in_eff
 }
 
 #[test]
-fn access_point_policy_count_refuses_zero_and_a_count_below_the_active_policy() {
+fn access_point_policy_count_below_the_active_policy_drops_it_to_zero() {
     let mut point = AccessPointObject::new(1, "AP-1").unwrap();
     point.set_number_of_authentication_policies(3).unwrap();
     write(&mut point, POLICY, PropertyValue::Unsigned(3)).unwrap();
-    for count in [0, 2] {
-        assert_error(
-            point.set_number_of_authentication_policies(count),
-            ErrorCode::VALUE_OUT_OF_RANGE,
-        );
-    }
+    assert_error(
+        point.set_number_of_authentication_policies(0),
+        ErrorCode::VALUE_OUT_OF_RANGE,
+    );
     assert_eq!(read(&point, POLICIES), PropertyValue::Unsigned(3));
     assert_eq!(read(&point, POLICY), PropertyValue::Unsigned(3));
-    // Lowering the policy in effect first lets the count follow.
-    write(&mut point, POLICY, PropertyValue::Unsigned(2)).unwrap();
+    // A count below the policy in effect leaves none in effect (Clause
+    // 12.31.10), and the point reports the configuration fault (#1325).
     point.set_number_of_authentication_policies(2).unwrap();
     assert_eq!(read(&point, POLICIES), PropertyValue::Unsigned(2));
+    assert_eq!(read(&point, POLICY), PropertyValue::Unsigned(0));
+    assert_eq!(
+        read(&point, P::RELIABILITY),
+        PropertyValue::Enumerated(Reliability::CONFIGURATION_ERROR.to_raw())
+    );
+    // Picking one of the remaining policies clears both.
+    write(&mut point, POLICY, PropertyValue::Unsigned(2)).unwrap();
+    assert_eq!(read(&point, POLICY), PropertyValue::Unsigned(2));
+    assert_eq!(
+        read(&point, P::RELIABILITY),
+        PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw())
+    );
+    // A count at or above the policy in effect leaves it alone.
+    point.set_number_of_authentication_policies(2).unwrap();
+    point.set_number_of_authentication_policies(5).unwrap();
     assert_eq!(read(&point, POLICY), PropertyValue::Unsigned(2));
 }
 

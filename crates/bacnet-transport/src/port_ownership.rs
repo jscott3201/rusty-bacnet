@@ -12,6 +12,10 @@
 //! - macOS and the other BSDs refuse a plain bind there, but a socket that sets
 //!   SO_REUSEADDR itself may still bind the more specific address. They have
 //!   no option to stop it, so that case remains.
+//!
+//! The test-only helpers here cover tests that lose a port to another socket:
+//! a probed port taken before the test binds it (`lost_port`), and a loopback
+//! connect whose OS-chosen source port is still in use (`connect_loopback`).
 
 use std::io;
 
@@ -19,6 +23,10 @@ use std::io;
 use crate::port::{ReceivedNpdu, TransportPort};
 #[cfg(test)]
 use bacnet_types::error::Error;
+#[cfg(test)]
+use std::net::SocketAddr;
+#[cfg(test)]
+use std::time::Duration;
 #[cfg(test)]
 use tokio::sync::mpsc;
 
@@ -116,6 +124,78 @@ pub(crate) async fn restart(
     }
 }
 
+/// How many times [`connect_loopback`] connects before a local port collision
+/// fails it.
+#[cfg(test)]
+const CONNECT_ATTEMPTS: usize = 5;
+
+/// The real time [`connect_loopback`] waits after a local port collision.
+#[cfg(test)]
+const CONNECT_PAUSE: Duration = Duration::from_millis(50);
+
+/// Opens a test's outbound loopback TCP connection; the SC hub and SC TLS
+/// tests dial through here (#1629).
+///
+/// The OS picks the connection's source port. After many short-lived loopback
+/// connections the port it picks can still be in use, and Windows then fails
+/// the connect with `WSAEADDRINUSE`; on Linux and macOS a host out of
+/// ephemeral ports fails it with `AddrNotAvailable`. Neither says anything
+/// about the listener, so the connect runs again on a new socket, up to
+/// [`CONNECT_ATTEMPTS`] times. Any other error fails at once.
+#[cfg(test)]
+pub(crate) async fn connect_loopback(address: SocketAddr) -> tokio::net::TcpStream {
+    match retry_local_port(|| tokio::net::TcpStream::connect(address)).await {
+        Ok(tcp) => tcp,
+        Err(err) if local_port_collision(&err) => panic!(
+            "loopback connect to {address} still collided on a local port after \
+             {CONNECT_ATTEMPTS} attempts: {err} (#1629)"
+        ),
+        Err(err) => panic!("loopback connect to {address} failed: {err}"),
+    }
+}
+
+/// Whether a connect failed at its own end: the source port the OS gave it
+/// was taken, or there was none to give. A connect's errors all come from the
+/// OS, so the kind is enough.
+#[cfg(test)]
+fn local_port_collision(err: &io::Error) -> bool {
+    matches!(
+        err.kind(),
+        io::ErrorKind::AddrInUse | io::ErrorKind::AddrNotAvailable
+    )
+}
+
+/// Runs `dial` again while it fails with a local port collision, up to
+/// [`CONNECT_ATTEMPTS`] runs, and returns the last run's result.
+///
+/// The pause between runs is a thread sleep on Tokio's blocking pool. Many
+/// callers run on a paused clock, some inside the SC hub tests' `poll_io`,
+/// whose yields keep that clock from auto-advancing. A Tokio `sleep` would
+/// never end there, and elsewhere its auto-advance would move the clock past
+/// hub deadlines a test pins to the millisecond. Tokio holds a paused clock
+/// still while a `spawn_blocking` task runs (see `tokio::time::pause`). Only a
+/// current-thread runtime can pause its clock, so that is the only kind this
+/// matters on; on a multi-thread runtime the pause is a plain 50 ms of real
+/// time. On either, the runtime's threads stay free.
+#[cfg(test)]
+async fn retry_local_port<T, F>(mut dial: impl FnMut() -> F) -> io::Result<T>
+where
+    F: std::future::Future<Output = io::Result<T>>,
+{
+    let mut attempt = 1;
+    loop {
+        match dial().await {
+            Err(err) if attempt < CONNECT_ATTEMPTS && local_port_collision(&err) => {
+                attempt += 1;
+                tokio::task::spawn_blocking(|| std::thread::sleep(CONNECT_PAUSE))
+                    .await
+                    .unwrap();
+            }
+            result => return result,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
@@ -148,5 +228,104 @@ mod tests {
         // An AddrInUse the transport made up, not the OS, is never a lost port.
         let made_up = std::io::Error::from(std::io::ErrorKind::AddrInUse);
         assert!(!super::lost_port(1, &made_up));
+    }
+}
+
+#[cfg(test)]
+mod connect_loopback_tests {
+    use super::{connect_loopback, local_port_collision, retry_local_port, CONNECT_ATTEMPTS};
+    use std::io::{Error, ErrorKind};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// OS error codes, each with whether it is a local port collision:
+    /// WSAEADDRINUSE (the code #1629 reported), WSAEADDRNOTAVAIL,
+    /// WSAECONNREFUSED and WSAECONNRESET.
+    #[cfg(windows)]
+    const OS_CODES: [(i32, bool); 4] =
+        [(10048, true), (10049, true), (10061, false), (10054, false)];
+
+    /// OS error codes, each with whether it is a local port collision.
+    #[cfg(unix)]
+    const OS_CODES: [(i32, bool); 4] = [
+        (libc::EADDRINUSE, true),
+        (libc::EADDRNOTAVAIL, true),
+        (libc::ECONNREFUSED, false),
+        (libc::ECONNRESET, false),
+    ];
+
+    /// Runs a dial through the retry, its first runs failing with `errors` in
+    /// turn and the rest connecting. Returns how many runs there were and the
+    /// result.
+    async fn dial(errors: &[ErrorKind]) -> (usize, std::io::Result<()>) {
+        let runs = AtomicUsize::new(0);
+        let result = retry_local_port(|| {
+            let outcome = match errors.get(runs.fetch_add(1, Ordering::Relaxed)) {
+                Some(&kind) => Err(Error::from(kind)),
+                None => Ok(()),
+            };
+            async move { outcome }
+        })
+        .await;
+        (runs.into_inner(), result)
+    }
+
+    #[test]
+    fn only_the_address_in_use_family_is_a_local_port_collision() {
+        for (code, collision) in OS_CODES {
+            let err = Error::from_raw_os_error(code);
+            assert_eq!(local_port_collision(&err), collision, "{err:?}");
+        }
+        for kind in [
+            ErrorKind::ConnectionRefused,
+            ErrorKind::ConnectionReset,
+            ErrorKind::ConnectionAborted,
+            ErrorKind::TimedOut,
+            ErrorKind::PermissionDenied,
+            ErrorKind::Other,
+        ] {
+            assert!(!local_port_collision(&kind.into()), "{kind:?}");
+        }
+    }
+
+    /// A collision connects again and a real failure fails at once, on a
+    /// paused clock that holds still across the pauses.
+    #[tokio::test(start_paused = true)]
+    async fn a_collision_connects_again_and_a_refusal_fails_at_once() {
+        // A pending timer, standing in for a hub deadline: a pause that let
+        // the clock auto-advance would fire it.
+        let deadline = tokio::spawn(tokio::time::sleep(std::time::Duration::from_millis(1)));
+        tokio::task::yield_now().await;
+        let start = tokio::time::Instant::now();
+
+        let (runs, result) = dial(&[ErrorKind::AddrInUse, ErrorKind::AddrNotAvailable]).await;
+        assert_eq!(runs, 3);
+        result.unwrap();
+
+        let (runs, result) = dial(&[ErrorKind::ConnectionRefused]).await;
+        assert_eq!(runs, 1);
+        assert_eq!(result.unwrap_err().kind(), ErrorKind::ConnectionRefused);
+
+        let (runs, result) = dial(&[ErrorKind::AddrInUse, ErrorKind::ConnectionRefused]).await;
+        assert_eq!(runs, 2);
+        assert_eq!(result.unwrap_err().kind(), ErrorKind::ConnectionRefused);
+
+        let (runs, result) = dial(&[ErrorKind::AddrInUse; CONNECT_ATTEMPTS + 1]).await;
+        assert_eq!(runs, CONNECT_ATTEMPTS);
+        assert_eq!(result.unwrap_err().kind(), ErrorKind::AddrInUse);
+
+        assert_eq!(
+            tokio::time::Instant::now(),
+            start,
+            "a pause moved the clock"
+        );
+        assert!(!deadline.is_finished(), "a pause fired a pending timer");
+    }
+
+    #[tokio::test]
+    async fn a_free_loopback_listener_is_reached() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (dialed, accepted) = tokio::join!(connect_loopback(address), listener.accept());
+        assert_eq!(dialed.local_addr().unwrap(), accepted.unwrap().1);
     }
 }

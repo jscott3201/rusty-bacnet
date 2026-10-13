@@ -611,7 +611,7 @@ fn address_resolution_direct_connection_is_pure_in_all_states_and_codec_is_permi
                     assert_eq!(conn.max_bvlc_length, before.max_bvlc_length);
                     assert_eq!(conn.max_apdu_length, before.max_apdu_length);
                     assert_eq!(conn.hub_max_bvlc_length, before.hub_max_bvlc_length);
-                    assert_eq!(conn.hub_max_apdu_length, before.hub_max_apdu_length);
+                    assert_eq!(conn.hub_max_npdu_length, before.hub_max_npdu_length);
                     assert_eq!(conn.next_message_id, before.next_message_id);
                     assert_eq!(
                         conn.pending_connect_message_id,

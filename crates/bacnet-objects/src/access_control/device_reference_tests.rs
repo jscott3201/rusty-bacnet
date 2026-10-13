@@ -79,12 +79,11 @@ fn access_point_event_credential_refuses_a_non_device_device_identifier() {
     let mut point = AccessPointObject::new(1, "AP-1").unwrap();
     let card = oid(ObjectType::ACCESS_CREDENTIAL, 3);
     point
-        .set_access_event(
-            AccessEvent::GRANTED,
-            1,
-            stamp(9),
-            Some(on(oid(ObjectType::DEVICE, 9), card)),
-        )
+        .set_access_event(AccessEventReport {
+            time: Some(stamp(9)),
+            credential: Some(on(oid(ObjectType::DEVICE, 9), card)),
+            ..AccessEventReport::new(AccessEvent::GRANTED, 1)
+        })
         .unwrap();
     // Device 9, then Access Credential 3.
     let granted = PropertyValue::ApplicationData(vec![
@@ -92,12 +91,11 @@ fn access_point_event_credential_refuses_a_non_device_device_identifier() {
     ]);
     assert_eq!(read(&point, P::ACCESS_EVENT_CREDENTIAL), granted);
     for other in not_devices() {
-        assert_value_out_of_range(point.set_access_event(
-            AccessEvent::DENIED_OTHER,
-            2,
-            stamp(10),
-            Some(on(other, card)),
-        ));
+        assert_value_out_of_range(point.set_access_event(AccessEventReport {
+            time: Some(stamp(10)),
+            credential: Some(on(other, card)),
+            ..AccessEventReport::new(AccessEvent::DENIED_OTHER, 2)
+        }));
         // None of the event's rows moved.
         assert_eq!(read(&point, P::ACCESS_EVENT_CREDENTIAL), granted);
         assert_eq!(

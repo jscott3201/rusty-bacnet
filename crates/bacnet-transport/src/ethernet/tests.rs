@@ -232,7 +232,7 @@ fn ethernet_number_capability_delegates_without_configured_authority() {
     assert!(transport.supports_local_nonrouter_number_controls());
     let any: AnyTransport<LoopbackSerial> = AnyTransport::Ethernet(transport);
     assert!(any.supports_local_nonrouter_number_controls());
-    assert!(any.normal_bip_endpoint().is_none());
+    assert!(any.bip_port().is_none());
 }
 
 /// A raw frame to `destination` from `source` with LLC `control`, carrying

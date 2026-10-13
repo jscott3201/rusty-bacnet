@@ -374,7 +374,7 @@ fn element(property: PropertyIdentifier, value: Vec<u8>) -> BACnetPropertyValue 
 #[tokio::test]
 async fn audit_reporter_denied_wp_and_wpm_suffix_have_no_audit_side_effects() {
     let mut fixture = server(reporter()).await;
-    fixture.server.config.mutation_policy = crate::mutation::MutationPolicy::DenyAll;
+    fixture.server.config_mut().mutation_policy = crate::mutation::MutationPolicy::DenyAll;
     assert!(matches!(
         write_value(&fixture.server, None).await,
         Apdu::Error(_)
@@ -383,13 +383,14 @@ async fn audit_reporter_denied_wp_and_wpm_suffix_have_no_audit_side_effects() {
     assert!(fixture.transport.sent.lock().unwrap().is_empty());
     assert_eq!(fixture.writes.load(Ordering::Acquire), 0);
     assert_eq!(fixture.attempts.load(Ordering::Acquire), 0);
-    fixture.server.config.mutation_policy = crate::mutation::MutationPolicy::Permissive;
-    fixture.server.config.mutation_authorizer = Some(Arc::new(|context| match &context.target {
-        crate::mutation::MutationTarget::WritePropertyMultiple(attempt) => {
-            attempt.reference.property_identifier == PropertyIdentifier::PRESENT_VALUE.to_raw()
-        }
-        _ => false,
-    }));
+    fixture.server.config_mut().mutation_policy = crate::mutation::MutationPolicy::Permissive;
+    fixture.server.config_mut().mutation_authorizer =
+        Some(Arc::new(|context| match &context.target {
+            crate::mutation::MutationTarget::WritePropertyMultiple(attempt) => {
+                attempt.reference.property_identifier == PropertyIdentifier::PRESENT_VALUE.to_raw()
+            }
+            _ => false,
+        }));
     assert!(matches!(
         dispatch(
             &fixture.server,

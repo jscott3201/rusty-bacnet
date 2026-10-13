@@ -15,6 +15,8 @@ import rusty_bacnet
 from ipv6_selected_link import ADDRESS, INDEX, GROUP, frame, receive, udp
 
 PEER = b"\x40\x87\x91"
+# The server's VMAC: its device instance, 321 (H.7.2).
+NODE = b"\x00\x01\x41"
 QUERY = b"\x01\x80\x12"
 
 
@@ -39,8 +41,13 @@ async def run():
     assert remote.startswith("fd") and remote != ADDRESS
     observer = socket.create_connection((remote, 47809), timeout=2)
     observed = observer.makefile("rb")
-    port = 0
-    node = None
+    # local_address() names the server's VMAC, not its port: pick the port.
+    with socket.socket(socket.AF_INET6, socket.SOCK_DGRAM) as probe:
+        probe.bind((ADDRESS, 0))
+        port = probe.getsockname()[1]
+    node = NODE
+    local = (ADDRESS, port)
+    group = (GROUP, port, 0, INDEX)
     peer = udp(ADDRESS)
     server = rusty_bacnet.BACnetServer(
         321, transport="ipv6", port=port, ipv6_interface=ADDRESS)
@@ -51,19 +58,12 @@ async def run():
                     group if broadcast else local)
 
     async def fence():
-        nonlocal node
         peer.sendto(frame(6, PEER, b""), local)
         data, source, destination = await asyncio.to_thread(
             receive, peer, lambda b: b[:2] == b"\x82\x07")
         assert len(data) == 10 and data[:4] == b"\x82\x07\x00\x0a"
         assert data[7:] == PEER
-        if node is None:
-            # Python's IPv6 transport uses random VMAC startup independently of
-            # its application Device ID. Resolve that wire identity, not a guess.
-            node = data[4:7]
-            assert node[0] & 0xc0 == 0x40
-        else:
-            assert data[4:7] == node
+        assert data[4:7] == node
         assert source[1] == port and destination == ADDRESS
 
     async def expect(number):
@@ -78,11 +78,7 @@ async def run():
 
     try:
         await server.start()
-        published = await server.local_address()
-        port = int(published.rsplit(":", 1)[1])
-        local = (ADDRESS, port)
-        group = (GROUP, port, 0, INDEX)
-        assert await server.local_address() == f"[{ADDRESS}]:{port}"
+        assert await server.local_address() == "bip6:0x000141"
         observer.sendall(json.dumps({"port": port}).encode() + b"\n")
         observer_index = json.loads(await asyncio.to_thread(observed.readline))["index"]
         await fence()

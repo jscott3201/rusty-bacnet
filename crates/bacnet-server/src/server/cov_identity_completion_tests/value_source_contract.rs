@@ -89,12 +89,19 @@ async fn baseline(
 }
 #[tokio::test]
 async fn value_source_cov_failed_companion_atomicity_and_recovery() {
+    for noncommandable in [false, true] {
+        failed_companion_atomicity_and_recovery(noncommandable).await;
+    }
+}
+async fn failed_companion_atomicity_and_recovery(noncommandable: bool) {
+    let fields = &FIELDS[..if noncommandable { 3 } else { 5 }];
     for kind in [CovNotificationKind::Single, CovNotificationKind::Multiple] {
         let (f, state, sub) = fixture(kind).await;
+        state.lock().unwrap().noncommandable = noncommandable;
         f.fire(true, std::slice::from_ref(&sub)).await;
         f.sent.lock().unwrap().clear();
         let before = baseline(&f, &sub).await;
-        for property in FIELDS {
+        for &property in fields {
             state.lock().unwrap().fail = Some(property);
             for force in [false, true] {
                 f.fire(force, std::slice::from_ref(&sub)).await;
@@ -143,6 +150,9 @@ async fn value_source_cov_failed_companion_atomicity_and_recovery() {
                 },
             ),
         ] {
+            if !fields.contains(&property) {
+                continue;
+            }
             state.lock().unwrap().overrides.insert(property, value);
             f.fire(true, std::slice::from_ref(&sub)).await;
             assert!(f.sent.lock().unwrap().is_empty(), "{property:?}");
@@ -180,8 +190,9 @@ async fn value_source_cov_time_only_and_noncommandable_control() {
         assert_eq!(
             values.iter().map(|v| v.0).collect::<Vec<_>>(),
             [
+                PropertyIdentifier::PRESENT_VALUE,
+                PropertyIdentifier::STATUS_FLAGS,
                 PropertyIdentifier::VALUE_SOURCE,
-                PropertyIdentifier::STATUS_FLAGS
             ]
         );
         f.finish(false).await;
@@ -189,10 +200,17 @@ async fn value_source_cov_time_only_and_noncommandable_control() {
 }
 #[tokio::test]
 async fn value_source_cov_multiple_dedup_qualification_and_timestamps() {
+    for noncommandable in [false, true] {
+        multiple_dedup_qualification_and_timestamps(noncommandable).await;
+    }
+}
+async fn multiple_dedup_qualification_and_timestamps(noncommandable: bool) {
+    let fields = &FIELDS[..if noncommandable { 3 } else { 5 }];
     let kind = CovNotificationKind::Multiple;
     let (f, state, source) = fixture(kind).await;
+    state.lock().unwrap().noncommandable = noncommandable;
     let mut snapshots = vec![source.clone()];
-    for property in FIELDS {
+    for &property in fields {
         let mut p = proposal(kind, false, property);
         p.last_notified_observation = None;
         p.timestamped = property == PropertyIdentifier::VALUE_SOURCE;
@@ -220,8 +238,8 @@ async fn value_source_cov_multiple_dedup_qualification_and_timestamps() {
     };
     let report = COVNotificationMultipleRequest::decode(&request.service_request).unwrap();
     let values = &report.list_of_cov_notifications[0].list_of_values;
-    assert_eq!(values.len(), 5);
-    for field in FIELDS {
+    assert_eq!(values.len(), fields.len());
+    for &field in fields {
         assert_eq!(
             values
                 .iter()
@@ -245,6 +263,15 @@ async fn value_source_cov_multiple_dedup_qualification_and_timestamps() {
             "one capture of {field:?}"
         );
     }
+    if noncommandable {
+        let state = state.lock().unwrap();
+        assert!(!state
+            .reads
+            .contains_key(&PropertyIdentifier::LAST_COMMAND_TIME));
+        assert!(!state
+            .reads
+            .contains_key(&PropertyIdentifier::CURRENT_COMMAND_PRIORITY));
+    }
     let pv = snapshots
         .iter()
         .find(|s| s.monitored_property == Some(PropertyIdentifier::PRESENT_VALUE))
@@ -266,7 +293,7 @@ async fn value_source_cov_multiple_dedup_qualification_and_timestamps() {
     };
     let report = COVNotificationMultipleRequest::decode(&request.service_request).unwrap();
     let values = &report.list_of_cov_notifications[0].list_of_values;
-    assert_eq!(values.len(), 5);
+    assert_eq!(values.len(), fields.len());
     for value in values {
         assert_eq!(
             value.time_of_change.is_some(),
@@ -281,7 +308,12 @@ async fn value_source_cov_multiple_dedup_qualification_and_timestamps() {
         .find(|s| s.monitored_property == Some(PropertyIdentifier::VALUE_SOURCE))
         .unwrap();
     assert_ne!(
-        baseline(&f, source).await.unwrap().command().unwrap().0,
+        baseline(&f, source)
+            .await
+            .unwrap()
+            .source_companions()
+            .unwrap()
+            .0,
         before.unwrap().sample().clone()
     );
     f.finish(false).await;
@@ -420,6 +452,10 @@ async fn value_source_cov_multiple_timestamped_sibling_merges_flags_only_when_qu
         .collect();
     assert_eq!(pv_times, vec![Some(prepared.local_time)]);
     assert_eq!(baseline(&f, &pv).await, pv_before);
-    assert!(baseline(&f, &source).await.unwrap().command().is_some());
+    assert!(baseline(&f, &source)
+        .await
+        .unwrap()
+        .source_companions()
+        .is_some());
     f.finish(false).await;
 }

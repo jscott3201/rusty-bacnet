@@ -61,7 +61,7 @@ fn envelope(
             .identities
             .as_ref()
             .filter(|_| count != 0)
-            .map(|ids| ids[range.start].sequence_number()),
+            .map(|ids| ids.sequence_number(range.start)),
     })
 }
 

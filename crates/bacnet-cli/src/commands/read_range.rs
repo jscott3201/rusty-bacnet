@@ -7,27 +7,34 @@
 //! is shown as its timestamp, datum and, for a Trend Log, status flags. Any
 //! other property or object type decodes as application values. Whatever
 //! doesn't decode is shown as hex.
+//!
+//! The heading carries the result flags and the first sequence number, so a
+//! page that left items out says so; `--all` pages through a whole log and
+//! ends with the checkpoint to resume from (#1532).
 
 use bacnet_client::client::BACnetClient;
-use bacnet_encoding::constructed::{
-    decode_audit_log_record_at, decode_event_log_record, decode_log_multiple_record,
-    decode_log_record,
+use bacnet_client::log_reader::{LogCursor, LogGap};
+use bacnet_services::read_range::{
+    LogRecords, ReadRangeAck, ReadRangeRequest, ReadRangeValidation, ReadRangeViolation,
 };
 use bacnet_transport::port::TransportPort;
 use bacnet_types::bitstring::LogStatus;
 use bacnet_types::constructed::{
-    BACnetAuditLogDatum, BACnetAuditNotification, BACnetRecipient, EventLogDatum,
+    BACnetAuditLogDatum, BACnetAuditLogRecord, BACnetAuditNotification, BACnetEventLogRecord,
+    BACnetLogMultipleRecord, BACnetLogRecord, BACnetRecipient, EventLogDatum,
     EventNotificationRequest, LogData, LogDatum,
 };
 use bacnet_types::enums::{ErrorClass, ErrorCode, NotifyType, ObjectType, PropertyIdentifier};
-use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlags, Time};
 use serde::Serialize;
 
 use super::read::{decode_and_format, format_application_values, hex};
+pub use super::read_range_options::RangeOptions;
 use crate::output::{self, OutputFormat};
 
-/// Read a range of items from a list or log-buffer property.
+/// Read a range of items from a list or log-buffer property: one read over
+/// the range `range` names, or with `--all` every page of a log.
+#[allow(clippy::too_many_arguments)]
 pub async fn read_range_cmd<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     mac: &[u8],
@@ -35,33 +42,226 @@ pub async fn read_range_cmd<T: TransportPort + 'static>(
     instance: u32,
     property: PropertyIdentifier,
     index: Option<u32>,
+    range: &RangeOptions,
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let oid = ObjectIdentifier::new(object_type, instance)?;
-    let ack = client.read_range(mac, oid, property, index, None).await?;
-
-    let heading = Heading {
+    let mut heading = Heading {
         object: format!("{object_type}:{instance}"),
         property: format!("{property}"),
-        item_count: ack.item_count,
+        ..Heading::default()
     };
-    let decoder = if property == PropertyIdentifier::LOG_BUFFER {
-        record_decoder(object_type)
+    if range.all {
+        if property != PropertyIdentifier::LOG_BUFFER || index.is_some() {
+            return Err("--all pages through a log's Log_Buffer".into());
+        }
+        // What was read is printed, with the flags that resume the read,
+        // before any error that stopped it.
+        let (rows, stopped) = read_all(client, mac, oid, range, &mut heading).await?;
+        print_records(&heading, &rows, format);
+        return stopped.map_or(Ok(()), Err);
+    }
+    let request = ReadRangeRequest {
+        object_identifier: oid,
+        property_identifier: property,
+        property_array_index: index,
+        range: range.spec()?,
+    };
+    let validation = if range.strict {
+        ReadRangeValidation::Strict
     } else {
-        None
+        ReadRangeValidation::Lenient
     };
-    match decoder {
-        Some(decode) => print_records(&heading, &decode_records(decode, &ack.item_data), format),
+    let reply = client.read_range_with(mac, &request, validation).await?;
+    let ack = reply.ack;
+    heading.item_count = u64::from(ack.item_count);
+    heading.result_flags = ack.result_flags;
+    heading.first_sequence_number = ack.first_sequence_number;
+    heading.note_violations(&reply.violations);
+    match log_rows(&ack) {
+        Some(rows) => print_records(&heading, &rows, format),
         None => print_items(&heading, &ack.item_data, format),
     }
     Ok(())
 }
 
+/// What stopped an `--all` read part way.
+type Stopped = Option<Box<dyn std::error::Error>>;
+
+/// Read every page of `log` from the start `range` names, filling in the
+/// heading: the records, the last page's flags, the first sequence number,
+/// the rules the device broke, the pages read, any gaps and the checkpoint.
+/// An error after the options are checked stops the read but keeps what it
+/// read, for the caller to print first.
+async fn read_all<T: TransportPort + 'static>(
+    client: &BACnetClient<T>,
+    mac: &[u8],
+    log: ObjectIdentifier,
+    range: &RangeOptions,
+    heading: &mut Heading,
+) -> Result<(LogRows, Stopped), Box<dyn std::error::Error>> {
+    let (mut cursor, page_size) = range.pages()?;
+    let mut rows = LogRows::default();
+    let mut paged = Paged::default();
+    let stopped = loop {
+        let page = match client.read_log_page(mac, log, cursor, page_size).await {
+            Ok(page) => page,
+            Err(error) => break Some(error.into()),
+        };
+        paged.pages += 1;
+        if paged.pages == 1 {
+            heading.first_sequence_number = page.first_sequence_number;
+        }
+        heading.item_count += page.records.len() as u64;
+        heading.result_flags = page.result_flags;
+        heading.note_violations(&page.violations);
+        paged.gaps.extend(page.gap);
+        rows.rows.extend(record_rows(&page.records));
+        cursor = page.next;
+        if page.done {
+            break None;
+        }
+    };
+    paged.next = cursor_flags(cursor);
+    heading.paged = Some(paged);
+    Ok((rows, stopped))
+}
+
+/// The `read-range` flags that resume from `cursor`.
+fn cursor_flags(cursor: LogCursor) -> String {
+    match cursor {
+        LogCursor::Oldest => "--all".into(),
+        LogCursor::Sequence(sequence) => format!("--sequence {sequence}"),
+        LogCursor::Position(position) => format!("--position {position}"),
+        LogCursor::Time(date, time) => format!(
+            "--time {:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:02}",
+            date.actual_year().unwrap_or_default(),
+            date.month,
+            date.day,
+            time.hour,
+            time.minute,
+            time.second,
+            time.hundredths
+        ),
+    }
+}
+
 /// What every ReadRange output starts with.
+#[derive(Default)]
 struct Heading {
     object: String,
     property: String,
-    item_count: u32,
+    /// Items returned; with `--all`, records over every page.
+    item_count: u64,
+    /// FIRST_ITEM, LAST_ITEM and MORE_ITEMS; with `--all`, the last page's.
+    result_flags: (bool, bool, bool),
+    /// The first item's sequence number; with `--all`, the first page's.
+    first_sequence_number: Option<u64>,
+    /// The rules the device's answers broke, each once, in the order met.
+    violations: Vec<&'static str>,
+    paged: Option<Paged>,
+}
+
+/// What an `--all` read adds to the heading.
+#[derive(Default)]
+struct Paged {
+    pages: usize,
+    gaps: Vec<LogGap>,
+    /// The flags that resume the read later.
+    next: String,
+}
+
+impl Heading {
+    fn note_violations(&mut self, violations: &[ReadRangeViolation]) {
+        for rule in violations {
+            if !self.violations.contains(&rule.name()) {
+                self.violations.push(rule.name());
+            }
+        }
+    }
+
+    /// The first line of the table output.
+    fn line(&self) -> String {
+        let (first, last, more) = self.result_flags;
+        let flags: Vec<&str> = [
+            (first, "FIRST_ITEM"),
+            (last, "LAST_ITEM"),
+            (more, "MORE_ITEMS"),
+        ]
+        .into_iter()
+        .filter_map(|(set, name)| set.then_some(name))
+        .collect();
+        let flags = if flags.is_empty() {
+            "none".to_string()
+        } else {
+            flags.join(",")
+        };
+        let mut line = format!(
+            "ReadRange {}  {}  count={}  flags={flags}",
+            self.object, self.property, self.item_count
+        );
+        if let Some(first) = self.first_sequence_number {
+            line.push_str(&format!("  first-seq={first}"));
+        }
+        if !self.violations.is_empty() {
+            line.push_str(&format!("  violations={}", self.violations.join(",")));
+        }
+        if let Some(paged) = &self.paged {
+            line.push_str(&format!("  pages={}  next: {}", paged.pages, paged.next));
+        }
+        line
+    }
+
+    /// Lines after the table output, one for each gap.
+    fn notes(&self) -> Vec<String> {
+        self.paged
+            .iter()
+            .flat_map(|paged| &paged.gaps)
+            .map(|gap| match gap.skipped {
+                Some(skipped) => format!(
+                    "  [gap] {skipped} records before sequence {} are gone (asked for {})",
+                    gap.first, gap.expected
+                ),
+                None => format!(
+                    "  [gap] the log's numbering restarted: asked for {}, read from {}",
+                    gap.expected, gap.first
+                ),
+            })
+            .collect()
+    }
+
+    /// The JSON object every output starts from.
+    fn json(&self) -> serde_json::Value {
+        let (first_item, last_item, more_items) = self.result_flags;
+        let mut json = serde_json::json!({
+            "object": self.object,
+            "property": self.property,
+            "item_count": self.item_count,
+            "result_flags": {
+                "first_item": first_item,
+                "last_item": last_item,
+                "more_items": more_items,
+            },
+            "first_sequence_number": self.first_sequence_number,
+            "violations": self.violations,
+        });
+        if let Some(paged) = &self.paged {
+            json["pages"] = paged.pages.into();
+            json["next"] = paged.next.clone().into();
+            json["gaps"] = paged
+                .gaps
+                .iter()
+                .map(|gap| {
+                    serde_json::json!({
+                        "expected": gap.expected,
+                        "first": gap.first,
+                        "skipped": gap.skipped,
+                    })
+                })
+                .collect();
+        }
+        json
+    }
 }
 
 /// One log record as the CLI shows it.
@@ -76,72 +276,64 @@ struct LogRecordRow {
 /// The records read from a log buffer, and the hex of whatever followed the
 /// last record that decoded.
 #[derive(Debug, Default)]
-struct LogRecords {
+struct LogRows {
     rows: Vec<LogRecordRow>,
     undecoded: Option<String>,
 }
 
-/// Decode the record at an offset into its row and the offset just past it.
-type RecordDecoder = fn(&[u8], usize) -> Result<(LogRecordRow, usize), Error>;
-
-/// The record decoder for the log buffer of an object of `object_type`, if
-/// the type keeps one.
-fn record_decoder(object_type: ObjectType) -> Option<RecordDecoder> {
-    match object_type {
-        ObjectType::TREND_LOG => Some(trend_log_row),
-        ObjectType::EVENT_LOG => Some(event_log_row),
-        ObjectType::TREND_LOG_MULTIPLE => Some(trend_log_multiple_row),
-        ObjectType::AUDIT_LOG => Some(audit_log_row),
-        _ => None,
-    }
+/// The rows of a log buffer's records, when `ack` answers a read of the
+/// Log_Buffer of a log object: every record that decodes, up to the first
+/// that doesn't, whose octets on are kept as hex.
+fn log_rows(ack: &ReadRangeAck) -> Option<LogRows> {
+    Some(match ack.log_records()? {
+        Ok(records) => LogRows {
+            rows: record_rows(&records),
+            undecoded: None,
+        },
+        Err(error) => LogRows {
+            rows: record_rows(&error.decoded),
+            undecoded: ack
+                .item_data
+                .get(error.offset..)
+                .filter(|rest| !rest.is_empty())
+                .map(hex),
+        },
+    })
 }
 
-/// Decode records until the data runs out or one fails to decode.
-fn decode_records(decode: RecordDecoder, data: &[u8]) -> LogRecords {
-    let mut records = LogRecords::default();
-    let mut offset = 0;
-    while offset < data.len() {
-        match decode(data, offset) {
-            Ok((row, next)) if next > offset => {
-                records.rows.push(row);
-                offset = next;
-            }
-            _ => {
-                records.undecoded = Some(hex(&data[offset..]));
-                break;
-            }
+fn record_rows(records: &LogRecords) -> Vec<LogRecordRow> {
+    match records {
+        LogRecords::TrendLog(records) => records.iter().map(trend_log_row).collect(),
+        LogRecords::EventLog(records) => records.iter().map(event_log_row).collect(),
+        LogRecords::TrendLogMultiple(records) => {
+            records.iter().map(trend_log_multiple_row).collect()
         }
+        LogRecords::AuditLog(records) => records.iter().map(audit_log_row).collect(),
     }
-    records
 }
 
-fn trend_log_row(data: &[u8], offset: usize) -> Result<(LogRecordRow, usize), Error> {
-    let (record, next) = decode_log_record(data, offset)?;
-    let row = LogRecordRow {
+fn trend_log_row(record: &BACnetLogRecord) -> LogRecordRow {
+    LogRecordRow {
         timestamp: timestamp(record.date, record.time),
         datum: log_datum(&record.log_datum),
         status_flags: record.status_flags.map(status_flags),
-    };
-    Ok((row, next))
+    }
 }
 
-fn event_log_row(data: &[u8], offset: usize) -> Result<(LogRecordRow, usize), Error> {
-    let (record, next) = decode_event_log_record(data, offset)?;
+fn event_log_row(record: &BACnetEventLogRecord) -> LogRecordRow {
     let datum = match &record.log_datum {
         EventLogDatum::LogStatus(status) => log_status(*status),
         EventLogDatum::Notification(notification) => event_notification(notification),
         EventLogDatum::TimeChange(seconds) => time_change(*seconds),
     };
-    let row = LogRecordRow {
+    LogRecordRow {
         timestamp: timestamp(record.date, record.time),
         datum,
         status_flags: None,
-    };
-    Ok((row, next))
+    }
 }
 
-fn trend_log_multiple_row(data: &[u8], offset: usize) -> Result<(LogRecordRow, usize), Error> {
-    let (record, next) = decode_log_multiple_record(data, offset)?;
+fn trend_log_multiple_row(record: &BACnetLogMultipleRecord) -> LogRecordRow {
     let datum = match &record.log_data {
         LogData::LogStatus(status) => log_status(*status),
         LogData::Values(values) => {
@@ -153,28 +345,25 @@ fn trend_log_multiple_row(data: &[u8], offset: usize) -> Result<(LogRecordRow, u
         }
         LogData::TimeChange(seconds) => time_change(*seconds),
     };
-    let row = LogRecordRow {
+    LogRecordRow {
         timestamp: timestamp(record.date, record.time),
         datum,
         status_flags: None,
-    };
-    Ok((row, next))
+    }
 }
 
-fn audit_log_row(data: &[u8], offset: usize) -> Result<(LogRecordRow, usize), Error> {
-    let (record, next) = decode_audit_log_record_at(data, offset)?;
+fn audit_log_row(record: &BACnetAuditLogRecord) -> LogRecordRow {
     let datum = match &record.datum {
         BACnetAuditLogDatum::LogStatus(status) => log_status(*status),
         BACnetAuditLogDatum::AuditNotification(notification) => audit_notification(notification),
         BACnetAuditLogDatum::TimeChange(seconds) => time_change(*seconds),
     };
     let (date, time) = record.timestamp;
-    let row = LogRecordRow {
+    LogRecordRow {
         timestamp: timestamp(date, time),
         datum,
         status_flags: None,
-    };
-    Ok((row, next))
+    }
 }
 
 fn timestamp(date: Date, time: Time) -> String {
@@ -294,13 +483,10 @@ fn recipient(recipient: &BACnetRecipient) -> String {
     }
 }
 
-fn print_records(heading: &Heading, records: &LogRecords, format: OutputFormat) {
+fn print_records(heading: &Heading, records: &LogRows, format: OutputFormat) {
     match format {
         OutputFormat::Table => {
-            println!(
-                "ReadRange {}  {}  count={}",
-                heading.object, heading.property, heading.item_count
-            );
+            println!("{}", heading.line());
             let flags = records.rows.iter().any(|row| row.status_flags.is_some());
             let mut table = comfy_table::Table::new();
             let mut header = vec!["#", "Timestamp", "Datum"];
@@ -319,14 +505,13 @@ fn print_records(heading: &Heading, records: &LogRecords, format: OutputFormat) 
             if let Some(hex) = &records.undecoded {
                 println!("  [raw] {hex}");
             }
+            for note in heading.notes() {
+                println!("{note}");
+            }
         }
         OutputFormat::Json => {
-            let mut json = serde_json::json!({
-                "object": heading.object,
-                "property": heading.property,
-                "item_count": heading.item_count,
-                "records": records.rows,
-            });
+            let mut json = heading.json();
+            json["records"] = serde_json::to_value(&records.rows).unwrap_or_default();
             if let Some(hex) = &records.undecoded {
                 json["undecoded"] = serde_json::Value::from(hex.as_str());
             }
@@ -342,10 +527,7 @@ fn print_items(heading: &Heading, data: &[u8], format: OutputFormat) {
     let (mut items, undecoded) = format_application_values(data);
     match format {
         OutputFormat::Table => {
-            println!(
-                "ReadRange {}  {}  count={}",
-                heading.object, heading.property, heading.item_count
-            );
+            println!("{}", heading.line());
             for (number, item) in (1..).zip(&items) {
                 println!("  [{number}] {item}");
             }
@@ -357,12 +539,8 @@ fn print_items(heading: &Heading, data: &[u8], format: OutputFormat) {
             if let Some(hex) = undecoded {
                 items.push(format!("[raw: {hex}]"));
             }
-            let json = serde_json::json!({
-                "object": heading.object,
-                "property": heading.property,
-                "item_count": heading.item_count,
-                "items": items,
-            });
+            let mut json = heading.json();
+            json["items"] = items.into();
             println!(
                 "{}",
                 serde_json::to_string_pretty(&json).unwrap_or_default()

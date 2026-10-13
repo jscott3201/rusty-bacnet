@@ -8,7 +8,9 @@ use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::ObjectIdentifier;
 
-use bacnet_benchmarks::helpers::{current_rss_bytes, make_bip6_client, make_bip6_server};
+use bacnet_benchmarks::helpers::{
+    current_rss_bytes, make_bip6_client, make_bip6_server, resolve_bip6_server,
+};
 
 fn bench_read_property_latency(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
@@ -16,7 +18,7 @@ fn bench_read_property_latency(c: &mut Criterion) {
     let (mut server, mut client, server_mac) = rt.block_on(async {
         let server = make_bip6_server().await.unwrap();
         let client = make_bip6_client().await.unwrap();
-        let mac = server.local_mac().to_vec();
+        let mac = resolve_bip6_server(&client, &server).await.unwrap();
         (server, client, mac)
     });
 
@@ -52,7 +54,7 @@ fn bench_write_property_latency(c: &mut Criterion) {
     let (mut server, mut client, server_mac) = rt.block_on(async {
         let server = make_bip6_server().await.unwrap();
         let client = make_bip6_client().await.unwrap();
-        let mac = server.local_mac().to_vec();
+        let mac = resolve_bip6_server(&client, &server).await.unwrap();
         (server, client, mac)
     });
 
@@ -92,7 +94,7 @@ fn bench_rpm_latency(c: &mut Criterion) {
     let (mut server, mut client, server_mac) = rt.block_on(async {
         let server = make_bip6_server().await.unwrap();
         let client = make_bip6_client().await.unwrap();
-        let mac = server.local_mac().to_vec();
+        let mac = resolve_bip6_server(&client, &server).await.unwrap();
         (server, client, mac)
     });
 

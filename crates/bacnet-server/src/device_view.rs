@@ -28,20 +28,28 @@ use std::time::Duration;
 #[derive(Clone, Copy)]
 pub(crate) enum DeviceExecution {
     FullServer,
-    Endpoint { writes: bool },
+    Endpoint { writes: bool, reinitialize: bool },
 }
 
 impl DeviceExecution {
     pub(crate) fn services(self, clock: bool) -> impl Iterator<Item = ServiceSupported> {
-        let services: &[ServiceSupported] = match self {
-            Self::FullServer => EXECUTED_SERVICES,
-            Self::Endpoint { writes: false } => &[ServiceSupported::READ_PROPERTY],
-            Self::Endpoint { writes: true } => &[
-                ServiceSupported::READ_PROPERTY,
-                ServiceSupported::WRITE_PROPERTY,
-            ],
+        let services = match self {
+            Self::FullServer => EXECUTED_SERVICES.to_vec(),
+            Self::Endpoint {
+                writes,
+                reinitialize,
+            } => {
+                let mut services = vec![ServiceSupported::READ_PROPERTY];
+                if writes {
+                    services.push(ServiceSupported::WRITE_PROPERTY);
+                }
+                if reinitialize {
+                    services.push(ServiceSupported::REINITIALIZE_DEVICE);
+                }
+                services
+            }
         };
-        services.iter().copied().filter(move |service| {
+        services.into_iter().filter(move |service| {
             clock
                 || !matches!(
                     *service,

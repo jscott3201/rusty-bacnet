@@ -59,15 +59,17 @@ def installed_stub_method(name: str) -> ast.FunctionDef:
 class EventLogStubContractTests(unittest.TestCase):
     def test_runtime_and_stub_take_the_same_arguments(self) -> None:
         parameters = inspect.signature(BACnetServer.add_event_log).parameters
-        self.assertEqual(
-            list(parameters),
-            ["self", "instance", "name", "buffer_size", "log_received_notifications"],
-        )
+        positional = ["self", "instance", "name", "buffer_size", "log_received_notifications"]
+        self.assertEqual(list(parameters), [*positional, "total_record_count"])
         self.assertIs(parameters["log_received_notifications"].default, False)
-        method = installed_stub_method("add_event_log")
         self.assertEqual(
-            [argument.arg for argument in method.args.args],
-            list(parameters),
+            parameters["total_record_count"].kind, inspect.Parameter.KEYWORD_ONLY
+        )
+        self.assertEqual(parameters["total_record_count"].default, 0)
+        method = installed_stub_method("add_event_log")
+        self.assertEqual([argument.arg for argument in method.args.args], positional)
+        self.assertEqual(
+            [argument.arg for argument in method.args.kwonlyargs], ["total_record_count"]
         )
         docs = ast.get_docstring(method)
         assert docs is not None

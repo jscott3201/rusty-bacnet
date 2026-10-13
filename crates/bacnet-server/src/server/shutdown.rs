@@ -38,14 +38,23 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// building another server on the same storage.
     ///
     /// Once its requests are joined, a write a Notification Forwarder,
-    /// Notification Class or Audit Log still holds staged for one of them is
-    /// dropped, and stop waits until every save those objects have queued
-    /// has run, so storage holds the state each object serves (#1363); see
+    /// Notification Class, Access Rights object or Audit Log still holds
+    /// staged for one of them is dropped, and stop waits until every save
+    /// those objects have queued has run, so storage holds the state each
+    /// object serves (#1363); see
     /// [`DurableWrites::settle_forgotten_writes`]. That wait has no limit:
     /// storage that stalls holds stop up, and a warning naming the objects
     /// still saving is logged after 5 s and every 30 s after that. Stop does
     /// not wait while the application holds the database: the objects then
-    /// settle once it lets go, and put storage back when they are dropped.
+    /// settle from a task once it lets go, and put storage back when they
+    /// are dropped. That task lets go of its handle through
+    /// [`drop_database_off_runtime`], so if it holds the last one the
+    /// objects drop on Tokio's blocking pool.
+    ///
+    /// A request's abort lands when its task next yields, so a request
+    /// already running when stop begins may find its save done and make its
+    /// write first. Its answer is sealed, but the object serves that write,
+    /// and storage holds it (#1457).
     ///
     /// [`DurableWrites::settle_forgotten_writes`]: bacnet_objects::durable::DurableWrites::settle_forgotten_writes
     ///
@@ -188,7 +197,10 @@ impl<T: TransportPort> Drop for BACnetServer<T> {
     /// Seal the server and abort its tasks. In async code the object
     /// database then drops on Tokio's blocking pool (#1409): the drop returns
     /// before the objects' last saves land, so storage may still change after
-    /// it. Call [`stop`](BACnetServer::stop) first to wait for them.
+    /// it. Call [`stop`](BACnetServer::stop) first to wait for them. A clone
+    /// of [`database`](BACnetServer::database) the application still holds
+    /// keeps the objects alive; let go of it with
+    /// [`drop_database_off_runtime`] (#1513).
     fn drop(&mut self) {
         if let Some(network) = &self.network {
             network.seal_responses();
@@ -238,12 +250,17 @@ impl<T: TransportPort> BACnetServer<T> {
     /// async code without `stop()` would block a Tokio worker for as long as
     /// storage takes. So when a runtime is current, the server's handle goes
     /// to a task that waits until `tasks`, aborted, and the server's request
-    /// and notification tasks have let go of theirs; then, if nothing else
-    /// holds the database, it is dropped on the blocking pool, as DeleteObject
-    /// drops a removed object. The server's drop returns first, so storage may
-    /// still change after it. An application still holding the database
-    /// drops the last handle itself. With no runtime current, the database
-    /// drops here, as it always has.
+    /// and notification tasks have let go of theirs; then it lets go of the
+    /// handle through [`drop_database_off_runtime`], so the database drops
+    /// on the blocking pool if nothing else holds it, as DeleteObject drops a
+    /// removed object. The server's drop returns first, so storage may still
+    /// change after it. An application still holding the database lets go
+    /// of the last handle itself, the same way (#1513). With no runtime
+    /// current, the database drops here, as it always has.
+    ///
+    /// A DCC timer the drop could not take, because a request or the timer's
+    /// own expiry held its slot, is cancelled here once the requests are
+    /// joined: with Audit reporting, it holds the database too (#1560).
     fn let_database_go(&mut self, tasks: Vec<JoinHandle<()>>) {
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
             return;
@@ -251,6 +268,7 @@ impl<T: TransportPort> BACnetServer<T> {
         let db = std::mem::take(&mut self.db);
         let requests = Arc::clone(&self.request_tasks);
         let notifications = Arc::clone(&self.notification_transactions);
+        let dcc_timer = Arc::clone(&self.dcc_timer);
         runtime.spawn(async move {
             for task in tasks {
                 let _ = task.await;
@@ -258,12 +276,71 @@ impl<T: TransportPort> BACnetServer<T> {
             while let Some(result) = requests.join_next().await {
                 super::request_tasks::RequestTasks::observe(Some(result));
             }
+            // No request is left to hold the slot. The guard goes before the
+            // join, as the timer may be queued for the slot itself.
+            let timer = dcc_timer.lock().await.take();
+            if let Some(timer) = timer {
+                timer.abort();
+                let _ = timer.await;
+            }
             while let Some(result) = notifications.join_next().await {
                 NotificationTransactions::observe(Some(result));
             }
-            if Arc::strong_count(&db) == 1 {
-                drop(tokio::task::spawn_blocking(move || drop(db)));
-            }
+            drop(drop_database_off_runtime(db));
         });
     }
+}
+
+/// Let go of a handle on an object database without parking an async
+/// runtime's worker thread (#1513).
+///
+/// The last handle to go drops every object, and a durable object (a
+/// Notification Forwarder, Notification Class, Access Rights object or Audit
+/// Log with storage) waits as it drops for the saves it has queued, after
+/// putting storage back to the state it serves if a write is still staged
+/// (#1363). Dropped in async code, that wait would hold a Tokio worker for as
+/// long as storage takes. So if `db` is the last handle and a Tokio runtime is
+/// current, the database drops on the runtime's blocking pool, and the
+/// returned task finishes once it has. Any other handle just lets go and
+/// returns `None`, as does a last one with no runtime current, which drops
+/// the database on this thread. A runtime that is shutting down runs nothing
+/// more on its blocking pool: Tokio shuts the new task down at once, and the
+/// database drops on this thread then too.
+///
+/// A dropped server lets go of its own handle this way once its tasks are
+/// done, whether or not it was stopped, and so do the tasks a `stop()`
+/// leaves to settle staged writes and end runs once the application lets
+/// go of the database. Any of them may still hold a handle when the
+/// application lets go of its clone of [`BACnetServer::database`], so
+/// `None` is the usual outcome. What waits until storage holds the state
+/// each object serves is [`stop`](BACnetServer::stop), not this. This keeps
+/// the application's own handle, should it be the last, from dropping the
+/// objects on a runtime worker: in async code, release it here rather than
+/// dropping it.
+///
+/// ```no_run
+/// # use bacnet_transport::bip::BipTransport;
+/// # async fn demo(mut server: bacnet_server::server::BACnetServer<BipTransport>) {
+/// use bacnet_server::server::drop_database_off_runtime;
+///
+/// let db = std::sync::Arc::clone(server.database());
+/// // ... use the database while the server runs ...
+/// // stop() waits until storage holds what each object serves.
+/// let _ = server.stop().await;
+/// drop(server);
+/// // The server's own tasks may still hold the database; whichever handle
+/// // goes last, it drops off the runtime.
+/// drop(drop_database_off_runtime(db));
+/// # }
+/// ```
+pub fn drop_database_off_runtime(db: Arc<RwLock<ObjectDatabase>>) -> Option<JoinHandle<()>> {
+    // `Arc::into_inner` hands the database to exactly one of two handles let
+    // go of at once, where a count check followed by a drop could leave both
+    // thinking the other was last.
+    let db = Arc::into_inner(db)?;
+    let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+        drop(db);
+        return None;
+    };
+    Some(runtime.spawn_blocking(move || drop(db)))
 }

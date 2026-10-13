@@ -115,20 +115,12 @@ fn assert_cases(
     assert_eq!(&prefix[..], b"prefix");
 }
 
-fn write_common(object: &mut dyn BACnetObject, configured: bool) {
+fn write_common(object: &mut dyn BACnetObject) {
     object
         .write_property(
             P::DESCRIPTION,
             None,
             PropertyValue::CharacterString("long color label".repeat(100)),
-            None,
-        )
-        .unwrap();
-    object
-        .write_property(
-            P::OUT_OF_SERVICE,
-            None,
-            PropertyValue::Boolean(configured),
             None,
         )
         .unwrap();
@@ -144,8 +136,11 @@ fn rpm_color_indexed_reads_and_bytes_are_unchanged() {
     for configured in [false, true] {
         let mut object = ColorObject::new(7, "CLR-7").unwrap();
         if configured {
-            // Application-level color plus the two routed arms.
-            object.set_present_value(1.0, 0.5);
+            // Application-level color plus two routed arms. STOP with no
+            // fade running changes nothing.
+            object
+                .set_present_value(bacnet_types::constructed::BACnetXyColor::new(1.0, 0.5))
+                .unwrap();
             // STOP.
             object
                 .write_property(
@@ -164,7 +159,7 @@ fn rpm_color_indexed_reads_and_bytes_are_unchanged() {
                 )
                 .unwrap();
         }
-        write_common(&mut object, configured);
+        write_common(&mut object);
         let oid = object.object_identifier();
         let mut db = ObjectDatabase::new();
         db.add(Box::new(object)).unwrap();
@@ -223,7 +218,7 @@ fn rpm_color_indexed_reads_and_bytes_are_unchanged() {
                 Ok(if configured {
                     &[0x22, 0x03, 0xE8]
                 } else {
-                    &[0x21, 0x00]
+                    &[0x21, 0x64]
                 }),
             ),
             (
@@ -237,69 +232,33 @@ fn rpm_color_indexed_reads_and_bytes_are_unchanged() {
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (
-                P::STATUS_FLAGS,
-                None,
-                Ok(if configured {
-                    &[0x82, 0x04, 0x10]
-                } else {
-                    &[0x82, 0x04, 0x00]
-                }),
-            ),
-            (
-                P::STATUS_FLAGS,
-                Some(0),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
-            ),
-            (P::EVENT_STATE, None, Ok(&[0x91, 0])),
-            (
-                P::EVENT_STATE,
-                Some(0),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
-            ),
-            (
-                P::OUT_OF_SERVICE,
-                None,
-                Ok(if configured { &[0x11] } else { &[0x10] }),
-            ),
-            (
-                P::OUT_OF_SERVICE,
-                Some(0),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
-            ),
-            (P::RELIABILITY, None, Ok(&[0x91, 0])),
-            (
-                P::RELIABILITY,
-                Some(0),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
-            ),
+            // Neither addendum table has these rows (#1474).
+            (P::STATUS_FLAGS, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
+            (P::EVENT_STATE, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
+            (P::OUT_OF_SERVICE, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
+            (P::RELIABILITY, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
             (
                 P::PROPERTY_LIST,
                 None,
-                // Color_Command is 4194334 (0x40001E) and Default_Color
-                // 4194330 (0x40001A), three octets each.
+                // Table 12-X order. Color_Command is 4194334 (0x40001E) and
+                // Default_Color 4194330 (0x40001A), three octets each.
                 Ok(&[
-                    0x91, 0x1C, 0x91, 0x55, 0x91, 0xA4, 0x93, 0x40, 0x00, 0x1E, 0x92, 0x01, 0x7A,
-                    0x93, 0x40, 0x00, 0x1A, 0x92, 0x01, 0x76, 0x92, 0x01, 0x81, 0x91, 0x6F, 0x91,
-                    0x24, 0x91, 0x51, 0x91, 0x67,
+                    0x91, 0x55, 0x91, 0xA4, 0x93, 0x40, 0x00, 0x1E, 0x92, 0x01, 0x7A, 0x93, 0x40,
+                    0x00, 0x1A, 0x91, 0x1C, 0x92, 0x01, 0x76, 0x92, 0x01, 0x81,
                 ]),
             ),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 12])),
-            (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 0x1C])),
-            (P::PROPERTY_LIST, Some(2), Ok(&[0x91, 0x55])),
-            (P::PROPERTY_LIST, Some(3), Ok(&[0x91, 0xA4])),
-            (P::PROPERTY_LIST, Some(4), Ok(&[0x93, 0x40, 0x00, 0x1E])),
-            (P::PROPERTY_LIST, Some(5), Ok(&[0x92, 0x01, 0x7A])),
-            (P::PROPERTY_LIST, Some(6), Ok(&[0x93, 0x40, 0x00, 0x1A])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 8])),
+            (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 0x55])),
+            (P::PROPERTY_LIST, Some(2), Ok(&[0x91, 0xA4])),
+            (P::PROPERTY_LIST, Some(3), Ok(&[0x93, 0x40, 0x00, 0x1E])),
+            (P::PROPERTY_LIST, Some(4), Ok(&[0x92, 0x01, 0x7A])),
+            (P::PROPERTY_LIST, Some(5), Ok(&[0x93, 0x40, 0x00, 0x1A])),
+            (P::PROPERTY_LIST, Some(6), Ok(&[0x91, 0x1C])),
             (P::PROPERTY_LIST, Some(7), Ok(&[0x92, 0x01, 0x76])),
             (P::PROPERTY_LIST, Some(8), Ok(&[0x92, 0x01, 0x81])),
-            (P::PROPERTY_LIST, Some(9), Ok(&[0x91, 0x6F])),
-            (P::PROPERTY_LIST, Some(10), Ok(&[0x91, 0x24])),
-            (P::PROPERTY_LIST, Some(11), Ok(&[0x91, 0x51])),
-            (P::PROPERTY_LIST, Some(12), Ok(&[0x91, 0x67])),
             (
                 P::PROPERTY_LIST,
-                Some(13),
+                Some(9),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (
@@ -328,10 +287,8 @@ fn rpm_color_temperature_indexed_reads_and_bytes_are_unchanged() {
     for configured in [false, true] {
         let mut object = ColorTemperatureObject::new(7, "CT-7").unwrap();
         if configured {
-            // Present_Value needs no Out_Of_Service gate; the command and
-            // fade defaults below are exercised through the read arms only.
-            object.set_present_value(5000);
-            // STEP_UP_CCT by 1 K.
+            // 5000 K, then STEP_UP_CCT by 1 K, carried out at once.
+            object.set_present_value(5000).unwrap();
             object
                 .write_property(
                     P::COLOR_COMMAND,
@@ -341,12 +298,12 @@ fn rpm_color_temperature_indexed_reads_and_bytes_are_unchanged() {
                 )
                 .unwrap();
         }
-        write_common(&mut object, configured);
+        write_common(&mut object);
         let oid = object.object_identifier();
         let mut db = ObjectDatabase::new();
         db.add(Box::new(object)).unwrap();
         // Independent application-value bytes pin the existing projection.
-        // 5000 = 0x1388, 4000 = 0x0FA0, 1000 = 0x03E8, 30000 = 0x7530.
+        // 5001 = 0x1389, 4000 = 0x0FA0, 1000 = 0x03E8, 30000 = 0x7530.
         let cases: &[(P, Option<u32>, ExpectedRead)] = &[
             (P::OBJECT_TYPE, None, Ok(&[0x91, 64])),
             (
@@ -358,7 +315,7 @@ fn rpm_color_temperature_indexed_reads_and_bytes_are_unchanged() {
                 P::PRESENT_VALUE,
                 None,
                 Ok(if configured {
-                    &[0x22, 0x13, 0x88]
+                    &[0x22, 0x13, 0x89]
                 } else {
                     &[0x22, 0x0F, 0xA0]
                 }),
@@ -372,7 +329,7 @@ fn rpm_color_temperature_indexed_reads_and_bytes_are_unchanged() {
                 P::TRACKING_VALUE,
                 None,
                 Ok(if configured {
-                    &[0x22, 0x13, 0x88]
+                    &[0x22, 0x13, 0x89]
                 } else {
                     &[0x22, 0x0F, 0xA0]
                 }),
@@ -408,7 +365,7 @@ fn rpm_color_temperature_indexed_reads_and_bytes_are_unchanged() {
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (P::DEFAULT_FADE_TIME, None, Ok(&[0x21, 0x00])),
+            (P::DEFAULT_FADE_TIME, None, Ok(&[0x21, 0x64])),
             (
                 P::DEFAULT_FADE_TIME,
                 Some(0),
@@ -444,74 +401,38 @@ fn rpm_color_temperature_indexed_reads_and_bytes_are_unchanged() {
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (
-                P::STATUS_FLAGS,
-                None,
-                Ok(if configured {
-                    &[0x82, 0x04, 0x10]
-                } else {
-                    &[0x82, 0x04, 0x00]
-                }),
-            ),
-            (
-                P::STATUS_FLAGS,
-                Some(0),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
-            ),
-            (P::EVENT_STATE, None, Ok(&[0x91, 0])),
-            (
-                P::EVENT_STATE,
-                Some(0),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
-            ),
-            (
-                P::OUT_OF_SERVICE,
-                None,
-                Ok(if configured { &[0x11] } else { &[0x10] }),
-            ),
-            (
-                P::OUT_OF_SERVICE,
-                Some(0),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
-            ),
-            (P::RELIABILITY, None, Ok(&[0x91, 0])),
-            (
-                P::RELIABILITY,
-                Some(0),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
-            ),
+            // Neither addendum table has these rows (#1474).
+            (P::STATUS_FLAGS, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
+            (P::EVENT_STATE, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
+            (P::OUT_OF_SERVICE, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
+            (P::RELIABILITY, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
             (
                 P::PROPERTY_LIST,
                 None,
-                // Color_Command is 4194334 (0x40001E) and
+                // Table 12-Y order. Color_Command is 4194334 (0x40001E) and
                 // Default_Color_Temperature 4194331 (0x40001B).
                 Ok(&[
-                    0x91, 0x1C, 0x91, 0x55, 0x91, 0xA4, 0x93, 0x40, 0x00, 0x1E, 0x92, 0x01, 0x7A,
-                    0x93, 0x40, 0x00, 0x1B, 0x92, 0x01, 0x76, 0x92, 0x01, 0x77, 0x92, 0x01, 0x78,
-                    0x92, 0x01, 0x81, 0x91, 0x45, 0x91, 0x41, 0x91, 0x6F, 0x91, 0x24, 0x91, 0x51,
-                    0x91, 0x67,
+                    0x91, 0x55, 0x91, 0xA4, 0x93, 0x40, 0x00, 0x1E, 0x92, 0x01, 0x7A, 0x93, 0x40,
+                    0x00, 0x1B, 0x91, 0x1C, 0x92, 0x01, 0x76, 0x92, 0x01, 0x77, 0x92, 0x01, 0x78,
+                    0x91, 0x45, 0x91, 0x41, 0x92, 0x01, 0x81,
                 ]),
             ),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 16])),
-            (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 0x1C])),
-            (P::PROPERTY_LIST, Some(2), Ok(&[0x91, 0x55])),
-            (P::PROPERTY_LIST, Some(3), Ok(&[0x91, 0xA4])),
-            (P::PROPERTY_LIST, Some(4), Ok(&[0x93, 0x40, 0x00, 0x1E])),
-            (P::PROPERTY_LIST, Some(5), Ok(&[0x92, 0x01, 0x7A])),
-            (P::PROPERTY_LIST, Some(6), Ok(&[0x93, 0x40, 0x00, 0x1B])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 12])),
+            (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 0x55])),
+            (P::PROPERTY_LIST, Some(2), Ok(&[0x91, 0xA4])),
+            (P::PROPERTY_LIST, Some(3), Ok(&[0x93, 0x40, 0x00, 0x1E])),
+            (P::PROPERTY_LIST, Some(4), Ok(&[0x92, 0x01, 0x7A])),
+            (P::PROPERTY_LIST, Some(5), Ok(&[0x93, 0x40, 0x00, 0x1B])),
+            (P::PROPERTY_LIST, Some(6), Ok(&[0x91, 0x1C])),
             (P::PROPERTY_LIST, Some(7), Ok(&[0x92, 0x01, 0x76])),
             (P::PROPERTY_LIST, Some(8), Ok(&[0x92, 0x01, 0x77])),
             (P::PROPERTY_LIST, Some(9), Ok(&[0x92, 0x01, 0x78])),
-            (P::PROPERTY_LIST, Some(10), Ok(&[0x92, 0x01, 0x81])),
-            (P::PROPERTY_LIST, Some(11), Ok(&[0x91, 0x45])),
-            (P::PROPERTY_LIST, Some(12), Ok(&[0x91, 0x41])),
-            (P::PROPERTY_LIST, Some(13), Ok(&[0x91, 0x6F])),
-            (P::PROPERTY_LIST, Some(14), Ok(&[0x91, 0x24])),
-            (P::PROPERTY_LIST, Some(15), Ok(&[0x91, 0x51])),
-            (P::PROPERTY_LIST, Some(16), Ok(&[0x91, 0x67])),
+            (P::PROPERTY_LIST, Some(10), Ok(&[0x91, 0x45])),
+            (P::PROPERTY_LIST, Some(11), Ok(&[0x91, 0x41])),
+            (P::PROPERTY_LIST, Some(12), Ok(&[0x92, 0x01, 0x81])),
             (
                 P::PROPERTY_LIST,
-                Some(17),
+                Some(13),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (

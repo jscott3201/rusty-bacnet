@@ -96,18 +96,30 @@ FEATURES="bacnet-transport/sc-tls,bacnet-transport/ipv6"
 FEATURES="$FEATURES,bacnet-client/sc-tls,bacnet-client/ipv6"
 FEATURES="$FEATURES,bacnet-server/sc-tls"
 FEATURES="$FEATURES,bacnet-cli/sc-tls,bacnet-cli/tui"
+FEATURES="$FEATURES,bacnet-mstp-codec/bytes,bacnet-mstp-codec/heapless"
+FEATURES="$FEATURES,bacnet-mstp-core/alloc"
+FEATURES="$FEATURES,bacnet-bip-codec/bytes,bacnet-bip-codec/heapless"
+FEATURES="$FEATURES,bacnet-router-core/bip,bacnet-router-core/mstp"
+
+# The no_std builds (std off, alloc on) of the crates that have one (#1613).
+# In the run above, the hosted crates turn std back on for them, so these get
+# a run of their own.
+NO_STD_ARGS=(-p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --features alloc)
 
 echo "MSRV gate covers:"
 for p in $PKGS; do echo "  - $p"; done
 echo "with features: $FEATURES"
+echo "and bacnet-types, bacnet-encoding and bacnet-services without std, with alloc"
 echo
 
 run() { printf '+ ' >&2; printf '%q ' "$@" >&2; printf '\n' >&2; "$@"; }
 if "$native"; then
   run "$cargo_bin" check --locked "${ARGS[@]}" --features "$FEATURES" "${target_args[@]}"
+  run "$cargo_bin" check --locked "${NO_STD_ARGS[@]}" "${target_args[@]}"
 else
   # Bash 3.2 with nounset cannot expand an empty array here.
   run "$cargo_bin" check --locked "${ARGS[@]}" --features "$FEATURES"
+  run "$cargo_bin" check --locked "${NO_STD_ARGS[@]}"
   exit 0
 fi
 
@@ -158,4 +170,4 @@ if 'not found' in links:
 if not re.search(r'^\s*libpcap\.so\S*\s+=>\s+/\S+\s+\(', links, re.MULTILINE):
     sys.exit('error: MSRV: no resolved dynamic libpcap.so dependency')
 PY
-echo 'OK: Linux native MSRV baseline, ethernet, serial, serial-gpio and pcap build/link passed.'
+echo 'OK: Linux native MSRV baseline, no_std alloc, ethernet, serial, serial-gpio and pcap build/link passed.'

@@ -62,30 +62,46 @@ fn device_write_target<'a>(
 
 /// Composition-visible inbound responder (narrow service scope).
 ///
-/// Handles `ReadProperty` and optionally authorized local Device Description/active recipient
-/// `WriteProperty`, plus `Reject`/`Abort`. Full service parity is a later
+/// Handles `ReadProperty`, optionally authorized local Device
+/// Description/active recipient `WriteProperty`, optionally `ReinitializeDevice`
+/// through its handler, plus `Reject`/`Abort`. Full service parity is a later
 /// packet. Inbound transactions reuse the
 /// wire invoke ID directly and NEVER allocate from the shared outbound
 /// client ID pool, so equal inbound/outbound numeric IDs stay unambiguous
 /// via the ingress classifier + coordinator admission.
 #[doc(hidden)]
 pub struct EndpointResponder {
-    db: Arc<RwLock<ObjectDatabase>>,
+    /// `Some` until the responder drops; see [`Self::db`].
+    db: Option<Arc<RwLock<ObjectDatabase>>>,
     egress: EndpointEgress,
     open: AtomicBool,
     device_writes: Option<(ObjectIdentifier, MutationAuthorizer)>,
+    reinitialize: Option<(ReinitializeHandler, Option<String>)>,
     registered_port: Option<(ObjectIdentifier, std::sync::Weak<()>)>,
     read_work_limit: usize,
+}
+
+impl Drop for EndpointResponder {
+    /// The responder's handle on the database goes through
+    /// [`drop_database_off_runtime`](crate::server::drop_database_off_runtime):
+    /// whichever role handle or dispatch task drops the responder last, in
+    /// async code it never drops the objects on a runtime worker (#1561).
+    fn drop(&mut self) {
+        if let Some(db) = self.db.take() {
+            drop(crate::server::drop_database_off_runtime(db));
+        }
+    }
 }
 
 impl EndpointResponder {
     #[doc(hidden)]
     pub fn new(db: Arc<RwLock<ObjectDatabase>>, egress: EndpointEgress) -> Self {
         Self {
-            db,
+            db: Some(db),
             egress,
             open: AtomicBool::new(true),
             device_writes: None,
+            reinitialize: None,
             registered_port: None,
             read_work_limit: crate::server::ReadPropertyMultipleBudget::default()
                 .max_result_elements,
@@ -99,6 +115,11 @@ impl EndpointResponder {
     pub fn with_read_work_limit(mut self, limit: usize) -> Self {
         self.read_work_limit = limit;
         self
+    }
+
+    /// The database, held until the responder drops.
+    fn db(&self) -> &Arc<RwLock<ObjectDatabase>> {
+        self.db.as_ref().expect("held until the responder drops")
     }
 
     /// Receiving-port identity selected by this owner, never inferred from DB rows.
@@ -123,6 +144,27 @@ impl EndpointResponder {
         self
     }
 
+    /// Install the ReinitializeDevice handler and the password a request must carry.
+    /// The handler runs under the rules on [`ReinitializeHandler`].
+    #[doc(hidden)]
+    pub fn with_reinitialize(
+        mut self,
+        handler: ReinitializeHandler,
+        password: Option<String>,
+    ) -> Self {
+        self.reinitialize = Some((handler, password));
+        self
+    }
+
+    /// Refuses once the session owner has closed this responder.
+    fn ensure_open(&self) -> Result<(), Error> {
+        if self.open.load(Ordering::Acquire) {
+            Ok(())
+        } else {
+            Err(shutdown_error())
+        }
+    }
+
     async fn write_device_property(
         &self,
         request: &ConfirmedRequestPdu,
@@ -132,10 +174,8 @@ impl EndpointResponder {
         let write = WritePropertyRequest::decode(&request.service_request)
             .map_err(Error::into_request_reject)?;
         {
-            let mut db = self.db.write().await;
-            if !self.open.load(Ordering::Acquire) {
-                return Err(shutdown_error());
-            }
+            let mut db = self.db().write().await;
+            self.ensure_open()?;
             device_write_target(&mut db, *device, &write)?;
         }
         if write.property_array_index.is_some() {
@@ -175,11 +215,9 @@ impl EndpointResponder {
         if !super::audit_notification::fail_closed_authorize(|| authorizer(&context)) {
             return Err(super::audit_notification::request_denied());
         }
-        let mut db = self.db.write().await;
+        let mut db = self.db().write().await;
         // Close may win while this request waits for the database owner.
-        if !self.open.load(Ordering::Acquire) {
-            return Err(shutdown_error());
-        }
+        self.ensure_open()?;
         let MutationTarget::WriteProperty(write) = &context.target else {
             unreachable!("Device write context")
         };
@@ -224,9 +262,7 @@ impl EndpointResponder {
     /// execution is independent of whether its saved response authority survives.
     #[doc(hidden)]
     pub async fn handle(&self, mut received: ReceivedApdu) -> Result<bool, Error> {
-        if !self.open.load(Ordering::Acquire) {
-            return Err(shutdown_error());
-        }
+        self.ensure_open()?;
         let _registration_lease = match &self.registered_port {
             Some((_, lease)) => Some(lease.upgrade().ok_or_else(shutdown_error)?),
             None => None,
@@ -248,6 +284,10 @@ impl EndpointResponder {
         let checked_response =
             received.provenance.is_direct_peer() || received.direct_response.is_some();
         let invoke_id = request.invoke_id;
+        let reinitialization = self
+            .reinitialize
+            .as_ref()
+            .filter(|_| request.service_choice == ConfirmedServiceChoice::REINITIALIZE_DEVICE);
         let mut response = if request.segmented {
             Apdu::Abort(AbortPdu {
                 sent_by_server: true,
@@ -256,11 +296,31 @@ impl EndpointResponder {
             })
         } else if request.service_choice == ConfirmedServiceChoice::READ_PROPERTY {
             confirmed_response::read_property_response(
-                &self.db,
+                self.db(),
                 &request,
                 self.device_writes.is_some(),
+                self.reinitialize.is_some(),
                 self.registered_port.as_ref().map(|(oid, _)| *oid),
                 self.read_work_limit,
+            )
+            .await
+        } else if let Some((handler, password)) = reinitialization {
+            let requester = reinitialize::Requester::new(
+                &received.source_mac,
+                received.source_network.as_ref(),
+                received.provenance,
+            );
+            // Close may win while the request waits for the database owner;
+            // it is refused then, before the handler runs.
+            let still_open = || self.ensure_open();
+            reinitialize::response(
+                self.db(),
+                &request,
+                password,
+                Some(handler),
+                requester,
+                still_open,
+                |_| {}, // Endpoint sessions have no server DCC state.
             )
             .await
         } else if request.service_choice == ConfirmedServiceChoice::WRITE_PROPERTY
@@ -380,3 +440,7 @@ mod tests;
 #[cfg(test)]
 #[path = "endpoint_device_write_tests.rs"]
 mod device_write_tests;
+
+#[cfg(test)]
+#[path = "endpoint_reinitialize_tests.rs"]
+mod reinitialize_tests;

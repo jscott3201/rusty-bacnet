@@ -1,5 +1,5 @@
 //! A Recipient_List destination whose address MAC is longer than
-//! `BACnetAddress::MAX_MAC_LEN` (18 octets, B/IPv6) is refused on the wire
+//! `BACnetAddress::MAX_MAC_LEN` (18 octets) is refused on the wire
 //! (#1124). It does not decode, so WriteProperty answers PROPERTY /
 //! INVALID_DATA_TYPE and AddListElement a ChangeList-Error naming the element;
 //! the stored list stays as it was. A Value_Source correction carrying such an

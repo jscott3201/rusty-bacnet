@@ -74,7 +74,9 @@ use audit_configuration::AuditNotificationSink;
 ///
 /// Supports multiple transports via the `transport` parameter:
 /// - `"bip"` (default): BACnet/IP over UDP
-/// - `"ipv6"`: BACnet/IPv6 over UDP multicast
+/// - `"ipv6"`: BACnet/IPv6 over UDP multicast. The server's VMAC is its
+///   `device_instance` (`bip6:0x0004D2` for 1234); startup fails when another
+///   node on the link already uses it.
 /// - `"sc"`: BACnet/SC over TLS WebSocket (requires `sc_hub`, `sc_vmac`,
 ///   `sc_ca_cert`, `sc_client_cert`, `sc_client_key`, and persistent `sc_device_uuid`)
 /// - `"mstp"`: BACnet MS/TP over RS-485 (requires `serial_port`)
@@ -87,12 +89,18 @@ use audit_configuration::AuditNotificationSink;
 pub struct BACnetServer {
     inner: Arc<Mutex<Option<server::BACnetServer<AnyTransport<crate::mstp_py::PySerial>>>>>,
     device_instance: u32,
+    segmentation_supported: bacnet_types::enums::Segmentation,
+    apdu_segment_timeout_ms: u64,
     device_name: String,
     transport_type: String,
     // BIP config
     interface: String,
     port: u16,
     broadcast_address: String,
+    /// See `BipTransport::set_share_port_by_address` (#1538).
+    share_port_by_address: bool,
+    /// The B/IP mode `bbmd=` or `foreign_device=` asked for (#938).
+    bip_mode: bacnet_transport::bip::BipMode,
     registered_network_port: Option<u32>,
     // SC config
     sc_hub: Option<String>,
@@ -105,12 +113,8 @@ pub struct BACnetServer {
     sc_heartbeat_timeout_ms: Option<u64>,
     // IPv6 config
     ipv6_interface: Option<String>,
-    // MS/TP config
-    serial_port: Option<String>,
-    mstp_baud: u32,
-    mstp_mac: u8,
-    mstp_max_master: u8,
-    mstp_max_info_frames: u8,
+    /// The MS/TP keywords, `serial_port` included.
+    mstp: crate::mstp_py::MstpOptions,
     // Passwords
     dcc_password: Option<String>,
     mutation_policy: bacnet_server::mutation::MutationPolicy,
@@ -195,16 +199,19 @@ impl BACnetServer {
 
 mod server_methods {
     mod access_control_methods;
+    mod access_input_methods;
     mod access_rights_methods;
     mod audit_log_methods;
     mod averaging_methods;
     mod channel_methods;
+    mod constructor;
     mod constructor_budgets;
     mod cov_counters;
     mod cov_policy;
     mod dcc_outcomes;
     mod event_notification_counters;
     mod file_configuration;
+    mod foreign_registration;
     mod life_safety_methods;
     mod lifecycle;
     mod loop_methods;

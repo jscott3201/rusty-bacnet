@@ -120,14 +120,14 @@ Do not solve a failed local lab by replacing `127.0.0.1` with `0.0.0.0` or a bui
 
 This exercises **one directed BACnet/IP property read** through the native extension, with application-owned sample data and bounded lifecycle handling. It does not establish discovery, routed operation, MS/TP timing, BACnet/SC security, or full conformance.
 
-The recorded runs below used **v0.11.0**; they have not been repeated with v{release}.
+The recorded runs below used **an earlier release**, whose build is linked under Sources; they have not been repeated with v{release}.
 
-During site integration, **all eight tutorial tests and the standalone lab passed on macOS 27.0 arm64 with CPython 3.12.13**, using the v0.11.0 cp312 wheel from the release workflow linked below. The optional **v0.11.0 macOS arm64 CLI** also read the loopback server's value (`72.5`) and units (`64`) through a separate ephemeral socket; the server stopped after its 30-second limit. These results cover these local tutorial flows, not PyPI availability, a general wheel/platform matrix, or physical-network interoperability.
+During site integration, **all eight tutorial tests and the standalone lab passed on macOS 27.0 arm64 with CPython 3.12.13**, using that release's cp312 wheel from the release workflow linked below. The optional **macOS arm64 CLI from the same release** also read the loopback server's value (`72.5`) and units (`64`) through a separate ephemeral socket; the server stopped after its 30-second limit. These results cover these local tutorial flows, not PyPI availability, a general wheel/platform matrix, or physical-network interoperability.
 
-The supplied documentation handoff separately records an earlier Python-only round trip on **Linux x86-64, CPython 3.13, and the v0.11.0 release-workflow wheel**. Its Linux CLI extension was blocked by a missing libpcap runtime. That Linux loader limitation was not retested or cleared by the macOS result.
+The supplied documentation handoff separately records an earlier Python-only round trip on **Linux x86-64, CPython 3.13, and that release's wheel from the release workflow**. Its Linux CLI extension was blocked by a missing libpcap runtime. That Linux loader limitation was not retested or cleared by the macOS result.
 
 <NextStep href="/rusty-bacnet/start/first-read/" label="Read a known, authorized device" description="Move from loopback to your actual interface and a specific target." />
 
 ## Sources
 
-<a href={`${repository}/blob/v${release}/examples/python/bip_client_server.py`}>Released server and client example</a> · <a href={`${repository}/blob/v${release}/docs/python-api.md`}>Python API</a> · <a href={`${repository}/blob/v${release}/crates/bacnet-types/src/enums/units.rs`}>Engineering units</a> · [v0.11.0 release build](https://github.com/jscott3201/rusty-bacnet/actions/runs/34003656261).
+<a href={`${repository}/blob/v${release}/examples/python/bip_client_server.py`}>Released server and client example</a> · <a href={`${repository}/blob/v${release}/docs/python-api.md`}>Python API</a> · <a href={`${repository}/blob/v${release}/crates/bacnet-types/src/enums/units.rs`}>Engineering units</a> · [Earlier release build](https://github.com/jscott3201/rusty-bacnet/actions/runs/34003656261).

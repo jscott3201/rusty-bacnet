@@ -205,7 +205,9 @@ pub(crate) fn end_unowned(db: &Arc<RwLock<ObjectDatabase>>, stranded: Vec<Unfini
 /// The task is detached on purpose: its caller is a `Drop` or a `stop()` that
 /// mustn't wait on a database an application holds, and nothing else would
 /// end these runs. A runtime that shuts down before the task runs drops it;
-/// that is logged, and the objects stay busy.
+/// that is logged, and the objects stay busy. The task may outlive every
+/// other handle on the database, so it lets go of its own off the runtime
+/// (#1513).
 fn when_free(
     db: &Arc<RwLock<ObjectDatabase>>,
     end: impl FnOnce(&mut ObjectDatabase) + Send + 'static,
@@ -223,6 +225,7 @@ fn when_free(
                 ));
                 end(&mut *db.write().await);
                 waiting.0 = None;
+                drop(crate::server::drop_database_off_runtime(db));
             });
         }
         Err(_) => warn!("runs let go of outside a runtime; their objects stay busy"),

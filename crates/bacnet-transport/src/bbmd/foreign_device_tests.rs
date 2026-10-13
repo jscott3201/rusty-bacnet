@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use super::*;
-use bacnet_types::enums::BvlcResultCode;
+use bacnet_bip_codec::BvlcResultCode;
 
 fn make_unconfigured_bbmd() -> BbmdState {
     BbmdState::new([192, 168, 1, 1], 0xBAC0)

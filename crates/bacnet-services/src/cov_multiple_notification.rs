@@ -1,5 +1,8 @@
 //! COVNotificationMultiple-Request types and codec (split from `cov_multiple`).
 
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;
 use bacnet_types::enums::{PropertyIdentifier, RejectReason};

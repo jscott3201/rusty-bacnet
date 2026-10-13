@@ -3,6 +3,9 @@
 //! Provides both raw value codecs (no tag header) and application/context-tagged
 //! convenience functions for all BACnet primitive types.
 
+#[cfg(not(feature = "std"))]
+use alloc::{string::String, vec::Vec};
+
 use bacnet_types::error::{DecodingKind, Error};
 use bacnet_types::primitives::{BACnetTimeStamp, Date, ObjectIdentifier, PropertyValue, Time};
 use bytes::{BufMut, BytesMut};

@@ -7,15 +7,71 @@
 //! under that same guard, releases it, and runs the event pass, the COV
 //! fanout, the fanout for a re-evaluated Schedule's targets and any Staging
 //! plan. `write_local` runs `finish` as a task of its own in the server's
-//! request task set, so a caller that drops its future (a timeout, a
-//! `select!`, a cancelled Python task) no longer skips any of it.
+//! request task set ([`BACnetServer::finish_in_task`]), so a caller that
+//! drops its future (a timeout, a `select!`, a cancelled Python task) no
+//! longer skips any of it. `set_life_safety_operation_expected_local` hands
+//! its capture and fanout to such a task the same way (#1520).
 
 use super::local_writes::LocalWriter;
 use super::*;
 use crate::command_lists::TakenRuns;
 use crate::life_safety_cov::LifeSafetyCovChange;
 use bacnet_objects::staging::StagingWritePlan;
+use futures_util::FutureExt;
+use std::future::Future;
 use tokio::sync::OwnedRwLockWriteGuard;
+use tracing::error;
+
+/// The runtime a local change's post-commit task is spawned onto, checked
+/// before anything changes: outside one, the change fails with
+/// [`Error::Encoding`] and makes none.
+pub(super) fn local_runtime() -> Result<tokio::runtime::Handle, Error> {
+    tokio::runtime::Handle::try_current()
+        .map_err(|_| Error::Encoding("Local writes require a Tokio runtime".into()))
+}
+
+impl<T: TransportPort + 'static> BACnetServer<T> {
+    /// Spawn `work`, what a committed local change owes, as a task of its own
+    /// in the request task set, at once, and return a future that waits for
+    /// it (#1367). The caller makes the change under a guard that `work`
+    /// owns and spawns this with no wait in between, so dropping the returned
+    /// future skips none of the work. `stop()` aborts the task with the other
+    /// request tasks, and a closed set drops it unrun; either way the change
+    /// was made, so the future is `Ok(())` then too. A panic in `work` is
+    /// raised again in the caller, as it would be were the work done in
+    /// place; with the caller gone, it is logged and goes no further.
+    pub(super) fn finish_in_task(
+        &self,
+        runtime: &tokio::runtime::Handle,
+        work: impl Future<Output = ()> + Send + 'static,
+    ) -> impl Future<Output = Result<(), Error>> {
+        let (done, finished) = oneshot::channel();
+        self.request_tasks.spawn_on(
+            async move {
+                let work = std::panic::AssertUnwindSafe(work);
+                if let Err(Err(panic)) = done.send(work.catch_unwind().await) {
+                    let message = panic
+                        .downcast_ref::<&str>()
+                        .copied()
+                        .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+                        .unwrap_or("a non-text payload");
+                    error!(
+                        panic = message,
+                        "A local change's post-commit work panicked after its caller went away"
+                    );
+                }
+            },
+            runtime,
+        );
+        async move {
+            match finished.await {
+                Ok(Err(panic)) => std::panic::resume_unwind(panic),
+                // Done, or aborted by `stop()`: either way the change was made.
+                Ok(Ok(())) | Err(_) => Ok(()),
+            }
+        }
+    }
+}
 
 /// A local write that has committed, with what it still owes.
 pub(in crate::server) struct Committed {

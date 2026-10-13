@@ -20,26 +20,28 @@ fn selected(
         selection: SignedRangeSelection::from_range(3, 0..3),
         first_sequence_number: sequences.map(|s| s[0]),
         identities: sequences.map(|s| {
-            s.iter()
-                .map(|seq| {
-                    LogRecordIdentity::new(
-                        *seq,
-                        Date {
-                            year: 126,
-                            month: 9,
-                            day: 1,
-                            day_of_week: 2,
-                        },
-                        Time {
-                            hour: 1,
-                            minute: 0,
-                            second: 0,
-                            hundredths: 0,
-                        },
-                    )
-                    .unwrap()
-                })
-                .collect()
+            LogIdentities::Listed(
+                s.iter()
+                    .map(|seq| {
+                        LogRecordIdentity::new(
+                            *seq,
+                            Date {
+                                year: 126,
+                                month: 9,
+                                day: 1,
+                                day_of_week: 2,
+                            },
+                            Time {
+                                hour: 1,
+                                minute: 0,
+                                second: 0,
+                                hundredths: 0,
+                            },
+                        )
+                        .unwrap()
+                    })
+                    .collect(),
+            )
         }),
     }
 }

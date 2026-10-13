@@ -46,7 +46,7 @@ fn bdt_encode_decode_round_trip() {
     assert_eq!(bbmd.bdt().len(), 3);
 
     let mut buf = BytesMut::new();
-    bbmd.encode_bdt(&mut buf);
+    encode_bdt_entries(&bbmd.bdt(), &mut buf);
     assert_eq!(buf.len(), 30); // 3 * 10 bytes
 
     let decoded = BbmdState::decode_bdt(&buf).unwrap();
@@ -125,7 +125,7 @@ fn delete_nonexistent_foreign_device_naks() {
 fn expired_entries_purged() {
     let mut bbmd = make_bbmd();
     // Insert an entry that's past TTL + grace period (0 + 30 = 30s, elapsed 40s)
-    bbmd.fdt.push(FdtEntry {
+    bbmd.insert_fdt_entry_for_test(FdtEntry {
         ip: [10, 0, 0, 5],
         port: 0xBAC0,
         ttl: 0,
@@ -139,8 +139,12 @@ fn fdt_encode() {
     let mut bbmd = make_bbmd();
     bbmd.register_foreign_device([10, 0, 0, 5], 0xBAC0, 60);
     let mut buf = BytesMut::new();
-    bbmd.encode_fdt(&mut buf);
-    assert_eq!(buf.len(), FDT_ENTRY_SIZE);
+    buf.extend(
+        bbmd.fdt_wire_entries()
+            .iter()
+            .flat_map(|row| row.to_octets()),
+    );
+    assert_eq!(buf.len(), bacnet_bip_codec::FDT_ENTRY_LENGTH);
     // IP
     assert_eq!(&buf[0..4], &[10, 0, 0, 5]);
     // Port
@@ -160,9 +164,13 @@ fn fdt_encode_caps_max_ttl_remaining_time() {
     assert_eq!(result, BvlcResultCode::SUCCESSFUL_COMPLETION);
 
     let mut buf = BytesMut::new();
-    bbmd.encode_fdt(&mut buf);
+    buf.extend(
+        bbmd.fdt_wire_entries()
+            .iter()
+            .flat_map(|row| row.to_octets()),
+    );
 
-    assert_eq!(buf.len(), FDT_ENTRY_SIZE);
+    assert_eq!(buf.len(), bacnet_bip_codec::FDT_ENTRY_LENGTH);
     assert_eq!(u16::from_be_bytes([buf[6], buf[7]]), u16::MAX);
     assert_eq!(u16::from_be_bytes([buf[8], buf[9]]), u16::MAX);
 }
@@ -249,7 +257,7 @@ fn forwarding_targets_excludes_originating_foreign_device_and_expired_entries() 
     }])
     .unwrap();
     bbmd.register_foreign_device([10, 0, 0, 5], 0xBAC0, 60);
-    bbmd.fdt.push(FdtEntry {
+    bbmd.insert_fdt_entry_for_test(FdtEntry {
         ip: [10, 0, 0, 6],
         port: 0xBAC0,
         ttl: 60,
@@ -374,7 +382,7 @@ fn set_local_address_refuses_to_overflow_the_bdt() {
 fn fdt_grace_period() {
     let mut bbmd = make_bbmd();
     // Insert entry that expired based on TTL alone but within grace period
-    bbmd.fdt.push(FdtEntry {
+    bbmd.insert_fdt_entry_for_test(FdtEntry {
         ip: [10, 0, 0, 5],
         port: 0xBAC0,
         ttl: 60,
@@ -431,7 +439,11 @@ fn fdt_decode_round_trip() {
     let mut bbmd = make_bbmd();
     bbmd.register_foreign_device([10, 0, 0, 5], 0xBAC0, 60);
     let mut buf = BytesMut::new();
-    bbmd.encode_fdt(&mut buf);
+    buf.extend(
+        bbmd.fdt_wire_entries()
+            .iter()
+            .flat_map(|row| row.to_octets()),
+    );
 
     let entries = decode_fdt(&buf).unwrap();
     assert_eq!(entries.len(), 1);
@@ -464,7 +476,11 @@ fn encode_bdt_entries_matches_state() {
     let mut buf_state = BytesMut::new();
     let mut bbmd = make_bbmd();
     bbmd.set_bdt(entries.clone()).unwrap();
-    bbmd.encode_bdt(&mut buf_state);
+    buf_state.extend(
+        bbmd.bdt_wire_entries()
+            .iter()
+            .flat_map(|row| row.to_octets()),
+    );
 
     // set_bdt auto-inserts self, so include self in the expected entries
     entries.push(BdtEntry {

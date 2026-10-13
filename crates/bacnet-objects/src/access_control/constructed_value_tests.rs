@@ -123,7 +123,11 @@ fn access_point_access_event_time_serves_each_timestamp_choice() {
     let mut point = AccessPointObject::new(1, "AP-1").unwrap();
     for (tag, (stamp, expected)) in (1..).zip(stamps()) {
         point
-            .set_access_event(AccessEvent::GRANTED, tag, stamp.clone(), None)
+            .set_access_event(AccessEventReport {
+                time: Some(stamp.clone()),
+                credential: None,
+                ..AccessEventReport::new(AccessEvent::GRANTED, tag)
+            })
             .unwrap();
         let read = point
             .read_property(PropertyIdentifier::ACCESS_EVENT_TIME, None)

@@ -7,7 +7,7 @@ Rusty BACnet is a protocol stack with three user-facing entry points, not a desk
 
 ## Integrating more than a read?
 
-The [integration overview](/rusty-bacnet/development/overview/) covers shared endpoints, BACnet/SC setup, Network Port and Number controls, and building from source. The installation and start pages below target v0.12.0.
+The [integration overview](/rusty-bacnet/development/overview/) covers shared endpoints, BACnet/SC setup, Network Port and Number controls, and building from source. The installation and start pages below target v0.13.0.
 
 ## Start without hardware
 
@@ -27,7 +27,7 @@ Choose Python for scripts, data collection, integration prototypes, or a small t
 
 ## Embed with Rust
 
-Choose Rust when BACnet belongs inside your application. The workspace has separate crates for clients, servers, types, encoding, services, transports, networking, and objects. You do not need every crate for a property read.
+Choose Rust when BACnet belongs inside your application. The workspace has separate crates for clients, servers, types, encoding, services, transports, networking, objects and shared endpoints, plus `no_std` codecs and cores (MS/TP, BACnet/IP and a router) for firmware. You do not need every crate for a property read.
 
 [Start with the Rust client](/rusty-bacnet/start/rust/). The reviewed release declares Rust 1.93 as its minimum; this documentation project does not raise the library's minimum Rust version.
 
@@ -45,6 +45,6 @@ Keep writes, alarm acknowledgments, device communication control, time synchroni
 
 ## Sources and release scope
 
-These instructions target **v0.12.0**. Source review is not a claim of hardware qualification.
+These instructions target **v0.13.0**. Source review is not a claim of hardware qualification.
 
-[Release](https://github.com/jscott3201/rusty-bacnet/releases/tag/v0.12.0) · [Workspace manifest](https://github.com/jscott3201/rusty-bacnet/blob/v0.12.0/Cargo.toml) · [Python packaging](https://github.com/jscott3201/rusty-bacnet/blob/v0.12.0/crates/rusty-bacnet/pyproject.toml).
+[Release](https://github.com/jscott3201/rusty-bacnet/releases/tag/v0.13.0) · [Workspace manifest](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/Cargo.toml) · [Python packaging](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/crates/rusty-bacnet/pyproject.toml).

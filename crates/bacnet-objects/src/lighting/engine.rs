@@ -37,6 +37,10 @@
 //! takes effect at once. A step the table says to ignore halts nothing, and
 //! neither does a proprietary operation, which this object stores but
 //! defines no action for.
+//!
+//! The trims (#1528, see `trim`) sit on top of all this: Tracking_Value as
+//! reported is the engine's value held between them, and a trim change runs
+//! alongside whatever operation is in progress.
 
 use std::time::Duration;
 
@@ -138,15 +142,16 @@ fn engine_level(value: f32) -> f32 {
 }
 
 /// The level a step operation writes from `tracking`, or `None` when the
-/// operation is to be ignored (Table 12-67).
-fn step_level(operation: Op, tracking: f32, increment: f32) -> Option<f32> {
+/// operation is to be ignored (Table 12-67). `floor` is the dimmest on level
+/// in effect, 1.0 or the low trim (#1528), from which STEP_OFF turns off.
+fn step_level(operation: Op, tracking: f32, increment: f32, floor: f32) -> Option<f32> {
     let up = (tracking + increment).min(100.0);
     let down = (tracking - increment).max(1.0);
     match operation {
         Op::STEP_UP => (tracking != 0.0).then_some(up),
         Op::STEP_DOWN => (tracking != 0.0).then_some(down),
         Op::STEP_ON => Some(if tracking == 0.0 { 1.0 } else { up }),
-        Op::STEP_OFF if tracking == 1.0 => Some(0.0),
+        Op::STEP_OFF if tracking == floor => Some(0.0),
         Op::STEP_OFF => (tracking != 0.0).then_some(down),
         _ => None,
     }
@@ -162,17 +167,32 @@ impl LightingOutputObject {
     }
 
     /// Tracking_Value at `now`: the fade or ramp's value while one runs,
-    /// otherwise Present_Value (Clause 12.54.5).
+    /// otherwise Present_Value (Clause 12.54.5), held within the trims
+    /// (#1528).
     pub(super) fn tracking_value_at(&self, now: Duration) -> f32 {
+        self.trimmed(self.untrimmed_at(now), now)
+    }
+
+    /// Tracking_Value at `now` before the trims hold it: Present_Value once
+    /// a fade or ramp has arrived, as one down to off under a low trim ends
+    /// its line at the trim (#1528).
+    fn untrimmed_at(&self, now: Duration) -> f32 {
         match self.operation {
-            Some(Operation::Moving { run, .. }) => run.transition().value_at(now),
+            Some(Operation::Moving { run, .. }) if !run.transition().is_finished(now) => {
+                run.transition().value_at(now)
+            }
             _ => self.present_value,
         }
     }
 
-    /// In_Progress at `now`: FADE_ACTIVE or RAMP_ACTIVE while a fade or ramp
-    /// is still moving, otherwise IDLE.
+    /// In_Progress at `now`: TRIM_ACTIVE while the trims hold Tracking_Value
+    /// apart from Present_Value, whatever else runs (#1528); otherwise
+    /// FADE_ACTIVE or RAMP_ACTIVE while a fade or ramp is still moving, and
+    /// IDLE.
     pub(super) fn in_progress_at(&self, now: Duration) -> LightingInProgress {
+        if self.trim_active(self.untrimmed_at(now), now) {
+            return LightingInProgress::TRIM_ACTIVE;
+        }
         match self.operation {
             Some(Operation::Moving { run, .. }) if !run.transition().is_finished(now) => {
                 match run.transition().kind() {
@@ -219,11 +239,12 @@ impl LightingOutputObject {
     }
 
     /// Advance to `now`: finish a fade or ramp that has arrived, run out an
-    /// egress timer that is due, and take a COV sample that is due. `true`
-    /// when something a COV report could carry changed.
+    /// egress timer that is due, move a trim change on, and take a COV sample
+    /// that is due. `true` when something a COV report could carry changed.
     pub(super) fn advance_to(&mut self, now: Duration) -> bool {
         let step = self.sample_step();
-        match self.operation {
+        let trims = self.trims.advance(now, step);
+        let operation = match self.operation {
             Some(Operation::Egress {
                 priority,
                 then,
@@ -233,27 +254,29 @@ impl LightingOutputObject {
                 self.set_slot(priority, then.slot());
                 true
             }
-            Some(Operation::Moving { priority, mut run }) => match run.advance(now, step) {
-                Progress::Finished => {
-                    self.operation = None;
-                    true
-                }
-                Progress::Sampled => {
-                    self.operation = Some(Operation::Moving { priority, run });
-                    true
-                }
-                Progress::Pending => false,
-            },
+            Some(Operation::Moving { priority, mut run }) => {
+                let progress = run.advance(now, step);
+                // Even with nothing due, a finer step may have brought the
+                // next sample forward, so the run goes back either way.
+                self.operation =
+                    (progress != Progress::Finished).then_some(Operation::Moving { priority, run });
+                progress != Progress::Pending
+            }
             _ => false,
-        }
+        };
+        trims || operation
     }
 
     /// The next instant the engine needs advancing at, if any.
     pub(super) fn next_deadline(&self) -> Option<Duration> {
-        self.operation.map(|operation| match operation {
+        let operation = self.operation.map(|operation| match operation {
             Operation::Moving { run, .. } => run.deadline(),
             Operation::Egress { deadline, .. } => deadline,
-        })
+        });
+        match (operation, self.trims.deadline()) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
     }
 
     /// Carry out `command`'s operation at `priority`.
@@ -271,13 +294,14 @@ impl LightingOutputObject {
                 if self.highest_priority() != Some(priority) {
                     return;
                 }
+                let (from, to) = self.trimmed_line(tracking, level, now);
                 let transition = if operation == Op::FADE_TO {
                     let fade_time = command.fade_time.unwrap_or(self.default_fade_time);
                     let fade_time = Duration::from_millis(u64::from(fade_time));
-                    Transition::fade(tracking, level, now, fade_time)
+                    Transition::fade(from, to, now, fade_time)
                 } else {
                     let rate = command.ramp_rate.unwrap_or(self.default_ramp_rate);
-                    Transition::ramp(tracking, level, now, f64::from(rate))
+                    Transition::ramp(from, to, now, f64::from(rate))
                 };
                 if let Some(transition) = transition {
                     let run = Run::start(transition, self.sample_step());
@@ -297,7 +321,8 @@ impl LightingOutputObject {
                 // level, which is the override Clause 12.54.6.2 gives
                 // occupants the egress time for, rather than stepping from
                 // the off or relinquished level the egress was heading to.
-                if let Some(level) = step_level(operation, tracking, increment) {
+                let floor = self.step_floor(now);
+                if let Some(level) = step_level(operation, tracking, increment, floor) {
                     self.halt_for(priority);
                     self.set_slot(priority, Some(engine_level(level)));
                 }
@@ -394,7 +419,7 @@ impl LightingOutputObject {
     }
 
     /// The highest priority with a level in its slot.
-    fn highest_priority(&self) -> Option<u8> {
+    pub(super) fn highest_priority(&self) -> Option<u8> {
         self.priority_array
             .iter()
             .position(Option::is_some)
@@ -417,17 +442,20 @@ impl LightingOutputObject {
     }
 
     /// How far Tracking_Value moves between COV samples: COV_Increment, or
-    /// one percent while that is 0.0.
-    fn sample_step(&self) -> f64 {
-        if self.cov_increment > 0.0 {
+    /// one percent while that is 0.0, or a Tracking_Value subscriber's own
+    /// increment where that is finer (#1510).
+    pub(super) fn sample_step(&self) -> f64 {
+        let own = if self.cov_increment > 0.0 {
             f64::from(self.cov_increment)
         } else {
             DEFAULT_SAMPLE_STEP
-        }
+        };
+        self.finest_tracking_increment
+            .map_or(own, |finest| own.min(finest))
     }
 
     /// Tell the server's monotonic task a deadline was armed.
-    fn wake(&self) {
+    pub(super) fn wake(&self) {
         if let Some(waker) = &self.deadline_waker {
             waker();
         }

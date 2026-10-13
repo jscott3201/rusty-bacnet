@@ -3,7 +3,7 @@
 //! See the [`BACnetEventParameter`] type for details.
 
 #[cfg(not(feature = "std"))]
-use alloc::{format, string::String, vec, vec::Vec};
+use alloc::{string::String, vec::Vec};
 
 use crate::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetExtendedPropertyState, BACnetPropertyStates,

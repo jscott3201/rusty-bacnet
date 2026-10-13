@@ -19,11 +19,14 @@
     "minimum_active_rp_attempts": 1000
   },
   "diagnostic_fields": [
-    "der_tx", "der_rx", "dner_tx_direct", "dner_tx_queued", "dner_rx",
-    "reply_postponed_tx", "reply_postponed_rx", "wait_for_reply_timeouts",
-    "invalid_frame_discards", "stale_partial_resets", "outbound_queue_full",
-    "outbound_oversize", "ingress_full", "ingress_closed", "serial_read_errors",
-    "serial_write_errors"
+    "der_tx", "dner_tx_direct", "dner_tx_queued", "reply_postponed_tx",
+    "wait_for_reply_timeouts", "outbound_queue_full", "outbound_oversize",
+    "ingress_full", "ingress_closed", "serial_read_errors", "serial_write_errors",
+    "echo_mismatches", "echo_missing", "echo_fragments_dropped", "late_answers_queued",
+    "late_answers_dropped",
+    "late_answers_expired", "mac.frames_received", "mac.npdus_delivered",
+    "mac.parser_errors", "mac.frame_aborts", "mac.deadline_misses",
+    "mac.token_rotations", "mac.token_retries", "mac.deferred_starts"
   ],
   "participant_template": {
     "role_alias": null,

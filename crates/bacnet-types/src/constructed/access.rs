@@ -1,6 +1,6 @@
-//! Constructed values served by the Access Rights object (Clause 12.34), the
-//! Access Credential object (Clause 12.35) and the Credential Data Input
-//! object (Clause 12.36).
+//! Constructed values served by the Access Point object (Clause 12.31), the
+//! Access Rights object (Clause 12.34), the Access Credential object (Clause
+//! 12.35) and the Credential Data Input object (Clause 12.36).
 
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
@@ -152,4 +152,45 @@ pub struct BACnetCredentialAuthenticationFactor {
     pub disable: AccessAuthenticationFactorDisable,
     /// The factor itself.
     pub authentication_factor: BACnetAuthenticationFactor,
+}
+
+/// One entry of an authentication policy (the policy member of
+/// `BACnetAuthenticationPolicy`, Clause 21; Clause 12.31.12): a Credential
+/// Data Input the Access Point reads a factor from, and the step of the
+/// authentication that factor belongs to.
+///
+/// On the wire the reference is framed in context tag `[0]` and the index
+/// follows as a context `[1]` Unsigned.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BACnetAuthenticationPolicyEntry {
+    /// The Credential Data Input the factor is read from, in this device or
+    /// in the Device the reference names.
+    pub credential_data_input: BACnetDeviceObjectReference,
+    /// The step this factor serves: 1 for the first factor expected, 2 for
+    /// the next, and so on. Entries sharing an index are alternatives, any
+    /// one of which completes that step.
+    pub index: u32,
+}
+
+/// One element of an Access Point's Authentication_Policy_List array
+/// (`BACnetAuthenticationPolicy`, Clause 21; Clause 12.31.12).
+///
+/// On the wire the entries go out inside opening and closing tag `[0]`, each
+/// as its two members with no wrapper, then the order flag as a context
+/// `[1]` BOOLEAN and the timeout as a context `[2]` Unsigned. The codec is
+/// `bacnet_encoding::constructed::{encode_authentication_policy,
+/// decode_authentication_policy}`; it keeps whatever entries it reads, and
+/// the Access Point judges whether the policy is usable.
+///
+/// The default is the element Clause 12.31.12.2 gives an array that grows
+/// without a value for its new elements: no entries, the order not enforced
+/// and no timeout.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BACnetAuthenticationPolicy {
+    /// The factors the policy asks for.
+    pub policy: Vec<BACnetAuthenticationPolicyEntry>,
+    /// Whether the factors have to come in the order their indexes give.
+    pub order_enforced: bool,
+    /// The seconds allowed for presenting every factor; 0 for no limit.
+    pub timeout: u32,
 }

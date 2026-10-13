@@ -3,14 +3,17 @@
 //! In-memory, deterministic, no sleeps. Uses [`super::envelope_harness`] and
 //! `ctx_with_provenance`. Deny is silent: no mutation, relay, ACK, or Reject.
 
-use super::control_policy::{ControlAuthorizer, ControlGate, ControlPolicy};
-use super::envelope_harness::*;
-use super::*;
-use crate::router_table::ReachabilityStatus;
-use bacnet_encoding::npdu::NpduAddress;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+
+use bacnet_encoding::npdu::{Npdu, NpduAddress};
+use bacnet_types::enums::NetworkMessageType;
+use bacnet_types::MacAddr;
+
+use super::control_policy::{ControlAuthContext, ControlAuthorizer, ControlGate, ControlPolicy};
+use super::envelope_harness::*;
+use super::SendRequest;
+use crate::router_table::{PortId, Reachability};
 
 fn hardened() -> Arc<ControlGate> {
     Arc::new(ControlGate::hardened())
@@ -37,7 +40,7 @@ async fn permissive_default_matches_today() {
         control_npdu(NetworkMessageType::I_AM_ROUTER_TO_NETWORK, &[0x0b, 0xb8]),
     ))
     .await;
-    assert!(h.table.lock().await.lookup(3000).is_some());
+    assert!(h.table().lookup(3000).is_some());
     assert_eq!(broadcast_data(h.drain(0)).len(), 1);
     h.handle(h.ctx(
         0,
@@ -48,7 +51,7 @@ async fn permissive_default_matches_today() {
         ),
     ))
     .await;
-    assert_eq!(h.table.lock().await.lookup(4000).unwrap().port_index, 1);
+    assert_eq!(h.table().lookup(4000).unwrap().port(), PortId(1));
     assert_eq!(h.drain(0).len(), 1);
     assert_eq!(h.gate.snapshot().i_am.allow_total, 1);
     assert_eq!(h.gate.snapshot().init_mgmt.allow_total, 1);
@@ -56,7 +59,7 @@ async fn permissive_default_matches_today() {
 
 #[tokio::test]
 async fn hardened_denies_protected_silently() {
-    let mut table = RouterTable::new();
+    let mut table = TableSeed::new();
     table.add_direct(1000, 0);
     table.add_direct(2000, 1);
     table.add_learned(3000, 1, MacAddr::from_slice(&[2]));
@@ -69,7 +72,7 @@ async fn hardened_denies_protected_silently() {
     ))
     .await;
     h.assert_quiet();
-    assert!(h.table.lock().await.lookup(3001).is_none());
+    assert!(h.table().lookup(3001).is_none());
     // Init update + purge denied: no mutation, no empty ACK.
     h.handle(h.ctx(
         0,
@@ -81,7 +84,7 @@ async fn hardened_denies_protected_silently() {
     ))
     .await;
     h.assert_quiet();
-    assert!(h.table.lock().await.lookup(4000).is_none());
+    assert!(h.table().lookup(4000).is_none());
     h.handle(h.ctx(
         1,
         &[2],
@@ -92,7 +95,7 @@ async fn hardened_denies_protected_silently() {
     ))
     .await;
     h.assert_quiet();
-    assert!(h.table.lock().await.lookup(3000).is_some());
+    assert!(h.table().lookup(3000).is_some());
     // Init-ACK learning denied.
     h.handle(h.ctx(
         0,
@@ -118,8 +121,8 @@ async fn hardened_denies_protected_silently() {
         h.assert_quiet();
     }
     assert_eq!(
-        h.table.lock().await.effective_reachability(3000),
-        Some(ReachabilityStatus::Reachable)
+        h.table().effective_reachability(3000, h.now()),
+        Some(Reachability::Reachable)
     );
     // Reject transition denied: no table change, and no relay toward the
     // originator on 1000 its DNET/DADR names.
@@ -134,8 +137,8 @@ async fn hardened_denies_protected_silently() {
     h.handle(h.ctx(1, &[2], npdu)).await;
     h.assert_quiet();
     assert_eq!(
-        h.table.lock().await.effective_reachability(3000),
-        Some(ReachabilityStatus::Reachable)
+        h.table().effective_reachability(3000, h.now()),
+        Some(Reachability::Reachable)
     );
     // I-Could-Be denied: no insert.
     h.handle(h.ctx(
@@ -148,7 +151,7 @@ async fn hardened_denies_protected_silently() {
     ))
     .await;
     h.assert_quiet();
-    assert!(h.table.lock().await.lookup(5000).is_none());
+    assert!(h.table().lookup(5000).is_none());
     let snap = h.gate.snapshot();
     assert_eq!(snap.i_am.deny_total, 1);
     assert_eq!(snap.i_am.policy_deny_total, 1);
@@ -164,7 +167,7 @@ async fn hardened_denies_protected_silently() {
 async fn hardened_allows_read_only_discovery() {
     let mut h = Harness::with_gate(
         {
-            let mut t = RouterTable::new();
+            let mut t = TableSeed::new();
             t.add_direct(1000, 0);
             t.add_direct(2000, 1);
             t.add_learned(3000, 1, MacAddr::from_slice(&[2]));
@@ -188,7 +191,7 @@ async fn hardened_allows_read_only_discovery() {
     ))
     .await;
     assert_eq!(h.drain(0).len(), 1);
-    assert_eq!(h.table.lock().await.len(), 3);
+    assert_eq!(h.table().len(), 3);
     // What-Is answered; Number-Is quiet; Establish/Disconnect no-ops.
     h.handle(h.ctx(
         0,
@@ -255,7 +258,7 @@ async fn hardened_authorized_update_across_two_nets() {
         Arc::new(|ctx| ctx.target_nets.iter().all(|n| *n == 3000 || *n == 4000));
     let mut h = Harness::with_gate(
         {
-            let mut t = RouterTable::new();
+            let mut t = TableSeed::new();
             t.add_direct(1000, 0);
             t.add_direct(2000, 1);
             t
@@ -268,7 +271,7 @@ async fn hardened_authorized_update_across_two_nets() {
         control_npdu(NetworkMessageType::I_AM_ROUTER_TO_NETWORK, &[0x0b, 0xb8]),
     ))
     .await;
-    assert!(h.table.lock().await.lookup(3000).is_some());
+    assert!(h.table().lookup(3000).is_some());
     assert_eq!(broadcast_data(h.drain(0)).len(), 1);
     h.handle(h.ctx(
         0,
@@ -279,7 +282,7 @@ async fn hardened_authorized_update_across_two_nets() {
         ),
     ))
     .await;
-    assert!(h.table.lock().await.lookup(4000).is_some());
+    assert!(h.table().lookup(4000).is_some());
     assert_eq!(h.drain(0).len(), 1);
     // Outside the two controlled nets: denied silently.
     h.handle(h.ctx(
@@ -289,7 +292,7 @@ async fn hardened_authorized_update_across_two_nets() {
     ))
     .await;
     h.assert_quiet();
-    assert!(h.table.lock().await.lookup(5000).is_none());
+    assert!(h.table().lookup(5000).is_none());
     let snap = h.gate.snapshot();
     assert_eq!(snap.i_am.allow_total, 1);
     assert_eq!(snap.init_mgmt.allow_total, 1);
@@ -308,7 +311,7 @@ async fn authorizer_deny_and_panic_fail_closed() {
     ] {
         let mut h = Harness::with_gate(
             {
-                let mut t = RouterTable::new();
+                let mut t = TableSeed::new();
                 t.add_direct(1000, 0);
                 t.add_direct(2000, 1);
                 t
@@ -325,13 +328,13 @@ async fn authorizer_deny_and_panic_fail_closed() {
         ))
         .await;
         h.assert_quiet();
-        assert!(h.table.lock().await.lookup(3000).is_none(), "{name}");
+        assert!(h.table().lookup(3000).is_none(), "{name}");
         let snap = h.gate.snapshot();
         assert_eq!(snap.init_mgmt.deny_total, 1, "{name}");
         assert_eq!(snap.init_mgmt.allow_total, 0, "{name}");
     }
     // Hardened absent-authorizer denies are policy-denies, not authorizer denials.
-    let mut h = Harness::with_gate(RouterTable::new(), hardened());
+    let mut h = Harness::with_gate(TableSeed::new(), hardened());
     h.handle(h.ctx(
         0,
         &[9],
@@ -346,7 +349,7 @@ async fn authorizer_deny_and_panic_fail_closed() {
 async fn init_query_answered_in_hardened_full_queue_bounded() {
     let mut h = Harness::with_gate(
         {
-            let mut t = RouterTable::new();
+            let mut t = TableSeed::new();
             t.add_direct(1000, 0);
             t.add_direct(2000, 1);
             t
@@ -371,12 +374,12 @@ async fn init_query_answered_in_hardened_full_queue_bounded() {
         ),
     ))
     .await;
-    assert!(h.table.lock().await.lookup(3000).is_some());
+    assert!(h.table().lookup(3000).is_some());
     assert_eq!(h.drain(0).len(), 16);
     // Denied control on a full queue stays quiet without panic.
     let mut denied = Harness::with_gate(
         {
-            let mut t = RouterTable::new();
+            let mut t = TableSeed::new();
             t.add_direct(1000, 0);
             t.add_direct(2000, 1);
             t
@@ -398,7 +401,7 @@ async fn init_query_answered_in_hardened_full_queue_bounded() {
             control_npdu(NetworkMessageType::I_AM_ROUTER_TO_NETWORK, &[0x0b, 0xb8]),
         ))
         .await;
-    assert!(denied.table.lock().await.lookup(3000).is_none());
+    assert!(denied.table().lookup(3000).is_none());
     assert_eq!(denied.drain(0).len(), 16);
 }
 
@@ -412,7 +415,7 @@ async fn standard_vs_hardened_matrix() {
         };
         let mut h = Harness::with_gate(
             {
-                let mut t = RouterTable::new();
+                let mut t = TableSeed::new();
                 t.add_direct(1000, 0);
                 t.add_direct(2000, 1);
                 t
@@ -426,7 +429,7 @@ async fn standard_vs_hardened_matrix() {
         ))
         .await;
         assert_eq!(
-            h.table.lock().await.lookup(3000).is_some(),
+            h.table().lookup(3000).is_some(),
             expect_learn,
             "permissive={permissive}"
         );
@@ -443,7 +446,7 @@ async fn convergence_recovers_after_deny_and_busy_expiry() {
     let auth: ControlAuthorizer = Arc::new(|ctx| ctx.port_idx == 1);
     let mut h = Harness::with_gate(
         {
-            let mut t = RouterTable::new();
+            let mut t = TableSeed::new();
             t.add_direct(1000, 0);
             t.add_direct(2000, 1);
             t.add_learned(3000, 1, MacAddr::from_slice(&[2]));
@@ -460,8 +463,8 @@ async fn convergence_recovers_after_deny_and_busy_expiry() {
     .await;
     h.assert_quiet();
     assert_eq!(
-        h.table.lock().await.effective_reachability(3000),
-        Some(ReachabilityStatus::Reachable)
+        h.table().effective_reachability(3000, h.now()),
+        Some(Reachability::Reachable)
     );
     // Authorized Busy marks via the announcing peer.
     h.handle(h.ctx(
@@ -472,18 +475,20 @@ async fn convergence_recovers_after_deny_and_busy_expiry() {
     .await;
     assert_eq!(broadcast_data(h.drain(0)).len(), 1);
     assert_eq!(
-        h.table.lock().await.effective_reachability(3000),
-        Some(ReachabilityStatus::Busy)
+        h.table().effective_reachability(3000, h.now()),
+        Some(Reachability::Busy)
     );
-    // Busy expiry via table-seeded past deadline (no sleeps): reachable again.
+    // Busy expiry via a table-seeded deadline that has come (no sleeps):
+    // reachable again.
     {
-        let mut tbl = h.table.lock().await;
-        tbl.mark_busy(3000, Instant::now() - Duration::from_secs(1));
-        tbl.clear_expired_busy();
+        let now = h.now();
+        let mut tbl = h.table();
+        tbl.mark_busy(3000, now);
+        tbl.clear_expired_busy(now);
     }
     assert_eq!(
-        h.table.lock().await.effective_reachability(3000),
-        Some(ReachabilityStatus::Reachable)
+        h.table().effective_reachability(3000, h.now()),
+        Some(Reachability::Reachable)
     );
     // Fresh authorized learning converges after the clear.
     h.handle(h.ctx(
@@ -492,14 +497,14 @@ async fn convergence_recovers_after_deny_and_busy_expiry() {
         control_npdu(NetworkMessageType::I_AM_ROUTER_TO_NETWORK, &[0x0b, 0xb8]),
     ))
     .await;
-    assert!(h.table.lock().await.lookup(3000).is_some());
+    assert!(h.table().lookup(3000).is_some());
 }
 
 #[tokio::test]
 async fn reject_deny_sends_no_success_and_no_loop() {
     let mut h = Harness::with_gate(
         {
-            let mut t = RouterTable::new();
+            let mut t = TableSeed::new();
             t.add_learned(3000, 0, MacAddr::from_slice(&[1]));
             t.add_direct(4000, 1);
             t
@@ -517,14 +522,14 @@ async fn reject_deny_sends_no_success_and_no_loop() {
     h.handle(h.ctx(0, &[1], npdu)).await;
     h.assert_quiet();
     assert_eq!(
-        h.table.lock().await.effective_reachability(3000),
-        Some(ReachabilityStatus::Reachable)
+        h.table().effective_reachability(3000, h.now()),
+        Some(Reachability::Reachable)
     );
     // Authorized reject applies once and relays once: no invented success,
     // no response loop (exactly one relay, no second reject).
     let mut allowed = Harness::with_gate(
         {
-            let mut t = RouterTable::new();
+            let mut t = TableSeed::new();
             t.add_learned(3000, 0, MacAddr::from_slice(&[1]));
             t.add_direct(4000, 1);
             t
@@ -541,12 +546,48 @@ async fn reject_deny_sends_no_success_and_no_loop() {
     });
     allowed.handle(allowed.ctx(0, &[1], npdu)).await;
     assert_eq!(
-        allowed.table.lock().await.effective_reachability(3000),
-        Some(ReachabilityStatus::Unreachable)
+        allowed.table().effective_reachability(3000, h.now()),
+        Some(Reachability::Unreachable)
     );
     assert_eq!(allowed.drain(1).len(), 1);
     assert!(allowed.drain(0).is_empty());
     assert!(allowed.drain(1).is_empty());
+}
+
+/// A Busy or Available with no list covers every network its sender
+/// serves: the authorizer's context says so, and with a list it doesn't.
+#[tokio::test]
+async fn authorizer_sees_an_omitted_list_as_omitted() {
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let auth: ControlAuthorizer = {
+        let seen = Arc::clone(&seen);
+        Arc::new(move |ctx: &ControlAuthContext| {
+            seen.lock().unwrap().push((
+                ctx.message_type,
+                ctx.target_nets.clone(),
+                ctx.targets_omitted,
+            ));
+            true
+        })
+    };
+    let mut h = Harness::with_gate(TableSeed::new(), hardened_with(auth));
+    for (kind, payload) in [
+        (NetworkMessageType::ROUTER_BUSY_TO_NETWORK, vec![]),
+        (NetworkMessageType::ROUTER_BUSY_TO_NETWORK, vec![0x0b, 0xb8]),
+        (NetworkMessageType::ROUTER_AVAILABLE_TO_NETWORK, vec![]),
+        (NetworkMessageType::I_AM_ROUTER_TO_NETWORK, vec![0x0b, 0xb8]),
+    ] {
+        h.handle(h.ctx(1, &[2], control_npdu(kind, &payload))).await;
+    }
+    assert_eq!(
+        *seen.lock().unwrap(),
+        [
+            (0x04, vec![], true),
+            (0x04, vec![3000], false),
+            (0x05, vec![], true),
+            (0x01, vec![3000], false),
+        ]
+    );
 }
 
 #[tokio::test]
@@ -561,7 +602,7 @@ async fn authorizer_sees_only_protected_and_replaced_peer_differs() {
     };
     let mut h = Harness::with_gate(
         {
-            let mut t = RouterTable::new();
+            let mut t = TableSeed::new();
             t.add_direct(1000, 0);
             t.add_direct(2000, 1);
             t
@@ -589,24 +630,23 @@ async fn authorizer_sees_only_protected_and_replaced_peer_differs() {
         control_npdu(NetworkMessageType::I_AM_ROUTER_TO_NETWORK, &[0x0b, 0xb8]),
     ))
     .await;
-    assert!(h.table.lock().await.lookup(3000).is_some());
+    assert!(h.table().lookup(3000).is_some());
     h.handle(h.ctx(
         1,
         &[3],
         control_npdu(NetworkMessageType::I_AM_ROUTER_TO_NETWORK, &[0x0b, 0xb9]),
     ))
     .await;
-    assert!(h.table.lock().await.lookup(3001).is_none());
+    assert!(h.table().lookup(3001).is_none());
     assert_eq!(calls.load(Ordering::Relaxed), 2);
 }
 
-#[test]
-fn control_context_debug_is_redacted() {
+#[tokio::test]
+async fn control_context_debug_is_redacted() {
     use bacnet_transport::port::TransportProvenance;
     let npdu = Npdu {
         is_network_message: true,
         message_type: Some(NetworkMessageType::I_AM_ROUTER_TO_NETWORK.to_raw()),
-        vendor_id: Some(999),
         source: Some(NpduAddress {
             network: 900,
             mac_address: MacAddr::from_slice(&[0xAA, 0xBB]),
@@ -614,13 +654,6 @@ fn control_context_debug_is_redacted() {
         payload: bytes::Bytes::from_static(&[0x0b, 0xb8, 0xde, 0xad]),
         ..Npdu::default()
     };
-    let ingress = IngressContext::test_local_with_provenance(
-        1,
-        2000,
-        &[0xAA, 0xBB, 0xCC],
-        npdu,
-        TransportProvenance::unverified(),
-    );
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
     let auth: ControlAuthorizer = {
         let seen = Arc::clone(&seen);
@@ -629,18 +662,21 @@ fn control_context_debug_is_redacted() {
             false
         })
     };
-    let gate = ControlGate::new(ControlPolicy::Hardened, Some(auth));
-    assert!(!gate.authorize(
-        &ingress,
-        super::control_policy::ControlClass::IAm,
-        &[3000],
-        false
-    ));
+    let gate = Arc::new(ControlGate::new(ControlPolicy::Hardened, Some(auth)));
+    let mut h = Harness::with_gate(TableSeed::new(), Arc::clone(&gate));
+    let ingress = h.ctx_with_provenance(
+        1,
+        &[0xAA, 0xBB, 0xCC],
+        npdu,
+        TransportProvenance::unverified(),
+    );
+    h.handle(ingress).await;
+    h.assert_quiet();
+    assert_eq!(gate.snapshot().i_am.deny_total, 1);
     let rendered = seen.lock().unwrap().pop().unwrap();
     assert!(rendered.contains("3000"));
     assert!(rendered.contains("unverified"));
     assert!(!rendered.contains("AA"));
     assert!(!rendered.contains("DE"));
     assert!(!rendered.contains("ad"));
-    let _ = gate;
 }

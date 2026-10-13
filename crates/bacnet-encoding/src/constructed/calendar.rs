@@ -16,6 +16,9 @@
 //! Effective_Period carries it, that pair is the whole encoding. A BACnetLIST
 //! of calendar entries is the plain concatenation of its elements.
 
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
 use bacnet_types::constructed::{BACnetCalendarEntry, BACnetDateRange, BACnetWeekNDay};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::Date;

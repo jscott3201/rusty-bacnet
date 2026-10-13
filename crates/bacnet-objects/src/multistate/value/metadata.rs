@@ -131,12 +131,24 @@ const BASE: &[PropertyMetadata] = &[
 ];
 
 pub(super) fn for_object(object: &MultiStateValueObject) -> Cow<'_, [PropertyMetadata]> {
-    object.access.project(Cow::Borrowed(BASE))
+    object
+        .access
+        .project(rows(object), object.write_source.is_enabled())
 }
 
 /// Whether `property` is absent under the object's Present_Value access.
 pub(super) fn excludes(object: &MultiStateValueObject, property: P) -> bool {
-    object.access.excludes(BASE, property)
+    object
+        .access
+        .excludes(&rows(object), property, object.write_source.is_enabled())
+}
+
+fn rows(object: &MultiStateValueObject) -> Cow<'_, [PropertyMetadata]> {
+    let mut rows = Cow::Borrowed(BASE);
+    if object.profile.metadata().next().is_some() {
+        rows.to_mut().extend(object.profile.metadata());
+    }
+    rows
 }
 
 #[cfg(test)]

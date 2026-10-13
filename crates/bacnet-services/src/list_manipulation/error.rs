@@ -41,8 +41,11 @@ impl ChangeListError {
 
     /// Decode one complete body with no trailing content.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let (error_class, error_code, first_failed_element_number) =
-            decode_element_error(data, "ChangeList-Error")?;
+        let (error_class, error_code, first_failed_element_number) = decode_element_error(
+            data,
+            "ChangeList-Error",
+            "ChangeList-Error first-failed-element-number",
+        )?;
         Ok(Self {
             error_class,
             error_code,

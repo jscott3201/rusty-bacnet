@@ -18,9 +18,20 @@
 //! ownership before egress admission, so dropping their caller does not cancel
 //! admitted work. `stop()` seals admission, closes roles, joins dispatch and owned
 //! workers, then stops ingress. Undelivered audit records may be lost on shutdown.
+//! Before reporting termination, it settles forgotten durable writes and awaits
+//! queued save attempts with the database guard released. Canceling this wait
+//! preserves one settlement task for the next `stop()` call to join.
 //! Cloned role handles keep working until shutdown, then fail closed; after
 //! the session drops, [`Weak`](std::sync::Weak) upgrade fails and every role
 //! call reports shutdown.
+//!
+//! The session keeps its object database through `stop()` and lets go of it
+//! when it drops. Every endpoint holder of the database (the session, the
+//! server role's responder, a cloned server role handle, the source Audit
+//! runtime and the session's tasks) lets go through
+//! [`drop_database_off_runtime`], so whichever goes last, in async code the
+//! objects and any durable saves they wait for drop on Tokio's blocking pool,
+//! not on a runtime worker (#1561).
 //!
 //! ```compile_fail,E0596
 //! // Lifecycle is owner-exclusive: `stop` takes `&mut self`, so a shared
@@ -82,6 +93,7 @@ use crate::roles::{
 use bacnet_server::server::{
     __endpoint_EndpointResponder as EndpointResponder,
     __endpoint_NotificationTransactions as NotificationTransactions,
+    __endpoint_settle_durable_writes as settle_durable_writes, drop_database_off_runtime,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -120,9 +132,9 @@ pub enum SessionRole {
 /// limit).
 ///
 /// Typed at the public boundary: every field is validated where it matters
-/// (`queue_capacity == 0` or `read_work_limit == 0` fails
-/// [`EndpointSession::new`]; APDU/timer values flow into the client role
-/// config unchanged).
+/// (`queue_capacity == 0`, `read_work_limit == 0` or a
+/// `min_request_interval_ms` past an hour fails [`EndpointSession::new`];
+/// APDU/timer values flow into the client role config unchanged).
 ///
 /// ```
 /// use bacnet_endpoint::session::SessionConfig;
@@ -131,6 +143,7 @@ pub enum SessionRole {
 /// assert!(config.queue_capacity > 0);
 /// assert_eq!(config.max_apdu_length, 480);
 /// assert_eq!(config.read_work_limit, 256);
+/// assert_eq!(config.min_request_interval_ms, 0);
 /// ```
 #[derive(Clone, Debug)]
 pub struct SessionConfig {
@@ -149,7 +162,8 @@ pub struct SessionConfig {
     /// [`DeviceIdentity`](crate::identity::DeviceIdentity) via
     /// [`with_identity`](EndpointSession::with_identity) overrides this with
     /// the identity value; the MS/TP builder additionally rejects identities
-    /// above its 480 transport bound at build time.
+    /// above its transport bound (480, or 1476 with extended frames) at
+    /// build time.
     pub max_apdu_length: u16,
     /// Result rows one ReadProperty served by the server role may expand
     /// (default 256).
@@ -164,6 +178,18 @@ pub struct SessionConfig {
     /// Must be greater than zero; [`EndpointSession::new`] returns
     /// [`Error::Encoding`] otherwise.
     pub read_work_limit: usize,
+    /// Least time, in milliseconds, between the client role's confirmed
+    /// requests to one destination (default 0: no pacing), measured as
+    /// [`ClientConfig::min_request_interval_ms`] says for `BACnetClient`
+    /// (#1542).
+    ///
+    /// Only new confirmed requests wait: a retry keeps its request's turn,
+    /// and replies, notifications and unconfirmed requests go at once.
+    /// Stopping or dropping the session ends a wait at once with the
+    /// shutdown error. At
+    /// most [`MAX_MIN_REQUEST_INTERVAL_MS`](bacnet_client::client::MAX_MIN_REQUEST_INTERVAL_MS),
+    /// an hour; [`EndpointSession::new`] returns [`Error::Encoding`] past it.
+    pub min_request_interval_ms: u64,
 }
 
 impl Default for SessionConfig {
@@ -175,6 +201,7 @@ impl Default for SessionConfig {
             max_apdu_length: 480,
             read_work_limit: bacnet_server::server::ReadPropertyMultipleBudget::default()
                 .max_result_elements,
+            min_request_interval_ms: 0,
         }
     }
 }
@@ -259,13 +286,18 @@ pub struct EndpointSession<T: TransportPort + 'static> {
     pub(crate) source_audit_bindings: Vec<(ObjectIdentifier, std::net::SocketAddrV4)>,
     source_recipient: Option<Arc<crate::source_audit::recipient::SourceRecipient>>,
     stop_exit: Option<Result<SessionExit, Error>>,
+    durable_settlement: Option<JoinHandle<()>>,
     ingress_stopped: bool,
     identity: Option<crate::identity::DeviceIdentity>,
     bip_local_address: Option<std::net::SocketAddrV4>,
     registered_network_port: Option<ObjectIdentifier>,
     registered_port_lease: std::sync::Weak<()>,
     device_write_authorizer: Option<bacnet_server::mutation::MutationAuthorizer>,
+    pub(crate) reinitialize: Option<bacnet_server::server::ReinitializeHandler>,
+    pub(crate) reinit_password: Option<String>,
     egress: Option<bacnet_endpoint_core::endpoint_ingress::EndpointEgress>,
+    /// The B/IP transport's own exchanges, when the B/IP builder built it.
+    pub(crate) bip_status: Option<bacnet_transport::bip::BvlcClientStatus>,
 }
 
 /// Terminal state of the session dispatch task.
@@ -286,7 +318,8 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// Creates a session owning `transport` (not yet started).
     ///
     /// Returns [`Error::Encoding`] when `config.queue_capacity` or
-    /// `config.read_work_limit` is zero. Normally built via
+    /// `config.read_work_limit` is zero, or `config.min_request_interval_ms`
+    /// is more than an hour. Normally built via
     /// [`BipEndpointBuilder`](crate::bip::BipEndpointBuilder),
     /// [`ScEndpointBuilder`](crate::sc::ScEndpointBuilder), or
     /// [`MstpEndpointBuilder`](crate::mstp::MstpEndpointBuilder) instead of
@@ -314,12 +347,20 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                 "endpoint session read work limit must be greater than zero".into(),
             ));
         }
+        let interval = config.min_request_interval_ms;
+        if interval > bacnet_client::client::MAX_MIN_REQUEST_INTERVAL_MS {
+            return Err(Error::Encoding(format!(
+                "endpoint session min-request-interval {interval} ms is more than {} ms",
+                bacnet_client::client::MAX_MIN_REQUEST_INTERVAL_MS
+            )));
+        }
         let coordinator = Arc::new(OutboundTransactionCoordinator::new());
         let token = SessionToken::new(Arc::clone(&coordinator));
         let client_config = ClientConfig {
             apdu_timeout_ms: config.apdu_timeout_ms,
             apdu_retries: config.apdu_retries,
             max_apdu_length: config.max_apdu_length,
+            min_request_interval_ms: interval,
             ..ClientConfig::default()
         };
         Ok(Self {
@@ -353,13 +394,17 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             source_audit_bindings: Vec::new(),
             source_recipient: None,
             stop_exit: None,
+            durable_settlement: None,
             ingress_stopped: false,
             identity: None,
             bip_local_address: None,
             registered_network_port: None,
             registered_port_lease: std::sync::Weak::new(),
             device_write_authorizer: None,
+            reinitialize: None,
+            reinit_password: None,
             egress: None,
+            bip_status: None,
         })
     }
 
@@ -370,7 +415,8 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// [`DeviceIdentity`](crate::identity::DeviceIdentity) is also composed,
     /// build the database from that same identity (see
     /// [`DeviceIdentity::build_database`](crate::identity::DeviceIdentity::build_database))
-    /// so Device readback agrees with I-Am.
+    /// so Device readback agrees with I-Am. The selected Device must declare
+    /// segmentation NONE, matching the narrow endpoint roles.
     /// The session retains ownership even in `ClientOnly` mode and shares this
     /// same database with the responder in `Both` mode.
     ///
@@ -482,10 +528,11 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                 "endpoint session cannot be started more than once".into(),
             ));
         }
-        let device_write_target = self.validate_device_execution()?;
+        self.validate_segmentation().await?;
+        let device_target = self.validate_device_execution()?;
         let source_routes = self.prepare_source_audit_reporter()?;
         self.prepare_registered_port().await?;
-        self.commit_device_write_profile(device_write_target);
+        self.commit_device_profile(device_target);
         if self.lifecycle.compare_exchange(
             Lifecycle::Ready as u8,
             Lifecycle::Running as u8,
@@ -510,7 +557,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         };
         if let Err(error) = self
             .publish_registered_port(
-                receivers.normal_bip_port,
+                receivers.bip_port.clone(),
                 receivers.egress.local_network_number(),
             )
             .await
@@ -519,7 +566,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             return Err(error);
         }
         let bip_local_address = receivers.bip_local_address;
-        if let Err(error) = self.start_roles(receivers, source_routes, device_write_target) {
+        if let Err(error) = self.start_roles(receivers, source_routes, device_target) {
             // Keep cleanup ownership in self before awaiting. Cancellation leaves
             // Stopping plus intact joins; stop/Drop can still finish teardown.
             let _ = self.stop().await;
@@ -537,6 +584,12 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// [`Error::Encoding`]. Takes
     /// `&mut self` so only the owner can stop; cloned role handles observe
     /// shutdown and fail closed.
+    ///
+    /// With an attached database, waits for its lock and for queued durable save
+    /// attempts, including corrections for abandoned staged writes. Release any
+    /// application-held database guard so shutdown can progress. A stalled backend
+    /// keeps this call pending; completion does not certify backend success or
+    /// power-loss durability. The database remains attached after termination.
     pub async fn stop(&mut self) -> Result<SessionExit, Error> {
         let state = self.lifecycle.load(Ordering::Acquire);
         if state != Lifecycle::Running as u8 && state != Lifecycle::Stopping as u8 {
@@ -609,6 +662,19 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         self.responder.take();
         self.client_handle = None;
         self.server_handle = None;
+        if self.durable_settlement.is_none() {
+            if let Some(db) = &self.database {
+                self.durable_settlement = Some(tokio::spawn(settle_durable_writes(Arc::clone(db))));
+            }
+        }
+        if let Some(task) = self.durable_settlement.as_mut() {
+            // Keep the one settlement owner across canceled stop waiters.
+            let result = task.await;
+            self.durable_settlement = None;
+            result.map_err(|error| {
+                Error::Encoding(format!("endpoint durable settlement failed: {error}"))
+            })?;
+        }
         self.lifecycle
             .store(Lifecycle::Stopped as u8, Ordering::Release);
         self.stop_exit.take().expect("joined dispatch")
@@ -694,6 +760,20 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             .flatten()
     }
 
+    /// How the transport's foreign-device registration is going (#938):
+    /// whether it holds a live lease, the time left on it, and the last
+    /// attempt's result and outcome, a BBMD's refusal included. It is there
+    /// for a session [`BipEndpointBuilder`](crate::bip::BipEndpointBuilder)
+    /// built, in any mode and after stop, and `None` for any other: take a
+    /// [`BipTransport::bvlc_client_status`](bacnet_transport::bip::BipTransport::bvlc_client_status)
+    /// before handing a transport to [`Self::new`].
+    pub fn foreign_registration(
+        &self,
+    ) -> Option<bacnet_transport::bip::ForeignRegistrationSnapshot> {
+        let status = self.bip_status.as_ref()?;
+        Some(status.snapshot().foreign_registration)
+    }
+
     /// Returns the composed session role (narrow admin).
     pub fn session_role(&self) -> SessionRole {
         self.role
@@ -772,6 +852,16 @@ impl<T: TransportPort + 'static> Drop for EndpointSession<T> {
         }
         if let Some(task) = self.dispatch_task.take() {
             task.abort();
+        }
+        if let Some(task) = self.durable_settlement.take() {
+            task.abort();
+        }
+        // The session's own handle, kept through stop(), goes off the
+        // runtime if it is the last (#1561). Every other endpoint holder
+        // (responder, source Audit, the aborted tasks' handles) lets go the
+        // same way when it drops, whichever goes last.
+        if let Some(db) = self.database.take() {
+            drop(drop_database_off_runtime(db));
         }
     }
 }
@@ -986,3 +1076,7 @@ mod local_network_tests;
 #[cfg(test)]
 #[path = "read_work_limit_tests.rs"]
 mod read_work_limit_tests;
+
+#[cfg(test)]
+#[path = "client_pacing_tests.rs"]
+mod client_pacing_tests;

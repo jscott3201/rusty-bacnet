@@ -1,3 +1,6 @@
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
 use super::*;
 use crate::constructed::{decode_property_state, encode_property_state};
 

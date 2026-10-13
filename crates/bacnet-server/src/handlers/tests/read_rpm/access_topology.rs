@@ -481,10 +481,10 @@ fn rpm_access_point_indexed_reads_and_bytes_are_unchanged() {
                 Ok(&[
                     0x91, 28, 0x91, 247, 0x92, 0x01, 0x42, 0x91, 250, 0x91, 246, 0x91, 36, 0x91,
                     111, 0x91, 81, 0x91, 103, 0x92, 0x01, 0x04, 0x91, 249, 0x91, 255, 0x92, 0x01,
-                    0x21, 0x92, 0x01, 0x05, 0x91, 88,
+                    0x21, 0x92, 0x01, 0x05, 0x91, 88, 0x91, 248,
                 ]),
             ),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 15])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 16])),
             (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 28])),
             (P::PROPERTY_LIST, Some(2), Ok(&[0x91, 247])),
             (P::PROPERTY_LIST, Some(3), Ok(&[0x92, 0x01, 0x42])),
@@ -497,9 +497,11 @@ fn rpm_access_point_indexed_reads_and_bytes_are_unchanged() {
             (P::PROPERTY_LIST, Some(10), Ok(&[0x92, 0x01, 0x04])),
             (P::PROPERTY_LIST, Some(11), Ok(&[0x91, 249])),
             (P::PROPERTY_LIST, Some(15), Ok(&[0x91, 88])),
+            // Access_Event_Authentication_Factor (248), served since #1132.
+            (P::PROPERTY_LIST, Some(16), Ok(&[0x91, 248])),
             (
                 P::PROPERTY_LIST,
-                Some(16),
+                Some(17),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (
@@ -526,6 +528,17 @@ fn rpm_access_point_indexed_reads_and_bytes_are_unchanged() {
             ),
             (
                 P::ACCESS_EVENT_CREDENTIAL,
+                Some(0),
+                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+            ),
+            // The UNDEFINED factor until an event carries one (#1132).
+            (
+                P::ACCESS_EVENT_AUTHENTICATION_FACTOR,
+                None,
+                Ok(&[0x09, 0x00, 0x19, 0x00, 0x28]),
+            ),
+            (
+                P::ACCESS_EVENT_AUTHENTICATION_FACTOR,
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
@@ -724,3 +737,6 @@ fn rpm_access_zone_indexed_reads_and_bytes_are_unchanged() {
         assert_cases(&db, oid, cases);
     }
 }
+
+#[path = "access_point_policies.rs"]
+mod policies;

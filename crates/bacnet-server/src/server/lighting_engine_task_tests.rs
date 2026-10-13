@@ -281,3 +281,191 @@ async fn an_egress_reports_present_value_when_it_runs_out() {
     );
     server.stop().await.unwrap();
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_trim_change_fades_in_on_the_task_and_reports_trim_active() {
+    let (mut server, oid, sent) = start(|object| {
+        object.set_high_end_trim(Some(100.0)).unwrap();
+        object.set_trim_fade_time(300).unwrap();
+    })
+    .await;
+    subscribe(&server, oid, None).await;
+    write(&server, oid, PV, PropertyValue::Real(90.0), Some(8)).await;
+    assert_eq!(
+        reports(&sent),
+        [(OBJECT, PV, real(90.0)), (TRACKING, TV, real(90.0))]
+    );
+    // High_End_Trim 60 (4194335): the bound moves from 100 down to 60 over
+    // 300 ms, and Tracking_Value follows it from 90 down at each 100 ms grid
+    // point. Present_Value stays 90, so whole-object subscribers hear
+    // nothing.
+    write(
+        &server,
+        oid,
+        PropertyIdentifier::HIGH_END_TRIM,
+        PropertyValue::Real(60.0),
+        None,
+    )
+    .await;
+    assert_eq!(reports(&sent), []);
+    // TRIM_ACTIVE is 5.
+    assert_eq!(
+        read(&server, oid, PropertyIdentifier::IN_PROGRESS).await,
+        PropertyValue::Enumerated(5)
+    );
+    // 100 - 40/3 is a little over 86.66, so the first grid point holds
+    // Tracking_Value at the bound; the end holds it at the trim.
+    let mut heard = Vec::new();
+    for _ in 0..3 {
+        advance(100).await;
+        heard.push(reports(&sent));
+    }
+    assert_eq!(
+        heard,
+        [
+            vec![(TRACKING, TV, real(100.0 - 40.0 / 3.0))],
+            vec![(TRACKING, TV, real(100.0 - 80.0 / 3.0))],
+            vec![(TRACKING, TV, real(60.0))],
+        ]
+    );
+    assert_eq!(
+        read(&server, oid, PropertyIdentifier::IN_PROGRESS).await,
+        PropertyValue::Enumerated(5)
+    );
+    let deadline = server
+        .database()
+        .read()
+        .await
+        .get(&oid)
+        .unwrap()
+        .next_monotonic_deadline_internal();
+    assert_eq!(deadline, None);
+    server.stop().await.unwrap();
+}
+
+/// Subscribe `process` to Tracking_Value alone, with `increment`, and return
+/// the subscription's key.
+async fn subscribe_tracking(
+    server: &BACnetServer<TestTransport>,
+    oid: ObjectIdentifier,
+    process: u32,
+    increment: Option<f32>,
+) -> crate::cov::CovSubscriptionKey {
+    server
+        .cov_table
+        .write()
+        .await
+        .subscribe(CovSubscription {
+            subscriber_mac: MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, process as u8]),
+            subscriber_network: None,
+            subscriber_process_identifier: process,
+            monitored_object_identifier: oid,
+            issue_confirmed_notifications: false,
+            expires_at: None,
+            last_notified_observation: None,
+            monitored_property: Some(TV),
+            monitored_property_array_index: None,
+            cov_increment: increment,
+            notification_kind: CovNotificationKind::Single,
+            timestamped: false,
+        })
+        .unwrap()
+        .key()
+        .clone()
+}
+
+/// Tracking_Value subscribers finer than COV_Increment get denser samples
+/// (#1510): the finest one sets the step, at most one sample per 100 ms grid
+/// point, and each subscriber still hears only its own steps.
+#[tokio::test(start_paused = true)]
+async fn the_finest_tracking_value_subscriber_sets_the_sample_step() {
+    let (mut server, oid, sent) = start(|object| {
+        object
+            .write_property(
+                PropertyIdentifier::COV_INCREMENT,
+                None,
+                PropertyValue::Real(25.0),
+                None,
+            )
+            .unwrap();
+    })
+    .await;
+    // Increments of 1, 10 and 50 percent on processes 3, 4 and 5.
+    for (process, increment) in [(3, 1.0), (4, 10.0), (5, 50.0)] {
+        subscribe_tracking(&server, oid, process, Some(increment)).await;
+    }
+    // RAMP_TO 100.0 % at 50.0 %/s, 5 percent each 100 ms, over 2 s.
+    let ramp = [
+        0x09, 0x02, 0x1C, 0x42, 0xC8, 0x00, 0x00, 0x2C, 0x42, 0x48, 0x00, 0x00,
+    ];
+    write(&server, oid, LC, command(&ramp), None).await;
+    let first: Vec<_> = [3, 4, 5].map(|p| (p, TV, real(0.0))).into();
+    assert_eq!(reports(&sent), first);
+    // A 1 percent step is 20 ms, so the grid bounds it: a sample every
+    // 100 ms, not every quarter as COV_Increment 25 alone would give.
+    for tenth in 1..=20u8 {
+        advance(100).await;
+        let level = f32::from(tenth) * 5.0;
+        let mut expected = vec![(3, TV, real(level))];
+        if tenth % 2 == 0 {
+            expected.push((4, TV, real(level)));
+        }
+        if tenth % 10 == 0 {
+            expected.push((5, TV, real(level)));
+        }
+        assert_eq!(reports(&sent), expected, "at {} ms", u32::from(tenth) * 100);
+    }
+    server.stop().await.unwrap();
+}
+
+/// A subscriber increment finer than COV_Increment but coarser than the ramp
+/// moves in one 100 ms grid cell sets the step itself, and once that
+/// subscriber goes the object's own step comes back (#1510).
+#[tokio::test(start_paused = true)]
+async fn an_unsubscribe_gives_back_the_objects_own_sample_step() {
+    let (mut server, oid, sent) = start(|object| {
+        object
+            .write_property(
+                PropertyIdentifier::COV_INCREMENT,
+                None,
+                PropertyValue::Real(25.0),
+                None,
+            )
+            .unwrap();
+    })
+    .await;
+    // Process 2 gives no increment, so it hears every sample; process 3
+    // asks for 10 percent.
+    subscribe_tracking(&server, oid, 2, None).await;
+    let fine = subscribe_tracking(&server, oid, 3, Some(10.0)).await;
+    // RAMP_TO 100.0 % at 50.0 %/s, 5 percent each 100 ms, over 2 s.
+    let ramp = [
+        0x09, 0x02, 0x1C, 0x42, 0xC8, 0x00, 0x00, 0x2C, 0x42, 0x48, 0x00, 0x00,
+    ];
+    write(&server, oid, LC, command(&ramp), None).await;
+    assert_eq!(reports(&sent), [(2, TV, real(0.0)), (3, TV, real(0.0))]);
+    // 10 percent is two grid cells of this ramp: a sample every 200 ms, not
+    // at every grid point.
+    let mut heard = Vec::new();
+    for _ in 0..4 {
+        advance(100).await;
+        heard.push(reports(&sent));
+    }
+    let both = |level| vec![(2, TV, real(level)), (3, TV, real(level))];
+    assert_eq!(heard, [vec![], both(10.0), vec![], both(20.0)]);
+    // Without process 3, the sample already planned for 600 ms stands; after
+    // it, COV_Increment's quarter, 500 ms, is the step again.
+    server.cov_table.write().await.unsubscribe(&fine);
+    for at in (500..=2_000).step_by(100) {
+        advance(100).await;
+        let expected = match at {
+            600 => vec![(2, TV, real(30.0))],
+            1_100 => vec![(2, TV, real(55.0))],
+            1_600 => vec![(2, TV, real(80.0))],
+            2_000 => vec![(2, TV, real(100.0))],
+            _ => vec![],
+        };
+        assert_eq!(reports(&sent), expected, "at {at} ms");
+    }
+    server.stop().await.unwrap();
+}

@@ -22,7 +22,6 @@ mod dcc;
 #[doc(hidden)]
 pub mod endpoint_responder;
 #[cfg(test)]
-#[path = "endpoint_shared_runtime_tests.rs"]
 mod endpoint_shared_runtime_tests;
 mod enrollment_summary;
 mod event_information;
@@ -30,6 +29,8 @@ mod mutations;
 use mutations::{InitialCovNotification, MutationEffects};
 #[cfg(test)]
 mod audit_log_buffer_wire_tests;
+#[cfg(test)]
+mod color_command_wire_tests;
 #[cfg(test)]
 mod durable_stop_tests;
 #[cfg(test)]
@@ -56,6 +57,7 @@ mod mutation_wpm_priority_tests;
 mod mutation_wpm_tests;
 #[cfg(test)]
 mod notification_class_durable_tests;
+
 mod read_range;
 #[cfg(test)]
 mod recipient_mac_bound_tests;
@@ -63,6 +65,8 @@ mod recipient_mac_bound_tests;
 mod structured_error_wire_tests;
 #[cfg(test)]
 mod subscribed_recipients_wire_tests;
+#[cfg(test)]
+mod tags_durable_tests;
 mod unconfirmed;
 #[cfg(test)]
 mod unconfirmed_tests;
@@ -296,14 +300,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 .await
             }
             s if s == ConfirmedServiceChoice::REINITIALIZE_DEVICE => {
-                let password = &config.reinit_password;
-                let error = handlers::handle_reinitialize_device(&req.service_request, password)
-                    .err()
-                    .unwrap_or(Error::Protocol {
-                        class: ErrorClass::SERVICES.to_raw() as u32,
-                        code: ErrorCode::SERVICE_REQUEST_DENIED.to_raw() as u32,
-                    });
-                Self::error_apdu_from_error(invoke_id, service_choice, &error)
+                let requester =
+                    reinitialize::Requester::new(source_mac, source_network.as_ref(), provenance);
+                reinitialize::server_response(services, &req, requester).await
             }
             s if s == ConfirmedServiceChoice::GET_EVENT_INFORMATION => {
                 event_information::response(
@@ -452,7 +451,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             ),
                             invoke_id,
                             &req.service_request,
-                            Instant::now,
+                            runtime_clock::now,
                         ) {
                             received_event = Some(notification);
                         } else {
@@ -665,6 +664,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         },
                         ack.service_ack.clone(),
                         pending,
+                        Duration::from_millis(config.apdu_segment_timeout_ms),
                     );
                 }
 

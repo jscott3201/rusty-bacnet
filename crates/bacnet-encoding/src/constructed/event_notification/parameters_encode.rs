@@ -1,3 +1,6 @@
+#[cfg(not(feature = "std"))]
+use alloc::string::ToString;
+
 use super::*;
 use crate::constructed::log_fields::check_bit_string;
 

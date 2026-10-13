@@ -64,7 +64,7 @@ async fn bind(wire: &Wire, peer: &Peer, instance: u32, ago: Duration) {
         oid,
         &peer.mac,
         peer.network.as_ref(),
-        Instant::now() - ago,
+        runtime_clock::now() - ago,
         |_| false,
     );
 }

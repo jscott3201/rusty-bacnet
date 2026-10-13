@@ -3,6 +3,8 @@
 //! Provides tab completion for commands, object types, and properties,
 //! plus command history via rustyline.
 
+use std::net::SocketAddrV6;
+
 use bacnet_client::client::BACnetClient;
 use bacnet_transport::bip::BipTransport;
 use bacnet_transport::port::TransportPort;
@@ -25,6 +27,7 @@ use self::admin::{
 };
 use self::bbmd::{
     handle_bdt, handle_bip_discover, handle_bip_register, handle_fdt, handle_unregister,
+    print_foreign_status, report_foreign_start,
 };
 use self::cov_control::{handle_control, handle_reinit, handle_subscribe};
 use self::discover::{handle_discover, handle_find};
@@ -288,28 +291,9 @@ async fn handle_status<T: TransportPort + 'static>(
 ) {
     println!("{} {}", "Transport:".dimmed(), transport_name);
 
-    let mac = client.local_mac();
-    if mac.len() == 6 {
-        let ip = std::net::Ipv4Addr::new(mac[0], mac[1], mac[2], mac[3]);
-        let port = u16::from_be_bytes([mac[4], mac[5]]);
-        println!(
-            "{} {}",
-            "Local address:".dimmed(),
-            format!("{ip}:{port}").cyan()
-        );
-    } else if mac.len() == 18 {
-        let mut ip_bytes = [0u8; 16];
-        ip_bytes.copy_from_slice(&mac[..16]);
-        let ip = std::net::Ipv6Addr::from(ip_bytes);
-        let port = u16::from_be_bytes([mac[16], mac[17]]);
-        println!(
-            "{} {}",
-            "Local address:".dimmed(),
-            format!("[{ip}]:{port}").cyan()
-        );
-    } else {
-        println!("{} {mac:02x?}", "Local MAC:".dimmed());
-    }
+    let bound = resolve::as_bip6(client.transport()).and_then(|bip6| bip6.local_address());
+    let (label, local) = local_address_line(client.local_mac(), bound);
+    println!("{} {}", label.dimmed(), local.cyan());
 
     match &session.default_target_display {
         Some(display) => println!("{} {}", "Default target:".dimmed(), display.cyan()),
@@ -336,14 +320,30 @@ async fn handle_status<T: TransportPort + 'static>(
     );
 }
 
+/// The `status` line for this node's address: a B/IP MAC as `ip:port`, a
+/// B/IPv6 VMAC as `bip6:0x0004D2` followed by the B/IPv6 address it is bound
+/// to, and any other MAC as bytes.
+fn local_address_line(mac: &[u8], bip6: Option<SocketAddrV6>) -> (&'static str, String) {
+    match (mac.len(), bip6) {
+        (3, Some(bound)) => (
+            "Local address:",
+            format!("{} ({bound})", output::format_mac(mac)),
+        ),
+        (3 | 6, _) => ("Local address:", output::format_mac(mac)),
+        _ => ("Local MAC:", format!("{mac:02x?}")),
+    }
+}
+
 /// Resolve a target string to a MAC address, looking up device instances from
-/// the client's discovered device table.
+/// the client's discovered device table and B/IPv6 addresses with
+/// Virtual-Address-Resolution.
 async fn resolve_target_mac<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     target_str: &str,
 ) -> Result<Vec<u8>, String> {
-    match resolve::parse_target(target_str)? {
+    match resolve::parse_target_on(client.transport(), target_str)? {
         resolve::Target::Mac(mac) => Ok(mac),
+        resolve::Target::Bip6(peer) => resolve::bip6_vmac(client.transport(), peer).await,
         resolve::Target::Instance(n) => match client.get_device(n).await {
             Some(d) => Ok(d.mac_address.to_vec()),
             None => Err(format!(
@@ -430,6 +430,7 @@ Aliases: whois=discover, whohas=find, rp=read, rpm=readm, rr=read-range, wp=writ
          cov=subscribe, dcc=control, ack=ack-alarm, ts=time-sync
 
 Targets: IP address (192.168.1.10), IP:port (10.0.1.5:47809), or device instance (1234)
+         B/IPv6 (--ipv6): bip6:1234, bip6:0x40ABCD, or [IPv6]:port (resolved to its VMAC)
          When a default target is set, commands that take a target can omit it.
 Objects: type:instance (ai:1, analog-input:1, binary-value:3)
 Properties: name or abbreviation (present-value, pv, object-name, on, ol[3])"
@@ -549,7 +550,7 @@ pub async fn run_shell<T: TransportPort + 'static>(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut rl = setup_readline()?;
     let mut session = Session::new();
-    let transport_name = if is_sc { "BACnet/SC" } else { "BACnet/IP" };
+    let transport_name = if is_sc { "BACnet/SC" } else { "BACnet/IPv6" };
     let prompt = if is_sc { "bacnet[sc]> " } else { "bacnet> " };
 
     println!(
@@ -608,6 +609,7 @@ pub async fn run_shell<T: TransportPort + 'static>(
 /// Run the interactive BACnet shell with BIP transport (supports BBMD commands).
 pub async fn run_bip_shell(
     client: BACnetClient<BipTransport>,
+    foreign_bbmd: Option<std::net::SocketAddrV4>,
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut rl = setup_readline()?;
@@ -618,6 +620,9 @@ pub async fn run_bip_shell(
         "BACnet CLI v{}. Type 'help' for commands, 'exit' to quit.",
         env!("CARGO_PKG_VERSION")
     );
+    if let Some(bbmd) = foreign_bbmd {
+        report_foreign_start(&client, bbmd).await;
+    }
 
     loop {
         match rl.readline("bacnet> ") {
@@ -638,6 +643,9 @@ pub async fn run_bip_shell(
                     "target" => handle_target(args, &mut session),
                     "status" => {
                         handle_status(&*client, &session, "BACnet/IP").await;
+                        if let Some(bbmd) = foreign_bbmd {
+                            print_foreign_status(&client, bbmd);
+                        }
                     }
                     "discover" | "whois" => {
                         handle_bip_discover(&client, args, format).await;

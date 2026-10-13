@@ -243,6 +243,40 @@ async fn the_dcc_timer_reenabling_communication_sends_at_once() {
     h.server.stop().await.unwrap();
 }
 
+#[tokio::test(start_paused = true)]
+async fn reinitialize_restart_resumes_overdue_cov_without_another_write() {
+    use bacnet_services::device_mgmt::ReinitializeDeviceRequest;
+    use bacnet_types::enums::{EnableDisable, ReinitializedState};
+    for state in [ReinitializedState::WARMSTART, ReinitializedState::COLDSTART] {
+        let mut config = permissive_dcc();
+        config.on_reinitialize = Some(Arc::new(|_, _| Ok(())));
+        let mut h = Harness::start(config).await;
+        h.subscribe_with_delay(false, av1_timed(), DELAY).await;
+        h.notification().await;
+        h.dcc(EnableDisable::DISABLE_INITIATION, None).await;
+        h.settle().await;
+        h.set_clock(14);
+        let earliest = TokioInstant::now();
+        h.write_local(10.0).await;
+        tokio::time::sleep_until(earliest + Duration::from_secs(u64::from(DELAY) + 2)).await;
+        h.no_notification().await;
+        let mut data = BytesMut::new();
+        ReinitializeDeviceRequest {
+            reinitialized_state: state,
+            password: None,
+        }
+        .encode(&mut data)
+        .unwrap();
+        let accepted = TokioInstant::now();
+        h.request(ConfirmedServiceChoice::REINITIALIZE_DEVICE, data)
+            .await;
+        let report = h.notification().await;
+        promptly(accepted, "after accepted restart");
+        assert_eq!(pv_rows(&report), vec![(real(10.0), Some(time(14)))]);
+        h.server.stop().await.unwrap();
+    }
+}
+
 /// A confirmed report that DISABLE_INITIATION ends at its first retry (#1327)
 /// returns its history to the queue with no hold-off: once communication is
 /// enabled again the overdue change goes out at once, its time kept.

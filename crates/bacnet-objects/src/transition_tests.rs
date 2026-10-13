@@ -3,6 +3,8 @@
 
 use super::*;
 
+use bacnet_types::constructed::BACnetXyColor;
+
 fn ms(milliseconds: u64) -> Duration {
     Duration::from_millis(milliseconds)
 }
@@ -101,4 +103,55 @@ fn a_run_woken_slightly_late_keeps_its_cadence() {
     // 99 ms late still counts as on time.
     assert_eq!(run.advance(ms(1_099), 1.0), Progress::Sampled);
     assert_eq!(run.deadline(), ms(1_100));
+}
+
+#[test]
+fn a_finer_step_brings_the_pending_sample_forward() {
+    // 0 to 100 over 10 s moves 10 percent a second.
+    let fade = Transition::fade(0.0f32, 100.0, ms(0), ms(10_000)).unwrap();
+    let mut run = Run::start(fade, 5.0);
+    assert_eq!(run.deadline(), ms(500));
+    // A subscriber's 1 percent step is due 100 ms after the start (#1510).
+    assert_eq!(run.advance(ms(50), 1.0), Progress::Pending);
+    assert_eq!(run.deadline(), ms(100));
+    assert_eq!(run.advance(ms(100), 1.0), Progress::Sampled);
+    assert_eq!(run.deadline(), ms(200));
+    // Back to the coarse step, the pending sample stays where it is, and
+    // the one after it is a coarse step on.
+    assert_eq!(run.advance(ms(150), 5.0), Progress::Pending);
+    assert_eq!(run.deadline(), ms(200));
+    assert_eq!(run.advance(ms(200), 5.0), Progress::Sampled);
+    assert_eq!(run.deadline(), ms(700));
+    // A finer step whose sample would already have fallen due samples at
+    // once, and the next is planned from now.
+    assert_eq!(run.advance(ms(450), 1.0), Progress::Sampled);
+    assert_eq!(run.deadline(), ms(600));
+}
+
+#[test]
+fn an_xy_colour_fades_both_coordinates_along_one_line() {
+    let from = BACnetXyColor::new(0.1, 0.2);
+    let to = BACnetXyColor::new(0.4, 0.6);
+    // A 3-4-5 triangle: the distance is 0.5.
+    assert!((BACnetXyColor::distance(from, to) - 0.5).abs() < 1e-6);
+    let fade = Transition::fade(from, to, ms(0), ms(1_000)).unwrap();
+    let half = fade.value_at(ms(500));
+    assert!((half.x - 0.25).abs() < 1e-6 && (half.y - 0.4).abs() < 1e-6);
+    assert_eq!(fade.value_at(ms(1_000)), to);
+    // The same colour is nothing to fade.
+    assert_eq!(Transition::fade(to, to, ms(0), ms(1_000)), None);
+}
+
+#[test]
+fn kelvin_rounds_to_the_nearest_degree_and_ramps_by_its_distance() {
+    assert_eq!(u32::interpolate(2_700, 2_701, 0.49), 2_700);
+    assert_eq!(u32::interpolate(2_700, 2_701, 0.5), 2_701);
+    // Downward as well as upward.
+    assert_eq!(u32::interpolate(6_500, 2_700, 0.25), 5_550);
+    assert_eq!(u32::distance(6_500, 2_700), 3_800.0);
+    // 3,800 K at 100 K/s is 38 s.
+    let ramp = Transition::ramp(6_500u32, 2_700, ms(0), 100.0).unwrap();
+    assert!(!ramp.is_finished(ms(37_999)));
+    assert!(ramp.is_finished(ms(38_000)));
+    assert_eq!(ramp.value_at(ms(19_000)), 4_600);
 }

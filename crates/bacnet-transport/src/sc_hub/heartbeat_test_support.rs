@@ -62,7 +62,7 @@ impl LiveClient {
         });
         // Dialled like production SC sockets: tokio-rustls, then the upgrade.
         let dial = boxed(|| async {
-            let tcp = tokio::net::TcpStream::connect(address).await.unwrap();
+            let tcp = crate::port_ownership::connect_loopback(address).await;
             crate::sc_tls::disable_nagle(&tcp);
             let tls = tokio_rustls::TlsConnector::from(Arc::new(client))
                 .connect(

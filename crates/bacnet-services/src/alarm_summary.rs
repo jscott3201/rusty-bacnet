@@ -1,5 +1,8 @@
 //! GetAlarmSummary service per ASHRAE 135-2020 Clause 13.10 (deprecated).
 
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
 use bacnet_encoding::constructed::tagged::{
     decode_app_bit_string, decode_app_enumerated, decode_app_object_id,
 };

@@ -12,6 +12,9 @@
 //! Enumerated class and code, then any-value as a constructed wrapper
 //! around the value's own tagged encoding.
 
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
 use super::log_fields::{
     check_bit_string, decode_any_value, decode_failure, decode_integer, decode_log_status,
     decode_timestamp, encode_any_value, encode_ctx_integer, encode_failure, encode_log_status,

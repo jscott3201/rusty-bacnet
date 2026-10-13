@@ -19,7 +19,7 @@
 //! well.
 
 #[cfg(not(feature = "std"))]
-use alloc::{format, vec::Vec};
+use alloc::vec::Vec;
 
 use crate::enums::{AuditOperation, ObjectType, ServiceSupported};
 use crate::error::{Error, Result};

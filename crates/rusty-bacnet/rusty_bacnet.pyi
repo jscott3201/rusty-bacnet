@@ -6,6 +6,10 @@ as class attributes; vendor-proprietary values are available via ``from_raw()``.
 
 from __future__ import annotations
 
+import datetime
+import os
+import pathlib
+from collections.abc import Sequence
 from typing import Any, Awaitable, Literal, NotRequired, Optional, TypedDict, Union
 
 UNSPECIFIED: Literal[255]
@@ -592,9 +596,15 @@ class PropertyIdentifier:
     CERTIFICATE_SIGNING_REQUEST_FILE: PropertyIdentifier
     COMMAND_VALIDATION_RESULT: PropertyIdentifier
     ISSUER_CERTIFICATE_FILES: PropertyIdentifier
+    COLOR_OVERRIDE: PropertyIdentifier
+    COLOR_REFERENCE: PropertyIdentifier
     DEFAULT_COLOR: PropertyIdentifier
     DEFAULT_COLOR_TEMPERATURE: PropertyIdentifier
+    OVERRIDE_COLOR_REFERENCE: PropertyIdentifier
     COLOR_COMMAND: PropertyIdentifier
+    HIGH_END_TRIM: PropertyIdentifier
+    LOW_END_TRIM: PropertyIdentifier
+    TRIM_FADE_TIME: PropertyIdentifier
 
     @staticmethod
     def from_raw(value: int) -> PropertyIdentifier: ...
@@ -1171,6 +1181,11 @@ class DeviceObjectPropertyReference(TypedDict):
     property in this device, and stores a member naming the server's own
     Device in its local form.
 
+    Typed reads include all four keys; absent optional device and array
+    index fields are ``None``. Single reference reads from Trend Log,
+    Averaging and Event Enrollment use this same mapping. Reserved instance
+    4194303 remains an explicit ObjectIdentifier, including unset references.
+
     Unknown or missing keys and a ``device_identifier`` that isn't a Device
     raise ValueError, a ``property_array_index`` outside unsigned32
     OverflowError, and wrong types TypeError. The server reads only its own objects, so a Trend Log
@@ -1203,6 +1218,19 @@ class AccessRule(TypedDict):
     location: NotRequired[
         ObjectIdentifier | tuple[ObjectIdentifier, ObjectIdentifier] | None
     ]
+
+
+# One Access Point Authentication_Policy_List element
+# (``BACnetAuthenticationPolicy``): the ``(credential_data_input, index)``
+# entries, each Credential Data Input an ``ObjectIdentifier`` in this device
+# or a ``(device, object)`` pair, then whether the order is enforced and the
+# timeout in seconds (0 for none). A read of the list gives each element in
+# this form.
+AuthenticationPolicy = tuple[
+    list[tuple[ObjectIdentifier | tuple[ObjectIdentifier, ObjectIdentifier], int]],
+    bool,
+    int,
+]
 
 
 class AuditReporterConfiguration(TypedDict):
@@ -1425,9 +1453,13 @@ class PropertyValue:
       object reference lists and Accompaniment
       (``"device_object_reference"``: an ``ObjectIdentifier``, or
       ``(device, object)``), Supported_Formats
-      (``"authentication_factor_format"``), Stages (``"stage_limit_value"``:
-      ``(limit, values, deadband)``), Access Rights rules (``"access_rule"``:
-      an ``AccessRule`` with every key), property reference lists
+      (``"authentication_factor_format"``), Authentication_Policy_List
+      (``"authentication_policy"``: an ``AuthenticationPolicy``), Stages
+      (``"stage_limit_value"``: ``(limit, values, deadband)``), Access Rights
+      rules (``"access_rule"``:
+      an ``AccessRule`` with every key), property reference lists and the
+      single Trend Log Log_DeviceObjectProperty or Averaging and Event
+      Enrollment Object_Property_Reference
       (``"device_object_property_reference"``: a
       ``DeviceObjectPropertyReference`` with every key), a Global Group's
       Present_Value (``"property_access_result"``),
@@ -1441,7 +1473,12 @@ class PropertyValue:
       ``mac_address``), Value_Source and Value_Source_Array
       (``"value_source"``), and an Accumulator's Scale (``"scale"``: a
       ``float`` or an ``int``) and Prescale (``"prescale"``: ``(multiplier,
-      modulo_divide)``). Each element keeps its octets, so the value
+      modulo_divide)``). Tags elements are ``"name_value"`` mappings with
+      ``"name": str`` and ``"value": None | PropertyValue``. Semantic tags
+      have ``None``; valued NULL is ``PropertyValue.null()``. Date and Time
+      are separate primitive values, not a combined pair. Whole Tags reads
+      are lists, indexed reads one element, and index zero an unsigned count.
+      Each element keeps its octets, so the value
       writes back unchanged. A value that isn't those elements, to the last
       octet, follows the rules below.
     - Other context-tagged content (a Load Control's shed levels, an Event
@@ -1555,7 +1592,10 @@ class DiscoveredDevice:
     def object_identifier(self) -> ObjectIdentifier: ...
 
     @property
-    def mac_address(self) -> bytes: ...
+    def mac_address(self) -> bytes:
+        """The MAC the I-Am came from: IPv4 and port on B/IP, the
+        3-octet VMAC on B/IPv6, the station on MS/TP."""
+        ...
 
     @property
     def max_apdu_length(self) -> int: ...
@@ -1697,6 +1737,33 @@ class BacnetAbortError(BacnetError):
     """
     reason: int
 
+class BacnetLogNotAdvancingError(BacnetError):
+    """Raised when a paged log read can't advance (#1530).
+
+    The device answered a page by sequence number with records from before
+    the one asked for, as bacnet-stack 1.6.1 does past its sequence wrap, or
+    with none where its record counts say it holds that record. Read the log
+    by position instead.
+
+    Attributes:
+        requested: The sequence number asked for.
+        returned: What the device numbered the first record it sent; None
+            when it sent none.
+    """
+    requested: int
+    returned: int | None
+
+class BacnetReadRangeViolationError(BacnetError):
+    """Raised when a strict ``read_range`` refuses an answer that breaks a
+    ReadRange rule (#1531). Read again with ``validation="lenient"`` to keep
+    the answer and the rules it broke.
+
+    Attributes:
+        rule: The rule broken, in snake case, such as
+            ``"zero_first_sequence_number"``.
+    """
+    rule: str
+
 class BacnetTransportError(BacnetError, OSError):
     """Raised when a transport socket or I/O operation fails.
 
@@ -1717,6 +1784,30 @@ class BacnetTransportError(BacnetError, OSError):
 # Serial ports
 # ---------------------------------------------------------------------------
 
+def decode_log_records(result: ReadRangeResult) -> list[dict[str, Any]]:
+    """Decode the records of a ``read_range`` result of a log's Log_Buffer
+    (#1534).
+
+    Each record is a dict with ``timestamp`` as a ``(date, time)`` pair and
+    ``datum``, a dict whose ``kind`` names the choice and whose key of the
+    same name holds its value: ``log_status`` (bits: 0 log-disabled, 1
+    buffer-purged, 2 log-interrupted), ``boolean``, ``real``,
+    ``enumerated``, ``unsigned``, ``signed``, ``bitstring`` (``(unused_bits,
+    bytes)``), ``null`` (no value), ``failure`` (``(error_class,
+    error_code)``), ``time_change`` (seconds), ``any`` (the value's encoding),
+    ``values`` (a Trend Log Multiple record's list of such dicts),
+    ``notification`` (an Event Log record's event notification, its
+    ``event_values`` as their encoding) or ``audit_notification`` (an Audit
+    Log record, as ``audit_log_query`` shows it). A Trend Log record adds
+    ``status_flags`` (bits: 0 in-alarm, 1 fault, 2 overridden, 3
+    out-of-service), or None.
+
+    Raises ValueError for a result that isn't a log's Log_Buffer, or whose
+    item data doesn't decode as ``item_count`` records, naming the first
+    record that fails by index and offset.
+    """
+    ...
+
 def list_serial_ports() -> list[str]:
     """List the serial ports the operating system reports, as names to pass as
     ``serial_port=`` for ``transport="mstp"`` (``/dev/ttyUSB0``,
@@ -1728,6 +1819,92 @@ def list_serial_ports() -> list[str]:
     subclass for the failure's kind) if the operating system can't be asked.
     """
     ...
+
+
+# ---------------------------------------------------------------------------
+# B/IP modes (#938)
+# ---------------------------------------------------------------------------
+
+class ForeignDevice:
+    """A foreign-device registration, for the ``foreign_device=`` keyword of
+    ``BACnetClient``, ``BACnetServer`` and ``BipEndpoint`` (B/IP only).
+
+    ``bbmd`` is ``"ip"`` or ``"ip:port"`` (port 47808 by default). ``ttl`` is
+    how many seconds the BBMD keeps the entry, 1 to 65535. ``renewal`` is
+    the seconds between registrations, at least 0.1 and less than ``ttl``;
+    ``None`` renews at half the TTL. Behind NAT, renew often so the mapping
+    the BBMD's replies come back on stays open, while the TTL stays long.
+    Invalid values raise ValueError, or OverflowError for an integer out of
+    range.
+
+    The owner registers at start and renews on its own. Its broadcasts go
+    through the BBMD; the first few wait for the first registration to be
+    answered. ``foreign_registration()`` reports how it goes.
+    """
+
+    def __init__(self, bbmd: str, ttl: int = 300, renewal: Optional[float] = None) -> None: ...
+    @property
+    def bbmd(self) -> str: ...
+    @property
+    def ttl(self) -> int: ...
+    @property
+    def renewal(self) -> Optional[float]: ...
+
+class Bbmd:
+    """A BBMD set-up, for the ``bbmd=`` keyword of ``BACnetClient``,
+    ``BACnetServer`` and ``BipEndpoint`` (B/IP only).
+
+    ``bdt`` lists the BBMDs of the other subnets, each ``"ip:port"`` (its
+    broadcasts forwarded by unicast) or ``("ip:port", "mask")``; this BBMD's
+    own row is added when missing. ``accept_foreign_devices`` lets foreign
+    devices register (default False: every registration is refused).
+    ``management_acl`` lists the IPv4 addresses allowed to delete Foreign
+    Device Table entries (default: none). ``bdt_persist_path`` names a file
+    holding a BDT, 10 octets per row, to start with instead of ``bdt`` when
+    it loads. Write-BDT from the network is always refused. Invalid values
+    raise ValueError, or OverflowError for an integer out of range.
+    """
+
+    def __init__(
+        self,
+        bdt: Optional[Sequence[str | tuple[str, str]]] = None,
+        *,
+        accept_foreign_devices: bool = False,
+        management_acl: Optional[Sequence[str]] = None,
+        bdt_persist_path: Optional[str | os.PathLike[str]] = None,
+    ) -> None: ...
+    @property
+    def bdt(self) -> list[tuple[str, str]]: ...
+    @property
+    def accept_foreign_devices(self) -> bool: ...
+    @property
+    def management_acl(self) -> list[str]: ...
+    @property
+    def bdt_persist_path(self) -> Optional[pathlib.Path]: ...
+
+class ForeignRegistrationStatus(TypedDict):
+    """A foreign device's registration, as ``foreign_registration()``
+    reports it. ``registered`` is whether a lease is live; the lease starts
+    at the earliest send a success could answer, so it never outlasts the
+    BBMD's. ``lease_remaining`` and ``next_attempt_in`` are seconds, or None.
+    ``last_bbmd``, ``last_result`` (the BVLC result code, 0x0030 for a
+    refusal) and ``last_outcome`` (``"pending"``, ``"accepted"``,
+    ``"refused"``, ``"timed_out"``, ``"local_error"`` or ``"cancelled"``)
+    describe the latest attempt and clear when the owner stops. The totals
+    survive it: ``lapses`` counts leases that ran out with no newer success,
+    and ``renewal_hints`` the BBMD's Distribute-Broadcast-To-Network NAKs,
+    each of which brings the next attempt forward."""
+    registered: bool
+    lease_remaining: Optional[float]
+    next_attempt_in: Optional[float]
+    last_bbmd: Optional[str]
+    last_result: Optional[int]
+    last_outcome: Optional[str]
+    attempts: int
+    accepted: int
+    refused: int
+    lapses: int
+    renewal_hints: int
 
 
 # ---------------------------------------------------------------------------
@@ -1784,6 +1961,19 @@ class BACnetClient:
         # MS/TP peer address is a station MAC string ("7" or "mstp:7")
         async with BACnetClient(transport="mstp", serial_port="/dev/ttyUSB0", mstp_mac=3) as client:
             value = await client.read_property("7", oid, pid)
+
+        # A B/IPv6 peer is named by its VMAC: "bip6:1234" for device 1234,
+        # "bip6:0x40ABCD" for any VMAC. resolve_vmac finds it from "[ip]:port".
+        # ipv6_device_instance gives the client a stable VMAC of its own.
+        async with BACnetClient(transport="ipv6", port=0, ipv6_device_instance=4321) as client:
+            vmac = await client.resolve_vmac("[2001:db8::10]:47808")
+            value = await client.read_property(vmac, oid, pid)
+
+    Every ``address`` takes ``"ip:port"`` (B/IP), ``"bip6:<device
+    instance>"`` or ``"bip6:0x<6 hex digits>"`` (a B/IPv6 VMAC, ipv6 only),
+    colon hex such as ``"01:02:03:04:05:06"`` (SC, or ``"00:04:d2"`` for a
+    VMAC), or an MS/TP station. ``"[ip]:port"`` raises ValueError: use
+    ``resolve_vmac``. So does a ``bip6:`` address on any other transport.
     """
 
     def __init__(
@@ -1807,8 +1997,73 @@ class BACnetClient:
         mstp_mac: int = 1,
         mstp_max_master: int = 127,
         mstp_max_info_frames: int = 1,
+        mstp_extended_frames: bool = False,
+        mstp_echo: bool = False,
+        mstp_echo_grace_ms: Optional[int] = None,
+        mstp_transmit_latency_pad_ms: Optional[int] = None,
+        mstp_usage_timeout_ms: Optional[int] = None,
+        mstp_reply_timeout_ms: Optional[int] = None,
         sc_device_uuid: Optional[bytes | bytearray] = None,
-    ) -> None: ...
+        share_port_by_address: bool = False,
+        min_request_interval_ms: int = 0,
+        ipv6_device_instance: Optional[int] = None,
+        bbmd: Optional[Bbmd] = None,
+        foreign_device: Optional[ForeignDevice] = None,
+    ) -> None:
+        """``bbmd`` / ``foreign_device`` (B/IP only, at most one, else
+        ValueError): run the client as a BBMD, or register it with a BBMD
+        on another subnet as a foreign device, so its Who-Is reaches that
+        subnet (#938). See ``Bbmd`` and ``ForeignDevice``.
+
+        ``ipv6_device_instance`` (B/IPv6 only, default None): the device
+        instance whose VMAC the client uses (Clause H.7.2), 0 to 4194303, so
+        peers know it by a stable VMAC such as ``bip6:0x0010E1``. Give a
+        client an instance to get a stable VMAC; without one it picks a
+        random VMAC at each start, and that needs a multicast-capable link at
+        start, which Linux loopback is not. Another transport, or an instance
+        out of range, raises ValueError.
+
+        ``mstp_extended_frames`` (MS/TP only, default False): take and send
+        extended frames (Types 32 and 33), which carry NPDUs of up to 1497
+        octets, so APDUs of up to 1476; without it MS/TP carries 480-octet
+        APDUs and counts an extended frame it hears as invalid.
+
+        ``mstp_echo`` (MS/TP only, default False): the adapter returns every
+        octet this station sends (a transceiver whose receiver stays on while
+        it transmits), so the transport drops that echo rather than take it
+        for line traffic. ``mstp_echo_grace_ms`` (default None, 40 ms; needs
+        ``mstp_echo=True`` and at least 1, else ValueError at start) is how
+        long after a frame its echo may still be arriving. A negative value,
+        or one above 4294967295, raises OverflowError when the client is
+        built.
+
+        ``mstp_transmit_latency_pad_ms``, ``mstp_usage_timeout_ms`` and
+        ``mstp_reply_timeout_ms`` (MS/TP only, default None, the transport's
+        own): the time added to a frame's wire time on a port that can't
+        report its end (4 ms on Windows, where the port has none, 0 elsewhere;
+        at most 15), and T_usage_timeout (20 to 35, default 35) and
+        T_reply_timeout (255 to 300, default 300), in milliseconds. A value
+        outside those ranges raises ValueError at start, before the port
+        opens.
+
+        ``share_port_by_address`` (B/IP only, default False): bind the
+        interface address itself, so clients and devices on other addresses
+        of this host can share the port. Needs an explicit interface and a
+        nonzero port; broadcasts and unicast then arrive in no fixed order.
+
+        ``min_request_interval_ms`` (default 0, no pacing; at most
+        3,600,000, else ValueError) paces the confirmed requests to each
+        destination: each waits until that long after the latest one sent to
+        the same destination finished (reply, error or the caller giving up),
+        or after it was sent while it is still outstanding, checking again
+        when it wakes. Requests waiting together go one at a time, in no
+        promised order. Paging a log or polling
+        then leaves a slow device room for its other clients; requests to
+        different destinations don't wait on each other. Behind a router the
+        pause after a reply holds for requests made one after another only
+        (#1535).
+        """
+        ...
 
     def __aenter__(self) -> Awaitable[BACnetClient]: ...
     def __aexit__(
@@ -2033,6 +2288,25 @@ class BACnetClient:
 
     def clear_devices(self) -> Awaitable[None]:
         """Clear the discovered device table."""
+        ...
+
+    def resolve_vmac(self, address: str) -> Awaitable[str]:
+        """Find the VMAC of the B/IPv6 node at ``address``, given as
+        ``"[ip]:port"``, and return it as ``"bip6:0x0004D2"``, the form the
+        other methods take.
+
+        A B/IPv6 node is addressed by its VMAC, not its IPv6 address (Clause
+        U.1.3). This asks the node with a Virtual-Address-Resolution sent by
+        unicast, up to three times a second apart (Clause U.5), unless the
+        client already knows which VMAC is at that address. A link-local
+        address may carry its interface as a numeric zone
+        (``"[fe80::1%3]:47808"``).
+
+        Needs a started client with ``transport="ipv6"``, else RuntimeError.
+        Any other address form raises ValueError. Raises BacnetTransportError
+        (errno ETIMEDOUT) when nothing answers within three seconds, or when
+        the node refuses.
+        """
         ...
 
     def who_am_i(
@@ -2340,22 +2614,62 @@ class BACnetClient:
         object_id: ObjectIdentifier,
         property_id: PropertyIdentifier,
         array_index: Optional[int] = None,
-        range_type: Optional[Literal["position", "sequence"]] = None,
+        range_type: Optional[Literal["position", "sequence", "time"]] = None,
         reference_index: Optional[int] = None,
         reference_seq: Optional[int] = None,
         count: Optional[int] = None,
+        *,
+        reference_time: ReferenceTime | None = None,
+        validation: Literal["strict", "lenient"] = "strict",
     ) -> Awaitable[ReadRangeResult]:
         """Read a range of items from a list or log object.
 
-        ``range_type`` is ``"position"``, ``"sequence"``, or ``None`` (all-items).
-        ByTime is not exposed. Invalid selectors, array index zero and missing
-        or zero counts raise ValueError before I/O; a count outside INTEGER16
-        (-32768..=32767) raises OverflowError before address parsing or I/O
-        (#1360). Position/sequence
-        reference zero is valid; omitted references default to zero.
-        Returns ``{"object_id": ObjectIdentifier, "property_id": PropertyIdentifier,
-        "array_index": int | None, "result_flags": tuple[bool, bool, bool], "item_count": int,
-        "item_data": bytes, "first_sequence_number": int | None}``.
+        ``range_type`` is ``"position"``, ``"sequence"``, ``"time"`` or
+        ``None`` (all-items). ``"time"`` reads the ``count`` items newer than
+        ``reference_time`` (older, for a negative count): a naive
+        ``datetime.datetime`` in the device's local time, or a
+        ``((year, month, day, day_of_week), (hour, minute, second,
+        hundredths))`` pair; an aware datetime raises ValueError, since the
+        device's zone isn't known here (#1533). Invalid selectors, array index
+        zero, missing or zero counts and a time that isn't specific raise
+        ValueError before I/O; a count outside INTEGER16 (-32768..=32767)
+        raises OverflowError before address parsing or I/O (#1360).
+        Position/sequence reference zero is valid; omitted references default
+        to zero.
+
+        ``validation="strict"`` refuses an answer that breaks a ReadRange rule
+        with BacnetReadRangeViolationError, whose ``rule`` names it;
+        ``"lenient"`` keeps it and lists the rules in ``violations`` (#1531).
+        Decode a log's records with ``decode_log_records``.
+        """
+        ...
+
+    def read_log_page(
+        self,
+        address: str,
+        object_id: ObjectIdentifier,
+        cursor: LogCursor = None,
+        page_size: int = 100,
+    ) -> Awaitable[LogPage]:
+        """Read one page of a log's Log_Buffer from ``cursor`` (#1530).
+
+        ``cursor`` is ``None`` or ``"oldest"`` (the oldest record, found from
+        Record_Count and Total_Record_Count), ``("sequence", n)``,
+        ``("position", n)`` or ``("time", reference_time)``; lists work
+        too, so a checkpoint survives JSON. Loop on ``page["next"]`` until
+        ``page["done"]``, then keep ``next`` as the checkpoint. One request
+        is outstanding at a time. A first record past the one asked for sets
+        ``gap``; when the log drops the record asked for, the read starts
+        over from the oldest. A page answered from before the one asked for,
+        or none where the counts say records are, raises
+        BacnetLogNotAdvancingError: such a device's sequence numbers are
+        inconsistent, so read it from ``("position", 1)``. ``wrapped`` marks
+        a page that reached the top of the sequence range. A page whose
+        records don't decode raises BacnetError, dropping the records before
+        the failing one; an answer that breaks a rule the reader can't
+        tolerate, such as an echo that doesn't match, raises
+        BacnetReadRangeViolationError. A non-log object or a ``page_size``
+        outside 1..=32767 raises ValueError before I/O.
         """
         ...
 
@@ -2530,7 +2844,8 @@ class BACnetClient:
         or a ``bytes`` or ``bytearray`` holding one encoded BACnetChannelValue.
         Either way the value must be one BACnetChannelValue: a single
         application-tagged primitive (``PropertyValue.real(72.0)``), or a
-        context-0 lighting command (as ``bytes``, or the same octets in
+        context-0 lighting command, context-1 xy colour or context-2 colour
+        command (as ``bytes``, or the same octets in
         ``PropertyValue.application_data``), with no wrapper tag. Raises
         ``ValueError`` for anything else, a list for one, ``TypeError`` for a
         value of another type (a list of ints included), and ``OverflowError``
@@ -2640,6 +2955,13 @@ class BACnetClient:
         ...
 
     # --- Lifecycle ---
+
+    def foreign_registration(self) -> Awaitable[ForeignRegistrationStatus]:
+        """How the foreign-device registration is going (#938), a refusal
+        included. Sends nothing. Outside ``foreign_device=`` only manual
+        registrations show. RuntimeError before start and after stop; a
+        non-B/IP client raises BacnetError."""
+        ...
 
     def stop(self) -> Awaitable[None]:
         """Explicitly stop the client and release resources."""
@@ -2762,6 +3084,11 @@ class BACnetServer:
     lifetime. No generation, persistence, change detection, or version/variant
     enforcement is provided. Non-SC transports ignore this option.
 
+    Segmentation defaults to NONE. When enabled, apdu_segment_timeout_ms must
+    be positive; it supplies Device APDU_SEGMENT_TIMEOUT, response SegmentACK
+    waits, and the 4*Tseg receive inactivity timer. A separate 16-second
+    no-progress resource limit aborts abandoned request transfers with OTHER.
+
     Usage::
 
         server = BACnetServer(device_instance=1234, device_name="My Device")
@@ -2797,6 +3124,12 @@ class BACnetServer:
         mstp_mac: int = 1,
         mstp_max_master: int = 127,
         mstp_max_info_frames: int = 1,
+        mstp_extended_frames: bool = False,
+        mstp_echo: bool = False,
+        mstp_echo_grace_ms: Optional[int] = None,
+        mstp_transmit_latency_pad_ms: Optional[int] = None,
+        mstp_usage_timeout_ms: Optional[int] = None,
+        mstp_reply_timeout_ms: Optional[int] = None,
         max_confirmed_in_flight: int = 64,
         max_unconfirmed_in_flight: int = 32,
         max_confirmed_in_flight_per_peer: int = 16,
@@ -2824,7 +3157,36 @@ class BACnetServer:
         registered_network_port: Optional[int] = None,
         cov_policy: CovPolicy | None = None,
         time_sync_policy: TimeSyncPolicy | None = None,
-    ) -> None: ...
+        share_port_by_address: bool = False,
+        segmentation_supported: Segmentation = Segmentation.NONE,
+        apdu_segment_timeout_ms: int = 5000,
+        bbmd: Optional[Bbmd] = None,
+        foreign_device: Optional[ForeignDevice] = None,
+    ) -> None:
+        """``share_port_by_address`` (B/IP only, default False): bind the
+        interface address itself, so devices on other addresses of this host
+        can share the port. Needs an explicit interface and a nonzero port;
+        broadcasts and unicast then arrive in no fixed order.
+
+        ``bbmd`` / ``foreign_device`` (B/IP only, at most one, else
+        ValueError): run the device as a BBMD, or register it with a BBMD
+        on another subnet as a foreign device (#938). See ``Bbmd`` and
+        ``ForeignDevice``. A registered Network Port reports the mode in
+        BACnet_IP_Mode (normal 0, foreign 1, BBMD 2).
+
+        ``mstp_extended_frames`` (MS/TP only, default False): take and send
+        extended frames (Types 32 and 33), which carry NPDUs of up to 1497
+        octets, so the device accepts APDUs of up to 1476 instead of 480.
+
+        ``mstp_echo`` and ``mstp_echo_grace_ms`` (MS/TP only) declare an
+        adapter that returns every octet this station sends, as for
+        ``BACnetClient``; a negative grace, or one above 4294967295, raises
+        OverflowError when the server is built.
+
+        ``mstp_transmit_latency_pad_ms``, ``mstp_usage_timeout_ms`` and
+        ``mstp_reply_timeout_ms`` (MS/TP only) set the transmit-latency pad
+        and the two timeouts, in milliseconds, as for ``BACnetClient``."""
+        ...
 
     # --- Analog objects ---
     def add_analog_input(self, instance: int, name: str, units: int = 62, present_value: float = 0.0) -> None: ...
@@ -2908,13 +3270,27 @@ class BACnetServer:
         Recipient_List a client wrote, once saved, wins over the seed. ``port_filter`` serves Port_Filter as
         ``(port_id, enabled)`` pairs; the server receives through Port_ID 0.
         Without it Port_Filter is absent."""
-    def add_trend_log(self, instance: int, name: str, buffer_size: int = 100) -> None:
+    def add_trend_log(
+        self,
+        instance: int,
+        name: str,
+        buffer_size: int = 100,
+        *,
+        total_record_count: int = 0,
+    ) -> None:
         """Add a Trend Log (Clause 12.25) to the server (before starting).
 
-        Log_DeviceObjectProperty reads as ``application_data`` holding the
-        context-tagged reference; while unset it reads as Analog Input
+        Log_DeviceObjectProperty reads as one
+        ``device_object_property_reference`` value whose mapping includes all
+        four keys; while unset its object is Analog Input
         4194303's Present_Value, and writing a reference to instance 4194303
         unsets it. A null written to it succeeds and changes nothing.
+
+        ``total_record_count`` seeds Total_Record_Count, an Unsigned32, so
+        the log's first record is numbered one past it: seeded at
+        4294967294, records number 4294967295, then 1, 2 and on, which lets
+        a reader's handling of the wrap be tested. Out of range raises
+        OverflowError.
         """
         ...
     def add_trend_log_multiple(
@@ -2936,6 +3312,7 @@ class BACnetServer:
         stop_time: tuple[tuple[int, int, int, int], tuple[int, int, int, int]] | None = None,
         align_intervals: bool | None = None,
         interval_offset: int | None = None,
+        total_record_count: int = 0,
     ) -> None:
         """Add a Trend Log Multiple (Clause 12.30) that the server polls or
         triggers, logging one value per member in each record.
@@ -2969,6 +3346,9 @@ class BACnetServer:
         record, write Trigger TRUE, from a peer or with
         ``write_property_local``; it reads TRUE until the poller acquires
         the record. Read the records with ``read_range``.
+
+        ``total_record_count`` seeds Total_Record_Count as on
+        ``add_trend_log``.
         """
         ...
     def add_event_log(
@@ -2977,6 +3357,8 @@ class BACnetServer:
         name: str,
         buffer_size: int = 100,
         log_received_notifications: bool = False,
+        *,
+        total_record_count: int = 0,
     ) -> None:
         """Register an Event Log of ``buffer_size`` records before start().
 
@@ -2991,6 +3373,9 @@ class BACnetServer:
         Notification_Threshold is set (zero, the default, reports nothing);
         write it and Notification_Class with ``write_property_local`` or
         from a peer.
+
+        ``total_record_count`` seeds Total_Record_Count as on
+        ``add_trend_log``; BUFFER_READY counts from the seeded value.
         """
         ...
     def add_audit_log(self, instance: int, name: str, storage_path: str, buffer_size: int = 100) -> None: ...
@@ -3257,6 +3642,7 @@ class BACnetServer:
             list[ObjectIdentifier | tuple[ObjectIdentifier, ObjectIdentifier]]
         ] = None,
         number_of_authentication_policies: Optional[int] = None,
+        authentication_policies: Optional[list[tuple[str, AuthenticationPolicy]]] = None,
         supported_authorization_modes: Optional[list[int]] = None,
         priority_for_writing: Optional[int] = None,
     ) -> None:
@@ -3279,6 +3665,23 @@ class BACnetServer:
         BacnetProtocolError with VALUE_OUT_OF_RANGE. Peers write
         Active_Authentication_Policy (1 to the policy count) and
         Authorization_Mode (one of the supported modes).
+
+        ``authentication_policies`` sets Authentication_Policy_List and
+        Authentication_Policy_Names as ``(name, policy)`` pairs, both
+        read-only over the network, and the policy count to their number. A
+        policy's entries name the Credential Data Inputs and the step each
+        serves, from 1. An empty list, or more than 256 pairs, raises
+        BacnetProtocolError with VALUE_OUT_OF_RANGE; an index or timeout
+        outside 0..=4294967295 raises OverflowError. A policy with no
+        entries, a reference to anything but a Credential Data Input, or
+        indexes that don't start at 1 and climb by at most one is kept but
+        can't be in effect: while it is, Active_Authentication_Policy reads 0
+        until a peer writes a usable policy. While any such policy is listed,
+        or the active policy is 0, Reliability reads CONFIGURATION_ERROR and
+        the point takes no access events. A
+        ``number_of_authentication_policies`` given as well is applied after
+        and resizes both arrays, new policies empty and new names ``""``; it
+        can be at most 256 with the pairs (VALUE_OUT_OF_RANGE above).
         """
         ...
     def add_access_rights(
@@ -3432,7 +3835,8 @@ class BACnetServer:
     ) -> None:
         """Add an Event Enrollment (Clause 12.12) to the server (before starting).
 
-        Object_Property_Reference, read-only to peers, reads as Analog Input
+        Object_Property_Reference, read-only to peers, reads as one typed
+        ``device_object_property_reference`` mapping. It names Analog Input
         4194303's Present_Value while the enrollment has no reference.
         Fault_Parameters reads as the context-tagged ``none`` choice while no
         fault algorithm is set, and writing that clears it; a null written to
@@ -3481,8 +3885,9 @@ class BACnetServer:
         can write both, and each write discards the samples. An interval of 0,
         or a sample count of 0 or above 1440, raises VALUE_OUT_OF_RANGE.
 
-        Object_Property_Reference reads as ``application_data`` holding the
-        context-tagged reference; while unset it reads as Analog Input
+        Object_Property_Reference reads as one
+        ``device_object_property_reference`` value whose mapping includes all
+        four keys; while unset its object is Analog Input
         4194303's Present_Value, and writing a reference whose object or
         Device is at instance 4194303 unsets it. A null written to it succeeds
         and changes nothing.
@@ -3598,9 +4003,20 @@ class BACnetServer:
     def local_address(self) -> Awaitable[str]:
         """Get the retained server instance's last bound address snapshot.
 
+        B/IP gives ``"ip:port"``. B/IPv6 gives the VMAC peers address the
+        server by, ``"bip6:0x0004D2"`` for ``device_instance=1234``: an ipv6
+        server's VMAC is its device instance (Clauses U.1.3, H.7.2), and
+        startup fails when another node on the link already uses it. MS/TP
+        gives the station, SC the colon-hex VMAC.
+
         Available during interrupted shutdown; successful stop clears the
         instance and subsequent address queries raise RuntimeError.
         """
+        ...
+
+    def foreign_registration(self) -> Awaitable[ForeignRegistrationStatus]:
+        """How the foreign-device registration is going (#938), as for
+        ``BACnetClient``. RuntimeError before start and after stop."""
         ...
 
     # --- Server-side property access ---
@@ -3665,6 +4081,88 @@ class BACnetServer:
         not Out_Of_Service is set, since clients never write its Present_Value;
         Tracking_Value, Silenced and Operation_Expected stay as they are. Other
         object types are not writable through this method.
+        """
+        ...
+
+    def report_access_event_local(
+        self,
+        object_id: ObjectIdentifier,
+        event: int,
+        tag: int,
+        *,
+        time: Optional[BACnetTimeStamp] = None,
+        credential: Optional[
+            ObjectIdentifier | tuple[ObjectIdentifier, ObjectIdentifier]
+        ] = None,
+        authentication_factor: Optional[tuple[int, int, bytes]] = None,
+    ) -> Awaitable[None]:
+        """Report an access event at an Access Point the server holds.
+
+        Access_Event (``event``, a BACnetAccessEvent number),
+        Access_Event_Tag (``tag``, the access transaction), Access_Event_Time
+        (``time``, the Device clock's when omitted), Access_Event_Credential
+        (``credential``, the no-credential reference when omitted) and
+        Access_Event_Authentication_Factor (``authentication_factor`` as
+        ``(format_type, format_class, value)``, the UNDEFINED factor when
+        omitted) change together. A credential that isn't an Access
+        Credential, a factor format outside the closed production, or an
+        event that is neither a named BACnetAccessEvent nor a proprietary one
+        from 512 to 65535, raises VALUE_OUT_OF_RANGE. While the point is out
+        of service, or its Reliability isn't NO_FAULT_DETECTED, the event is
+        refused with WRITE_ACCESS_DENIED and nothing changes. An unknown
+        object raises UNKNOWN_OBJECT and any object other than an Access
+        Point OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. A new time sends the
+        point's COV report, and a time the point stamps itself always moves,
+        so events of one transaction each send one.
+        """
+        ...
+
+    def report_credential_read_local(
+        self,
+        object_id: ObjectIdentifier,
+        factor: tuple[int, int, bytes],
+        *,
+        update_time: Optional[BACnetTimeStamp] = None,
+    ) -> Awaitable[None]:
+        """Report a factor a Credential Data Input's reader has read.
+
+        Present_Value takes ``factor``, ``(format_type, format_class,
+        value)``, and Update_Time ``update_time``, the Device clock's when
+        omitted, together. The factor must name one of the reader's
+        ``supported_formats`` with its class, or be the UNDEFINED (0) or
+        ERROR (1) factor with class 0, else VALUE_OUT_OF_RANGE. While the
+        reader is out of service the read is kept aside, in place of the
+        reader's earlier one: a client's simulated values stay served, no
+        COV report goes out, and the return to service serves the latest
+        read. An unknown object raises UNKNOWN_OBJECT and any object other
+        than a Credential Data Input OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. A
+        new Update_Time sends the reader's COV report.
+        """
+        ...
+
+    def report_door_state_local(
+        self,
+        object_id: ObjectIdentifier,
+        *,
+        door_status: Optional[int] = None,
+        lock_status: Optional[int] = None,
+        door_alarm_state: Optional[int] = None,
+    ) -> Awaitable[None]:
+        """Report an Access Door's hardware state.
+
+        Whichever of Door_Status, Lock_Status and Door_Alarm_State is given,
+        as BACnetDoorStatus, BACnetLockStatus and BACnetDoorAlarmState
+        numbers, changes together; the others keep their values. A number
+        outside its production, or an alarm state the door's Alarm_Values,
+        Fault_Values and Masked_Alarm_Values don't admit, raises
+        VALUE_OUT_OF_RANGE and nothing changes. While the door is out of
+        service the values are kept aside, in place of the device's earlier
+        ones: a client's simulated values stay served, no COV report or event
+        follows, and the return to service serves the latest values
+        reported. An unknown object raises UNKNOWN_OBJECT and any object
+        other than an Access Door OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. In
+        service a new Door_Alarm_State sends the door's COV report, and the
+        door's event algorithm sees it at once.
         """
         ...
 
@@ -4038,6 +4536,45 @@ class ReadRangeResult(TypedDict):
     item_count: int
     item_data: bytes
     first_sequence_number: int | None
+    violations: list[str]
+
+ReferenceTime = Union[
+    datetime.datetime,
+    tuple[tuple[int, int, int, int], tuple[int, int, int, int]],
+]
+"""A ByTime reference: a naive datetime in the device's local time, or a
+``((year, month, day, day_of_week), (hour, minute, second, hundredths))``
+pair."""
+
+LogCursor = Union[
+    None,
+    Literal["oldest"],
+    tuple[Literal["sequence"], int],
+    tuple[Literal["position"], int],
+    tuple[Literal["time"], ReferenceTime],
+]
+"""Where ``read_log_page`` starts; a list of the same two items works too."""
+
+class LogGap(TypedDict):
+    """A page whose first record isn't the one asked for."""
+    expected: int
+    first: int
+    skipped: int | None
+
+class LogPage(TypedDict):
+    """One page of ``read_log_page``.
+
+    ``records`` are dicts, oldest first, as ``decode_log_records`` returns
+    them. ``next`` is never ``None`` or ``"oldest"``.
+    """
+    records: list[dict[str, Any]]
+    first_sequence_number: int | None
+    result_flags: tuple[bool, bool, bool]
+    gap: LogGap | None
+    violations: list[str]
+    next: LogCursor
+    done: bool
+    wrapped: bool
 
 class ReadPropertyResult(TypedDict):
     property_id: PropertyIdentifier
@@ -4116,22 +4653,62 @@ class EndpointClient:
         object_id: ObjectIdentifier,
         property_id: PropertyIdentifier,
         array_index: Optional[int] = None,
-        range_type: Optional[Literal["position", "sequence"]] = None,
+        range_type: Optional[Literal["position", "sequence", "time"]] = None,
         reference_index: Optional[int] = None,
         reference_seq: Optional[int] = None,
         count: Optional[int] = None,
+        *,
+        reference_time: ReferenceTime | None = None,
+        validation: Literal["strict", "lenient"] = "strict",
     ) -> Awaitable[ReadRangeResult]:
         """Read a range of items from a list or log object.
 
-        ``range_type`` is ``"position"``, ``"sequence"``, or ``None`` (all-items).
-        ByTime is not exposed. Invalid selectors, array index zero and missing
-        or zero counts raise ValueError before I/O; a count outside INTEGER16
-        (-32768..=32767) raises OverflowError before address parsing or I/O
-        (#1360). Position/sequence
-        reference zero is valid; omitted references default to zero.
-        Returns ``{"object_id": ObjectIdentifier, "property_id": PropertyIdentifier,
-        "array_index": int | None, "result_flags": tuple[bool, bool, bool], "item_count": int,
-        "item_data": bytes, "first_sequence_number": int | None}``.
+        ``range_type`` is ``"position"``, ``"sequence"``, ``"time"`` or
+        ``None`` (all-items). ``"time"`` reads the ``count`` items newer than
+        ``reference_time`` (older, for a negative count): a naive
+        ``datetime.datetime`` in the device's local time, or a
+        ``((year, month, day, day_of_week), (hour, minute, second,
+        hundredths))`` pair; an aware datetime raises ValueError, since the
+        device's zone isn't known here (#1533). Invalid selectors, array index
+        zero, missing or zero counts and a time that isn't specific raise
+        ValueError before I/O; a count outside INTEGER16 (-32768..=32767)
+        raises OverflowError before address parsing or I/O (#1360).
+        Position/sequence reference zero is valid; omitted references default
+        to zero.
+
+        ``validation="strict"`` refuses an answer that breaks a ReadRange rule
+        with BacnetReadRangeViolationError, whose ``rule`` names it;
+        ``"lenient"`` keeps it and lists the rules in ``violations`` (#1531).
+        Decode a log's records with ``decode_log_records``.
+        """
+        ...
+
+    def read_log_page(
+        self,
+        address: str,
+        object_id: ObjectIdentifier,
+        cursor: LogCursor = None,
+        page_size: int = 100,
+    ) -> Awaitable[LogPage]:
+        """Read one page of a log's Log_Buffer from ``cursor`` (#1530).
+
+        ``cursor`` is ``None`` or ``"oldest"`` (the oldest record, found from
+        Record_Count and Total_Record_Count), ``("sequence", n)``,
+        ``("position", n)`` or ``("time", reference_time)``; lists work
+        too, so a checkpoint survives JSON. Loop on ``page["next"]`` until
+        ``page["done"]``, then keep ``next`` as the checkpoint. One request
+        is outstanding at a time. A first record past the one asked for sets
+        ``gap``; when the log drops the record asked for, the read starts
+        over from the oldest. A page answered from before the one asked for,
+        or none where the counts say records are, raises
+        BacnetLogNotAdvancingError: such a device's sequence numbers are
+        inconsistent, so read it from ``("position", 1)``. ``wrapped`` marks
+        a page that reached the top of the sequence range. A page whose
+        records don't decode raises BacnetError, dropping the records before
+        the failing one; an answer that breaks a rule the reader can't
+        tolerate, such as an echo that doesn't match, raises
+        BacnetReadRangeViolationError. A non-log object or a ``page_size``
+        outside 1..=32767 raises ValueError before I/O.
         """
         ...
 
@@ -4177,8 +4754,9 @@ class BipEndpoint:
     """
 
     # network_port_instance declares a snapshot; registered_network_port explicitly
-    # selects it for one concrete-interface NORMAL B/IP bind. None stays unbound.
-    # NORMAL B/IP answers/learns local Network Number controls. Only explicit
+    # selects it for one concrete-interface B/IP bind, in any one mode (normal,
+    # foreign_device= or bbmd=). None stays unbound. Each mode answers/learns
+    # local Network Number controls. Only explicit
     # registration supplies configured provenance; an unregistered owner starts unknown.
 
     def __init__(
@@ -4201,10 +4779,25 @@ class BipEndpoint:
         registered_network_port: Optional[int] = None,
         *,
         read_work_limit: int = 256,
+        share_port_by_address: bool = False,
+        min_request_interval_ms: int = 0,
+        bbmd: Optional[Bbmd] = None,
+        foreign_device: Optional[ForeignDevice] = None,
     ) -> None:
-        """``read_work_limit``: result rows one ReadProperty served by the
+        """``bbmd`` / ``foreign_device`` (at most one, else ValueError): run
+        the endpoint as a BBMD, or register it as a foreign device (#938).
+        ``read_work_limit``: result rows one ReadProperty served by the
         server role may expand, a Group's member rows included; a read past it
-        is aborted with OUT_OF_RESOURCES. Zero raises ValueError."""
+        is aborted with OUT_OF_RESOURCES. Zero raises ValueError.
+        ``share_port_by_address`` (default False): bind the interface address
+        itself, so endpoints on other addresses of this host can share the
+        port. Needs an explicit interface and a nonzero port; broadcasts and
+        unicast then arrive in no fixed order.
+        ``min_request_interval_ms`` (default 0, no pacing; at most 3,600,000,
+        else ValueError) paces the client role's confirmed requests to each
+        destination exactly as ``BACnetClient``'s keyword does (#1542). A
+        retry keeps its request's turn; replies, notifications and
+        unconfirmed requests aren't paced."""
         ...
 
     def add_analog_input(self, instance: int, name: str, units: int = 62, present_value: float = 0.0) -> None: ...
@@ -4265,6 +4858,11 @@ class BipEndpoint:
         """Bounded snapshot (RuntimeError before start/after close)."""
         ...
 
+    def foreign_registration(self) -> Awaitable[ForeignRegistrationStatus]:
+        """How the foreign-device registration is going (#938), as for
+        ``BACnetClient``. RuntimeError before start and after close."""
+        ...
+
     def broadcast_i_am(self) -> Awaitable[None]:
         """Broadcast one I-Am consistent with the composed identity."""
         ...
@@ -4302,8 +4900,10 @@ class ScEndpoint:
         services: Optional[list[int]] = None,
         queue_capacity: int = 16,
         read_work_limit: int = 256,
+        min_request_interval_ms: int = 0,
     ) -> None:
-        """``read_work_limit`` is as for ``BipEndpoint``."""
+        """``read_work_limit`` and ``min_request_interval_ms`` are as for
+        ``BipEndpoint``."""
         ...
 
     def add_analog_input(self, instance: int, name: str, units: int = 62, present_value: float = 0.0) -> None: ...
@@ -4399,8 +4999,33 @@ class MstpEndpoint:
         apdu_retries: int = 0,
         *,
         read_work_limit: int = 256,
+        min_request_interval_ms: int = 0,
+        mstp_extended_frames: bool = False,
+        mstp_echo: bool = False,
+        mstp_echo_grace_ms: Optional[int] = None,
+        mstp_transmit_latency_pad_ms: Optional[int] = None,
+        mstp_usage_timeout_ms: Optional[int] = None,
+        mstp_reply_timeout_ms: Optional[int] = None,
     ) -> None:
-        """``read_work_limit`` is as for ``BipEndpoint``."""
+        """``read_work_limit`` and ``min_request_interval_ms`` are as for
+        ``BipEndpoint``.
+
+        ``max_apdu`` must fit the link: 480 by default, or 1476 with
+        ``mstp_extended_frames=True``, which turns on extended frames (Types
+        32 and 33, NPDUs of up to 1497 octets) as for ``BACnetClient``.
+        Every node on the link must then take extended frames; each port's
+        transmit queues reserve 768 KiB instead of 272 KiB.
+
+        ``mstp_echo=True`` declares an adapter that returns every octet the
+        station sends, and ``mstp_echo_grace_ms`` how long after a frame its
+        echo may still arrive (None: 40 ms), as for ``BACnetClient``. A grace
+        of 0, or one given without ``mstp_echo=True``, raises ValueError here;
+        a negative grace, or one above 4294967295, raises OverflowError.
+
+        ``mstp_transmit_latency_pad_ms``, ``mstp_usage_timeout_ms`` and
+        ``mstp_reply_timeout_ms`` are as for ``BACnetClient``, but a value
+        out of range raises ValueError here.
+        """
         ...
 
     def add_analog_input(self, instance: int, name: str, units: int = 62, present_value: float = 0.0) -> None: ...

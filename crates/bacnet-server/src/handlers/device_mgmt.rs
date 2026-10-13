@@ -97,17 +97,24 @@ pub(crate) fn validate_dcc(
     Ok((state, request.time_duration))
 }
 
-/// Handle a ReinitializeDevice request.
-///
-/// Intentionally validates decoding and the password only; no action is performed.
-/// Until an action surface exists, the server caller refuses the request after
-/// successful validation with SERVICES / SERVICE_REQUEST_DENIED.
+/// Handle a ReinitializeDevice request: decode it, check the password, and return the
+/// requested state. A state Clause 16.4 does not define is refused, after the password
+/// check, with SERVICES / SERVICE_REQUEST_DENIED.
 pub fn handle_reinitialize_device(
     service_data: &[u8],
     reinit_password: &Option<String>,
-) -> Result<(), Error> {
+) -> Result<bacnet_types::enums::ReinitializedState, Error> {
+    use bacnet_types::enums::ReinitializedState;
+
     let request =
         ReinitializeDeviceRequest::decode(service_data).map_err(Error::into_request_reject)?;
     validate_password(reinit_password, &request.password)?;
-    Ok(())
+    // ACTIVATE_CHANGES (7) is the highest state Clause 16.4 defines.
+    if request.reinitialized_state.to_raw() > ReinitializedState::ACTIVATE_CHANGES.to_raw() {
+        return Err(Error::Protocol {
+            class: ErrorClass::SERVICES.to_raw() as u32,
+            code: ErrorCode::SERVICE_REQUEST_DENIED.to_raw() as u32,
+        });
+    }
+    Ok(request.reinitialized_state)
 }

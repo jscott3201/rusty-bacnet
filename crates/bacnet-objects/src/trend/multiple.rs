@@ -172,6 +172,36 @@ impl TrendLogMultipleObject {
         self.log_buffer.records()
     }
 
+    /// Total_Record_Count, as
+    /// [`TrendLogObject::total_record_count`](super::TrendLogObject::total_record_count)
+    /// serves it.
+    pub fn total_record_count(&self) -> u32 {
+        self.log_buffer.total_record_count()
+    }
+
+    /// Restore the log buffer, or seed Total_Record_Count with no records,
+    /// before the log is added to an `ObjectDatabase`, under the rules of
+    /// [`TrendLogObject::restore_log_buffer`](super::TrendLogObject::restore_log_buffer)
+    /// (#1537). Records aren't checked against Log_DeviceObjectProperty,
+    /// which may have changed since they were taken. After a restart, follow
+    /// it with [`record_interruption`](Self::record_interruption), which
+    /// counts toward Total_Record_Count.
+    pub fn restore_log_buffer(
+        &mut self,
+        total_record_count: u32,
+        records: impl IntoIterator<Item = BACnetLogMultipleRecord>,
+    ) -> Result<(), Error> {
+        self.lifecycle()
+            .restore(total_record_count, records.into_iter().collect())
+    }
+
+    /// Append a LOG_INTERRUPTED status record, as
+    /// [`TrendLogObject::record_interruption`](super::TrendLogObject::record_interruption)
+    /// does, after restoring the log on a restart (#1537).
+    pub fn record_interruption(&mut self, date: Date, time: Time) -> Result<(), Error> {
+        self.lifecycle().record_interruption((date, time))
+    }
+
     /// Clear the buffer.
     pub fn clear(&mut self) {
         self.log_buffer.clear();

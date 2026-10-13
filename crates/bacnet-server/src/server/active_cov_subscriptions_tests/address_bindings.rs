@@ -85,7 +85,7 @@ async fn hear(wire: &Wire, instance: u32, mac: &[u8], source: Option<NpduAddress
         loop {
             let resolution = wire.server.device_bindings.read().await.resolve_at(
                 &peer(instance),
-                Instant::now(),
+                runtime_clock::now(),
                 |_| false,
             );
             if !matches!(
@@ -157,8 +157,28 @@ fn bindings_row(results: Vec<bacnet_services::rpm::ReadAccessResult>) -> Vec<u8>
         .expect("a Device_Address_Binding row")
 }
 
-// The age rule is `device_bindings_tests`' own: a stale observation can't be
-// made here without a monotonic clock older than the binding lifetime.
+/// An observation is listed until its binding lapses, exactly
+/// `OBSERVED_BINDING_TTL` after its I-Am: the table measures that on tokio's
+/// clock (#1556), so the paused clock steps the edge. 1 ms before it the
+/// device is listed, and at it the stale binding is not.
+#[tokio::test(start_paused = true)]
+async fn an_observation_is_listed_until_its_binding_lapses() {
+    let mut wire = Wire::start(ServerConfig::default()).await;
+    let local_mac = [0x0A, 0, 0, 9, 0xBA, 0xC0];
+    // The server takes the I-Am before the clock can move.
+    let heard = tokio::time::Instant::now();
+    hear(&wire, 9, &local_mac, None).await;
+    let lapses = heard + super::super::device_bindings::OBSERVED_BINDING_TTL;
+
+    tokio::time::advance(lapses - Duration::from_millis(1) - tokio::time::Instant::now()).await;
+    let read = wire.read(device(), BINDINGS, None).await.unwrap();
+    assert_eq!(decode(&read), vec![(peer(9), 0, local_mac.to_vec())]);
+
+    tokio::time::advance(Duration::from_millis(1)).await;
+    assert_eq!(wire.read(device(), BINDINGS, None).await, Ok(Vec::new()));
+    wire.server.stop().await.unwrap();
+}
+
 #[tokio::test(start_paused = true)]
 async fn configured_bindings_are_listed_through_every_read_path() {
     let mut wire = Wire::start(ServerConfig::default()).await;

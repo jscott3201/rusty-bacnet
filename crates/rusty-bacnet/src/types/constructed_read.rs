@@ -14,8 +14,9 @@
 
 use bacnet_encoding::constructed::{
     decode_access_rule, decode_action_list, decode_authentication_factor_format,
-    decode_calendar_entry, decode_cov_subscription, decode_daily_schedule, decode_date_range,
-    decode_destination, decode_device_object_property_reference, decode_device_object_reference,
+    decode_authentication_policy, decode_calendar_entry, decode_cov_subscription,
+    decode_daily_schedule, decode_date_range, decode_destination,
+    decode_device_object_property_reference, decode_device_object_reference, decode_name_value,
     decode_port_permission, decode_prescale, decode_property_access_result,
     decode_read_access_specification, decode_recipient, decode_scale, decode_special_event,
     decode_stage_limit_value, decode_value_source,
@@ -36,6 +37,8 @@ use super::PyPropertyValue;
 /// The constructed production a typed read splits a value into.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Element {
+    /// A Tags element as a name and an optional primitive PropertyValue.
+    NameValue,
     /// A Recipient_List destination, as a `Destination` mapping.
     Destination,
     /// A Port_Filter element, as a `(port_id, enabled)` pair.
@@ -53,6 +56,9 @@ pub(crate) enum Element {
     /// A Supported_Formats element: the format type, or a `(format_type,
     /// vendor_id, vendor_format)` triple when it carries vendor members.
     AuthenticationFactorFormat,
+    /// An Authentication_Policy_List element, as the `(entries,
+    /// order_enforced, timeout)` triple `add_access_point` takes (#1325).
+    AuthenticationPolicy,
     /// A Stages element, as a `(limit, values, deadband)` triple.
     StageLimitValue,
     /// An Access Rights rule, as an `AccessRule` mapping.
@@ -122,9 +128,14 @@ pub(crate) fn element(
         | (O::ACCESS_USER, P::CREDENTIALS | P::MEMBERS | P::MEMBER_OF)
         | (O::LIFE_SAFETY_POINT | O::LIFE_SAFETY_ZONE, P::MEMBER_OF)
         | (O::LIFE_SAFETY_ZONE, P::ZONE_MEMBERS) => (Element::DeviceObjectReference, Collection),
-        (O::ACCESS_RIGHTS, P::ACCOMPANIMENT) => (Element::DeviceObjectReference, Single),
+        (O::ACCESS_RIGHTS, P::ACCOMPANIMENT)
+        | (O::ACCESS_POINT, P::ACCESS_EVENT_CREDENTIAL)
+        | (O::LIFT | O::ESCALATOR, P::ENERGY_METER_REF) => (Element::DeviceObjectReference, Single),
         (O::CREDENTIAL_DATA_INPUT, P::SUPPORTED_FORMATS) => {
             (Element::AuthenticationFactorFormat, Collection)
+        }
+        (O::ACCESS_POINT, P::AUTHENTICATION_POLICY_LIST) => {
+            (Element::AuthenticationPolicy, Collection)
         }
         (O::STAGING, P::STAGES) => (Element::StageLimitValue, Collection),
         (O::ACCESS_RIGHTS, P::POSITIVE_ACCESS_RULES | P::NEGATIVE_ACCESS_RULES) => {
@@ -134,6 +145,10 @@ pub(crate) fn element(
         | (O::SCHEDULE | O::CHANNEL, P::LIST_OF_OBJECT_PROPERTY_REFERENCES)
         | (O::TREND_LOG_MULTIPLE, P::LOG_DEVICE_OBJECT_PROPERTY) => {
             (Element::DeviceObjectPropertyReference, Collection)
+        }
+        (O::TREND_LOG, P::LOG_DEVICE_OBJECT_PROPERTY)
+        | (O::AVERAGING | O::EVENT_ENROLLMENT, P::OBJECT_PROPERTY_REFERENCE) => {
+            (Element::DeviceObjectPropertyReference, Single)
         }
         (O::GLOBAL_GROUP, P::PRESENT_VALUE) => (Element::PropertyAccessResult, Collection),
         (O::DEVICE, P::AUDIT_NOTIFICATION_RECIPIENT) => (Element::Recipient, Single),
@@ -146,6 +161,7 @@ pub(crate) fn element(
         (O::ACCUMULATOR, P::SCALE) => (Element::Scale, Single),
         (O::ACCUMULATOR, P::PRESCALE) => (Element::Prescale, Single),
         // Every object type that has these properties gives them one datatype.
+        (_, P::TAGS) => (Element::NameValue, Collection),
         (_, P::EVENT_TIME_STAMPS | P::COMMAND_TIME_ARRAY) => (Element::TimeStamp, Collection),
         (_, P::LAST_COMMAND_TIME) => (Element::TimeStamp, Single),
         (_, P::VALUE_SOURCE_ARRAY) => (Element::ValueSource, Collection),
@@ -201,7 +217,8 @@ pub(crate) fn decode(
 impl Element {
     /// Every element production, each once; a new one goes here too, so
     /// that [`Self::from_tag`] knows it.
-    const ALL: [Self; 22] = [
+    const ALL: [Self; 24] = [
+        Self::NameValue,
         Self::Destination,
         Self::PortPermission,
         Self::ReadAccessSpecification,
@@ -209,6 +226,7 @@ impl Element {
         Self::ActionList,
         Self::DeviceObjectReference,
         Self::AuthenticationFactorFormat,
+        Self::AuthenticationPolicy,
         Self::StageLimitValue,
         Self::AccessRule,
         Self::DeviceObjectPropertyReference,
@@ -239,6 +257,7 @@ impl Element {
     /// The `PropertyValue.tag` of one element.
     pub(crate) fn tag(self) -> &'static str {
         match self {
+            Self::NameValue => "name_value",
             Self::Destination => "destination",
             Self::PortPermission => "port_permission",
             Self::ReadAccessSpecification => "read_access_specification",
@@ -246,6 +265,7 @@ impl Element {
             Self::ActionList => "action_list",
             Self::DeviceObjectReference => "device_object_reference",
             Self::AuthenticationFactorFormat => "authentication_factor_format",
+            Self::AuthenticationPolicy => "authentication_policy",
             Self::StageLimitValue => "stage_limit_value",
             Self::AccessRule => "access_rule",
             Self::DeviceObjectPropertyReference => "device_object_property_reference",
@@ -300,6 +320,7 @@ impl Element {
             decoded.map(|(value, end)| (variant(value), end))
         }
         match self {
+            Self::NameValue => with(decode_name_value(octets, offset), Decoded::NameValue),
             Self::Destination => with(decode_destination(octets, offset), Decoded::Destination),
             Self::PortPermission => with(
                 decode_port_permission(octets, offset),
@@ -321,6 +342,10 @@ impl Element {
             Self::AuthenticationFactorFormat => with(
                 decode_authentication_factor_format(octets, offset),
                 Decoded::AuthenticationFactorFormat,
+            ),
+            Self::AuthenticationPolicy => with(
+                decode_authentication_policy(octets, offset),
+                Decoded::AuthenticationPolicy,
             ),
             Self::StageLimitValue => with(
                 decode_stage_limit_value(octets, offset),
@@ -437,3 +462,11 @@ mod more_tests;
 #[cfg(test)]
 #[path = "constructed_read_scale_tests.rs"]
 mod scale_tests;
+
+#[cfg(test)]
+#[path = "constructed_read_tags_tests.rs"]
+mod tags_tests;
+
+#[cfg(test)]
+#[path = "constructed_read_reference_tests.rs"]
+mod reference_tests;

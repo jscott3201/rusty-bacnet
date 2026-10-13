@@ -11,9 +11,9 @@ use tokio::time::timeout;
 use super::fanout::{FanoutPolicy, FanoutRateLimiter};
 use super::*;
 use crate::bbmd::{BdtEntry, ForeignDevicePolicy};
-use crate::bvll::{decode_bip_mac, decode_bvll, encode_bvll, BvllMessage};
+use crate::bvll::{decode_bip_mac, decode_bvll, BvllMessage};
 use crate::port::TransportPort;
-use bacnet_types::enums::{BvlcFunction, BvlcResultCode};
+use bacnet_bip_codec::{BvlcFunction, BvlcResultCode};
 
 async fn recv_bvll(socket: &UdpSocket) -> BvllMessage {
     let mut recv_buf = [0u8; 2048];
@@ -35,8 +35,7 @@ async fn assert_no_bvll(socket: &UdpSocket, label: &str) {
 }
 
 fn bvll_frame(function: BvlcFunction, payload: &[u8]) -> Bytes {
-    let mut buf = BytesMut::new();
-    encode_bvll(&mut buf, function, payload).unwrap();
+    let buf = raw_frame(function, payload);
     buf.freeze()
 }
 
@@ -143,7 +142,7 @@ async fn duplicate_bdt_and_fdt_entries_yield_exactly_one_send_per_destination() 
     // The sink must receive exactly ONE forwarded NPDU (not 2 copies)
     let frame = recv_bvll(&sink_socket).await;
     assert_eq!(frame.function, BvlcFunction::FORWARDED_NPDU);
-    assert_eq!(frame.payload.as_ref(), test_npdu.as_slice());
+    assert_eq!(frame.npdu().unwrap().as_ref(), test_npdu.as_slice());
     assert_no_bvll(&sink_socket, "sink deduplication check").await;
 
     // Verify fanout counters
@@ -200,15 +199,7 @@ async fn sustained_broadcast_input_does_not_starve_concurrent_unicast() {
     let stop_flood = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let stop_flood_clone = Arc::clone(&stop_flood);
     let flood_handle = tokio::spawn(async move {
-        let mut buf = BytesMut::new();
-        crate::bvll::encode_bvll_forwarded(
-            &mut buf,
-            [10, 1, 2, 3],
-            47808,
-            &[0x01, 0x20, 0x11, 0x22],
-        )
-        .unwrap();
-        let frame = buf.freeze();
+        let frame = forwarded_wire(([10, 1, 2, 3], 47808), &[0x01, 0x20, 0x11, 0x22]).freeze();
         while !stop_flood_clone.load(std::sync::atomic::Ordering::Relaxed) {
             let _ = flood_sock.send_to(&frame, bbmd_dest).await;
             tokio::task::yield_now().await;
@@ -224,12 +215,10 @@ async fn sustained_broadcast_input_does_not_starve_concurrent_unicast() {
         .unwrap();
     let unicast_npdu = vec![0x01, 0x00, 0x99, 0x88, 0x77];
     let mut unicast_buf = BytesMut::new();
-    encode_bvll(
-        &mut unicast_buf,
+    unicast_buf.extend_from_slice(&raw_frame(
         BvlcFunction::ORIGINAL_UNICAST_NPDU,
         &unicast_npdu,
-    )
-    .unwrap();
+    ));
 
     let start_time = Instant::now();
     unicast_sock.send_to(&unicast_buf, bbmd_dest).await.unwrap();
@@ -298,12 +287,10 @@ async fn fanout_semantics_for_original_forwarded_and_dbtn() {
 
     // 1. Register foreign device
     let mut reg_buf = BytesMut::new();
-    encode_bvll(
-        &mut reg_buf,
+    reg_buf.extend_from_slice(&raw_frame(
         BvlcFunction::REGISTER_FOREIGN_DEVICE,
         &60u16.to_be_bytes(),
-    )
-    .unwrap();
+    ));
     peer_fd.send_to(&reg_buf, bbmd_dest).await.unwrap();
     let reg_ack = recv_bvll(&peer_fd).await;
     assert_eq!(reg_ack.function, BvlcFunction::BVLC_RESULT);
@@ -311,30 +298,30 @@ async fn fanout_semantics_for_original_forwarded_and_dbtn() {
     // 2. Test DBTN: from registered foreign device -> forwards to BDT peer
     let dbtn_npdu = vec![0x01, 0x20, 0xAA, 0x11];
     let mut dbtn_buf = BytesMut::new();
-    encode_bvll(
-        &mut dbtn_buf,
+    dbtn_buf.extend_from_slice(&raw_frame(
         BvlcFunction::DISTRIBUTE_BROADCAST_TO_NETWORK,
         &dbtn_npdu,
-    )
-    .unwrap();
+    ));
     peer_fd.send_to(&dbtn_buf, bbmd_dest).await.unwrap();
 
     let dbtn_forwarded = recv_bvll(&peer_bdt).await;
     assert_eq!(dbtn_forwarded.function, BvlcFunction::FORWARDED_NPDU);
-    assert_eq!(dbtn_forwarded.payload.as_ref(), dbtn_npdu.as_slice());
+    assert_eq!(
+        dbtn_forwarded.npdu().unwrap().as_ref(),
+        dbtn_npdu.as_slice()
+    );
     // DBTN does not echo back to sender
     assert_no_bvll(&peer_fd, "DBTN sender").await;
 
     // 3. Test Forwarded-NPDU from BDT peer -> forwards to foreign device
     let fwd_npdu = vec![0x01, 0x20, 0xBB, 0x22];
-    let mut fwd_buf = BytesMut::new();
-    crate::bvll::encode_bvll_forwarded(&mut fwd_buf, [10, 1, 2, 3], 47808, &fwd_npdu).unwrap();
+    let fwd_buf = forwarded_wire(([10, 1, 2, 3], 47808), &fwd_npdu);
     peer_bdt.send_to(&fwd_buf, bbmd_dest).await.unwrap();
 
     let fwd_to_fd = recv_bvll(&peer_fd).await;
     assert_eq!(fwd_to_fd.function, BvlcFunction::FORWARDED_NPDU);
-    assert_eq!(fwd_to_fd.payload.as_ref(), fwd_npdu.as_slice());
-    assert_eq!(fwd_to_fd.originating_ip, Some([10, 1, 2, 3]));
+    assert_eq!(fwd_to_fd.npdu().unwrap().as_ref(), fwd_npdu.as_slice());
+    assert_eq!(origin_of(&fwd_to_fd).map(|o| o.0), Some([10, 1, 2, 3]));
 
     // 4. Test DBTN from unregistered sender -> returns NAK
     let unreg_sock = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
@@ -345,7 +332,7 @@ async fn fanout_semantics_for_original_forwarded_and_dbtn() {
     assert_eq!(nak_res.function, BvlcFunction::BVLC_RESULT);
     assert_eq!(
         crate::bip::decode_bvlc_result_code(&nak_res).unwrap(),
-        bacnet_types::enums::BvlcResultCode::DISTRIBUTE_BROADCAST_TO_NETWORK_NAK
+        bacnet_bip_codec::BvlcResultCode::DISTRIBUTE_BROADCAST_TO_NETWORK_NAK
     );
 
     bbmd.stop().await.unwrap();
@@ -476,25 +463,20 @@ async fn dbtn_delivers_local_subnet_broadcast_under_tight_fanout_budget() {
         fanout::FanoutDispatcher::new(fanout_tx, fanout_limiter, Arc::clone(&fanout_counters));
 
     let ctx = RecvContext {
-        local_mac: encode_bip_mac(Ipv4Addr::LOCALHOST.octets(), local_port),
-        socket: bbmd_socket,
-        npdu_tx,
-        bbmd: Some(Arc::new(Mutex::new(state))),
-        broadcast_addr: Ipv4Addr::LOCALHOST,
-        broadcast_port: local_broadcast_port,
-        pending_bvlc_response: Arc::new(Mutex::new(None)),
-        management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
         fanout: Some(fanout_dispatcher),
-        force_dbtn_forward_failure: false,
-        forwarded_origins: super::groups::ForwardedOrigins::detached(),
+        ..RecvContext::for_test(
+            bbmd_socket,
+            npdu_tx,
+            SocketAddrV4::new(Ipv4Addr::from(Ipv4Addr::LOCALHOST.octets()), local_port),
+            SocketAddrV4::new(Ipv4Addr::LOCALHOST, local_broadcast_port),
+            Some(Arc::new(std::sync::Mutex::new(state))),
+        )
     };
 
     let sender = (Ipv4Addr::LOCALHOST.octets(), origin_fd_port);
     let msg = BvllMessage {
         function: BvlcFunction::DISTRIBUTE_BROADCAST_TO_NETWORK,
         payload: Bytes::from_static(&[0x01, 0x20, 0xDE, 0xAD, 0xBE, 0xEF]),
-        originating_ip: None,
-        originating_port: None,
     };
 
     handle_bvll_message(&msg, sender, Delivery::Unicast, &ctx).await;
@@ -502,14 +484,13 @@ async fn dbtn_delivers_local_subnet_broadcast_under_tight_fanout_budget() {
     // 1. Mandatory local subnet broadcast MUST be received
     let local_frame = recv_bvll(&local_broadcast_sink).await;
     assert_eq!(local_frame.function, BvlcFunction::FORWARDED_NPDU);
-    assert_eq!(local_frame.payload.as_ref(), msg.payload.as_ref());
-    assert_eq!(local_frame.originating_ip, Some(sender.0));
-    assert_eq!(local_frame.originating_port, Some(sender.1));
+    assert_eq!(local_frame.npdu().unwrap(), msg.payload);
+    assert_eq!(origin_of(&local_frame), Some(sender));
 
     // 2. Exactly one remote BDT peer receives the frame (due to max_fanout_per_input: 1)
     let peer_frame = recv_bvll(&bdt_peer_sink).await;
     assert_eq!(peer_frame.function, BvlcFunction::FORWARDED_NPDU);
-    assert_eq!(peer_frame.payload.as_ref(), msg.payload.as_ref());
+    assert_eq!(peer_frame.npdu().unwrap(), msg.payload);
 
     // 3. The second remote BDT peer was throttled
     assert_no_bvll(&extra_bdt_sink, "extra BDT peer throttled").await;

@@ -40,10 +40,11 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     /// an Unconfirmed-Request APDU (Clause 6.3), so any other APDU to it is
     /// an encoding failure too (#1479). With no `destination`, a `next_hop`
     /// that is the link's broadcast or another group address is a local
-    /// broadcast as well, but this layer doesn't ask the transport on every
-    /// unicast, so that one isn't checked, as with
-    /// [`NetworkLayer::send_apdu`]: a response goes back to the MAC its
-    /// request came from.
+    /// broadcast as well, but this send takes `next_hop` as given: unlike
+    /// [`NetworkLayer::send_apdu`], it doesn't send an Unconfirmed-Request
+    /// for one as the link's broadcast, and nothing checks it, since a
+    /// response goes back to the MAC its request came from (B/IP refuses a
+    /// group address there, #1677).
     ///
     /// Used by server transaction owners whose lifetime ends at local issuance,
     /// independently of the transport future's eventual Result.

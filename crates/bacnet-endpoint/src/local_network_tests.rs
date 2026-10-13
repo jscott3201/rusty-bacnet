@@ -69,6 +69,7 @@ struct Capture {
     inbound: Option<mpsc::Receiver<ReceivedNpdu>>,
     outbound: mpsc::Sender<Sent>,
     lease: Option<Arc<()>>,
+    fail_stop: bool,
 }
 
 impl Capture {
@@ -90,8 +91,11 @@ impl TransportPort for Capture {
     fn supports_local_nonrouter_number_controls(&self) -> bool {
         true
     }
-    fn normal_bip_endpoint(&self) -> Option<SocketAddrV4> {
-        Some(host(SELF))
+    fn bip_port(&self) -> Option<bacnet_transport::port::BipPort> {
+        Some(bacnet_transport::port::BipPort {
+            endpoint: host(SELF),
+            mode: bacnet_types::bip_port::BipPortMode::Normal,
+        })
     }
     fn retain_network_port_lease_internal(&mut self, lease: Arc<()>) -> Result<(), Error> {
         self.lease = Some(lease);
@@ -102,7 +106,11 @@ impl TransportPort for Capture {
     }
     async fn stop(&mut self) -> Result<(), Error> {
         self.lease = None;
-        Ok(())
+        if std::mem::take(&mut self.fail_stop) {
+            Err(Error::Encoding("injected capture stop failure".into()))
+        } else {
+            Ok(())
+        }
     }
     async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
         self.record(mac, npdu)
@@ -162,6 +170,10 @@ struct Endpoint {
 impl Endpoint {
     /// A session of `role` on the capture link, not yet started.
     fn new(role: SessionRole) -> Self {
+        Self::with_stop_failure(role, false)
+    }
+
+    fn with_stop_failure(role: SessionRole, fail_stop: bool) -> Self {
         let (inbound, input) = mpsc::channel(32);
         let (outbound, sent) = mpsc::channel(32);
         let transport = Capture {
@@ -169,6 +181,7 @@ impl Endpoint {
             inbound: Some(input),
             outbound,
             lease: None,
+            fail_stop,
         };
         let config = SessionConfig {
             apdu_timeout_ms: 5_000,

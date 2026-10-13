@@ -476,7 +476,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             let time_remaining = {
                 let table = cov_table.read().await;
                 table
-                    .remaining_lifetime(sub, Instant::now())
+                    .remaining_lifetime(sub, runtime_clock::now())
                     .and_then(crate::cov::CovTimeRemaining::wire_seconds)
                     .filter(|_| table.confirmed_idle(sub))
             };

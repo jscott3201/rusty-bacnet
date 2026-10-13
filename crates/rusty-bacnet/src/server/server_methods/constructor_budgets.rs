@@ -202,3 +202,33 @@ pub(super) fn budgets(keywords: BudgetKeywords) -> PyResult<Budgets> {
 #[cfg(test)]
 #[path = "constructor_budgets_tests.rs"]
 mod tests;
+
+/// Validate the full-server segmentation declaration and its receive deadline.
+pub(super) fn segmentation(
+    segmentation_supported: crate::types::PySegmentation,
+    apdu_segment_timeout_ms: u64,
+) -> PyResult<bacnet_types::enums::Segmentation> {
+    let segmentation_supported = segmentation_supported.inner;
+    if segmentation_supported.to_raw() > bacnet_types::enums::Segmentation::NONE.to_raw() {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "invalid segmentation_supported",
+        ));
+    }
+    if apdu_segment_timeout_ms == 0
+        && segmentation_supported != bacnet_types::enums::Segmentation::NONE
+    {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "apdu_segment_timeout_ms must be positive when segmentation is supported",
+        ));
+    }
+    let representable = apdu_segment_timeout_ms
+        .checked_mul(4)
+        .and_then(|ms| std::time::Instant::now().checked_add(std::time::Duration::from_millis(ms)))
+        .and_then(|deadline| deadline.checked_add(std::time::Duration::from_nanos(1)));
+    if representable.is_none() {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "receive segment timeout is not representable",
+        ));
+    }
+    Ok(segmentation_supported)
+}

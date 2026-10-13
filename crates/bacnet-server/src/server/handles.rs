@@ -7,6 +7,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         &self.local_mac
     }
 
+    /// The transport the server's network layer runs on, for its
+    /// transport-specific state: a B/IPv6 server's `local_address()`, which
+    /// a peer turns into this server's VMAC with `resolve_virtual_address`,
+    /// or a transport's counters. `None` once the server no longer holds its
+    /// network layer.
+    pub fn transport(&self) -> Option<&T> {
+        self.network.as_deref().map(NetworkLayer::transport)
+    }
+
     /// Get a reference to the shared object database.
     ///
     /// Objects read through this handle return raw standalone data. A built-in
@@ -16,6 +25,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// replacement cannot change the served execution profile.
     /// Install Device objects before startup: changing their membership through
     /// this handle does not rebind the discovery limiter's startup identity.
+    ///
+    /// A clone the application keeps can outlive the server's own handle, and
+    /// whichever goes last drops every object, waiting for the saves durable
+    /// objects have queued. In async code, let go of such a clone with
+    /// [`drop_database_off_runtime`], so that wait runs on Tokio's blocking
+    /// pool instead of a runtime worker (#1513).
     pub fn database(&self) -> &Arc<RwLock<ObjectDatabase>> {
         &self.db
     }
@@ -164,6 +179,23 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         crate::pics::PicsGenerator::new(&db, &self.config, pics_config)
             .for_server()
             .generate()
+    }
+}
+
+impl<T: TransportPort + bacnet_transport::bip::AsBip + 'static> BACnetServer<T> {
+    /// How this server's foreign-device registration is going (#938):
+    /// whether it holds a live lease, the time left on it, and the last
+    /// attempt's result and outcome, a BBMD's refusal included. It reads
+    /// [`BipTransport::bvlc_client_snapshot`] and sends nothing. Fails on a
+    /// transport that isn't B/IP, and once the server has stopped.
+    pub fn foreign_registration(
+        &self,
+    ) -> Result<bacnet_transport::bip::ForeignRegistrationSnapshot, Error> {
+        let transport = self.transport().ok_or_else(broadcaster::stopped)?;
+        Ok(transport
+            .as_bip()?
+            .bvlc_client_snapshot()
+            .foreign_registration)
     }
 }
 

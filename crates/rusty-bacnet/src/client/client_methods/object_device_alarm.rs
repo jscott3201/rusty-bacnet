@@ -33,10 +33,11 @@ impl BACnetClient {
         object_id: PyObjectIdentifier,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
+        let peers = PeerAddresses::for_transport(&self.transport_type);
         let oid = object_id.to_rust();
 
         let future = async move {
-            let mac = parse_address(&address)?;
+            let mac = peers.parse(&address)?;
             let c = {
                 let guard = inner.lock().await;
                 Arc::clone(guard.as_ref().ok_or_else(|| {
@@ -63,6 +64,7 @@ impl BACnetClient {
         initial_values: Option<Vec<PyPropertyWrite>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
+        let peers = PeerAddresses::for_transport(&self.transport_type);
 
         // Determine specifier type
         let specifier = if let Ok(ot) = object_specifier.extract::<PyObjectType>() {
@@ -91,7 +93,7 @@ impl BACnetClient {
             .collect();
 
         crate::py_async::future_into_py(py, async move {
-            let mac = parse_address(&address)?;
+            let mac = peers.parse(&address)?;
             let c = {
                 let guard = inner.lock().await;
                 Arc::clone(guard.as_ref().ok_or_else(|| {
@@ -121,10 +123,11 @@ impl BACnetClient {
         password: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
+        let peers = PeerAddresses::for_transport(&self.transport_type);
         let ed = enable_disable.to_rust();
 
         let future = async move {
-            let mac = parse_address(&address)?;
+            let mac = peers.parse(&address)?;
             let c = {
                 let guard = inner.lock().await;
                 Arc::clone(guard.as_ref().ok_or_else(|| {
@@ -149,10 +152,11 @@ impl BACnetClient {
         password: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
+        let peers = PeerAddresses::for_transport(&self.transport_type);
         let state = reinitialized_state.to_rust();
 
         let future = async move {
-            let mac = parse_address(&address)?;
+            let mac = peers.parse(&address)?;
             let c = {
                 let guard = inner.lock().await;
                 Arc::clone(guard.as_ref().ok_or_else(|| {
@@ -188,7 +192,8 @@ impl BACnetClient {
         time_of_acknowledgment: PyBACnetTimeStamp,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        let mac = parse_address(&address)?;
+        let peers = PeerAddresses::for_transport(&self.transport_type);
+        let mac = peers.parse(&address)?;
         let request = build_acknowledge_alarm_request(
             acknowledging_process_identifier,
             event_object_identifier.to_rust(),
@@ -235,11 +240,12 @@ impl BACnetClient {
             2,
         )?;
         let inner = self.inner.clone();
+        let peers = PeerAddresses::for_transport(&self.transport_type);
         let oid = event_object_identifier.to_rust();
         let event_state_acknowledged = event_state_acknowledged.to_rust();
 
         let future = async move {
-            let mac = parse_address(&address)?;
+            let mac = peers.parse(&address)?;
             let c = {
                 let guard = inner.lock().await;
                 Arc::clone(guard.as_ref().ok_or_else(|| {
@@ -269,10 +275,11 @@ impl BACnetClient {
         last_received_object_identifier: Option<PyObjectIdentifier>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
+        let peers = PeerAddresses::for_transport(&self.transport_type);
         let last_oid = last_received_object_identifier.map(|o| o.to_rust());
 
         crate::py_async::future_into_py(py, async move {
-            let mac = parse_address(&address)?;
+            let mac = peers.parse(&address)?;
             let c = {
                 let guard = inner.lock().await;
                 Arc::clone(guard.as_ref().ok_or_else(|| {
@@ -284,59 +291,6 @@ impl BACnetClient {
                 .await
                 .map_err(to_py_err)?;
             crate::py_async::attach(|py| Ok(PyBytes::new(py, &raw).into_any().unbind()))
-        })
-    }
-
-    // -----------------------------------------------------------------------
-    // ReadRange
-    // -----------------------------------------------------------------------
-
-    /// Read a range of items from a list or log object.
-    ///
-    /// `range_type` is `"position"`, `"sequence"`, or `None` (no range).
-    #[pyo3(signature = (address, object_id, property_id, array_index=None, range_type=None, reference_index=None, reference_seq=None, count=None))]
-    fn read_range<'py>(
-        &self,
-        py: Python<'py>,
-        address: String,
-        object_id: PyObjectIdentifier,
-        property_id: PyPropertyIdentifier,
-        array_index: Option<u32>,
-        range_type: Option<String>,
-        reference_index: Option<u64>,
-        reference_seq: Option<u64>,
-        count: Option<i16>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let inner = self.inner.clone();
-        let request = crate::read_range::request(
-            &object_id,
-            &property_id,
-            array_index,
-            range_type.as_deref(),
-            reference_index,
-            reference_seq,
-            count,
-        )?;
-
-        crate::py_async::future_into_py(py, async move {
-            let mac = parse_address(&address)?;
-            let c = {
-                let guard = inner.lock().await;
-                Arc::clone(guard.as_ref().ok_or_else(|| {
-                    PyRuntimeError::new_err("client not started — use 'async with'")
-                })?)
-            };
-            let ack = c
-                .read_range(
-                    &mac,
-                    request.object_identifier,
-                    request.property_identifier,
-                    request.property_array_index,
-                    request.range,
-                )
-                .await
-                .map_err(to_py_err)?;
-            crate::py_async::attach(|py| crate::read_range::ack_to_dict(py, ack))
         })
     }
 }

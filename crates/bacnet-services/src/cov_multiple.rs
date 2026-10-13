@@ -1,6 +1,9 @@
 //! SubscribeCOVPropertyMultiple and COVNotificationMultiple services
 //! per ASHRAE 135-2020 Clauses 13.16–13.18.
 
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
 use bacnet_encoding::constructed::{decode_property_reference, encode_property_reference};
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;

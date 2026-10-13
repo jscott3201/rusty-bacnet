@@ -7,9 +7,10 @@ use tokio::time::timeout;
 
 use super::rate_limit::{ManagementRateLimiter, MANAGEMENT_RESPONSE_BYTES_GLOBAL};
 use super::*;
-use crate::bbmd::{self, BbmdState, BdtEntry, BDT_ENTRY_SIZE, FDT_ENTRY_SIZE};
-use crate::bvll::{decode_bip_mac, decode_bvll, encode_bip_mac, encode_bvll};
-use bacnet_types::enums::{BvlcFunction, BvlcResultCode};
+use crate::bbmd::{self, BbmdState, BdtEntry};
+use crate::bvll::{decode_bip_mac, decode_bvll, encode_bip_mac};
+use bacnet_bip_codec::{BvlcFunction, BvlcResultCode};
+use bacnet_bip_codec::{BDT_ENTRY_LENGTH as BDT_ENTRY_SIZE, FDT_ENTRY_LENGTH as FDT_ENTRY_SIZE};
 
 #[test]
 fn test_bdt_empty_and_max_response_sizes() {
@@ -18,12 +19,10 @@ fn test_bdt_empty_and_max_response_sizes() {
     bbmd::encode_bdt_entries(&[], &mut empty_payload);
     assert_eq!(empty_payload.len(), 0);
     let mut empty_buf = BytesMut::new();
-    encode_bvll(
-        &mut empty_buf,
+    empty_buf.extend_from_slice(&raw_frame(
         BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE_ACK,
         &empty_payload,
-    )
-    .unwrap();
+    ));
     assert_eq!(empty_buf.len(), 4, "Empty Read-BDT-ACK must be 4 bytes");
 
     // Maximum BDT (128 entries): 128 * 10 = 1280 payload bytes -> 1284 total
@@ -39,12 +38,10 @@ fn test_bdt_empty_and_max_response_sizes() {
     bbmd::encode_bdt_entries(&entries, &mut max_payload);
     assert_eq!(max_payload.len(), 128 * BDT_ENTRY_SIZE);
     let mut max_buf = BytesMut::new();
-    encode_bvll(
-        &mut max_buf,
+    max_buf.extend_from_slice(&raw_frame(
         BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE_ACK,
         &max_payload,
-    )
-    .unwrap();
+    ));
     assert_eq!(
         max_buf.len(),
         1284,
@@ -66,15 +63,18 @@ fn test_fdt_empty_and_max_response_sizes() {
 
     // Empty FDT payload -> 4-byte BVLC header only
     let mut empty_payload = BytesMut::new();
-    state.encode_fdt(&mut empty_payload);
+    empty_payload.extend(
+        state
+            .fdt_wire_entries()
+            .iter()
+            .flat_map(|row| row.to_octets()),
+    );
     assert_eq!(empty_payload.len(), 0);
     let mut empty_buf = BytesMut::new();
-    encode_bvll(
-        &mut empty_buf,
+    empty_buf.extend_from_slice(&raw_frame(
         BvlcFunction::READ_FOREIGN_DEVICE_TABLE_ACK,
         &empty_payload,
-    )
-    .unwrap();
+    ));
     assert_eq!(empty_buf.len(), 4, "Empty Read-FDT-ACK must be 4 bytes");
 
     // Maximum FDT (128 entries): 128 * 10 = 1280 payload bytes -> 1284 total
@@ -94,15 +94,18 @@ fn test_fdt_empty_and_max_response_sizes() {
     assert_eq!(state.fdt().len(), 128);
 
     let mut max_payload = BytesMut::new();
-    state.encode_fdt(&mut max_payload);
+    max_payload.extend(
+        state
+            .fdt_wire_entries()
+            .iter()
+            .flat_map(|row| row.to_octets()),
+    );
     assert_eq!(max_payload.len(), 128 * FDT_ENTRY_SIZE);
     let mut max_buf = BytesMut::new();
-    encode_bvll(
-        &mut max_buf,
+    max_buf.extend_from_slice(&raw_frame(
         BvlcFunction::READ_FOREIGN_DEVICE_TABLE_ACK,
         &max_payload,
-    )
-    .unwrap();
+    ));
     assert_eq!(
         max_buf.len(),
         1284,
@@ -152,12 +155,10 @@ async fn test_max_fdt_response_accepted_by_bip_client() {
             payload.extend_from_slice(&60u16.to_be_bytes());
         }
         let mut response = BytesMut::with_capacity(4 + payload.len());
-        encode_bvll(
-            &mut response,
+        response.extend_from_slice(&raw_frame(
             BvlcFunction::READ_FOREIGN_DEVICE_TABLE_ACK,
             &payload,
-        )
-        .unwrap();
+        ));
         assert_eq!(response.len(), 1284);
         server.send_to(&response, client_addr).await.unwrap();
     });
@@ -253,12 +254,10 @@ async fn test_bbmd_wire_read_bdt_throttling_and_npdu_traffic() {
         .unwrap();
 
     let mut req_buf = BytesMut::new();
-    encode_bvll(
-        &mut req_buf,
+    req_buf.extend_from_slice(&raw_frame(
         BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE,
         &[],
-    )
-    .unwrap();
+    ));
 
     // Requests 1, 2, 3 should succeed (3 * 1,284 = 3,852 <= 4,096)
     for _ in 0..3 {
@@ -301,12 +300,10 @@ async fn test_bbmd_wire_read_bdt_throttling_and_npdu_traffic() {
     // Verify NPDU traffic from the same client is NOT starved or affected
     let mut npdu_buf = BytesMut::new();
     let npdu_payload = [0x01, 0x04, 0xDE, 0xAD, 0xBE, 0xEF];
-    encode_bvll(
-        &mut npdu_buf,
+    npdu_buf.extend_from_slice(&raw_frame(
         BvlcFunction::ORIGINAL_UNICAST_NPDU,
         &npdu_payload,
-    )
-    .unwrap();
+    ));
     client_socket.send_to(&npdu_buf, bbmd_dest).await.unwrap();
 
     let received = timeout(Duration::from_millis(500), bbmd_rx.recv())
@@ -348,7 +345,7 @@ async fn test_bbmd_wire_read_fdt_throttling() {
 
     // Populate the running BBMD's FDT with 128 entries
     if let Some(bbmd_arc) = bbmd_transport.bbmd_state() {
-        let mut state = bbmd_arc.lock().await;
+        let mut state = bbmd_arc.lock().unwrap();
         for i in 0..BbmdState::MAX_FDT_ENTRIES {
             let ip = [10, 0, (i / 256) as u8, (i % 256) as u8];
             state.register_foreign_device(ip, 0xBAC0 + (i as u16), 300);
@@ -359,8 +356,7 @@ async fn test_bbmd_wire_read_fdt_throttling() {
         .await
         .unwrap();
 
-    let mut req_buf = BytesMut::new();
-    encode_bvll(&mut req_buf, BvlcFunction::READ_FOREIGN_DEVICE_TABLE, &[]).unwrap();
+    let req_buf = raw_frame(BvlcFunction::READ_FOREIGN_DEVICE_TABLE, &[]);
 
     // Requests 1, 2, 3 should succeed
     for _ in 0..3 {

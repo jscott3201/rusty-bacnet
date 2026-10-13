@@ -6,10 +6,10 @@ use bacnet_transport::any::AnyTransport;
 use bacnet_transport::bbmd::{BdtEntry, ForeignDevicePolicy};
 use bacnet_transport::bip::{AsBip, ManagementCounters};
 use bacnet_transport::bvll::decode_bip_mac;
+use bacnet_transport::bvll::BvlcResultCode;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::mstp::NoSerial;
 use bacnet_types::data_link::DataLink;
-use bacnet_types::enums::BvlcResultCode;
 
 /// A remote BBMD row the in-process BBMD starts with.
 const PEER_ROW: BdtEntry = BdtEntry {
@@ -48,7 +48,7 @@ async fn bip_client_transport_counters_change_after_a_read_bdt_exchange() {
     assert_eq!(client.transport().local_mac(), client.local_mac());
     // bip_builder makes a plain B/IP node: no BBMD state or FDT.
     assert!(client.transport().bbmd_state().is_none());
-    assert!(client.transport().fdt_counters().await.is_none());
+    assert!(client.transport().fdt_counters().is_none());
     assert_eq!(
         bbmd.transport().management_counters(),
         ManagementCounters::default()
@@ -71,14 +71,14 @@ async fn bip_client_transport_counters_change_after_a_read_bdt_exchange() {
 
     // The BBMD state handle is an owned Arc: it outlives the borrow.
     let state = Arc::clone(bbmd.transport().bbmd_state().expect("BBMD mode"));
-    assert_eq!(state.lock().await.bdt(), bdt.as_slice());
-    assert!(bbmd.transport().fdt_counters().await.is_some());
+    assert_eq!(state.lock().unwrap().bdt(), bdt.as_slice());
+    assert!(bbmd.transport().fdt_counters().is_some());
 
     client.stop().await.unwrap();
     bbmd.stop().await.unwrap();
     // The owned handle still reads the last tables after the client has
     // stopped its transport, as an MS/TP diagnostics handle does.
-    assert_eq!(state.lock().await.bdt(), bdt.as_slice());
+    assert_eq!(state.lock().unwrap().bdt(), bdt.as_slice());
 }
 
 #[tokio::test]
@@ -107,7 +107,7 @@ async fn any_transport_bip_variant_runs_the_bbmd_helpers_against_an_in_process_b
             .unwrap(),
         BvlcResultCode::SUCCESSFUL_COMPLETION
     );
-    let fdt_counters = bbmd.transport().fdt_counters().await.expect("BBMD mode");
+    let fdt_counters = bbmd.transport().fdt_counters().expect("BBMD mode");
     assert_eq!(fdt_counters.registrations_accepted, 1);
     let (ip, port) = decode_bip_mac(client.local_mac()).unwrap();
     let fdt = client.read_fdt(&bbmd_mac).await.unwrap();

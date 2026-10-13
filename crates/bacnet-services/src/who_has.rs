@@ -1,6 +1,9 @@
 //! Who-Has and I-Have services per ASHRAE 135-2020 Clause 16.9.
 
-use crate::who_is::{DeviceInstanceRange, WireLimits};
+#[cfg(not(feature = "std"))]
+use alloc::string::String;
+
+use crate::who_is::{DeviceInstanceRange, LimitLabels, WireLimits};
 use bacnet_encoding::constructed::tagged::{
     decode_app_character_string, decode_app_object_id, decode_ctx_character_string,
     decode_ctx_object_id, expect_end, next_is_context,
@@ -57,7 +60,7 @@ impl WhoHasRequest {
     /// it unanswered rather than reading one limit as a request for every device.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         // [0] low limit and [1] high limit, both or neither
-        let limits = WireLimits::decode(data, "WhoHas")?;
+        let limits = WireLimits::decode(data, &LimitLabels::WHO_HAS)?;
         let offset = limits.end;
 
         // CHOICE: [2] object-identifier OR [3] object-name
@@ -76,7 +79,7 @@ impl WhoHasRequest {
         expect_end(data, end, end, "WhoHas")?;
 
         Ok(Self {
-            range: limits.range("WhoHas")?,
+            range: limits.range()?,
             object,
         })
     }

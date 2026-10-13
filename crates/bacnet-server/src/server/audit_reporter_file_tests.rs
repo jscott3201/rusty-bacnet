@@ -404,7 +404,7 @@ async fn audit_reporter_atomic_write_file_execution_gates_precedence_and_results
             let before = metadata(&fixture).await;
             if case < 8 {
                 // Earlier semantic errors must still win over an oversized request.
-                fixture.server.config.atomic_write_file_budget = AtomicWriteFileBudget {
+                fixture.server.config_mut().atomic_write_file_budget = AtomicWriteFileBudget {
                     max_stream_payload_octets: 1,
                     max_records: 1,
                     max_record_payload_bytes: 1,
@@ -536,30 +536,35 @@ async fn audit_reporter_atomic_write_file_budget_and_authorization_are_silent() 
             let mut fixture = file_server(record).await;
             match case {
                 0 => {
-                    fixture.server.config.mutation_policy = crate::mutation::MutationPolicy::DenyAll
+                    fixture.server.config_mut().mutation_policy =
+                        crate::mutation::MutationPolicy::DenyAll
                 }
-                1 => fixture.server.config.mutation_authorizer = Some(Arc::new(|_| false)),
+                1 => fixture.server.config_mut().mutation_authorizer = Some(Arc::new(|_| false)),
                 2 => {
-                    fixture.server.config.mutation_authorizer =
+                    fixture.server.config_mut().mutation_authorizer =
                         Some(Arc::new(|_| panic!("fail closed")))
                 }
                 3 => {
                     fixture
                         .server
-                        .config
+                        .config_mut()
                         .atomic_write_file_budget
                         .max_stream_payload_octets = 1;
-                    fixture.server.config.atomic_write_file_budget.max_records = 1;
+                    fixture
+                        .server
+                        .config_mut()
+                        .atomic_write_file_budget
+                        .max_records = 1;
                 }
                 _ => {
                     fixture
                         .server
-                        .config
+                        .config_mut()
                         .atomic_write_file_budget
                         .max_stream_payload_octets = 1;
                     fixture
                         .server
-                        .config
+                        .config_mut()
                         .atomic_write_file_budget
                         .max_record_payload_bytes = 1;
                 }

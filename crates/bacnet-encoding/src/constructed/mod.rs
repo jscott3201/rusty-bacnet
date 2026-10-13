@@ -41,6 +41,7 @@ mod action_list;
 pub mod assigned_landing_calls;
 mod audit_notification;
 mod audit_record;
+pub mod authentication_policy;
 pub mod calendar;
 mod channel_value;
 mod color_command;
@@ -59,6 +60,8 @@ mod log_fields;
 mod log_multiple_record;
 mod log_record;
 mod members;
+mod name_value;
+pub mod network_port;
 pub mod object_property_reference;
 pub mod port_permission;
 mod property_access_result;
@@ -88,11 +91,12 @@ pub use audit_record::{
     decode_audit_log_record, decode_audit_log_record_at, decode_audit_log_record_result_at,
     encode_audit_log_record, encode_audit_log_record_result,
 };
+pub use authentication_policy::{decode_authentication_policy, encode_authentication_policy};
 pub use calendar::{
     decode_calendar_entry, decode_calendar_entry_list, decode_date_range, encode_calendar_entry,
     encode_calendar_entry_list, encode_date_range,
 };
-pub use channel_value::{channel_value_end, is_lighting_command_channel_value};
+pub use channel_value::{channel_value_end, constructed_channel_value, ConstructedChannelValue};
 pub use color_command::{
     decode_color_command, decode_color_command_value, decode_xy_color, encode_color_command,
     encode_xy_color,
@@ -123,6 +127,12 @@ pub use lighting_command::{
 };
 pub use log_multiple_record::{decode_log_multiple_record, encode_log_multiple_record};
 pub use log_record::{decode_log_record, encode_log_record};
+pub use name_value::{decode_name_value, encode_name_value};
+pub use network_port::{
+    decode_bdt_entry, decode_bdt_entry_list, decode_fdt_entry, decode_fdt_entry_list,
+    decode_host_address, decode_host_n_port, encode_bdt_entry, encode_bdt_entry_list,
+    encode_fdt_entry, encode_fdt_entry_list, encode_host_address, encode_host_n_port,
+};
 pub use object_property_reference::{
     decode_object_property_reference, decode_object_property_reference_at,
     decode_setpoint_reference, decode_setpoint_reference_at, encode_object_property_reference,

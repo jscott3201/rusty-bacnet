@@ -1,0 +1,48 @@
+[package]
+name = "bip-codec-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+# A workspace of its own, outside the root one: it builds only with cargo-fuzz
+# on the pinned nightly, from its own Cargo.lock (docs/ci.md, "Fuzzing").
+[workspace]
+members = []
+
+[dependencies]
+arbitrary = { version = "1", features = ["derive"] }
+bacnet-bip-codec = { path = "..", features = ["bytes", "heapless"] }
+bytes = "1"
+heapless = "0.9"
+libfuzzer-sys = "0.4"
+
+[[bin]]
+name = "bip_decode"
+path = "fuzz_targets/bip_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "bip6_decode"
+path = "fuzz_targets/bip6_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "bip_encode"
+path = "fuzz_targets/bip_encode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "bip6_encode"
+path = "fuzz_targets/bip6_encode.rs"
+test = false
+doc = false
+bench = false

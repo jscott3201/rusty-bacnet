@@ -66,7 +66,7 @@ async fn explicit_random_collision_reseeds_and_configured_collision_is_transacti
     let mut incoming = started.unwrap();
     random.stop().await.unwrap();
     assert!(incoming.recv().await.is_none());
-    assert_eq!(random.local_mac(), &[0; 18]);
+    assert_eq!(random.local_mac(), &[0; 3]);
 
     let mut configured = Bip6Transport::new(selected, port, Some(0x12_3456));
     let (failed, _) = tokio::join!(
@@ -77,12 +77,15 @@ async fn explicit_random_collision_reseeds_and_configured_collision_is_transacti
     assert!(
         matches!(error, bacnet_types::error::Error::Transport(e) if e.kind() == std::io::ErrorKind::AddrInUse)
     );
-    assert_eq!(configured.local_mac(), &[0; 18]);
+    assert_eq!(configured.local_mac(), &[0; 3]);
     assert!(configured.send_broadcast(NPDU).await.is_err());
     let incoming = configured.start().await.unwrap();
+    assert_eq!(configured.local_mac(), [0x12, 0x34, 0x56]);
     assert_eq!(
-        decode_bip6_mac(configured.local_mac()).unwrap(),
-        (selected, port)
+        configured
+            .local_address()
+            .map(|local| (*local.ip(), local.port())),
+        Some((selected, port))
     );
     configured.stop().await.unwrap();
     drop(incoming);
@@ -105,7 +108,7 @@ async fn explicit_cancel_start_then_restart_stop_and_drop_reclaim_owner() {
         }
         // Drop the startup future after the actual probe, before publication.
     }
-    assert_eq!(transport.local_mac(), &[0; 18]);
+    assert_eq!(transport.local_mac(), &[0; 3]);
     assert!(transport.send_broadcast(NPDU).await.is_err());
     let mut incoming = transport.start().await.unwrap();
     transport.stop().await.unwrap();

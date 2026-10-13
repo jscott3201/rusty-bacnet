@@ -10,10 +10,11 @@ keywords = ["bacnet", "building-automation", "network", "routing"]
 categories = ["network-programming"]
 
 [dependencies]
-bacnet-types.workspace = true
-bacnet-encoding.workspace = true
+bacnet-types = { workspace = true, features = ["std"] }
+bacnet-encoding = { workspace = true, features = ["std"] }
 bacnet-transport.workspace = true
-bytes.workspace = true
+bacnet-router-core.workspace = true
+bytes = { workspace = true, features = ["std"] }
 tracing.workspace = true
 tokio = { workspace = true, features = ["sync", "time"] }
 

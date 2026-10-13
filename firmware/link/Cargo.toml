@@ -1,0 +1,161 @@
+[package]
+name = "firmware-link"
+description = "Firmware link test and size budget for the MS/TP, B/IP, router and APDU stacks"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+# The lib holds one scenario per stack, which the host tests run and the
+# images link. Each bin is an image on a bare-metal target, and a stub on a
+# host.
+[lib]
+test = false
+doctest = false
+
+[[bin]]
+name = "mstp"
+path = "src/bin/mstp.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "bip"
+path = "src/bin/bip.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "node"
+path = "src/bin/node.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "bbmd"
+path = "src/bin/bbmd.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "mstp-extended"
+path = "src/bin/mstp_extended.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "router"
+path = "src/bin/router.rs"
+test = false
+bench = false
+
+# Named for its scenario, not its feature: a crate named `alloc` would share
+# the sysroot crate's name in the size check's per-crate list.
+[[bin]]
+name = "apdu"
+path = "src/bin/apdu.rs"
+test = false
+bench = false
+required-features = ["alloc"]
+
+[[test]]
+name = "apdu"
+path = "tests/apdu.rs"
+required-features = ["alloc"]
+
+# `alloc`: the apdu image and its scenario, which link bacnet-encoding and
+# bacnet-services with `alloc`, and on bare-metal targets
+# the image's allocator and critical section, and the atomics backend where
+# the target has no compare-and-swap. On by default, so host builds, clippy,
+# rustdoc and tests cover it. The other images build without it
+# (`--no-default-features`): with it, the lib links `alloc`, and an image
+# without a global allocator fails to link.
+[features]
+default = ["alloc"]
+alloc = [
+    "dep:bacnet-types",
+    "dep:bacnet-encoding",
+    "dep:bacnet-services",
+    "dep:bytes",
+    "dep:embedded-alloc",
+    "dep:portable-atomic",
+    "dep:critical-section",
+    "dep:riscv",
+]
+
+# `emulate`: the emulation build, which scripts/emu/emulate-firmware.sh runs
+# under QEMU by hand, never in CI (docs/ci.md, "Emulation (manual)"). Each
+# image's reset entry runs its scenario, checks the summary against the one
+# its host test asserts, reports it and its stack's high-water mark through
+# semihosting, and exits. The runtimes paint the stack at reset for that
+# mark: cortex-m-rt's `paint-stack`, and on RISC-V the image's own
+# `__pre_init`, which riscv-rt's `pre-init` calls.
+#
+# A build with it needs exactly one board feature, which build.rs maps to
+# that board's memory layout in boards/; each turns `emulate` on. The images
+# the link test measures build without them.
+emulate = ["dep:semihosting", "cortex-m-rt/paint-stack", "riscv-rt/pre-init"]
+# BBC micro:bit, an nRF51822 (Cortex-M0): thumbv6m-none-eabi.
+board-microbit = ["emulate"]
+# TI Stellaris LM3S6965 evaluation board (Cortex-M3): thumbv7m-none-eabi.
+board-lm3s6965evb = ["emulate"]
+# Netduino Plus 2, an STM32F405 (Cortex-M4F): thumbv7em-none-eabihf.
+board-netduinoplus2 = ["emulate"]
+# QEMU's SiFive E board, an E31 core (RV32IMAC): riscv32imc-unknown-none-elf.
+board-sifive-e = ["emulate"]
+
+# Default features, so no allocator, plus the BVLL codec's heapless sink
+# and the router core's B/IP and MS/TP glue, which need neither std nor an
+# allocator. The MS/TP core's HeaplessQueues need no feature, and
+# bacnet-bip-core has none. The alloc stack is `no_std` with `alloc`, as
+# the libraries document.
+[dependencies]
+bacnet-mstp-codec = { workspace = true }
+bacnet-mstp-core = { workspace = true }
+bacnet-bip-codec = { workspace = true, features = ["heapless"] }
+bacnet-bip-core = { workspace = true }
+bacnet-router-core = { workspace = true, features = ["bip", "mstp"] }
+heapless = { workspace = true }
+bacnet-types = { workspace = true, features = ["alloc"], optional = true }
+bacnet-encoding = { workspace = true, features = ["alloc"], optional = true }
+bacnet-services = { workspace = true, features = ["alloc"], optional = true }
+bytes = { workspace = true, optional = true }
+
+# The host test runs the alloc scenario in the image's allocator, a
+# linked-list first fit, over an arena of the image's size.
+[dev-dependencies]
+linked_list_allocator = { workspace = true }
+
+# The runtimes only on bare-metal targets, so a host build pulls in neither.
+# The apdu image's allocator too: a host build uses std's. semihosting, for
+# the emulation build only: its output and exit code reach QEMU's host side.
+[target.'cfg(target_os = "none")'.dependencies]
+embedded-alloc = { workspace = true, optional = true }
+semihosting = { workspace = true, optional = true }
+
+# critical-section: the apdu image implements a single-core critical
+# section on Cortex-M, which its allocator and atomics lock with, saving the
+# interrupt mask as a bool. cortex-m's implementation would bring in the
+# unmaintained bare-metal crate (RUSTSEC-2026-0110).
+[target.'cfg(all(target_arch = "arm", target_os = "none"))'.dependencies]
+cortex-m-rt = { workspace = true }
+critical-section = { workspace = true, features = ["restore-state-bool"], optional = true }
+
+# single-hart: the images target parts with one hart, so the startup code
+# can drop its multi-hart gate; memory: its link.x includes memory.x, as
+# cortex-m-rt's does. riscv: its single-hart critical section, for the
+# apdu image as on Cortex-M above.
+[target.'cfg(all(target_arch = "riscv32", target_os = "none"))'.dependencies]
+riscv-rt = { workspace = true, features = ["single-hart", "memory"] }
+riscv = { workspace = true, features = ["critical-section-single-hart"], optional = true }
+
+# Targets without atomic compare-and-swap (ARMv6-M, RV32IMC): bytes takes its
+# atomics from portable-atomic, whose backend the image chooses, as only a
+# firmware may: the critical section above. No library chooses one.
+[target.'cfg(all(target_os = "none", not(target_has_atomic = "ptr")))'.dependencies]
+bytes = { workspace = true, features = ["extra-platforms"], optional = true }
+portable-atomic = { workspace = true, features = ["critical-section"], optional = true }
+
+[lints]
+workspace = true

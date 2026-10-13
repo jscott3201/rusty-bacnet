@@ -96,7 +96,7 @@ async fn reply(
 
 async fn description(responder: &EndpointResponder) -> PropertyValue {
     responder
-        .db
+        .db()
         .read()
         .await
         .get(&device())
@@ -194,7 +194,7 @@ async fn endpoint_device_write_null_relinquishment_is_authorized_noop() {
         })))
         .await;
         responder
-            .db
+            .db()
             .write()
             .await
             .get_mut(&device())
@@ -289,7 +289,7 @@ async fn endpoint_device_write_revalidates_lower_level_authority_before_policy()
             device()
         };
         {
-            let mut db = responder.db.write().await;
+            let mut db = responder.db().write().await;
             db.remove(&device()).unwrap();
             if case != "removed" {
                 db.add(Box::new(TrapObject {
@@ -338,7 +338,7 @@ async fn endpoint_device_write_revalidates_lower_level_authority_before_policy()
 async fn endpoint_device_write_revalidates_replacement_after_authorization() {
     for remove_only in [false, true] {
         let (mut responder, mut ingress) = fixture(Some(Arc::new(|_| true))).await;
-        let db = responder.db.clone();
+        let db = responder.db().clone();
         let writes = Arc::new(AtomicUsize::new(0));
         let observed = writes.clone();
         responder = responder.with_device_writes(
@@ -552,7 +552,7 @@ async fn endpoint_device_write_direct_and_routed_egress_preserve_destination() {
 #[tokio::test]
 async fn endpoint_device_write_shutdown_while_waiting_for_database_never_commits() {
     let (responder, mut ingress) = fixture(Some(Arc::new(|_| true))).await;
-    let held = responder.db.write().await;
+    let held = responder.db().write().await;
     let mut received = received(request(&write()));
     let (tx, rx) = oneshot::channel();
     received.reply_tx = Some(tx);
@@ -598,7 +598,7 @@ async fn endpoint_refuses_a_command_present_value_write_and_starts_no_run() {
             }],
         }])
         .unwrap();
-    responder.db.write().await.add(Box::new(command)).unwrap();
+    responder.db().write().await.add(Box::new(command)).unwrap();
     let mut value = BytesMut::new();
     bacnet_encoding::primitives::encode_property_value(&mut value, &PropertyValue::Unsigned(1))
         .unwrap();
@@ -615,7 +615,7 @@ async fn endpoint_refuses_a_command_present_value_write_and_starts_no_run() {
         ErrorClass::PROPERTY,
         ErrorCode::WRITE_ACCESS_DENIED,
     );
-    let db = responder.db.read().await;
+    let db = responder.db().read().await;
     let command = db.get(&cmd).unwrap();
     for (property, expected) in [
         (
@@ -662,7 +662,7 @@ async fn endpoint_refuses_a_channel_present_value_write_and_starts_no_distributi
             PropertyIdentifier::DESCRIPTION.to_raw(),
         )])
         .unwrap();
-    responder.db.write().await.add(Box::new(channel)).unwrap();
+    responder.db().write().await.add(Box::new(channel)).unwrap();
     let mut value = BytesMut::new();
     bacnet_encoding::primitives::encode_app_character_string(&mut value, "commanded").unwrap();
     let write = WritePropertyRequest {
@@ -678,7 +678,7 @@ async fn endpoint_refuses_a_channel_present_value_write_and_starts_no_distributi
         ErrorClass::PROPERTY,
         ErrorCode::WRITE_ACCESS_DENIED,
     );
-    let db = responder.db.read().await;
+    let db = responder.db().read().await;
     let channel = db.get(&ch).unwrap();
     assert_eq!(
         channel

@@ -280,6 +280,7 @@ async fn rejected_segmented_child_drops_owner_without_polling() {
         },
         Bytes::from_static(&[0; 70]),
         Some(c.owner()),
+        DEFAULT_APDU_SEGMENT_TIMEOUT,
     );
     assert!(tasks.is_empty());
     c.clean();
@@ -304,6 +305,7 @@ async fn rejected_segmented_child_drops_owner_without_polling() {
         },
         Bytes::from_static(&[0; 70]),
         Some(c.owner()),
+        DEFAULT_APDU_SEGMENT_TIMEOUT,
     );
     c.clean();
 }

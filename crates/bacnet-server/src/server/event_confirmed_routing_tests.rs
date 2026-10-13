@@ -420,11 +420,18 @@ async fn confirmed_retry_reuses_committed_message_bytes_after_history_changes() 
     );
 }
 
-#[tokio::test(start_paused = true)]
-async fn observed_routed_device_stops_emitting_when_retry_reaches_expiry() {
+/// The APDU timeout [`retry_against_observed_binding`] gives its notification.
+const RETRY: Duration = Duration::from_millis(1_000);
+
+/// Send a confirmed notification to Device 91, observed through `ROUTER_A`
+/// so long ago that its binding lapses `lapses_after_retry` after the first
+/// retry falls due, and step the clock to that retry. The binding's age and
+/// the retry timer are both on tokio's clock (#1556), so the gap between
+/// them is exact and a runner stall can't change it.
+async fn retry_against_observed_binding(lapses_after_retry: Duration) -> Harness {
     let identifier = ObjectIdentifier::new(ObjectType::DEVICE, 91).unwrap();
     let mut bindings = DeviceBindingTable::new();
-    let observed_at = Instant::now() - OBSERVED_BINDING_TTL + Duration::from_millis(500);
+    let observed_at = runtime_clock::now() - OBSERVED_BINDING_TTL + RETRY + lapses_after_retry;
     let source = NpduAddress {
         network: 1001,
         mac_address: MacAddr::from_slice(RECIPIENT),
@@ -435,7 +442,7 @@ async fn observed_routed_device_stops_emitting_when_retry_reaches_expiry() {
     );
     let harness = Harness::new_with_bindings(
         vec![destination_for(BACnetRecipient::Device(identifier), true)],
-        1_000,
+        RETRY.as_millis() as u64,
         bindings,
     )
     .await;
@@ -443,11 +450,25 @@ async fn observed_routed_device_stops_emitting_when_retry_reaches_expiry() {
 
     assert_eq!(harness.unicast_frames().len(), 1);
     assert_eq!(harness.notification_transactions.active_count(), 1);
-    tokio::time::advance(Duration::from_secs(1)).await;
+    tokio::time::advance(RETRY).await;
     for _ in 0..16 {
         tokio::task::yield_now().await;
     }
+    harness
+}
 
+/// A binding that lapses 1 ms after the retry falls due still carries it.
+#[tokio::test(start_paused = true)]
+async fn observed_routed_device_retries_until_its_binding_lapses() {
+    let harness = retry_against_observed_binding(Duration::from_millis(1)).await;
+    assert_eq!(harness.unicast_frames().len(), 2, "1 ms before the lapse");
+    assert_eq!(harness.notification_transactions.active_count(), 1);
+}
+
+/// A binding that lapses exactly when the retry falls due doesn't.
+#[tokio::test(start_paused = true)]
+async fn observed_routed_device_stops_emitting_when_retry_reaches_expiry() {
+    let harness = retry_against_observed_binding(Duration::ZERO).await;
     assert_eq!(
         harness.unicast_frames().len(),
         1,

@@ -1,9 +1,9 @@
 //! A peer the direct listener refuses during TLS reads the alert, and its
 //! active and pending slots come back afterwards (#950).
 use super::*;
+use crate::port_ownership::connect_loopback;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 
 /// What a WebSocket client writes straight after its TLS 1.3 Finished.
 const UPGRADE: &[u8] = b"GET /.bacnet/sc HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n\
@@ -27,7 +27,7 @@ fn client_without_certificate(ca: &TestCa) -> tokio_rustls::TlsConnector {
 async fn a_refused_tls_peer_reads_the_alert_and_its_slots_are_released() {
     let ca = TestCa::generate();
     let (mut listener, _rx) = start_listener(&ca, |c| c).await;
-    let tcp = TcpStream::connect(listener.local_addr()).await.unwrap();
+    let tcp = connect_loopback(listener.local_addr()).await;
     let server_name = rustls::pki_types::ServerName::try_from("localhost").unwrap();
     let connected = tokio::time::timeout(
         Duration::from_secs(3),
@@ -67,7 +67,7 @@ async fn a_refused_tls_peer_reads_the_alert_and_its_slots_are_released() {
 async fn a_raw_peer_that_never_closes_gets_fin_and_releases_its_slots() {
     let ca = TestCa::generate();
     let (mut listener, _rx) = start_listener(&ca, |c| c).await;
-    let mut raw = TcpStream::connect(listener.local_addr()).await.unwrap();
+    let mut raw = connect_loopback(listener.local_addr()).await;
     raw.write_all(b"not a TLS record\r\n\r\n").await.unwrap();
     // The alert, then FIN: reading reaches end of stream, not a reset.
     tokio::time::timeout(Duration::from_secs(3), async {
@@ -88,7 +88,7 @@ async fn a_raw_peer_that_never_closes_gets_fin_and_releases_its_slots() {
 async fn a_raw_peer_that_keeps_writing_is_dropped_and_releases_its_slots() {
     let ca = TestCa::generate();
     let (mut listener, _rx) = start_listener(&ca, |c| c).await;
-    let mut raw = TcpStream::connect(listener.local_addr()).await.unwrap();
+    let mut raw = connect_loopback(listener.local_addr()).await;
     // The TLS accept waits for a ClientHello, so the slots are held now.
     wait_counts(&listener, 1, 1).await;
     let writer = tokio::spawn(async move {

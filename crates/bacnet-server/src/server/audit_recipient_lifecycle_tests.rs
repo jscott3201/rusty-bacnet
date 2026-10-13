@@ -286,7 +286,7 @@ async fn recipient_configured_routed_old_route_is_preserved_and_observed_new_is_
             oid(ObjectType::DEVICE, 22),
             LOGGER,
             None,
-            Instant::now(),
+            runtime_clock::now(),
             |_| false,
         );
     assert!(matches!(

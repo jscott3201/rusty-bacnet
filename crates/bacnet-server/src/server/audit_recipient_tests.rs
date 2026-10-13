@@ -374,7 +374,7 @@ async fn recipient_invalid_and_unauthorized_requests_preserve_value_epoch_and_se
         ));
     }
     for panic in [false, true] {
-        fixture.server.config.mutation_authorizer = Some(Arc::new(move |_| {
+        fixture.server.config_mut().mutation_authorizer = Some(Arc::new(move |_| {
             assert!(!panic, "authorization panic");
             false
         }));
@@ -519,7 +519,7 @@ async fn recipient_wpm_authorizer_denies_after_committed_prefix_without_suffix_a
     let mut fixture = fixture(reporter()).await;
     let decisions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let captured = Arc::clone(&decisions);
-    fixture.server.config.mutation_authorizer = Some(Arc::new(move |context| {
+    fixture.server.config_mut().mutation_authorizer = Some(Arc::new(move |context| {
         assert_eq!(context.invoke_id, Some(77));
         assert_eq!(context.source_mac.as_slice(), SOURCE);
         captured.fetch_add(1, Ordering::AcqRel) == 0

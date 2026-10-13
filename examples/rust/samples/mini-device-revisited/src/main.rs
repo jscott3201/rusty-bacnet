@@ -62,7 +62,8 @@ struct Args {
     #[arg(long, default_value_t = 3456)]
     instance: u32,
 
-    /// Local NIC IPv4 (advertised in I-Am). UDP binds 0.0.0.0 for discovery.
+    /// Local NIC IPv4 (advertised in I-Am). The transport binds it, plus a
+    /// wildcard broadcast listener on Unix, so discovery broadcasts arrive.
     #[arg(long)]
     address: Option<Ipv4Addr>,
 

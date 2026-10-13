@@ -6,10 +6,16 @@
 
 use std::sync::Arc;
 
-use super::super::control_policy::ControlGate;
-use super::super::envelope_harness::{attributes, own_addresses, Harness, PORT_MACS};
-use super::*;
+use bacnet_encoding::npdu::{Npdu, NpduAddress};
+use bacnet_transport::port::DataAttribute;
+use bacnet_types::enums::NetworkMessageType;
+use bacnet_types::MacAddr;
 use bytes::Bytes;
+
+use super::control_policy::ControlGate;
+use super::envelope_harness::{attributes, Harness, IngressContext, TableSeed, PORT_MACS};
+use super::SendRequest;
+use crate::router_table::Reachability;
 
 /// Reason 1 for network 5000: the payload every reject below carries.
 const NO_ROUTE_TO_5000: [u8; 3] = [0x01, 0x13, 0x88];
@@ -35,42 +41,34 @@ fn address(network: u16, mac: &[u8]) -> NpduAddress {
     }
 }
 
-/// Refuse an NPDU from [`SENDER`] on port 0 (network 1000) whose SNET/SADR is
-/// `origin` with reason 1 for 5000, and return what each port's send queue
-/// then holds. The harness router is [01] on 1000 and [02] on 2000.
-fn reject_for(origin: Option<&NpduAddress>) -> [Vec<SendRequest>; 2] {
-    let (txs, mut rxs): (Vec<_>, Vec<_>) = (0..2).map(|_| mpsc::channel(4)).unzip();
-    let own = own_addresses();
-    let data_attributes = attributes();
-    let refused = Refused {
-        send_txs: &txs,
-        own: &own,
-        port_idx: 0,
-        sender_mac: &SENDER,
-        origin,
-        data_attributes: &data_attributes,
-    };
-    send_reject(&refused, 5000, RejectMessageReason::NOT_DIRECTLY_CONNECTED);
-    [0, 1].map(|port| std::iter::from_fn(|| rxs[port].try_recv().ok()).collect())
-}
-
-#[test]
-fn send_reject_sends_nothing_when_the_originator_is_the_router() {
-    // The router's own MAC on the arrival network, and on the other one: no
-    // reject goes out on either port (#1219).
+#[tokio::test]
+async fn no_reject_goes_out_when_the_originator_is_the_router() {
+    // An APDU from [`SENDER`] on port 0 (network 1000) for 5000, which the
+    // table holds as unreachable, so it is refused with reason 1 and no
+    // search. Its SNET/SADR is the router's own MAC on the arrival network,
+    // or on the other one: no reject goes out on either port (#1219).
     for origin in [
         address(1000, &[PORT_MACS[0]]),
         address(2000, &[PORT_MACS[1]]),
     ] {
-        let [arrival, other] = reject_for(Some(&origin));
-        assert!(arrival.is_empty(), "{origin:?}");
-        assert!(other.is_empty(), "{origin:?}");
+        let mut h = Harness::two_port();
+        h.learned(5000, 1, &[9]);
+        h.table().mark_unreachable(5000);
+        let npdu = Npdu {
+            destination: Some(address(5000, &[5])),
+            source: Some(origin.clone()),
+            hop_count: 255,
+            payload: Bytes::from_static(&[0x10, 0x08]),
+            ..Npdu::default()
+        };
+        h.dispatch(h.ctx(0, &SENDER, npdu)).await;
+        h.assert_quiet();
     }
 }
 
 /// Direct 1000/0 and 2000/1, and 3000 learned behind [9] on port 0.
-fn relay_table() -> RouterTable {
-    let mut table = RouterTable::new();
+fn relay_table() -> TableSeed {
+    let mut table = TableSeed::new();
     table.add_direct(1000, 0);
     table.add_direct(2000, 1);
     table.add_learned(3000, 0, MacAddr::from_slice(&[9]));
@@ -221,8 +219,8 @@ async fn a_reject_addressed_to_the_router_reaches_its_consumer_and_the_table() {
         assert_eq!(control.ingress_sequence, 1, "{case}");
         assert!(controls.try_recv().is_err(), "{case}");
         assert_eq!(
-            h.table.lock().await.effective_reachability(3000),
-            Some(ReachabilityStatus::Busy),
+            h.table().effective_reachability(3000, h.now()),
+            Some(Reachability::Busy),
             "{case}: the table still learns from it"
         );
         assert!(h.drain(0).is_empty(), "{case}: not relayed");
@@ -250,8 +248,8 @@ async fn a_reject_for_another_node_or_a_denied_one_skips_the_routers_consumer() 
     h.handle(ctx).await;
     assert!(controls.try_recv().is_err());
     assert_eq!(
-        h.table.lock().await.effective_reachability(3000),
-        Some(ReachabilityStatus::Reachable)
+        h.table().effective_reachability(3000, h.now()),
+        Some(Reachability::Reachable)
     );
     h.assert_quiet();
 }

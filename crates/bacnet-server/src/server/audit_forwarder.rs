@@ -35,7 +35,7 @@ fn resolve(
     }
     let route = RecipientRoute::from_device_resolution(bindings.resolve_at(
         &device,
-        Instant::now(),
+        runtime_clock::now(),
         &is_group,
     ))
     .localize(local_network, &is_group, &is_group)

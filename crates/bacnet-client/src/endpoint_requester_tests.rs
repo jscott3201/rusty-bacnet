@@ -404,7 +404,7 @@ async fn routed_destination_to_no_single_device_fails_before_registration() {
 
     for (dnet, dadr) in [(0, &[3][..]), (u16::MAX, &[3]), (100, &[])] {
         for destination in [routed(dnet, dadr), via_broadcast(dnet, dadr)] {
-            let refused = prepare(destination.clone()).err();
+            let refused = prepare(destination.clone()).await.err();
             assert!(
                 matches!(refused, Some(Error::Encoding(_))),
                 "{destination:?}: {refused:?}"
@@ -413,7 +413,7 @@ async fn routed_destination_to_no_single_device_fails_before_registration() {
             assert_eq!(requester.inner.tsm.lock().unwrap().pending_count(), 0);
         }
     }
-    let prepared = prepare(routed(u16::MAX - 1, &[3])).unwrap();
+    let prepared = prepare(routed(u16::MAX - 1, &[3])).await.unwrap();
     assert_eq!(coordinator.active_count().unwrap(), 1);
     drop(prepared);
     assert_eq!(coordinator.active_count().unwrap(), 0);
@@ -464,6 +464,7 @@ async fn a_group_destination_fails_before_registration() {
                 PropertyIdentifier::PRESENT_VALUE,
                 None,
             )
+            .await
             .err();
         assert!(
             matches!(&refused, Some(Error::Encoding(message))

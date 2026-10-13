@@ -6,10 +6,14 @@
 //! [`decode_npdu`](bacnet_encoding::npdu::decode_npdu) and re-walk the entry
 //! octets by hand, never reusing the implementation's parser.
 
-use super::envelope_harness::*;
-use super::*;
-use crate::router_table::RoutingClaimSnapshot;
 use bacnet_encoding::npdu::decode_npdu;
+use bacnet_types::enums::NetworkMessageType;
+use bacnet_types::MacAddr;
+use bytes::Bytes;
+
+use super::envelope_harness::*;
+use super::SendRequest;
+use crate::router_table::{ClaimCounters, PortId};
 
 /// Independent-peer entry walk: count + `DNET(2) + Port ID(1) + Port Info(N)`
 /// with no trailing bytes. Panics on any envelope deviation.
@@ -40,31 +44,14 @@ fn unicast_payloads(requests: Vec<SendRequest>) -> Vec<Bytes> {
         .collect()
 }
 
-#[test]
-fn wire_port_id_mapping_is_stable_nonzero_and_checked() {
-    assert_eq!(RouterTable::wire_port_id(0), Some(1));
-    assert_eq!(RouterTable::wire_port_id(1), Some(2));
-    assert_eq!(RouterTable::port_index_for_wire_id(1, 2), Some(0));
-    assert_eq!(RouterTable::port_index_for_wire_id(2, 2), Some(1));
-    // Port ID 0 is the purge trigger, never a real port.
-    assert_eq!(RouterTable::port_index_for_wire_id(0, 2), None);
-    // Past the local port count names no local port.
-    assert_eq!(RouterTable::port_index_for_wire_id(3, 2), None);
-    assert_eq!(RouterTable::port_index_for_wire_id(255, 2), None);
-}
-
 #[tokio::test]
 async fn zero_entry_query_leaves_table_untouched() {
     let mut h = Harness::two_port();
     let before: Vec<(u16, usize, bool)> = {
-        let tbl = h.table.lock().await;
+        let tbl = h.table();
         let mut rows: Vec<(u16, usize, bool)> = tbl
-            .sorted_networks()
-            .iter()
-            .map(|net| {
-                let entry = tbl.lookup(*net).unwrap();
-                (*net, entry.port_index, entry.directly_connected)
-            })
+            .routes()
+            .map(|(net, entry)| (net, usize::from(entry.port().0), entry.is_direct()))
             .collect();
         rows.sort_unstable();
         rows
@@ -85,14 +72,10 @@ async fn zero_entry_query_leaves_table_untouched() {
     );
     assert_eq!(peer_entries(&decoded.payload), vec![(1000, 1), (2000, 2)]);
     let after: Vec<(u16, usize, bool)> = {
-        let tbl = h.table.lock().await;
+        let tbl = h.table();
         let mut rows: Vec<(u16, usize, bool)> = tbl
-            .sorted_networks()
-            .iter()
-            .map(|net| {
-                let entry = tbl.lookup(*net).unwrap();
-                (*net, entry.port_index, entry.directly_connected)
-            })
+            .routes()
+            .map(|(net, entry)| (net, usize::from(entry.port().0), entry.is_direct()))
             .collect();
         rows.sort_unstable();
         rows
@@ -102,7 +85,7 @@ async fn zero_entry_query_leaves_table_untouched() {
 
 #[tokio::test]
 async fn empty_table_query_is_one_count_zero_ack() {
-    let mut h = Harness::with_table(RouterTable::new());
+    let mut h = Harness::with_table(TableSeed::new());
     h.handle(h.ctx(
         0,
         &[7],
@@ -135,20 +118,20 @@ async fn update_installs_learned_route_on_mapped_port() {
         Some(NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK.to_raw())
     );
     assert!(decoded.payload.is_empty());
-    let table = h.table.lock().await;
+    let table = h.table();
     let route = table.lookup(4000).unwrap();
-    assert_eq!(route.port_index, 1);
-    assert!(!route.directly_connected);
-    assert_eq!(route.next_hop_mac.as_slice(), &[9]);
+    assert_eq!(route.port(), PortId(1));
+    assert!(!route.is_direct());
+    assert_eq!(route.next_hop().as_slice(), &[9]);
     // Configured attachments are untouched.
-    assert!(table.lookup(1000).unwrap().directly_connected);
-    assert!(table.lookup(2000).unwrap().directly_connected);
-    assert_eq!(table.claim_snapshot(), RoutingClaimSnapshot::default());
+    assert!(table.lookup(1000).unwrap().is_direct());
+    assert!(table.lookup(2000).unwrap().is_direct());
+    assert_eq!(table.claim_counters(), ClaimCounters::default());
 }
 
 #[tokio::test]
 async fn purge_removes_learned_but_preserves_direct() {
-    let mut table = RouterTable::new();
+    let mut table = TableSeed::new();
     table.add_direct(1000, 0);
     table.add_direct(2000, 1);
     table.add_learned(3000, 0, MacAddr::from_slice(&[1]));
@@ -166,16 +149,16 @@ async fn purge_removes_learned_but_preserves_direct() {
     let replies = unicast_payloads(h.drain(1));
     assert_eq!(replies.len(), 1);
     assert!(decode_npdu(replies[0].clone()).unwrap().payload.is_empty());
-    let table = h.table.lock().await;
+    let table = h.table();
     assert!(table.lookup(3000).is_none());
     let direct = table.lookup(1000).unwrap();
-    assert!(direct.directly_connected);
-    assert_eq!(direct.port_index, 0);
+    assert!(direct.is_direct());
+    assert_eq!(direct.port(), PortId(0));
 }
 
 #[tokio::test]
 async fn replacement_rewrites_learned_mapping_in_one_message() {
-    let mut table = RouterTable::new();
+    let mut table = TableSeed::new();
     table.add_direct(1000, 0);
     table.add_direct(2000, 1);
     table.add_learned(3000, 0, MacAddr::from_slice(&[1]));
@@ -191,12 +174,12 @@ async fn replacement_rewrites_learned_mapping_in_one_message() {
     ))
     .await;
     assert_eq!(unicast_payloads(h.drain(0)).len(), 1);
-    let table = h.table.lock().await;
+    let table = h.table();
     let route = table.lookup(3000).unwrap();
-    assert_eq!(route.port_index, 1);
-    assert!(!route.directly_connected);
-    assert_eq!(route.next_hop_mac.as_slice(), &[9]);
-    assert_eq!(table.claim_snapshot().learned_ok, 0);
+    assert_eq!(route.port(), PortId(1));
+    assert!(!route.is_direct());
+    assert_eq!(route.next_hop().as_slice(), &[9]);
+    assert_eq!(table.claim_counters().learned_ok, 0);
 }
 
 #[tokio::test]
@@ -214,13 +197,13 @@ async fn intra_message_order_is_last_wins() {
     ))
     .await;
     assert_eq!(unicast_payloads(h.drain(0)).len(), 1);
-    let table = h.table.lock().await;
+    let table = h.table();
     // Added then purged: absent.
     assert!(table.lookup(4000).is_none());
     // Purged (absent no-op) then added via Port ID 1: learned on port 0.
     let route = table.lookup(5000).unwrap();
-    assert_eq!(route.port_index, 0);
-    assert!(!route.directly_connected);
+    assert_eq!(route.port(), PortId(0));
+    assert!(!route.is_direct());
 }
 
 #[tokio::test]
@@ -243,10 +226,10 @@ async fn truncated_port_info_rejects_whole_message() {
         ))
         .await;
         h.assert_quiet();
-        let table = h.table.lock().await;
+        let table = h.table();
         assert_eq!(table.len(), 2);
         assert!(table.lookup(3000).is_none());
-        assert_eq!(table.claim_snapshot(), RoutingClaimSnapshot::default());
+        assert_eq!(table.claim_counters(), ClaimCounters::default());
     }
 }
 
@@ -271,9 +254,9 @@ async fn unknown_port_and_reserved_networks_skip_rest_applies() {
     let replies = unicast_payloads(h.drain(0));
     assert_eq!(replies.len(), 1);
     assert!(decode_npdu(replies[0].clone()).unwrap().payload.is_empty());
-    let table = h.table.lock().await;
+    let table = h.table();
     assert!(table.lookup(7000).is_none());
-    assert_eq!(table.lookup(7001).unwrap().port_index, 1);
+    assert_eq!(table.lookup(7001).unwrap().port(), PortId(1));
     assert_eq!(table.len(), 3);
 }
 
@@ -282,7 +265,7 @@ async fn reserved_entry_does_not_consume_cap_or_hide_suffix() {
     // Full table (256 learned): a leading reserved-DNET entry with a valid
     // Port ID must skip before the route-cap check, so the replacement
     // behind it still applies and the cap counter stays truthful.
-    let mut table = RouterTable::new();
+    let mut table = TableSeed::new();
     for net in 1..=256u16 {
         table.add_learned(net, 0, MacAddr::from_slice(&[1]));
     }
@@ -300,26 +283,27 @@ async fn reserved_entry_does_not_consume_cap_or_hide_suffix() {
     let replies = unicast_payloads(h.drain(0));
     assert_eq!(replies.len(), 1);
     assert!(decode_npdu(replies[0].clone()).unwrap().payload.is_empty());
-    let table = h.table.lock().await;
+    let table = h.table();
     assert_eq!(table.len(), 256);
     let route = table.lookup(1).unwrap();
-    assert_eq!(route.port_index, 1);
-    assert!(!route.directly_connected);
-    assert_eq!(route.next_hop_mac.as_slice(), &[9]);
-    assert_eq!(table.claim_snapshot(), RoutingClaimSnapshot::default());
+    assert_eq!(route.port(), PortId(1));
+    assert!(!route.is_direct());
+    assert_eq!(route.next_hop().as_slice(), &[9]);
+    assert_eq!(table.claim_counters(), ClaimCounters::default());
 }
 
 #[tokio::test]
 async fn large_table_query_splits_into_bounded_acks() {
-    let mut table = RouterTable::new();
+    let mut table = TableSeed::new();
     table.add_direct(1000, 0);
     table.add_direct(2000, 1);
-    for net in 10..310u16 {
+    // A full table: the 256-route cap, 254 learned and 2 direct.
+    for net in 10..264u16 {
         let port = usize::from(net % 2);
         table.add_learned(net, port, MacAddr::from_slice(&[port as u8]));
     }
     let expected_total = table.len();
-    assert_eq!(expected_total, 302);
+    assert_eq!(expected_total, 256);
     let mut h = Harness::with_table(table);
     h.handle(h.ctx(
         0,
@@ -329,7 +313,7 @@ async fn large_table_query_splits_into_bounded_acks() {
     .await;
     assert!(h.drain(1).is_empty());
     let replies = unicast_payloads(h.drain(0));
-    assert!(replies.len() > 1, "302 entries must not fit one ACK");
+    assert!(replies.len() > 1, "256 entries must not fit one ACK");
     let mut stream: Vec<(u16, u8)> = Vec::with_capacity(expected_total);
     for raw in &replies {
         // Egress bound holds on the encoded reply itself.
@@ -392,7 +376,7 @@ async fn full_queue_drops_acks_without_mutation_or_panic() {
             SendRequest::Unicast { .. } => panic!("no ACK fits a full queue"),
         }
     }
-    assert_eq!(h.table.lock().await.len(), 2);
+    assert_eq!(h.table().len(), 2);
 
     // Update with a saturated queue still applies, ACK dropped (bounded).
     let mut h = Harness::two_port();
@@ -413,8 +397,41 @@ async fn full_queue_drops_acks_without_mutation_or_panic() {
         ),
     ))
     .await;
-    assert!(h.table.lock().await.lookup(3000).is_some());
+    assert!(h.table().lookup(3000).is_some());
     assert_eq!(h.drain(0).len(), 16);
+}
+
+#[tokio::test]
+async fn a_full_queue_ends_a_chunked_answer_at_its_first_refused_ack() {
+    // A full table answers in three Acks. The first fills the one free slot,
+    // the second finds the queue full, and the answer stops there: the
+    // router tries no third Ack, as before the engine.
+    let mut table = TableSeed::new();
+    for net in 10..266u16 {
+        table.add_learned(net, 1, MacAddr::from_slice(&[5]));
+    }
+    let mut h = Harness::with_table(table);
+    for _ in 0..15 {
+        h.txs[0]
+            .try_send(SendRequest::Broadcast {
+                npdu: Bytes::new(),
+                data_attributes: Vec::new(),
+            })
+            .unwrap();
+    }
+    h.handle(h.ctx(
+        0,
+        &[7],
+        control_npdu(NetworkMessageType::INITIALIZE_ROUTING_TABLE, &[0]),
+    ))
+    .await;
+    let acks = unicast_payloads(h.drain(0).split_off(15));
+    assert_eq!(acks.len(), 1);
+    assert_eq!(
+        peer_entries(&decode_npdu(acks[0].clone()).unwrap().payload).len(),
+        124
+    );
+    assert_eq!(h.counters().refused, 1);
 }
 
 #[tokio::test]
@@ -422,7 +439,7 @@ async fn ack_claims_learn_via_ingress_and_never_reconfigure() {
     // The ACK's Port IDs are the sender's local numbering: they must not
     // steer our table, and direct routes must survive ACK traffic.
     // Hardened gate: first cross-port claim pends, repeat corroborates.
-    let mut table = RouterTable::new_hardened();
+    let mut table = TableSeed::new_hardened();
     table.add_direct(1000, 0);
     table.add_direct(2000, 1);
     table.add_learned(3000, 0, MacAddr::from_slice(&[1]));
@@ -439,11 +456,11 @@ async fn ack_claims_learn_via_ingress_and_never_reconfigure() {
     .await;
     h.assert_quiet();
     {
-        let table = h.table.lock().await;
+        let table = h.table();
         let direct = table.lookup(1000).unwrap();
-        assert!(direct.directly_connected);
-        assert_eq!(direct.port_index, 0);
-        assert_eq!(table.lookup(3000).unwrap().port_index, 0);
+        assert!(direct.is_direct());
+        assert_eq!(direct.port(), PortId(0));
+        assert_eq!(table.lookup(3000).unwrap().port(), PortId(0));
     }
     // Repeat corroborates: 3000 moves via the ingress port (1), never via
     // the sender's Port ID; the direct entry is still intact.
@@ -457,20 +474,19 @@ async fn ack_claims_learn_via_ingress_and_never_reconfigure() {
     ))
     .await;
     h.assert_quiet();
-    let table = h.table.lock().await;
+    let table = h.table();
     let moved = table.lookup(3000).unwrap();
-    assert_eq!(moved.port_index, 1);
-    assert!(!moved.directly_connected);
-    assert_eq!(moved.next_hop_mac.as_slice(), &[2]);
-    assert!(table.lookup(1000).unwrap().directly_connected);
+    assert_eq!(moved.port(), PortId(1));
+    assert!(!moved.is_direct());
+    assert_eq!(moved.next_hop().as_slice(), &[2]);
+    assert!(table.lookup(1000).unwrap().is_direct());
     assert_eq!(
-        table.claim_snapshot(),
-        RoutingClaimSnapshot {
-            learned_ok: 1,
-            pending_started: 1,
-            corroborated_applied: 1,
-            ..Default::default()
-        }
+        table.claim_counters(),
+        claim_counts(|c| {
+            c.learned_ok = 1;
+            c.pending_started = 1;
+            c.corroborated_applied = 1;
+        })
     );
 }
 
@@ -478,7 +494,7 @@ async fn ack_claims_learn_via_ingress_and_never_reconfigure() {
 async fn update_ack_round_trip_is_stable() {
     // A query answer re-applied as an update restores the same table: the
     // wire Port IDs are stable and nonzero in both directions.
-    let mut table = RouterTable::new();
+    let mut table = TableSeed::new();
     table.add_direct(1000, 0);
     table.add_direct(2000, 1);
     table.add_learned(3000, 1, MacAddr::from_slice(&[5]));
@@ -503,19 +519,19 @@ async fn update_ack_round_trip_is_stable() {
         ),
     ))
     .await;
-    assert!(h.table.lock().await.lookup(3000).is_none());
+    assert!(h.table().lookup(3000).is_none());
     h.handle(h.ctx(
         0,
         &[7],
         control_npdu(NetworkMessageType::INITIALIZE_ROUTING_TABLE, &answer),
     ))
     .await;
-    let table = h.table.lock().await;
+    let table = h.table();
     // Learned entries restore as learned on the mapped ports; the direct
     // entries the answer re-states are refused, staying exactly as before.
     let route = table.lookup(3000).unwrap();
-    assert_eq!(route.port_index, 1);
-    assert!(!route.directly_connected);
-    assert!(table.lookup(1000).unwrap().directly_connected);
-    assert!(table.lookup(2000).unwrap().directly_connected);
+    assert_eq!(route.port(), PortId(1));
+    assert!(!route.is_direct());
+    assert!(table.lookup(1000).unwrap().is_direct());
+    assert!(table.lookup(2000).unwrap().is_direct());
 }

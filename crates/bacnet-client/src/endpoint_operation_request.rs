@@ -98,7 +98,7 @@ impl EndpointOperationAck {
     pub fn into_property(self) -> Result<ReadPropertyACK, Error> {
         self.into_read()?.into_property()
     }
-    pub fn into_range(self) -> Result<ReadRangeAck, Error> {
+    pub fn into_range(self) -> Result<bacnet_services::read_range::ReadRangeReply, Error> {
         self.into_read()?.into_range()
     }
     pub fn into_multiple(self) -> Result<bacnet_services::rpm::ReadPropertyMultipleACK, Error> {

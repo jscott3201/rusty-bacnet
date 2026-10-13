@@ -13,6 +13,8 @@ Most configuration mistakes come from mixing settings that sound similar but act
 | Local UDP port | `--port` | `port` | The port used by this local client |
 | Discovery broadcast destination | `--broadcast` | `broadcast_address` | Where broadcast discovery is directed |
 | APDU timeout | `--timeout` | `apdu_timeout_ms` | Request timeout in milliseconds |
+| Foreign-device registration | `--foreign-bbmd`, `--ttl`, `--renewal` | `foreign_device=ForeignDevice(bbmd, ttl, renewal)` | Register with a BBMD and keep renewing; B/IP only |
+| Request pacing | `--min-interval-ms` | `min_request_interval_ms` | Least time between requests to one device, in milliseconds; 0 by default |
 | Remote endpoint | Command target | Method `address` | Target address and, where needed, remote port |
 
 The reviewed CLI defaults to local UDP port `47808`, broadcast address `255.255.255.255`, and APDU timeout `6000` ms. One-shot commands without an interface use `0.0.0.0`; the interactive shell may prompt for an interface.
@@ -37,7 +39,7 @@ In Python, construct the client or server with the documented keyword arguments.
 
 ## Keep units visible
 
-Use `--timeout 6000` for a 6000-millisecond APDU timeout. Discovery's `--wait` and foreign-device registration's `--ttl` are measured in seconds. MS/TP baud is a line rate, and BACnet/SC heartbeat fields have their own documented units and bounds.
+Use `--timeout 6000` for a 6000-millisecond APDU timeout. Discovery's `--wait` and foreign-device registration's `--ttl` and `--renewal` are measured in seconds. MS/TP baud is a line rate, and BACnet/SC heartbeat fields have their own documented units and bounds.
 
 Do not copy a numeric value between settings merely because the names resemble one another.
 
@@ -51,6 +53,6 @@ Documentation, GitHub Pages, public issues, and screenshots must not contain rea
 
 ## Sources and release scope
 
-These instructions target **v0.12.0**. Source review is not a claim of hardware qualification.
+These instructions target **v0.13.0**. Source review is not a claim of hardware qualification.
 
-[CLI definitions](https://github.com/jscott3201/rusty-bacnet/blob/v0.12.0/crates/bacnet-cli/src/args.rs) · [CLI transport construction](https://github.com/jscott3201/rusty-bacnet/blob/v0.12.0/crates/bacnet-cli/src/transport.rs) · [Python constructor](https://github.com/jscott3201/rusty-bacnet/blob/v0.12.0/docs/python-api.md).
+[CLI definitions](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/crates/bacnet-cli/src/args.rs) · [CLI transport construction](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/crates/bacnet-cli/src/transport.rs) · [Python constructor](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/docs/python-api.md).

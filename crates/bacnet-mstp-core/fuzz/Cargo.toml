@@ -1,0 +1,28 @@
+[package]
+name = "mstp-core-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+# A workspace of its own, outside the root one: it builds only with cargo-fuzz
+# on the pinned nightly, from its own Cargo.lock (docs/ci.md, "Fuzzing").
+[workspace]
+members = []
+
+[dependencies]
+arbitrary = { version = "1", features = ["derive"] }
+# The codec builds the frames the target feeds and decodes the line for the
+# checker; its own fuzz targets check it against an independent oracle.
+bacnet-mstp-codec = { path = "../../bacnet-mstp-codec" }
+bacnet-mstp-core = { path = "..", features = ["alloc"] }
+libfuzzer-sys = "0.4"
+
+[[bin]]
+name = "mstp_core"
+path = "fuzz_targets/mstp_core.rs"
+test = false
+doc = false
+bench = false

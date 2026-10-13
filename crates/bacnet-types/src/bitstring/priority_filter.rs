@@ -1,7 +1,7 @@
 //! Fixed-width command-priority filter used by Audit Reporter objects.
 
 #[cfg(not(feature = "std"))]
-use alloc::{vec, vec::Vec};
+use alloc::vec::Vec;
 
 use crate::error::{Error, Result};
 

@@ -244,7 +244,7 @@ fn clockless_timestamped_first_reference_is_refused_by_name_but_can_cancel() {
                 subscriber_process_identifier: 1,
                 monitored_object_identifier: oid,
                 issue_confirmed_notifications: false,
-                expires_at: Some(Instant::now() + Duration::from_secs(300)),
+                expires_at: Some(crate::runtime_clock::now() + Duration::from_secs(300)),
                 last_notified_observation: None,
                 monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
                 monitored_property_array_index: None,

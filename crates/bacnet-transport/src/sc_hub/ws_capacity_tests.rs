@@ -112,7 +112,7 @@ async fn node_and_hub_advertise_distinct_full_message_and_npdu_capacities() {
     assert_eq!(
         (
             connection.hub_max_bvlc_length,
-            connection.hub_max_apdu_length
+            connection.hub_max_npdu_length
         ),
         (5705, 1497)
     );

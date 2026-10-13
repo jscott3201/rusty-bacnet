@@ -1,15 +1,19 @@
 //! Values the probe and the rows both use: the day and time the schedule
 //! rows pass, object identifiers, the probe's property error, one instance
-//! of each clock, and the address a capability renders as.
+//! of each clock, the address a capability renders as, and the probe's
+//! property metadata.
 
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use bacnet_objects::clock::{ClockFrame, ClockReader};
+use bacnet_objects::property_metadata::{
+    PropertyConformance, PropertyMetadata, PropertyWriteCapability,
+};
 use bacnet_objects::schedule::ScheduleWrite;
 use bacnet_objects::traits::{DeadlineWaker, MonotonicClock};
 use bacnet_types::calendar::SpecificDate;
-use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
+use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier as P};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, Time};
 
@@ -79,3 +83,38 @@ pub fn schedule_write(value: u64) -> ScheduleWrite {
         retry: false,
     }
 }
+
+/// DESCRIPTION is writable here, and CUSTOM is absent, unlike the probe's
+/// own answers, so defaults derived from these rows give themselves away.
+pub const METADATA: [PropertyMetadata; 5] = [
+    PropertyMetadata::new(
+        P::OBJECT_IDENTIFIER,
+        PropertyConformance::RequiredRead,
+        None,
+        PropertyWriteCapability::ReadOnly,
+    ),
+    PropertyMetadata::new(
+        P::OBJECT_NAME,
+        PropertyConformance::RequiredRead,
+        None,
+        PropertyWriteCapability::ReadOnly,
+    ),
+    PropertyMetadata::new(
+        P::OBJECT_TYPE,
+        PropertyConformance::RequiredRead,
+        None,
+        PropertyWriteCapability::ReadOnly,
+    ),
+    PropertyMetadata::new(
+        P::DESCRIPTION,
+        PropertyConformance::Optional,
+        None,
+        PropertyWriteCapability::Always,
+    ),
+    PropertyMetadata::new(
+        P::PROPERTY_LIST,
+        PropertyConformance::RequiredRead,
+        None,
+        PropertyWriteCapability::ReadOnly,
+    ),
+];

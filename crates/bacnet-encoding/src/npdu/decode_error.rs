@@ -1,5 +1,8 @@
 //! Why [`decode_npdu`](super::decode_npdu) refused an NPDU.
 
+#[cfg(not(feature = "std"))]
+use alloc::string::ToString;
+
 use core::fmt;
 
 use bacnet_types::error::Error;
@@ -79,8 +82,8 @@ impl fmt::Display for NpduDecodeError {
     }
 }
 
-impl std::error::Error for NpduDecodeError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+impl core::error::Error for NpduDecodeError {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
             Self::AddressTooLong { .. } => None,
             Self::Malformed(error) => Some(error),

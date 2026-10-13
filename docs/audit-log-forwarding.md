@@ -58,8 +58,10 @@ Missing or observed-only bindings, omitted/local Device references, self-parent
 Device references (including another log on the same Device), non-Device or
 non-Audit-Log identifiers, and a direct binding to the local MAC are unusable:
 Reliability reports CONFIGURATION_ERROR and no forward is sent. No discovery
-traffic is initiated. Direct and explicitly routed unicast bindings are
-supported. A routed binding whose network is this device's own number, once
+traffic is initiated. Unlike an event notification, a forward never looks for
+a parent device it has no binding for: it sends no Who-Is and waits for no
+I-Am, and it goes only along a configured binding (#1522). Direct and
+explicitly routed unicast bindings are supported. A routed binding whose network is this device's own number, once
 the server knows it, is used as a local one: the copy goes to the parent's MAC
 with no DNET and is answered from there (#1358). A configured binding does not
 authenticate the peer.

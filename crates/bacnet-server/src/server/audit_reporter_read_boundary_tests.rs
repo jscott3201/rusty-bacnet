@@ -268,7 +268,7 @@ async fn audit_reporter_rpm_work_bytes_and_decode_failures_discard_all_intents()
         if failure == "work" {
             fixture
                 .server
-                .config
+                .config_mut()
                 .read_property_multiple_budget
                 .max_result_elements = 1;
         } else if failure == "bytes" {
@@ -284,7 +284,7 @@ async fn audit_reporter_rpm_work_bytes_and_decode_failures_discard_all_intents()
             reads.store(0, Ordering::Release);
             fixture
                 .server
-                .config
+                .config_mut()
                 .read_property_multiple_budget
                 .max_service_ack_bytes = first_ack.len();
         }

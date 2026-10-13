@@ -49,6 +49,14 @@ macro_rules! unsupported_udp_metadata_item {
     };
 }
 
+supported_unix_item! {
+/// Room for the control messages one IPv4 or IPv6 datagram carries: packet
+/// info on Linux, or a destination address and a whole link-layer address
+/// (`IP_RECVIF`) on the BSDs, whose padding can take 84 octets on a 32-bit
+/// BSD. `u64` keeps it aligned for any `cmsghdr`.
+type ControlBuffer = [u64; 32];
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum IpVersion {
     V4,
@@ -56,13 +64,15 @@ pub(crate) enum IpVersion {
     V6,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ReceivedDatagram {
     pub len: usize,
     pub peer: SocketAddr,
     pub destination: IpAddr,
-    /// IPv6 packet-info arrival interface; zero is not a selected-link owner.
-    #[cfg_attr(not(feature = "ipv6"), allow(dead_code))]
+    /// The index of the interface the datagram arrived on, where the OS
+    /// reports it: IPv6 packet info everywhere, and for IPv4 the packet info
+    /// on Linux and Windows and `IP_RECVIF` on macOS and the BSDs. It is
+    /// reported as given: zero names no interface, and consumers treat it so.
     pub arrival_index: Option<u32>,
     pub os_group_delivery: Option<bool>,
 }
@@ -107,14 +117,14 @@ impl DestinationReceiver {
             iov_base: buf.as_mut_ptr().cast(),
             iov_len: buf.len(),
         };
-        let mut control = [0usize; 16];
+        let mut control: ControlBuffer = [0; 32];
         let mut message: libc::msghdr = unsafe { zeroed() };
         message.msg_name = (&mut peer_storage as *mut libc::sockaddr_storage).cast();
         message.msg_namelen = size_of::<libc::sockaddr_storage>() as libc::socklen_t;
         message.msg_iov = &mut iov;
         message.msg_iovlen = 1;
         message.msg_control = control.as_mut_ptr().cast();
-        message.msg_controllen = size_of::<[usize; 16]>() as _;
+        message.msg_controllen = size_of::<ControlBuffer>() as _;
 
         let received = unsafe { libc::recvmsg(udp_socket.as_raw_fd(), &mut message, 0) };
         if received < 0 {
@@ -256,11 +266,35 @@ fn configure_packet_info(udp_socket: &Socket, version: IpVersion) -> io::Result<
             size_of::<libc::c_int>() as libc::socklen_t,
         )
     };
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error())
+    if result != 0 {
+        return Err(io::Error::last_os_error());
     }
+    // IP_RECVDSTADDR carries no interface; IP_RECVIF adds it. Only a B/IP
+    // transport sharing its port by address reads it, so without it the
+    // socket still works.
+    #[cfg(any(
+        target_vendor = "apple",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
+    if matches!(version, IpVersion::V4) {
+        let result = unsafe {
+            libc::setsockopt(
+                udp_socket.as_raw_fd(),
+                libc::IPPROTO_IP,
+                libc::IP_RECVIF,
+                (&enabled as *const libc::c_int).cast(),
+                size_of::<libc::c_int>() as libc::socklen_t,
+            )
+        };
+        if result != 0 {
+            let error = io::Error::last_os_error();
+            tracing::debug!(%error, "IP_RECVIF unavailable; arrival interfaces unknown");
+        }
+    }
+    Ok(())
 }
 }
 
@@ -282,7 +316,7 @@ fn ipv4_packet_info_option() -> io::Result<(libc::c_int, libc::c_int)> {
     ))
 ))]
 supported_unix_item! {
-unsafe fn unix_ipv4_destination_cmsg(_header: &libc::cmsghdr) -> io::Result<Option<Ipv4Addr>> {
+unsafe fn unix_ipv4_destination_cmsg(_header: &libc::cmsghdr) -> io::Result<Option<CmsgMetadata>> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "IPv4 destination metadata is unsupported on this platform",
@@ -348,20 +382,45 @@ unsafe fn unix_socket_addr(storage: &libc::sockaddr_storage) -> Option<SocketAdd
 }
 
 supported_unix_item! {
+/// What one control message says about a datagram.
+enum CmsgMetadata {
+    /// Its destination, with the arrival interface when the same message
+    /// carries it.
+    Destination(IpAddr, Option<u32>),
+    /// Only the arrival interface (`IP_RECVIF`).
+    #[cfg_attr(not(any(
+        target_vendor = "apple",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    )), allow(dead_code))]
+    Interface(u32),
+}
+}
+
+supported_unix_item! {
 unsafe fn unix_destination(message: &libc::msghdr, version: IpVersion) -> io::Result<(IpAddr, Option<u32>)> {
     let mut destination = None;
+    let mut interface = None;
     let mut header = unsafe { libc::CMSG_FIRSTHDR(message) };
     while !header.is_null() {
         let current = unsafe { &*header };
-        let candidate = unsafe { unix_destination_cmsg(current, version) }?;
-        if let Some(candidate) = candidate {
-            if destination.replace(candidate).is_some() {
-                return Err(invalid_metadata("duplicate UDP destination metadata"));
+        match unsafe { unix_destination_cmsg(current, version) }? {
+            Some(CmsgMetadata::Destination(address, index)) => {
+                if destination.replace(address).is_some() {
+                    return Err(invalid_metadata("duplicate UDP destination metadata"));
+                }
+                interface = index.or(interface);
             }
+            Some(CmsgMetadata::Interface(index)) => interface = Some(index),
+            None => {}
         }
         header = unsafe { libc::CMSG_NXTHDR(message, header) };
     }
-    destination.ok_or_else(|| invalid_metadata("missing UDP destination metadata"))
+    let destination =
+        destination.ok_or_else(|| invalid_metadata("missing UDP destination metadata"))?;
+    Ok((destination, interface))
 }
 }
 
@@ -369,11 +428,9 @@ supported_unix_item! {
 unsafe fn unix_destination_cmsg(
     header: &libc::cmsghdr,
     version: IpVersion,
-) -> io::Result<Option<(IpAddr, Option<u32>)>> {
+) -> io::Result<Option<CmsgMetadata>> {
     match version {
-        IpVersion::V4 => unsafe {
-            unix_ipv4_destination_cmsg(header).map(|address| address.map(|address| (IpAddr::V4(address), None)))
-        },
+        IpVersion::V4 => unsafe { unix_ipv4_destination_cmsg(header) },
         IpVersion::V6
             if header.cmsg_level == libc::IPPROTO_IPV6
                 && header.cmsg_type == libc::IPV6_PKTINFO =>
@@ -382,7 +439,8 @@ unsafe fn unix_destination_cmsg(
                 return Err(invalid_metadata("short IPv6 destination metadata"));
             }
             let info = unsafe { &*(libc::CMSG_DATA(header) as *const libc::in6_pktinfo) };
-            Ok(Some((IpAddr::V6(Ipv6Addr::from(info.ipi6_addr.s6_addr)), Some(info.ipi6_ifindex))))
+            let address = IpAddr::V6(Ipv6Addr::from(info.ipi6_addr.s6_addr));
+            Ok(Some(CmsgMetadata::Destination(address, Some(info.ipi6_ifindex))))
         }
         _ => Ok(None),
     }
@@ -399,7 +457,7 @@ fn unix_cmsg_has_payload<T>(header: &libc::cmsghdr) -> bool {
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
-unsafe fn unix_ipv4_destination_cmsg(header: &libc::cmsghdr) -> io::Result<Option<Ipv4Addr>> {
+unsafe fn unix_ipv4_destination_cmsg(header: &libc::cmsghdr) -> io::Result<Option<CmsgMetadata>> {
     if header.cmsg_level != libc::IPPROTO_IP || header.cmsg_type != libc::IP_PKTINFO {
         return Ok(None);
     }
@@ -407,7 +465,9 @@ unsafe fn unix_ipv4_destination_cmsg(header: &libc::cmsghdr) -> io::Result<Optio
         return Err(invalid_metadata("short IPv4 destination metadata"));
     }
     let info = unsafe { &*(libc::CMSG_DATA(header) as *const libc::in_pktinfo) };
-    Ok(Some(Ipv4Addr::from(info.ipi_addr.s_addr.to_ne_bytes())))
+    let address = IpAddr::V4(Ipv4Addr::from(info.ipi_addr.s_addr.to_ne_bytes()));
+    let index = u32::try_from(info.ipi_ifindex).ok();
+    Ok(Some(CmsgMetadata::Destination(address, index)))
 }
 
 #[cfg(any(
@@ -417,15 +477,29 @@ unsafe fn unix_ipv4_destination_cmsg(header: &libc::cmsghdr) -> io::Result<Optio
     target_os = "netbsd",
     target_os = "openbsd"
 ))]
-unsafe fn unix_ipv4_destination_cmsg(header: &libc::cmsghdr) -> io::Result<Option<Ipv4Addr>> {
-    if header.cmsg_level != libc::IPPROTO_IP || header.cmsg_type != libc::IP_RECVDSTADDR {
+unsafe fn unix_ipv4_destination_cmsg(header: &libc::cmsghdr) -> io::Result<Option<CmsgMetadata>> {
+    if header.cmsg_level != libc::IPPROTO_IP {
+        return Ok(None);
+    }
+    if header.cmsg_type == libc::IP_RECVIF {
+        // A link-layer socket address: length and family octets, then the
+        // 16-bit interface index, the same on every BSD.
+        if !unix_cmsg_has_payload::<[u8; 4]>(header) {
+            return Err(invalid_metadata("short IPv4 interface metadata"));
+        }
+        let data = unsafe { std::slice::from_raw_parts(libc::CMSG_DATA(header), 4) };
+        let index = u16::from_ne_bytes([data[2], data[3]]);
+        return Ok(Some(CmsgMetadata::Interface(u32::from(index))));
+    }
+    if header.cmsg_type != libc::IP_RECVDSTADDR {
         return Ok(None);
     }
     if !unix_cmsg_has_payload::<libc::in_addr>(header) {
         return Err(invalid_metadata("short IPv4 destination metadata"));
     }
     let address = unsafe { &*(libc::CMSG_DATA(header) as *const libc::in_addr) };
-    Ok(Some(Ipv4Addr::from(address.s_addr.to_ne_bytes())))
+    let address = IpAddr::V4(Ipv4Addr::from(address.s_addr.to_ne_bytes()));
+    Ok(Some(CmsgMetadata::Destination(address, None)))
 }
 
 #[cfg(windows)]
@@ -551,7 +625,7 @@ unsafe fn windows_destination(
             {
                 let info: IN_PKTINFO = unsafe { std::ptr::read_unaligned(data.cast()) };
                 let bytes = unsafe { info.ipi_addr.S_un.S_addr.to_ne_bytes() };
-                Some((IpAddr::V4(Ipv4Addr::from(bytes)), None))
+                Some((IpAddr::V4(Ipv4Addr::from(bytes)), Some(info.ipi_ifindex)))
             }
             IpVersion::V6
                 if header.cmsg_level == IPPROTO_IPV6
@@ -580,6 +654,19 @@ unsafe fn windows_destination(
 mod tests {
     use super::*;
 
+    supported_unix_item! {
+    /// Both control messages a BSD hands an IPv4 datagram fit the buffer, and
+    /// Linux's packet info for either family.
+    #[test]
+    fn the_control_buffer_holds_every_message_a_datagram_carries() {
+        let space = |length: usize| unsafe { libc::CMSG_SPACE(length as _) } as usize;
+        // The BSDs' link-layer socket address is 20 to 56 octets long.
+        let bsd = space(std::mem::size_of::<libc::in_addr>()) + space(56);
+        let linux = space(std::mem::size_of::<libc::in6_pktinfo>()) + space(12);
+        assert!(bsd.max(linux) <= std::mem::size_of::<ControlBuffer>());
+    }
+    }
+
     #[tokio::test]
     async fn ipv4_loopback_destination_is_reported() {
         let socket = Socket::new(socket2::Domain::IPV4, socket2::Type::DGRAM, None).unwrap();
@@ -599,7 +686,7 @@ mod tests {
         let received = receiver.recv_from(&socket, &mut buf).await.unwrap();
         assert_eq!(&buf[..received.len], b"v4");
         assert_eq!(received.destination, IpAddr::V4(Ipv4Addr::LOCALHOST));
-        assert_eq!(received.arrival_index, None);
+        assert!(received.arrival_index.is_some_and(|index| index != 0));
     }
 
     #[tokio::test]

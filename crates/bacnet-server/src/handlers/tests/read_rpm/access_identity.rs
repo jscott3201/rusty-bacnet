@@ -327,6 +327,14 @@ fn rpm_access_user_indexed_reads_and_bytes_are_unchanged() {
             object
                 .write_property(P::USER_TYPE, None, PropertyValue::Enumerated(2), None)
                 .unwrap();
+            object
+                .write_property(
+                    P::GLOBAL_IDENTIFIER,
+                    None,
+                    PropertyValue::Unsigned(77),
+                    None,
+                )
+                .unwrap();
             let here = |object_type, instance| -> Reference {
                 ObjectIdentifier::new(object_type, instance).unwrap().into()
             };
@@ -430,10 +438,10 @@ fn rpm_access_user_indexed_reads_and_bytes_are_unchanged() {
                 None,
                 Ok(&[
                     0x91, 28, 0x92, 0x01, 0x3E, 0x92, 0x01, 0x09, 0x91, 111, 0x91, 103, 0x92, 0x01,
-                    0x1E, 0x91, 159,
+                    0x1E, 0x91, 159, 0x92, 0x01, 0x43,
                 ]),
             ),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 7])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 8])),
             (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 28])),
             (P::PROPERTY_LIST, Some(2), Ok(&[0x92, 0x01, 0x3E])),
             (P::PROPERTY_LIST, Some(3), Ok(&[0x92, 0x01, 0x09])),
@@ -442,9 +450,11 @@ fn rpm_access_user_indexed_reads_and_bytes_are_unchanged() {
             // Members (286) and Member_Of (159), the O rows #1394 serves.
             (P::PROPERTY_LIST, Some(6), Ok(&[0x92, 0x01, 0x1E])),
             (P::PROPERTY_LIST, Some(7), Ok(&[0x91, 159])),
+            // Global_Identifier (323), the W row #1463 serves.
+            (P::PROPERTY_LIST, Some(8), Ok(&[0x92, 0x01, 0x43])),
             (
                 P::PROPERTY_LIST,
-                Some(8),
+                Some(9),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (
@@ -452,8 +462,13 @@ fn rpm_access_user_indexed_reads_and_bytes_are_unchanged() {
                 Some(u32::MAX),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
-            // Global_Identifier is the Table 12-38 W row with no read arm.
-            (P::GLOBAL_IDENTIFIER, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
+            // Global_Identifier, the Table 12-38 W row (#1463): an
+            // Unsigned32, and no array.
+            (
+                P::GLOBAL_IDENTIFIER,
+                None,
+                Ok(if configured { &[0x21, 77] } else { &[0x21, 0] }),
+            ),
             (
                 P::GLOBAL_IDENTIFIER,
                 Some(1),

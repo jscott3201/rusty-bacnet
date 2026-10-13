@@ -13,11 +13,13 @@
 //! Everything is pure. Every instant is a `Duration` on the caller's
 //! monotonic clock (the server's, or a hand-set one in a test), passed in, so
 //! the value at any instant is computed from the line rather than stepped by
-//! a timer. A [`Run`] adds the one piece of state an object keeps while a
-//! transition is under way: when the value is next due to be sampled for
-//! COV.
+//! a timer. A [`Run`] adds the state an object keeps while a transition is
+//! under way: when the value was last sampled for COV and when it is next
+//! due, which a finer sample step can bring forward (#1510).
 
 use std::time::Duration;
+
+use bacnet_types::constructed::BACnetXyColor;
 
 /// How often, at most, a running transition's value is sampled for COV.
 ///
@@ -46,6 +48,39 @@ impl TransitionLevel for f32 {
 
     fn distance(from: f32, to: f32) -> f64 {
         (f64::from(to) - f64::from(from)).abs()
+    }
+}
+
+/// A CIE 1931 xy colour (a Color object's FADE_TO_COLOR, #1474). Each
+/// coordinate moves on its own straight line, so the colour crosses the
+/// diagram in a straight line too; the addendum leaves the path to the
+/// implementation. The distance is the length of that line, which only
+/// spaces the COV samples, as a colour fade has no rate.
+impl TransitionLevel for BACnetXyColor {
+    fn interpolate(from: Self, to: Self, fraction: f64) -> Self {
+        Self::new(
+            f32::interpolate(from.x, to.x, fraction),
+            f32::interpolate(from.y, to.y, fraction),
+        )
+    }
+
+    fn distance(from: Self, to: Self) -> f64 {
+        f32::distance(from.x, to.x).hypot(f32::distance(from.y, to.y))
+    }
+}
+
+/// A colour temperature in kelvin (a Color Temperature object's fades,
+/// ramps and steps, #1474). Values in between round to the nearest kelvin,
+/// as Present_Value and Tracking_Value are Unsigned; the distance is in
+/// kelvin, the unit a ramp rate is given in per second.
+impl TransitionLevel for u32 {
+    fn interpolate(from: u32, to: u32, fraction: f64) -> u32 {
+        let (from, to) = (f64::from(from), f64::from(to));
+        (from + (to - from) * fraction).round() as u32
+    }
+
+    fn distance(from: u32, to: u32) -> f64 {
+        f64::from(from.abs_diff(to))
     }
 }
 
@@ -176,6 +211,9 @@ fn from_nanos(nanos: u128) -> Duration {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Run<V> {
     transition: Transition<V>,
+    /// The instant the next sample is planned from: the start, then each
+    /// sample's planned instant.
+    last_sample: Duration,
     next_sample: Duration,
 }
 
@@ -196,6 +234,7 @@ impl<V: TransitionLevel> Run<V> {
     pub(crate) fn start(transition: Transition<V>, step: f64) -> Self {
         Self {
             next_sample: transition.next_sample(transition.start, step),
+            last_sample: transition.start,
             transition,
         }
     }
@@ -213,6 +252,12 @@ impl<V: TransitionLevel> Run<V> {
 
     /// Advance to `now`, scheduling the next sample when one fell due.
     ///
+    /// `step` may be finer than the one the pending sample was planned with,
+    /// as when a COV subscriber asks for a smaller increment than the
+    /// object's (#1510): the pending sample then comes forward to where the
+    /// finer step puts it, from the last sample, and is taken now if that
+    /// has passed. A coarser step leaves the pending sample where it is.
+    ///
     /// A wake a little late (less than one grid cell, as a real timer
     /// usually is) schedules from the sample it was meant for, so the
     /// cadence holds instead of slipping a cell each time. A wake later than
@@ -220,19 +265,22 @@ impl<V: TransitionLevel> Run<V> {
     /// grid point, so the next one from it is a cell or more on, past `now`.
     pub(crate) fn advance(&mut self, now: Duration, step: f64) -> Progress {
         if self.transition.is_finished(now) {
-            Progress::Finished
-        } else if now >= self.next_sample {
-            let planned = self.next_sample;
-            let from = if now - planned < SAMPLE_GRID {
-                planned
-            } else {
-                now
-            };
-            self.next_sample = self.transition.next_sample(from, step);
-            Progress::Sampled
-        } else {
-            Progress::Pending
+            return Progress::Finished;
         }
+        let replanned = self.transition.next_sample(self.last_sample, step);
+        self.next_sample = self.next_sample.min(replanned);
+        if now < self.next_sample {
+            return Progress::Pending;
+        }
+        let planned = self.next_sample;
+        let from = if now - planned < SAMPLE_GRID {
+            planned
+        } else {
+            now
+        };
+        self.last_sample = from;
+        self.next_sample = self.transition.next_sample(from, step);
+        Progress::Sampled
     }
 }
 

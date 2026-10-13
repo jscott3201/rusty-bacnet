@@ -1,7 +1,14 @@
 //! Comprehensive tests for discovery rate limiting, duplicate suppression,
 //! and directed responses (Issue #534).
+//!
+//! The server tests run on tokio's paused clock, which the discovery limiter
+//! reads ([`runtime_clock::now`]), and wait for the server's counters
+//! instead of sleeping. No time passes unless a test advances the clock, so
+//! windows and token buckets see exact instants, and a stalled runner can't
+//! refill a bucket or close a window under a test (#1548). The limiter's own
+//! tests use hand-set instants, offsets from one reading of that clock.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use bytes::{Bytes, BytesMut};
 use tokio::sync::mpsc;
@@ -141,7 +148,39 @@ async fn spawn_test_server(
     (server, sent, tx)
 }
 
-#[tokio::test]
+/// Scheduler rounds [`until`] gives the server to make progress. It counts
+/// rounds, not time, so a stalled runner can't trip it.
+const ROUNDS: usize = 10_000;
+
+/// Yield to the server until `done` holds, or [`ROUNDS`] pass; returns
+/// whether it held. Yielding never moves the paused clock.
+async fn until(mut done: impl FnMut() -> bool) -> bool {
+    for _ in 0..ROUNDS {
+        if done() {
+            return true;
+        }
+        tokio::task::yield_now().await;
+    }
+    false
+}
+
+/// The server's discovery counters once it has checked `received` Who-Is and
+/// Who-Has requests in all and finished answering them. Dispatch starts an
+/// admitted request's handler in the same step that counts the request, so
+/// with no unconfirmed handler left running every counter is final.
+async fn counters_after(server: &BACnetServer<TestTransport>, received: u64) -> DiscoveryCounters {
+    let reached = until(|| {
+        let c = server.discovery_counters();
+        c.who_is_received + c.who_has_received >= received
+            && server.request_admission_counters().unconfirmed_active == 0
+    })
+    .await;
+    let counters = server.discovery_counters();
+    assert!(reached, "server stalled with counters {counters:?}");
+    counters
+}
+
+#[tokio::test(start_paused = true)]
 async fn test_controlled_burst_from_one_source_throttled() {
     let policy = DiscoveryPolicy {
         max_responses_per_sec_per_source: 4,
@@ -160,9 +199,8 @@ async fn test_controlled_burst_from_one_source_throttled() {
             .await
             .unwrap();
     }
-    tokio::time::sleep(Duration::from_millis(50)).await;
 
-    let c = server.discovery_counters();
+    let c = counters_after(&server, 10).await;
     assert_eq!(c.who_is_received, 10);
     assert_eq!(c.i_am_sent, 4);
     assert_eq!(c.responses_throttled_source, 6);
@@ -172,7 +210,7 @@ async fn test_controlled_burst_from_one_source_throttled() {
     server.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn test_source_fairness_while_first_source_throttled() {
     let policy = DiscoveryPolicy {
         max_responses_per_sec_per_source: 3,
@@ -192,16 +230,15 @@ async fn test_source_fairness_while_first_source_throttled() {
             .await
             .unwrap();
     }
-    tokio::time::sleep(Duration::from_millis(30)).await;
+    counters_after(&server, 6).await;
 
     for _ in 0..2 {
         tx.send(build_who_is_npdu(None, None, src2, None))
             .await
             .unwrap();
     }
-    tokio::time::sleep(Duration::from_millis(30)).await;
 
-    let c = server.discovery_counters();
+    let c = counters_after(&server, 8).await;
     assert_eq!(c.who_is_received, 8);
     assert_eq!(c.i_am_sent, 5); // 3 from src1, 2 from src2
     assert_eq!(c.responses_throttled_source, 3);
@@ -210,7 +247,7 @@ async fn test_source_fairness_while_first_source_throttled() {
     server.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn test_reserved_capacity_preserved_under_global_load() {
     let reserved_mac = MacAddr::from_slice(&[0x0A, 0x00, 0x00, 0x99]);
     let policy = DiscoveryPolicy {
@@ -232,9 +269,8 @@ async fn test_reserved_capacity_preserved_under_global_load() {
             .await
             .unwrap();
     }
-    tokio::time::sleep(Duration::from_millis(30)).await;
 
-    let c = server.discovery_counters();
+    let c = counters_after(&server, 5).await;
     assert_eq!(c.i_am_sent, 3); // 5 - 2 reserved = 3
     assert_eq!(c.responses_throttled_global, 2);
 
@@ -244,23 +280,21 @@ async fn test_reserved_capacity_preserved_under_global_load() {
             .await
             .unwrap();
     }
-    tokio::time::sleep(Duration::from_millis(30)).await;
 
-    let c = server.discovery_counters();
+    let c = counters_after(&server, 7).await;
     assert_eq!(c.i_am_sent, 5); // 3 + 2
 
     // Unreserved source is still throttled
     tx.send(build_who_is_npdu(None, None, unreserved, None))
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(30)).await;
-    let c = server.discovery_counters();
+    let c = counters_after(&server, 8).await;
     assert_eq!(c.responses_throttled_global, 3);
 
     server.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn test_duplicate_scans_coalesced_within_window() {
     let policy = DiscoveryPolicy {
         coalesce_window: Duration::from_millis(200),
@@ -269,23 +303,27 @@ async fn test_duplicate_scans_coalesced_within_window() {
     };
     let (mut server, _sent, tx) = spawn_test_server(policy).await;
     let src = &[0x0A, 0x00, 0x00, 0x02];
+    // Each request comes 20 ms after the one before, so each repeat lands
+    // inside the 200 ms window at an exact offset.
+    let gap = Duration::from_millis(20);
 
     // First Who-Is -> sent
     tx.send(build_who_is_npdu(None, None, src, None))
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    counters_after(&server, 1).await;
+    tokio::time::advance(gap).await;
 
     // Duplicate Who-Is within 200ms -> coalesced
     tx.send(build_who_is_npdu(None, None, src, None))
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(20)).await;
 
-    let c = server.discovery_counters();
+    let c = counters_after(&server, 2).await;
     assert_eq!(c.who_is_received, 2);
     assert_eq!(c.i_am_sent, 1);
     assert_eq!(c.requests_coalesced, 1);
+    tokio::time::advance(gap).await;
 
     // Who-Has for existing object by Name -> sent
     let who_has_name = WhoHasObject::Name("Zone Temp".into());
@@ -298,33 +336,34 @@ async fn test_duplicate_scans_coalesced_within_window() {
     ))
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    counters_after(&server, 3).await;
+    tokio::time::advance(gap).await;
 
     // Duplicate Who-Has -> coalesced
     tx.send(build_who_has_npdu(who_has_name, None, None, src, None))
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(20)).await;
 
-    let c = server.discovery_counters();
+    let c = counters_after(&server, 4).await;
     assert_eq!(c.who_has_received, 2);
     assert_eq!(c.i_have_sent, 1);
     assert_eq!(c.requests_coalesced, 2);
+    tokio::time::advance(gap).await;
 
     // Who-Has for non-existent object -> negative cache recorded
     let missing = WhoHasObject::Name("Missing Sensor".into());
     tx.send(build_who_has_npdu(missing.clone(), None, None, src, None))
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    counters_after(&server, 5).await;
+    tokio::time::advance(gap).await;
 
     // Repeated query for non-existent object -> negative cache hit coalesced!
     tx.send(build_who_has_npdu(missing, None, None, src, None))
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(20)).await;
 
-    let c = server.discovery_counters();
+    let c = counters_after(&server, 6).await;
     assert_eq!(c.who_has_received, 4);
     assert_eq!(c.i_have_sent, 1);
     assert_eq!(c.requests_coalesced, 3);
@@ -332,7 +371,41 @@ async fn test_duplicate_scans_coalesced_within_window() {
     server.stop().await.unwrap();
 }
 
-#[tokio::test]
+/// The window runs from the answered Who-Is and excludes its end: a repeat
+/// 199 ms later is coalesced, one 200 ms later is answered.
+#[tokio::test(start_paused = true)]
+async fn test_coalescing_window_closes_at_its_length() {
+    let policy = DiscoveryPolicy {
+        coalesce_window: Duration::from_millis(200),
+        prefer_directed_responses: true,
+        ..Default::default()
+    };
+    let (mut server, _sent, tx) = spawn_test_server(policy).await;
+    let src = &[0x0A, 0x00, 0x00, 0x02];
+
+    tx.send(build_who_is_npdu(None, None, src, None))
+        .await
+        .unwrap();
+    counters_after(&server, 1).await;
+
+    tokio::time::advance(Duration::from_millis(199)).await;
+    tx.send(build_who_is_npdu(None, None, src, None))
+        .await
+        .unwrap();
+    let c = counters_after(&server, 2).await;
+    assert_eq!((c.i_am_sent, c.requests_coalesced), (1, 1));
+
+    tokio::time::advance(Duration::from_millis(1)).await;
+    tx.send(build_who_is_npdu(None, None, src, None))
+        .await
+        .unwrap();
+    let c = counters_after(&server, 3).await;
+    assert_eq!((c.i_am_sent, c.requests_coalesced), (2, 1));
+
+    server.stop().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
 async fn test_confirmed_traffic_latency_bounded_during_discovery_flood() {
     let policy = DiscoveryPolicy {
         max_responses_per_sec_per_source: 2,
@@ -386,7 +459,6 @@ async fn test_confirmed_traffic_latency_bounded_during_discovery_flood() {
     let mut raw_buf = BytesMut::new();
     encode_npdu(&mut raw_buf, &npdu).unwrap();
 
-    let t0 = std::time::Instant::now();
     tx.send(ReceivedNpdu {
         direct_response: None,
         npdu: raw_buf.freeze(),
@@ -399,37 +471,31 @@ async fn test_confirmed_traffic_latency_bounded_during_discovery_flood() {
     .await
     .unwrap();
 
-    // Poll until response arrives
-    let mut found_ack = false;
-    for _ in 0..50 {
-        tokio::time::sleep(Duration::from_millis(5)).await;
-        for frame in sent.unicasts() {
-            if frame.mac.as_slice() == client_mac {
-                if let Ok(np) = decode_npdu(frame.npdu) {
-                    if let Ok(Apdu::ComplexAck(ack)) = decode_apdu(np.payload) {
-                        if ack.invoke_id == 1 {
-                            found_ack = true;
-                            break;
-                        }
-                    }
-                }
+    // One bound, on the paused clock, where the flood itself takes no time.
+    // It catches a delay the server adds (a timer or a pacing wait) and a read
+    // dropped under the flood, not the runner's speed: real-time latency under
+    // load is the stress test's `mixed` scenario's job.
+    let answered = tokio::time::timeout(Duration::from_millis(250), async {
+        for seen in 1.. {
+            sent.wait_for_len(seen).await;
+            let frame = sent.frame(seen - 1);
+            if frame.mac.as_slice() == client_mac
+                && matches!(frame.apdu(), Apdu::ComplexAck(ack) if ack.invoke_id == 1)
+            {
+                return;
             }
         }
-        if found_ack {
-            break;
-        }
-    }
-    let elapsed = t0.elapsed();
-    assert!(found_ack, "Confirmed response was not received");
+    })
+    .await;
     assert!(
-        elapsed < Duration::from_millis(500),
-        "Confirmed request delayed by discovery flood: took {elapsed:?}"
+        answered.is_ok(),
+        "Confirmed request was delayed or dropped by the discovery flood"
     );
 
     server.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn test_who_is_range_and_who_has_matching_correctness() {
     let policy = DiscoveryPolicy::unlimited();
     let (mut server, _sent, tx) = spawn_test_server(policy).await;
@@ -440,14 +506,14 @@ async fn test_who_is_range_and_who_has_matching_correctness() {
     tx.send(build_who_is_npdu(Some(2000), Some(3000), src, None))
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    counters_after(&server, 1).await;
     assert_eq!(server.discovery_counters().i_am_sent, 0);
 
     // In-range Who-Is: 1000..=2000 -> responds
     tx.send(build_who_is_npdu(Some(1000), Some(2000), src, None))
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    counters_after(&server, 2).await;
     assert_eq!(server.discovery_counters().i_am_sent, 1);
 
     // Who-Has by ID out of range device limits -> no response
@@ -461,7 +527,7 @@ async fn test_who_is_range_and_who_has_matching_correctness() {
     ))
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    counters_after(&server, 3).await;
     assert_eq!(server.discovery_counters().i_have_sent, 0);
 
     // Who-Has by ID matching -> responds with I-Have
@@ -474,7 +540,7 @@ async fn test_who_is_range_and_who_has_matching_correctness() {
     ))
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    counters_after(&server, 4).await;
     assert_eq!(server.discovery_counters().i_have_sent, 1);
 
     // Who-Has by Name matching -> responds with I-Have
@@ -487,13 +553,13 @@ async fn test_who_is_range_and_who_has_matching_correctness() {
     ))
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    counters_after(&server, 5).await;
     assert_eq!(server.discovery_counters().i_have_sent, 2);
 
     server.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn test_directed_vs_broadcast_and_routed_npdu() {
     // Part A: prefer_directed_responses = true (default)
     let policy = DiscoveryPolicy {
@@ -508,7 +574,7 @@ async fn test_directed_vs_broadcast_and_routed_npdu() {
     tx.send(build_who_is_npdu(None, None, local_src, None))
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    counters_after(&server, 1).await;
     assert_eq!(sent.unicasts().len(), 1);
     assert_eq!(sent.broadcasts().len(), 0);
     assert_eq!(server.discovery_counters().directed_responses_sent, 1);
@@ -524,7 +590,7 @@ async fn test_directed_vs_broadcast_and_routed_npdu() {
     ))
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    counters_after(&server, 2).await;
     assert_eq!(sent.unicasts().len(), 2);
     assert_eq!(server.discovery_counters().directed_responses_sent, 2);
 
@@ -539,7 +605,7 @@ async fn test_directed_vs_broadcast_and_routed_npdu() {
     ))
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    counters_after(&server, 3).await;
     assert_eq!(sent.unicasts().len(), 3);
     assert_eq!(sent.broadcasts().len(), 0);
     assert_eq!(server.discovery_counters().directed_responses_sent, 3);
@@ -559,7 +625,7 @@ async fn test_directed_vs_broadcast_and_routed_npdu() {
     let mut req = build_who_is_npdu(None, None, local_src, None);
     req.link_layer_group = true;
     tx2.send(req).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    counters_after(&server2, 1).await;
     assert_eq!(sent2.broadcasts().len(), 1);
     assert_eq!(sent2.unicasts().len(), 0);
     assert_eq!(server2.discovery_counters().directed_responses_sent, 0);
@@ -573,7 +639,7 @@ async fn test_directed_vs_broadcast_and_routed_npdu() {
     ))
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    counters_after(&server2, 2).await;
     assert_eq!(sent2.unicasts().len(), 1);
     assert_eq!(server2.discovery_counters().directed_responses_sent, 1);
 
@@ -622,7 +688,7 @@ fn test_exhausted_source_throttled_when_max_tracked_sources_reached() {
     };
     let limiter = DiscoveryLimiter::new(policy, Some(100));
     let req = encode_who_is_req(None, None);
-    let now = Instant::now();
+    let now = runtime_clock::now();
     let src_a = mock_received(&[0x0A, 0x00, 0x00, 0x01], None);
     let src_b = mock_received(&[0x0A, 0x00, 0x00, 0x02], None);
 
@@ -652,7 +718,7 @@ fn test_routed_who_is_byte_accounting_uses_remote_mac() {
     };
     let limiter = DiscoveryLimiter::new(policy, Some(100));
     let req = encode_who_is_req(None, None);
-    let now = Instant::now();
+    let now = runtime_clock::now();
     let routed = mock_received(&[0x0A, 0x00, 0x00, 0xFE], Some((200, &[0x11, 0x22])));
 
     assert_eq!(
@@ -678,7 +744,7 @@ fn test_routed_who_is_byte_accounting_uses_remote_mac() {
 
 #[test]
 fn test_independent_byte_tokens_enforced_when_response_count_unlimited() {
-    let now = Instant::now();
+    let now = runtime_clock::now();
     let src = mock_received(&[0x0A, 0x00, 0x00, 0x01], None);
     let req = encode_who_is_req(None, None);
 
@@ -729,7 +795,7 @@ fn test_negative_who_has_cache_strictly_bounded_to_512() {
         },
         Some(100),
     );
-    let base = Instant::now();
+    let base = runtime_clock::now();
 
     for i in 0..600 {
         let target = WhoHasTarget::Id(ObjectIdentifier::new(ObjectType::ANALOG_INPUT, i).unwrap());

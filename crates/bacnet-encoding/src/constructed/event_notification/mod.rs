@@ -6,6 +6,9 @@
 //! notification datum (Clause 12.27.13), so the record codec reuses these
 //! functions.
 
+#[cfg(not(feature = "std"))]
+use alloc::string::ToString;
+
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetDeviceObjectReference, BACnetPropertyStates,
     ChangeOfValueChoice, EventNotificationRequest, NotificationParameters,

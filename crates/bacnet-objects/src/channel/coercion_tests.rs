@@ -4,7 +4,7 @@ use bacnet_types::primitives::{Date, Time};
 use MemberDatatype as D;
 use PropertyValue as V;
 
-const ALL: [MemberDatatype; 14] = [
+const ALL: [MemberDatatype; 16] = [
     D::Unknown,
     D::Boolean,
     D::Unsigned,
@@ -19,6 +19,8 @@ const ALL: [MemberDatatype; 14] = [
     D::Time,
     D::ObjectIdentifier,
     D::LightingCommand,
+    D::ColorCommand,
+    D::XyColor,
 ];
 
 fn date() -> V {
@@ -72,19 +74,24 @@ fn assert_row(value: V, unchanged: &[MemberDatatype], converted: &[(MemberDataty
 
 #[test]
 fn member_datatype_follows_the_value_the_property_holds() {
+    fn of(property: PropertyIdentifier, current: Option<&V>) -> MemberDatatype {
+        MemberDatatype::of(ObjectType::ANALOG_VALUE, property, current)
+    }
     let pv = PropertyIdentifier::PRESENT_VALUE;
-    assert_eq!(MemberDatatype::of(pv, Some(&V::Real(1.0))), D::Real);
+    assert_eq!(of(pv, Some(&V::Real(1.0))), D::Real);
+    assert_eq!(of(pv, Some(&V::Enumerated(1))), D::Enumerated);
+    assert_eq!(of(pv, Some(&V::Signed(1))), D::Integer);
+    assert_eq!(of(pv, Some(&bits())), D::BitString);
+    assert_eq!(of(pv, Some(&V::Null)), D::Unknown);
+    assert_eq!(of(pv, Some(&V::List(vec![]))), D::Unknown);
+    assert_eq!(of(pv, None), D::Unknown);
+    // Two REALs are no xy colour outside a Color object.
     assert_eq!(
-        MemberDatatype::of(pv, Some(&V::Enumerated(1))),
-        D::Enumerated
+        of(pv, Some(&V::List(vec![V::Real(0.1), V::Real(0.2)]))),
+        D::Unknown
     );
-    assert_eq!(MemberDatatype::of(pv, Some(&V::Signed(1))), D::Integer);
-    assert_eq!(MemberDatatype::of(pv, Some(&bits())), D::BitString);
-    assert_eq!(MemberDatatype::of(pv, Some(&V::Null)), D::Unknown);
-    assert_eq!(MemberDatatype::of(pv, Some(&V::List(vec![]))), D::Unknown);
-    assert_eq!(MemberDatatype::of(pv, None), D::Unknown);
     assert_eq!(
-        MemberDatatype::of(
+        of(
             PropertyIdentifier::LIGHTING_COMMAND,
             Some(&V::OctetString(vec![]))
         ),
@@ -93,12 +100,37 @@ fn member_datatype_follows_the_value_the_property_holds() {
 }
 
 #[test]
-fn null_passes_to_everything_but_a_lighting_command() {
-    let all_but_lighting: Vec<_> = ALL
+fn colour_properties_have_their_addendum_datatypes() {
+    use ObjectType as O;
+    use PropertyIdentifier as P;
+    for (object_type, property, datatype) in [
+        (O::COLOR, P::PRESENT_VALUE, D::XyColor),
+        (O::COLOR, P::TRACKING_VALUE, D::XyColor),
+        (O::COLOR, P::DEFAULT_COLOR, D::XyColor),
+        (O::COLOR, P::COLOR_COMMAND, D::ColorCommand),
+        (O::COLOR_TEMPERATURE, P::COLOR_COMMAND, D::ColorCommand),
+        // A Color Temperature's Present_Value is an Unsigned.
+        (O::COLOR_TEMPERATURE, P::PRESENT_VALUE, D::Unknown),
+    ] {
+        assert_eq!(MemberDatatype::of(object_type, property, None), datatype);
+    }
+    assert_eq!(
+        MemberDatatype::of(
+            O::COLOR_TEMPERATURE,
+            P::PRESENT_VALUE,
+            Some(&V::Unsigned(4000))
+        ),
+        D::Unsigned
+    );
+}
+
+#[test]
+fn null_passes_to_everything_but_a_constructed_datatype() {
+    let primitive: Vec<_> = ALL
         .into_iter()
-        .filter(|target| *target != D::LightingCommand)
+        .filter(|target| !matches!(target, D::LightingCommand | D::ColorCommand | D::XyColor))
         .collect();
-    assert_row(V::Null, &all_but_lighting, &[]);
+    assert_row(V::Null, &primitive, &[]);
 }
 
 #[test]
@@ -374,4 +406,44 @@ fn lighting_command_goes_to_a_lighting_command_member_only() {
             V::ApplicationData(LIGHTING[1..8].to_vec()),
         )],
     );
+}
+
+/// x 0.5 (0x3F000000) and y 0.25 (0x3E800000), framed in [1].
+const XY: [u8; 12] = [
+    0x1E, 0x44, 0x3F, 0x00, 0x00, 0x00, 0x44, 0x3E, 0x80, 0x00, 0x00, 0x1F,
+];
+
+/// STEP_UP_CCT (4) by 100 K, framed in [2].
+const STEP_UP: [u8; 6] = [0x2E, 0x09, 0x04, 0x59, 0x64, 0x2F];
+
+#[test]
+fn an_xy_colour_goes_to_an_xy_colour_member_only() {
+    // The member gets the two REALs a WriteProperty of the colour decodes to.
+    assert_row(
+        V::ApplicationData(XY.to_vec()),
+        &[],
+        &[(D::XyColor, V::List(vec![V::Real(0.5), V::Real(0.25)]))],
+    );
+}
+
+#[test]
+fn a_colour_command_goes_to_a_colour_command_member_only() {
+    // The member gets the SEQUENCE inside the [2] tag.
+    assert_row(
+        V::ApplicationData(STEP_UP.to_vec()),
+        &[],
+        &[(D::ColorCommand, V::ApplicationData(STEP_UP[1..5].to_vec()))],
+    );
+}
+
+#[test]
+fn malformed_constructed_values_go_nowhere() {
+    for octets in [
+        &XY[..11],
+        &[0x2E, 0x09, 0x04, 0x59, 0x64][..],
+        &[0x3E, 0x09, 0x04, 0x3F][..],
+        &[&STEP_UP[..], &[0x00]].concat()[..],
+    ] {
+        assert_row(V::ApplicationData(octets.to_vec()), &[], &[]);
+    }
 }

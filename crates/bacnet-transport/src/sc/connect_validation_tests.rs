@@ -11,7 +11,7 @@ fn sentinel_connection() -> ScConnection {
     conn.hub_vmac = Some([0x44; 6]);
     conn.hub_device_uuid = Some([0x55; 16]);
     conn.hub_max_bvlc_length = 3333;
-    conn.hub_max_apdu_length = 2222;
+    conn.hub_max_npdu_length = 2222;
     conn
 }
 
@@ -24,7 +24,7 @@ fn assert_unchanged(conn: &ScConnection, before: &ScConnection) {
     assert_eq!(conn.hub_vmac, before.hub_vmac);
     assert_eq!(conn.hub_device_uuid, before.hub_device_uuid);
     assert_eq!(conn.hub_max_bvlc_length, before.hub_max_bvlc_length);
-    assert_eq!(conn.hub_max_apdu_length, before.hub_max_apdu_length);
+    assert_eq!(conn.hub_max_npdu_length, before.hub_max_npdu_length);
     assert_eq!(conn.local_vmac, before.local_vmac);
     assert_eq!(conn.device_uuid, before.device_uuid);
     assert_eq!(conn.max_bvlc_length, before.max_bvlc_length);
@@ -165,7 +165,7 @@ async fn connect_accept_reserved_identity_is_silently_discarded() {
     assert_eq!(conn.hub_vmac, Some([0x22; 6]));
     assert_eq!(conn.hub_device_uuid, Some([0x33; 16]));
     assert_eq!(conn.hub_max_bvlc_length, 8192);
-    assert_eq!(conn.hub_max_apdu_length, 4096);
+    assert_eq!(conn.hub_max_npdu_length, 4096);
 }
 
 #[test]
@@ -232,7 +232,7 @@ async fn connect_accept_invalid_matrix_waits_silently_for_valid_accept() {
     assert_eq!(conn.hub_vmac, Some([0x22; 6]));
     assert_eq!(conn.hub_device_uuid, Some([0x33; 16]));
     assert_eq!(
-        (conn.hub_max_bvlc_length, conn.hub_max_apdu_length),
+        (conn.hub_max_bvlc_length, conn.hub_max_npdu_length),
         (8192, 4096)
     );
 }
@@ -388,7 +388,7 @@ fn connect_accept_positive_limits_commit_without_normalization() {
         assert_eq!(conn.state, ScConnectionState::Connected);
         assert_eq!(conn.pending_connect_message_id, None);
         assert_eq!(
-            (conn.hub_max_bvlc_length, conn.hub_max_apdu_length),
+            (conn.hub_max_bvlc_length, conn.hub_max_npdu_length),
             (bvlc, npdu)
         );
     }

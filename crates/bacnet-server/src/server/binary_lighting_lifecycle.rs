@@ -11,9 +11,15 @@ use tokio::time::{Instant, MissedTickBehavior};
 /// expire what is due (`advance_monotonic_time_internal`) and to report its
 /// next deadline, and fans COV out for each object that changed once the
 /// database guard is dropped. Binary Lighting Output egress, Lighting Output
-/// fades, ramps and egress (#1384), Access Door pulse relock (#1073),
-/// Averaging sampling and Pulse Converter counting all run on it; the name
-/// predates the others.
+/// fades, ramps and egress (#1384), Color and Color Temperature fades and
+/// ramps (#1474), Access Door pulse relock (#1073), Averaging sampling and
+/// Pulse Converter counting all run on it; the name predates the others.
+///
+/// Before each advance it passes every object the finest COV increment its
+/// Tracking_Value subscribers ask for, so a fade or ramp samples Tracking_Value
+/// at least that finely (#1510). It reads that from the COV table inside the
+/// database guard, in the server's lock order, and lets the table go before
+/// any object runs.
 ///
 /// It wakes once a second, at the earliest deadline it gathered, and when an
 /// object arms a deadline in a write (`MonotonicClocks::deadline_armed`), so
@@ -57,9 +63,15 @@ pub(super) fn spawn_binary_lighting_operation_task<T: TransportPort + 'static>(
                 for oid in database.count_pulse_inputs() {
                     sampled.changed(oid);
                 }
+                let finest = fanout
+                    .cov_table
+                    .read()
+                    .await
+                    .finest_increments(PropertyIdentifier::TRACKING_VALUE);
                 let mut changed = Vec::new();
                 next_deadline = None;
                 database.for_each_object_mut(|oid, object| {
+                    object.set_tracking_cov_increment_internal(finest.get(&oid).copied());
                     if object.advance_monotonic_time_internal(now) {
                         if let Some(snapshot) = object.cov_snapshot_internal() {
                             changed.push((oid, snapshot));

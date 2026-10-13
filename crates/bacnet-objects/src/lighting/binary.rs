@@ -6,7 +6,9 @@ use bacnet_types::enums::{ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 
+use super::color_link::{self, ColorLink};
 use crate::common::{self, read_common_properties, read_priority_array};
+use crate::object_profile::{ObjectProfile, ProfileState, TagsPersistence};
 use crate::traits::{BACnetObject, MonotonicClock};
 
 const OFF: u32 = 0;
@@ -38,6 +40,10 @@ enum PresentValueCommand {
 ///
 /// The priority array stores only steady OFF/ON values. WARN, WARN_OFF,
 /// WARN_RELINQUISH, and STOP are command operations interpreted at write time.
+///
+/// Cloning copies served state into an in-memory object. Tags persistence and
+/// pending saves remain solely with the original; cloning or dropping the copy
+/// never saves, corrects, settles, or waits on the original writer.
 #[derive(Clone)]
 pub struct BinaryLightingOutputObject {
     oid: ObjectIdentifier,
@@ -56,6 +62,11 @@ pub struct BinaryLightingOutputObject {
     reliability: Reliability,
     priority_array: [Option<u32>; 16],
     relinquish_default: u32,
+    /// Color_Reference, with Color_Override and Override_Color_Reference
+    /// when overridable; absent until set.
+    color_link: Option<ColorLink>,
+    /// Tags, Profile_Location and Profile_Name, once provisioned (#1553).
+    profile: ProfileState,
 }
 
 impl BinaryLightingOutputObject {
@@ -77,7 +88,53 @@ impl BinaryLightingOutputObject {
             reliability: Reliability::NO_FAULT_DETECTED,
             priority_array: [None; 16],
             relinquish_default: OFF,
+            color_link: None,
+            profile: ProfileState::default(),
         })
+    }
+
+    /// Link the output to the colour objects that set its colour, or take
+    /// the link away with `None`, as a Lighting Output's
+    /// [`set_color_link`](super::LightingOutputObject::set_color_link) does
+    /// (#1527).
+    pub fn set_color_link(&mut self, link: Option<ColorLink>) -> Result<(), Error> {
+        self.color_link = link.map(ColorLink::checked).transpose()?;
+        Ok(())
+    }
+
+    /// The colour link, if one is set.
+    pub fn color_link(&self) -> Option<&ColorLink> {
+        self.color_link.as_ref()
+    }
+
+    /// Build with application-owned Tags storage. Saved Tags override configured
+    /// Tags only while `set_profile` provisions the row. Loaded data must satisfy
+    /// the normal Tags rules and the opt-in 1 MiB snapshot limit.
+    pub fn with_tags_persistence(
+        instance: u32,
+        name: impl Into<String>,
+        persistence: Arc<dyn TagsPersistence>,
+    ) -> Result<Self, Error> {
+        let mut object = Self::new(instance, name)?;
+        object.profile = ProfileState::persistent(object.oid, persistence)?;
+        Ok(object)
+    }
+
+    /// Wait for queued save attempts to finish. This is not a success receipt;
+    /// writes report their own save outcomes. Unstaged local writes block.
+    pub fn wait_for_tag_saves(&self) {
+        self.profile.wait_for_saves();
+    }
+
+    /// Provision the optional Tags, Profile_Location and Profile_Name rows
+    /// before registration (#1553), as a Color object's
+    /// [`set_profile`](crate::color::ColorObject::set_profile) does.
+    pub fn set_profile(&mut self, profile: ObjectProfile) -> Result<(), Error> {
+        self.profile.provision(profile)
+    }
+
+    pub(super) fn profile(&self) -> &ObjectProfile {
+        self.profile.profile()
     }
 
     /// Set the description string.
@@ -290,14 +347,16 @@ impl BACnetObject for BinaryLightingOutputObject {
             PropertyIdentifier::CURRENT_COMMAND_PRIORITY => {
                 Ok(common::current_command_priority(&self.priority_array))
             }
-            _ => Err(common::unknown_property_error()),
+            p => color_link::read(self.color_link.as_ref(), p)
+                .or_else(|| self.profile.read(p, array_index))
+                .unwrap_or_else(|| Err(common::unknown_property_error())),
         }
     }
 
     fn write_property(
         &mut self,
         property: PropertyIdentifier,
-        _array_index: Option<u32>,
+        array_index: Option<u32>,
         value: PropertyValue,
         priority: Option<u8>,
     ) -> Result<(), Error> {
@@ -326,6 +385,12 @@ impl BACnetObject for BinaryLightingOutputObject {
             }
             return Err(common::invalid_data_type_error());
         }
+        if let Some(result) = color_link::write(&mut self.color_link, property, &value) {
+            return result;
+        }
+        if let Some(result) = self.profile.write(property, array_index, &value) {
+            return result;
+        }
         if let Some(result) =
             common::write_out_of_service(&mut self.out_of_service, property, &value)
         {
@@ -337,8 +402,12 @@ impl BACnetObject for BinaryLightingOutputObject {
         Err(crate::common::unhandled_write_error(
             self.property_metadata().as_ref(),
             property,
-            _array_index,
+            array_index,
         ))
+    }
+
+    fn durable_writes_internal(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
+        self.profile.capability()
     }
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
@@ -363,6 +432,7 @@ impl BACnetObject for BinaryLightingOutputObject {
     }
 
     fn advance_monotonic_time_internal(&mut self, now: Duration) -> bool {
+        self.profile.expire(now);
         self.expire_at(now)
     }
 

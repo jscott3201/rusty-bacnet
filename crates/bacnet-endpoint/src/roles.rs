@@ -200,7 +200,8 @@ impl ClientRoleHandle {
                 .await
         } else {
             self.requester
-                .prepare_write(destination, Vec::new(), request)?
+                .prepare_write(destination, Vec::new(), request)
+                .await?
                 .execute()
                 .await
                 .result?
@@ -353,7 +354,8 @@ impl ClientRoleHandle {
                 .into_multiple()
         } else {
             self.requester
-                .prepare_read(destination, data_attributes, request)?
+                .prepare_read(destination, data_attributes, request)
+                .await?
                 .execute()
                 .await
                 .result?
@@ -403,6 +405,66 @@ impl ClientRoleHandle {
         property_array_index: Option<u32>,
         range: Option<bacnet_services::read_range::RangeSpec>,
     ) -> Result<bacnet_services::read_range::ReadRangeAck, Error> {
+        let request = bacnet_services::read_range::ReadRangeRequest {
+            object_identifier,
+            property_identifier,
+            property_array_index,
+            range,
+        };
+        self.read_range_checked(
+            destination,
+            data_attributes,
+            request,
+            bacnet_services::read_range::ReadRangeValidation::Strict,
+        )
+        .await
+        .map(|reply| reply.ack)
+    }
+
+    /// Read a range of items, choosing how to treat an acknowledgement that
+    /// breaks a rule, as
+    /// [`BACnetClient::read_range_with`](bacnet_client::client::BACnetClient::read_range_with)
+    /// does. Audited like [`read_range`](Self::read_range).
+    pub async fn read_range_with(
+        &self,
+        destination_mac: &[u8],
+        request: &bacnet_services::read_range::ReadRangeRequest,
+        validation: bacnet_services::read_range::ReadRangeValidation,
+    ) -> Result<bacnet_services::read_range::ReadRangeReply, Error> {
+        self.read_range_checked(
+            EndpointApduDestination::Direct {
+                destination_mac: bacnet_types::MacAddr::from_slice(destination_mac),
+            },
+            Vec::new(),
+            request.clone(),
+            validation,
+        )
+        .await
+    }
+
+    /// Read one page of `log`'s Log_Buffer from `cursor`, as
+    /// [`bacnet_client::log_reader::read_log_page`] does; each request is
+    /// audited like any other read, and paced by the session's
+    /// [`min_request_interval_ms`](crate::session::SessionConfig::min_request_interval_ms)
+    /// as a paced `BACnetClient`'s are.
+    pub async fn read_log_page(
+        &self,
+        destination_mac: &[u8],
+        log: ObjectIdentifier,
+        cursor: bacnet_client::log_reader::LogCursor,
+        page_size: u16,
+    ) -> Result<bacnet_client::log_reader::LogPage, Error> {
+        bacnet_client::log_reader::read_log_page(self, destination_mac, log, cursor, page_size)
+            .await
+    }
+
+    async fn read_range_checked(
+        &self,
+        destination: EndpointApduDestination,
+        data_attributes: Vec<DataAttribute>,
+        request: bacnet_services::read_range::ReadRangeRequest,
+        validation: bacnet_services::read_range::ReadRangeValidation,
+    ) -> Result<bacnet_services::read_range::ReadRangeReply, Error> {
         self.check_open()?;
         if let Some(source) = &self.source_audit {
             let source = source.upgrade().ok_or_else(shutdown_error)?;
@@ -411,27 +473,13 @@ impl ClientRoleHandle {
                     &self.requester,
                     destination,
                     data_attributes,
-                    bacnet_client::EndpointReadRequest::Range(
-                        bacnet_services::read_range::ReadRangeRequest {
-                            object_identifier,
-                            property_identifier,
-                            property_array_index,
-                            range,
-                        },
-                    ),
+                    bacnet_client::EndpointReadRequest::Range(request, validation),
                 )
                 .await?
                 .into_range();
         }
         self.requester
-            .read_range_with_destination(
-                destination,
-                data_attributes,
-                object_identifier,
-                property_identifier,
-                property_array_index,
-                range,
-            )
+            .read_range_with_destination(destination, data_attributes, request, validation)
             .await
     }
 
@@ -465,10 +513,36 @@ impl ClientRoleHandle {
     }
 }
 
+impl bacnet_client::log_reader::LogRequester for ClientRoleHandle {
+    async fn read_unsigned(
+        &self,
+        mac: &[u8],
+        log: ObjectIdentifier,
+        property: PropertyIdentifier,
+    ) -> Result<u64, Error> {
+        let ack = self.read_property(mac, log, property, None).await?;
+        bacnet_client::log_reader::unsigned_value(&ack.property_value)
+    }
+
+    async fn read_range_lenient(
+        &self,
+        mac: &[u8],
+        request: &bacnet_services::read_range::ReadRangeRequest,
+    ) -> Result<bacnet_services::read_range::ReadRangeReply, Error> {
+        self.read_range_with(
+            mac,
+            request,
+            bacnet_services::read_range::ReadRangeValidation::Lenient,
+        )
+        .await
+    }
+}
+
 /// Server role: narrow responder + shared notification pool.
 ///
 /// Service scope stays narrow: `ReadProperty`, optionally authorized local
-/// Device.Description `WriteProperty`, and `Reject`/`Abort`. Full
+/// Device.Description `WriteProperty`, optionally `ReinitializeDevice` through
+/// its handler, and `Reject`/`Abort`. Full
 /// `bacnet-server` parity is a later packet. No
 /// lifecycle methods on this handle; the session owner drives dispatch +
 /// `close()`. `Send + Sync`; every method fails closed after shutdown.

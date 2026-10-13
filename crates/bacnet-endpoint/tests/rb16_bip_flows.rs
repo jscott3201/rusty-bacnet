@@ -29,7 +29,7 @@ use bacnet_network::layer::NetworkLayer;
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_transport::bip::BipTransport;
-use bacnet_transport::bvll::{decode_bvll, encode_bvll};
+use bacnet_transport::bvll::{decode_bvll, encode_bvll, Bvll};
 use bacnet_types::enums::{
     AbortReason, ConfirmedServiceChoice, NetworkPriority, ObjectType, PropertyIdentifier,
     RejectReason, Segmentation, ServiceSupported,
@@ -382,12 +382,7 @@ async fn bip_routed_and_confirmed_cov_event_flows() {
     )
     .unwrap();
     let mut rframe = BytesMut::new();
-    encode_bvll(
-        &mut rframe,
-        bacnet_types::enums::BvlcFunction::ORIGINAL_UNICAST_NPDU,
-        &rnpdu,
-    )
-    .unwrap();
+    encode_bvll(&mut rframe, &Bvll::OriginalUnicastNpdu(&rnpdu)).unwrap();
     raw.send_to(&rframe, endpoint_socket).await.unwrap();
     let done = tokio::time::timeout(WAIT, outbound)
         .await
@@ -474,12 +469,7 @@ async fn bip_routed_and_confirmed_cov_event_flows() {
     )
     .unwrap();
     let mut f2 = BytesMut::new();
-    encode_bvll(
-        &mut f2,
-        bacnet_types::enums::BvlcFunction::ORIGINAL_UNICAST_NPDU,
-        &n2,
-    )
-    .unwrap();
+    encode_bvll(&mut f2, &Bvll::OriginalUnicastNpdu(&n2)).unwrap();
     raw.send_to(&f2, endpoint_socket).await.unwrap();
     let routed_ack = tokio::time::timeout(WAIT, routed)
         .await
@@ -527,12 +517,7 @@ async fn bip_routed_and_confirmed_cov_event_flows() {
         )
         .unwrap();
         let mut cf = BytesMut::new();
-        encode_bvll(
-            &mut cf,
-            bacnet_types::enums::BvlcFunction::ORIGINAL_UNICAST_NPDU,
-            &cn,
-        )
-        .unwrap();
+        encode_bvll(&mut cf, &Bvll::OriginalUnicastNpdu(&cn)).unwrap();
         raw.send_to(&cf, endpoint_socket).await.unwrap();
         let (rl, _) = tokio::time::timeout(WAIT, raw.recv_from(&mut buf))
             .await
@@ -589,12 +574,7 @@ async fn bip_routed_and_confirmed_cov_event_flows() {
     )
     .unwrap();
     let mut sf = BytesMut::new();
-    encode_bvll(
-        &mut sf,
-        bacnet_types::enums::BvlcFunction::ORIGINAL_UNICAST_NPDU,
-        &sn,
-    )
-    .unwrap();
+    encode_bvll(&mut sf, &Bvll::OriginalUnicastNpdu(&sn)).unwrap();
     raw.send_to(&sf, endpoint_socket).await.unwrap();
     let (al, _) = tokio::time::timeout(WAIT, raw.recv_from(&mut buf))
         .await

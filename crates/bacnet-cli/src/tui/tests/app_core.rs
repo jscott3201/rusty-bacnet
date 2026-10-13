@@ -8,7 +8,7 @@ use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 use super::*;
 use crate::tui::app::devices::{Movement, SortKey};
 use crate::tui::app::{Link, OpState, Overlay};
-use crate::tui::message::{OpOutcome, WhoIsScope, WhoIsSpec};
+use crate::tui::message::{DirectedTo, OpOutcome, WhoIsScope, WhoIsSpec};
 
 fn five_devices(app: &mut App) {
     for (i, vendor) in [260, 5, 260, 8, 260].into_iter().enumerate() {
@@ -399,7 +399,7 @@ fn ticks_mark_dirty_only_when_something_visible_changed() {
 fn describe_marks_remote_and_directed_scopes() {
     let spec = WhoIsSpec {
         scope: WhoIsScope::Directed {
-            mac: vec![1, 2, 3, 4, 0xBA, 0xC0],
+            to: DirectedTo::Mac(vec![1, 2, 3, 4, 0xBA, 0xC0]),
             label: "1.2.3.4".into(),
         },
         range: Some(bacnet_services::who_is::DeviceInstanceRange::single(5).unwrap()),

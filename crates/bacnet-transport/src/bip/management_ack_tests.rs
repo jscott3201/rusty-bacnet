@@ -16,8 +16,7 @@ async fn malformed_management_ack(function: BvlcFunction, payload_len: usize) ->
             .unwrap();
 
         let payload = vec![0; payload_len];
-        let mut response = BytesMut::with_capacity(4 + payload.len());
-        encode_bvll(&mut response, function, &payload).unwrap();
+        let response = raw_frame(function, &payload);
         server.send_to(&response, client_addr).await.unwrap();
     });
 
@@ -47,8 +46,7 @@ async fn raw_bvlc_request(target: &[u8], function: BvlcFunction, payload: &[u8])
     let (ip, port) = decode_bip_mac(target).unwrap();
     let dest = SocketAddrV4::new(Ipv4Addr::from(ip), port);
 
-    let mut buf = BytesMut::new();
-    encode_bvll(&mut buf, function, payload).unwrap();
+    let buf = raw_frame(function, payload);
     socket.send_to(&buf, dest).await.unwrap();
 
     let mut recv_buf = [0u8; 2048];
@@ -83,14 +81,17 @@ async fn read_bdt_ack_encodes_bdt_entries_as_n10_payload() {
         response.function,
         BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE_ACK
     );
-    assert_eq!(response.payload.len() % bbmd::BDT_ENTRY_SIZE, 0);
-    assert!(response.payload.len() >= bbmd::BDT_ENTRY_SIZE);
+    assert_eq!(
+        response.payload.len() % bacnet_bip_codec::BDT_ENTRY_LENGTH,
+        0
+    );
+    assert!(response.payload.len() >= bacnet_bip_codec::BDT_ENTRY_LENGTH);
 
     let configured_wire = [192, 168, 40, 10, 0xBA, 0xC0, 255, 255, 255, 0];
     assert!(
         response
             .payload
-            .as_chunks::<{ bbmd::BDT_ENTRY_SIZE }>()
+            .as_chunks::<{ bacnet_bip_codec::BDT_ENTRY_LENGTH }>()
             .0
             .contains(&configured_wire),
         "Read-BDT-Ack must include configured BDT entry bytes"
@@ -125,7 +126,7 @@ async fn read_fdt_ack_encodes_fdt_entries_as_n10_payload() {
         response.function,
         BvlcFunction::READ_FOREIGN_DEVICE_TABLE_ACK
     );
-    assert_eq!(response.payload.len(), bbmd::FDT_ENTRY_SIZE);
+    assert_eq!(response.payload.len(), bacnet_bip_codec::FDT_ENTRY_LENGTH);
     assert_eq!(&response.payload[0..4], &fd_ip);
     assert_eq!(
         u16::from_be_bytes([response.payload[4], response.payload[5]]),
@@ -153,12 +154,13 @@ async fn read_fdt_ack_encodes_fdt_entries_as_n10_payload() {
 async fn read_bdt_rejects_malformed_ack_payload_length() {
     let err = malformed_management_ack(
         BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE_ACK,
-        bbmd::BDT_ENTRY_SIZE - 1,
+        bacnet_bip_codec::BDT_ENTRY_LENGTH - 1,
     )
     .await;
 
     assert!(
-        format!("{err}").contains("BDT data length 9 not a multiple of 10"),
+        format!("{err}")
+            .contains("READ_BROADCAST_DISTRIBUTION_TABLE_ACK cannot carry a 9-octet payload"),
         "unexpected error: {err}"
     );
 }
@@ -167,12 +169,12 @@ async fn read_bdt_rejects_malformed_ack_payload_length() {
 async fn read_fdt_rejects_malformed_ack_payload_length() {
     let err = malformed_management_ack(
         BvlcFunction::READ_FOREIGN_DEVICE_TABLE_ACK,
-        bbmd::FDT_ENTRY_SIZE - 1,
+        bacnet_bip_codec::FDT_ENTRY_LENGTH - 1,
     )
     .await;
 
     assert!(
-        format!("{err}").contains("FDT data length 9 not a multiple of 10"),
+        format!("{err}").contains("READ_FOREIGN_DEVICE_TABLE_ACK cannot carry a 9-octet payload"),
         "unexpected error: {err}"
     );
 }

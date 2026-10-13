@@ -1,18 +1,16 @@
 use super::deadline_test_support::*;
 use super::heartbeat_test_support::clients;
 use super::*;
+use crate::port_ownership::connect_loopback;
 use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 
 #[tokio::test]
 async fn hub_admission_abort_before_first_poll_reclaims_slot() {
     let tls = TestTls::new();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let _peer = TcpStream::connect(listener.local_addr().unwrap())
-        .await
-        .unwrap();
+    let _peer = connect_loopback(listener.local_addr().unwrap()).await;
     let (tcp, address) = listener.accept().await.unwrap();
     let active = Arc::new(AtomicUsize::new(0));
     let admission = super::connection::Admission::new(active.clone(), Duration::from_secs(10));
@@ -45,9 +43,7 @@ async fn hub_admission_abort_before_first_poll_reclaims_slot() {
 async fn hub_admission_abort_during_tls_reclaims_slot() {
     let tls = TestTls::new();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let _peer = TcpStream::connect(listener.local_addr().unwrap())
-        .await
-        .unwrap();
+    let _peer = connect_loopback(listener.local_addr().unwrap()).await;
     let (tcp, address) = listener.accept().await.unwrap();
     let active = Arc::new(AtomicUsize::new(0));
     let admission = super::connection::Admission::new(active.clone(), Duration::from_secs(10));
@@ -154,7 +150,7 @@ async fn hub_actual_512_stalled_slots_expire_and_legitimate_mtls_recovers() {
     .await;
     let mut stalled = Vec::new();
     for admitted in 1..=512 {
-        let mut tcp = TcpStream::connect(hub.address).await.unwrap();
+        let mut tcp = connect_loopback(hub.address).await;
         // TCP connect completion is not admission. Observe the production counter.
         until(|| hub.active.load(Ordering::Acquire) == admitted).await;
         if admitted % 2 == 0 {
@@ -162,7 +158,7 @@ async fn hub_actual_512_stalled_slots_expire_and_legitimate_mtls_recovers() {
         }
         stalled.push(tcp);
     }
-    let mut rejected = TcpStream::connect(hub.address).await.unwrap();
+    let mut rejected = connect_loopback(hub.address).await;
     let mut byte = [0; 1];
     assert!(matches!(
         poll_io(rejected.read(&mut byte)).await,
@@ -201,21 +197,17 @@ async fn hub_phase_error_upgrade_timeout_and_connect_timeout_release_slots() {
     )
     .unwrap();
     let hub = CountedHub::start(&tls, timeouts).await;
-    let mut bad_tls = TcpStream::connect(hub.address).await.unwrap();
+    let mut bad_tls = connect_loopback(hub.address).await;
     until(|| hub.active.load(Ordering::Acquire) == 1).await;
     bad_tls.write_all(b"not a TLS record").await.unwrap();
     until(|| hub.active.load(Ordering::Acquire) == 0).await;
 
-    let mut bad_http = tls
-        .connect_tls(TcpStream::connect(hub.address).await.unwrap())
-        .await;
+    let mut bad_http = tls.connect_tls(connect_loopback(hub.address).await).await;
     until(|| hub.active.load(Ordering::Acquire) == 1).await;
     bad_http.write_all(b"invalid HTTP\r\n\r\n").await.unwrap();
     until(|| hub.active.load(Ordering::Acquire) == 0).await;
 
-    let _idle_http = tls
-        .connect_tls(TcpStream::connect(hub.address).await.unwrap())
-        .await;
+    let _idle_http = tls.connect_tls(connect_loopback(hub.address).await).await;
     until(|| hub.active.load(Ordering::Acquire) == 1).await;
     until(|| hub.active.load(Ordering::Acquire) == 0).await;
 
@@ -246,7 +238,7 @@ async fn hub_phase_error_upgrade_timeout_and_connect_timeout_release_slots() {
 async fn hub_tls_rejection_of_a_writing_peer_drops_it_and_releases_the_slot() {
     let tls = TestTls::new();
     let hub = CountedHub::start(&tls, ScHubHandshakeTimeouts::default()).await;
-    let mut peer = TcpStream::connect(hub.address).await.unwrap();
+    let mut peer = connect_loopback(hub.address).await;
     until(|| hub.active.load(Ordering::Acquire) == 1).await;
     let writer = tokio::spawn(async move {
         peer.write_all(b"not a TLS record").await.unwrap();

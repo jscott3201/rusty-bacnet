@@ -260,7 +260,7 @@ distinctly.
 ### 6.2 Crate and module layout
 
 Everything stays in `crates/bacnet-cli`, behind the `tui` cargo feature
-(opt-in until the TUI ships in 0.13.0, #975), and outside the workspace's `default-members` as before. A separate
+(opt-in until the TUI ships in 0.14.0, #975), and outside the workspace's `default-members` as before. A separate
 crate is not justified until a second consumer exists. Building without
 the feature drops ratatui and crossterm; `bacnet tui` then prints rebuild
 advice and exits 1.
@@ -583,7 +583,8 @@ TSM counters; an opt-in SC hub admin view of connected nodes.
   untouched by this epic.
 - **Lab PKI generator:** out of scope for v1.
 - **Release profile size tuning:** measured separately (#973) before deciding.
-- **Timing:** the TUI targets 0.13.0 so it does not hold up 0.12.0.
+- **Timing:** the TUI targets 0.14.0, so it holds up neither 0.12.0 nor
+  0.13.0.
 
 ## 14. References
 

@@ -16,7 +16,7 @@ A transport appearing in the codebase is not the same as every package, CLI bina
 | Path | How to start | Important boundary |
 |---|---|---|
 | BACnet/IP | CLI, Python client, or Rust client | Direct reads, discovery, and routed traffic are distinct tests |
-| BACnet/IPv6 | CLI `--ipv6`, Python, or Rust feature path | Requires appropriate IPv6 addressing/interface and network validation |
+| BACnet/IPv6 | CLI `--ipv6`, Python, or Rust feature path | Requires appropriate IPv6 addressing/interface and network validation; targets are VMACs (`bip6:<instance>`), which the CLI resolves from `[ip]:port` and Python from `resolve_vmac` |
 | BACnet/SC | SC-enabled CLI, Python, or Rust | Certificate trust, local identities, and hub behavior must be configured |
 | MS/TP | Rust serial path, or Python `transport="mstp"` and `MstpEndpoint` | No reviewed CLI transport flag; qualify the actual serial hardware |
 | Ethernet/802.3 | Advanced Rust transport path | Platform/privilege evidence is incomplete; not a general CLI tutorial |

@@ -30,6 +30,28 @@ bip-broadcast-observers = { max-threads = 1 }
 filter = 'binary(bip_network_numbers) | binary(client_bip_network_numbers)'
 test-group = 'bip-broadcast-observers'
 
+# These B/IP broadcast tests skip themselves on a host without a usable
+# default route or broadcast; show their output when they pass, so a CI log
+# says whether each one ran or skipped (#1538).
+[[profile.default.overrides]]
+filter = '''
+    binary_id(bacnet-transport) & (
+        test(=bip::shared_port_tests::a_subnet_broadcast_reaches_a_transport_sharing_its_port_by_address)
+      | test(=bip::shared_port_tests::a_broadcast_from_another_interface_is_dropped)
+    )
+'''
+success-output = "immediate"
+
+# The firmware link test's RAM sizes on the host (#1626, #1664, #1667), for
+# the log; check-firmware-link.sh prints the bare-metal ones. Likewise the
+# apdu scenario's peak heap use (#1635), against the image's arena.
+[[profile.default.overrides]]
+filter = '''
+    (package(firmware-link) & test(=ram_sizes))
+  | (binary_id(firmware-link::apdu) & test(=heap_fits_the_arena))
+'''
+success-output = "immediate"
+
 # Start the slowest tests first. nextest otherwise starts tests in binary and
 # name order, so a long test in a binary that sorts late, such as
 # bacnet-transport, starts near the end and keeps the run going alone for most
@@ -53,9 +75,7 @@ filter = '''
       | test(=client::routed_path_limit_tests::routed_sizing_uses_conservative_and_configured_forwarded_envelopes)
     ))
   | (binary_id(bacnet-server) & (
-        test(=server::segmentation_tests::request_progress::request_progress_new_in_order_saves_sustain_transfer_beyond_16_seconds)
-      | test(=server::segmentation_tests::request_progress::request_progress_reclaims_128_stalled_slots_before_admission)
-      | test(=server::audit_reporter_tests::lifecycle::audit_reporter_unassigned_create_failures_never_invent_an_oid)
+        test(=server::audit_reporter_tests::lifecycle::audit_reporter_unassigned_create_failures_never_invent_an_oid)
       | test(=server::audit_reporter_tests::read::range_file::boundary::audit_reporter_range_file_guard_release_precedes_admission_not_delivery)
       | test(=server::audit_reporter_tests::read::boundary::audit_reporter_read_admission_waits_for_read_guard_release_not_delivery)
     ))
@@ -68,7 +88,6 @@ filter = '''
       | test(=sc_hub::graceful_tests::graceful_does_not_block_on_held_sink)
       | test(=sc_hub::retirement_capacity_tests::terminal_relays_and_peer_close_each_recover_beyond_512_connections)
       | test(=sc_hub::retirement_capacity_tests::replacement_and_heartbeat_retirement_each_recover_beyond_512_blocked_relays)
-      | test(=sc::rejection_deadline_tests::rejection_deadline_timely_completion_and_immediate_error_preserve_pending_ack)
     ))
   | (binary_id(bacnet-transport::sc_hub_tls) & test(=typed_hub_honors_each_timeout_and_preserves_established_peers))
 '''

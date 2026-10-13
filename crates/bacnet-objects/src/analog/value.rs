@@ -3,8 +3,10 @@ use crate::common::{
     read_analog_event_properties, read_generic_event_properties, write_analog_event_properties,
     write_generic_event_properties,
 };
+use crate::object_profile::{ObjectProfile, ProfileState, TagsPersistence};
 use crate::present_value_access::PresentValueAccess;
 use crate::property_metadata::PropertyMetadata;
+use std::sync::Arc;
 
 mod metadata;
 #[cfg(test)]
@@ -16,6 +18,7 @@ mod nonfinite_tests;
 
 /// BACnet Analog Value object.
 pub struct AnalogValueObject {
+    profile: ProfileState,
     audit_policy: crate::audit::ObjectAuditPolicy,
     oid: ObjectIdentifier,
     name: String,
@@ -46,6 +49,8 @@ pub struct AnalogValueObject {
     pub(crate) event_history: EventHistory,
     /// Value source tracking.
     value_source: crate::command_source::ValueSourceTracking,
+    /// The last writer of a noncommandable Present_Value, once tracked (#1552).
+    write_source: crate::command_source::SingleValueSource,
 }
 
 impl AnalogValueObject {
@@ -70,6 +75,7 @@ impl AnalogValueObject {
     ) -> Result<Self, Error> {
         let oid = ObjectIdentifier::new(ObjectType::ANALOG_VALUE, instance)?;
         Ok(Self {
+            profile: ProfileState::default(),
             audit_policy: crate::audit::ObjectAuditPolicy::default(),
             oid,
             name: name.into(),
@@ -92,7 +98,51 @@ impl AnalogValueObject {
             max_pres_value: None,
             event_history: EventHistory::default(),
             value_source: crate::command_source::ValueSourceTracking::default(),
+            write_source: crate::command_source::SingleValueSource::default(),
         })
+    }
+
+    /// Build with application-owned Tags storage and the requested Present_Value access.
+    /// Saved Tags override configured Tags only while [`Self::set_profile`]
+    /// provisions the row. Loaded data must satisfy the shared Tags rules and
+    /// the opt-in 1 MiB snapshot limit.
+    pub fn with_tags_persistence(
+        instance: u32,
+        name: impl Into<String>,
+        units: u32,
+        access: PresentValueAccess,
+        persistence: Arc<dyn TagsPersistence>,
+    ) -> Result<Self, Error> {
+        let mut object = Self::with_access(instance, name, units, access)?;
+        object.profile = ProfileState::persistent(object.oid, persistence)?;
+        Ok(object)
+    }
+
+    /// Provision independent optional Tags, Profile_Location and Profile_Name
+    /// rows before registration, in every Present_Value access mode. Tags is
+    /// writable; the text rows are network read-only. Invalid configuration
+    /// leaves the previous profile and its attached storage unchanged.
+    pub fn set_profile(&mut self, profile: ObjectProfile) -> Result<(), Error> {
+        self.profile.provision(profile)
+    }
+
+    /// Wait for queued save attempts to finish; writes report their own outcomes.
+    /// This is not a success receipt. Unstaged synchronous writes block their caller.
+    pub fn wait_for_tag_saves(&self) {
+        self.profile.wait_for_saves();
+    }
+
+    /// Track the source of a noncommandable Present_Value (Clause 19.5,
+    /// #1552), provisioned before registration like the audit policy.
+    ///
+    /// On, the object serves Value_Source: the last writer, network or
+    /// local, which alone may then correct it. A write must name its writer
+    /// (`write_property_from`), and an application update through
+    /// `set_present_value_internal` leaves no source (NONE). A commandable
+    /// object always tracks its sources through Priority_Array, so this
+    /// changes nothing on one.
+    pub fn set_value_source_tracking(&mut self, enabled: bool) {
+        self.write_source.set_enabled(enabled);
     }
 
     /// Set the description string.
@@ -140,6 +190,26 @@ impl AnalogValueObject {
         Ok(())
     }
 
+    /// A noncommandable Present_Value write, network-equivalent.
+    fn write_direct_present_value(
+        &mut self,
+        array_index: Option<u32>,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        if array_index.is_some() {
+            return Err(common::property_is_not_an_array_error());
+        }
+        if self.access == PresentValueAccess::ReadOnly && !self.out_of_service {
+            return Err(common::write_access_denied_error());
+        }
+        // Clause 19.2: an otherwise permitted noncommandable NULL is a no-op.
+        if value == PropertyValue::Null {
+            return Ok(());
+        }
+        self.present_value = Self::checked_present_value(value)?;
+        Ok(())
+    }
+
     fn checked_present_value(value: PropertyValue) -> Result<f32, Error> {
         let PropertyValue::Real(v) = value else {
             return Err(common::invalid_data_type_error());
@@ -180,10 +250,17 @@ impl BACnetObject for AnalogValueObject {
         if metadata::excludes(self, property) {
             return Err(common::unknown_property_error());
         }
-        if let Some(result) = self
-            .value_source
-            .read(property, array_index, &self.priority_array)
-        {
+        let source = match self.access {
+            PresentValueAccess::Commandable => {
+                self.value_source
+                    .read(property, array_index, &self.priority_array)
+            }
+            _ => self.write_source.read(property, array_index),
+        };
+        if let Some(result) = source {
+            return result;
+        }
+        if let Some(result) = self.profile.read(property, array_index) {
             return result;
         }
 
@@ -266,10 +343,13 @@ impl BACnetObject for AnalogValueObject {
         {
             return Err(common::property_is_not_an_array_error());
         }
-        if property == PropertyIdentifier::VALUE_SOURCE
-            && self.access == PresentValueAccess::Commandable
-        {
-            return self.value_source.correct(value, priority, origin);
+        if property == PropertyIdentifier::VALUE_SOURCE {
+            return match self.access {
+                PresentValueAccess::Commandable => {
+                    self.value_source.correct(value, priority, origin)
+                }
+                _ => self.write_source.correct(array_index, value, origin),
+            };
         }
         if property == PropertyIdentifier::PRESENT_VALUE {
             return match self.access {
@@ -283,7 +363,14 @@ impl BACnetObject for AnalogValueObject {
                     )
                 }
                 PresentValueAccess::ReadOnly | PresentValueAccess::Writable => {
-                    self.write_property(property, array_index, value, priority)
+                    self.write_source.admit(origin)?;
+                    // A NULL is a no-op (Clause 19.2), so it has no writer.
+                    let null = value == PropertyValue::Null;
+                    self.write_direct_present_value(array_index, value)?;
+                    if !null {
+                        self.write_source.record(origin);
+                    }
+                    Ok(())
                 }
             };
         }
@@ -300,6 +387,9 @@ impl BACnetObject for AnalogValueObject {
         if metadata::excludes(self, property) {
             return Err(common::unknown_property_error());
         }
+        if let Some(result) = self.profile.write(property, array_index, &value) {
+            return result;
+        }
         if let Some(result) = self
             .audit_policy
             .write(property, array_index, &value, priority)
@@ -311,18 +401,9 @@ impl BACnetObject for AnalogValueObject {
             if self.access == PresentValueAccess::Commandable {
                 return Err(common::write_access_denied_error());
             }
-            if array_index.is_some() {
-                return Err(common::property_is_not_an_array_error());
-            }
-            if self.access == PresentValueAccess::ReadOnly && !self.out_of_service {
-                return Err(common::write_access_denied_error());
-            }
-            // Clause 19.2: an otherwise permitted noncommandable NULL is a no-op.
-            if value == PropertyValue::Null {
-                return Ok(());
-            }
-            self.present_value = Self::checked_present_value(value)?;
-            return Ok(());
+            // A tracked source needs the writer (`write_property_from`).
+            self.write_source.unsourced()?;
+            return self.write_direct_present_value(array_index, value);
         }
         if property == PropertyIdentifier::VALUE_SOURCE {
             return Err(common::write_access_denied_error());
@@ -407,6 +488,15 @@ impl BACnetObject for AnalogValueObject {
         ))
     }
 
+    fn durable_writes_internal(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
+        self.profile.capability()
+    }
+
+    fn advance_monotonic_time_internal(&mut self, now: std::time::Duration) -> bool {
+        self.profile.expire(now);
+        false
+    }
+
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         metadata::for_object(self)
     }
@@ -479,9 +569,21 @@ impl BACnetObject for AnalogValueObject {
             _ if self.out_of_service => Err(common::write_access_denied_error()),
             PresentValueAccess::ReadOnly | PresentValueAccess::Writable => {
                 self.present_value = Self::checked_present_value(value)?;
+                self.write_source.forget();
                 Ok(())
             }
         }
+    }
+
+    fn set_present_value_from_internal(
+        &mut self,
+        value: PropertyValue,
+        origin: &crate::command_source::CommandOrigin,
+    ) -> Result<(), Error> {
+        self.write_source.admit(origin)?;
+        self.set_present_value_internal(value)?;
+        self.write_source.record(origin);
+        Ok(())
     }
 
     fn evaluate_reliability_internal(&mut self) -> Result<ReliabilityEvaluation, Error> {

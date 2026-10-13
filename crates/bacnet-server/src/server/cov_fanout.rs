@@ -49,7 +49,7 @@ impl<T: TransportPort + 'static> CovFanout<T> {
             notification_transactions: Arc::clone(ctx.notification_transactions),
             comm_state: Arc::clone(ctx.comm_state),
             event_suppressions: Arc::clone(event_suppressions),
-            config: Arc::new(ctx.config.clone()),
+            config: Arc::clone(ctx.config),
         }
     }
 

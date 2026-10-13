@@ -31,7 +31,7 @@ async fn send_and_receive_original_broadcast(npdu: &Bytes) -> BvllMessage {
         .await
         .unwrap();
     let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, sink_port, Ipv4Addr::LOCALHOST);
-    transport.socket = Some(Arc::new(super::BipSocket::new(source_socket, None)));
+    transport.wire_for_test(Arc::new(super::BipSocket::new(source_socket, None)));
 
     transport.send_broadcast(npdu).await.unwrap();
 

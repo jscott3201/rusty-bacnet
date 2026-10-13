@@ -530,6 +530,8 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         track_depth: bool,
     ) -> Result<(mpsc::Receiver<ReceivedApdu>, QueueAdmissionCounters), Error> {
         let mut npdu_rx = self.transport.start().await?;
+        // Taken once the transport knows its own addresses.
+        self.local_broadcasts = self.transport.local_broadcast_destinations();
         let mut network_control_tx = self.network_control_tx.take();
         let network_control_ingress_sequence = Arc::clone(&self.network_control_ingress_sequence);
         let address_length_drops = Arc::clone(&self.address_length_drops);
@@ -633,12 +635,13 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
 }
 
 /// Whether a frame's link-layer source MAC fits [`NpduAddress::MAX_MAC_LEN`]
-/// (#1198). [`NetworkLayer`] and the router ask before decoding anything else
-/// in the frame. A longer MAC is counted in `drops` and its frame goes no
+/// (#1198). [`NetworkLayer`] asks before decoding anything else in the
+/// frame, and the router's engine (`bacnet-router-core`) applies the same
+/// bound. A longer MAC is counted in `drops` and its frame goes no
 /// further, so neither an APDU consumer nor the routing table ever learns an
 /// address that a `BACnetAddress` cannot hold. No built-in transport makes
-/// one: B/IP, BACnet/SC and Ethernet MACs are 6 octets, MS/TP 1 and B/IPv6
-/// 18; only a custom [`TransportPort`] can.
+/// one: B/IP, BACnet/SC and Ethernet MACs are 6 octets, B/IPv6 VMACs 3 and
+/// MS/TP 1; only a custom [`TransportPort`] can.
 pub(crate) fn link_source_fits(source_mac: &[u8], drops: &AtomicU64) -> bool {
     if source_mac.len() <= NpduAddress::MAX_MAC_LEN {
         return true;
@@ -655,9 +658,10 @@ pub(crate) fn link_source_fits(source_mac: &[u8], drops: &AtomicU64) -> bool {
 /// Whether a decoded NPDU's destination can be acted on: anything but DNET
 /// 0xFFFF with a DADR (#1379). That DNET already names every device on every
 /// network (Clauses 6.2.2 and 6.3.2), so a DADR beside it names one device as
-/// well and the NPDU contradicts itself. [`NetworkLayer`] and the router both
-/// ask right after decoding, before they look at what the NPDU carries, so
-/// this one check covers APDUs and network messages on either. A
+/// well and the NPDU contradicts itself. [`NetworkLayer`] asks right after
+/// decoding, before it looks at what the NPDU carries, so this one check
+/// covers APDUs and network messages; the router's engine applies the same
+/// rule at the same point. A
 /// contradictory NPDU is counted in `drops` and goes no further: it is not
 /// delivered, forwarded, answered, rejected or learned from.
 pub(crate) fn destination_is_coherent(
@@ -685,8 +689,8 @@ pub(crate) fn destination_is_coherent(
 /// transaction, so every device reached would get a request or an answer
 /// that names no one. The type is the high nibble of the APDU's first octet
 /// (Clause 20.1), so nothing is decoded, and an empty APDU names no type.
-/// Network messages pass. [`NetworkLayer`] and the router both ask right
-/// after [`destination_is_coherent`]: a refused NPDU is counted in `drops`
+/// Network messages pass. [`NetworkLayer`] asks right after
+/// [`destination_is_coherent`], as the router's engine does: a refused NPDU is counted in `drops`
 /// and is not delivered, forwarded, answered or rejected.
 pub(crate) fn broadcast_carries_unconfirmed(npdu: &Npdu, drops: &AtomicU64) -> bool {
     let Some(destination) = npdu.destination.as_ref() else {

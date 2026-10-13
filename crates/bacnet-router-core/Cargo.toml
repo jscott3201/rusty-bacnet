@@ -1,0 +1,50 @@
+[package]
+name = "bacnet-router-core"
+description = "Portable no-std BACnet router (Clause 6): a sans-IO routing engine over a borrowed NPDU view and writer, network-layer messages, a routing table and route discovery, with B/IP and MS/TP port glue"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["bacnet", "router", "npdu", "embedded", "no-std"]
+categories = ["embedded", "network-programming", "no-std", "no-std::no-alloc"]
+
+# The table, discovery and the engine's scratch live in caller-sized arrays
+# (const generics), and NPDUs are borrowed or written into caller storage,
+# so the crate needs neither std nor an allocator. Each feature adds the
+# glue for one portable link core, and needs neither either.
+[features]
+default = []
+# B/IP ports over bacnet-bip-core's node engine, a BBMD's included.
+bip = ["dep:bacnet-bip-core", "dep:bacnet-bip-codec"]
+# MS/TP ports over bacnet-mstp-core's master core.
+mstp = ["dep:bacnet-mstp-core"]
+
+[dependencies]
+bacnet-time = { workspace = true }
+bacnet-bip-codec = { workspace = true, optional = true }
+bacnet-bip-core = { workspace = true, optional = true }
+bacnet-mstp-core = { workspace = true, optional = true }
+
+# bacnet-encoding's decoder is the reference the NPDU view is held equal to,
+# and bacnet-types holds the constants the message codes must match; the
+# MS/TP glue tests decode the frames the master core sends. Tests only: the
+# crate itself never links any of them.
+[dev-dependencies]
+bacnet-encoding = { workspace = true, features = ["std"] }
+bacnet-mstp-codec = { workspace = true }
+bacnet-types = { workspace = true, features = ["std"] }
+bytes = { workspace = true }
+proptest.workspace = true
+
+[package.metadata.docs.rs]
+# Every feature, and a bare-metal target too, so the docs show the B/IP and
+# MS/TP glue and the crate without std; --cfg docsrs labels the modules
+# each feature adds.
+all-features = true
+targets = ["x86_64-unknown-linux-gnu", "thumbv7em-none-eabihf"]
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true

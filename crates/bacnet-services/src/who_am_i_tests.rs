@@ -320,7 +320,7 @@ fn app_octets(length: u8) -> Vec<u8> {
 #[test]
 fn you_are_mac_address_holds_to_the_bacnet_address_bound() {
     let longest = BACnetAddress::MAX_MAC_LEN as u8;
-    // The B/IPv6 form, the longest MAC on any data link the stack serves (#1200).
+    // The longest MAC the stack takes, `BACnetAddress::MAX_MAC_LEN` (#1200).
     let req = you_are(Some(device_1234()), Some(app_octets(longest)[2..].to_vec()));
     let expected = concat(&[&IDENTITY, &DEVICE_1234, &app_octets(longest)]);
     assert_eq!(encode_you_are(&req), expected);

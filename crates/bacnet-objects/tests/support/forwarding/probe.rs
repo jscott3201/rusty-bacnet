@@ -7,7 +7,8 @@ use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use super::fixtures::{address, day, noon, oid, property_error, schedule_write};
+use super::fixtures::{address, day, noon, oid, property_error, schedule_write, METADATA};
+use bacnet_objects::access_control::AccessControlInput;
 use bacnet_objects::accumulator::InputReading;
 use bacnet_objects::analog::AnalogValueObject;
 use bacnet_objects::audit::{
@@ -30,9 +31,7 @@ use bacnet_objects::event_enrollment::{
 use bacnet_objects::file::{FileConfiguration, FileObject, FileStorage};
 use bacnet_objects::log_buffer::{LogBufferRecords, LogRecordIdentity};
 use bacnet_objects::log_reporting::BufferReadyReport;
-use bacnet_objects::property_metadata::{
-    PropertyConformance, PropertyMetadata, PropertyWriteCapability,
-};
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::schedule::{ScheduleTargetOutcome, ScheduleWrite};
 use bacnet_objects::staging::StagingWritePlan;
 use bacnet_objects::traits::{
@@ -56,40 +55,6 @@ use bacnet_types::primitives::{BACnetTimeStamp, Date, ObjectIdentifier, Property
 pub const CUSTOM: P = P::from_raw(5000);
 pub const CUSTOM_LIST: P = P::from_raw(5001);
 const REPORTED: [CovReportedProperty; 1] = [CovReportedProperty::Trigger(CUSTOM)];
-/// DESCRIPTION is writable here, and CUSTOM is absent, unlike the probe's
-/// own answers, so defaults derived from these rows give themselves away.
-const METADATA: [PropertyMetadata; 5] = [
-    PropertyMetadata::new(
-        P::OBJECT_IDENTIFIER,
-        PropertyConformance::RequiredRead,
-        None,
-        PropertyWriteCapability::ReadOnly,
-    ),
-    PropertyMetadata::new(
-        P::OBJECT_NAME,
-        PropertyConformance::RequiredRead,
-        None,
-        PropertyWriteCapability::ReadOnly,
-    ),
-    PropertyMetadata::new(
-        P::OBJECT_TYPE,
-        PropertyConformance::RequiredRead,
-        None,
-        PropertyWriteCapability::ReadOnly,
-    ),
-    PropertyMetadata::new(
-        P::DESCRIPTION,
-        PropertyConformance::Optional,
-        None,
-        PropertyWriteCapability::Always,
-    ),
-    PropertyMetadata::new(
-        P::PROPERTY_LIST,
-        PropertyConformance::RequiredRead,
-        None,
-        PropertyWriteCapability::ReadOnly,
-    ),
-];
 
 /// The calls a probe received, oldest first, each as `name(arguments)`.
 pub type CallLog = Arc<Mutex<Vec<String>>>;
@@ -276,6 +241,9 @@ impl BACnetObject for Probe {
     fn next_monotonic_deadline_internal(&self) -> Option<Duration> {
         self.called("next_monotonic_deadline_internal", ());
         Some(Duration::from_secs(99))
+    }
+    fn set_tracking_cov_increment_internal(&mut self, finest: Option<f64>) {
+        self.called("set_tracking_cov_increment_internal", (finest,));
     }
     fn cov_snapshot_internal(&self) -> Option<Box<dyn BACnetObject>> {
         self.called("cov_snapshot_internal", ());
@@ -579,8 +547,21 @@ impl BACnetObject for Probe {
         self.called("set_present_value_internal", (value,));
         Ok(())
     }
+    fn set_present_value_from_internal(
+        &mut self,
+        value: PropertyValue,
+        origin: &CommandOrigin,
+    ) -> Result<(), Error> {
+        self.called("set_present_value_from_internal", (value, origin));
+        // Unlike the default, which answers as `set_present_value_internal` does.
+        Err(property_error(ErrorCode::VALUE_OUT_OF_RANGE))
+    }
     fn set_tracking_value_internal(&mut self, value: PropertyValue) -> Result<(), Error> {
         self.called("set_tracking_value_internal", (value,));
+        Ok(())
+    }
+    fn report_access_input_internal(&mut self, input: AccessControlInput) -> Result<(), Error> {
+        self.called("report_access_input_internal", (input,));
         Ok(())
     }
     fn set_controlled_variable_value_internal(

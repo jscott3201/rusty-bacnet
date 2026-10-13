@@ -29,6 +29,8 @@ impl BACnetServer {
     /// hundredths) align a POLLED log's acquisitions to the clock. Peers can
     /// write each of these, and Trigger, which asks a TRIGGERED log for one
     /// record; `write_property_local` writes it from the application.
+    /// `total_record_count` seeds Total_Record_Count: the first record is
+    /// numbered one past it, going from 2^32 - 1 on to 1 (#1537).
     #[pyo3(signature = (
         instance,
         name,
@@ -40,7 +42,8 @@ impl BACnetServer {
         start_time=None,
         stop_time=None,
         align_intervals=None,
-        interval_offset=None
+        interval_offset=None,
+        total_record_count=0
     ))]
     fn add_trend_log_multiple(
         &self,
@@ -54,6 +57,7 @@ impl BACnetServer {
         stop_time: Option<&Bound<'_, PyAny>>,
         align_intervals: Option<bool>,
         interval_offset: Option<u32>,
+        total_record_count: u32,
     ) -> PyResult<()> {
         let settings = TrendLogMultipleSettings {
             members: members
@@ -70,6 +74,7 @@ impl BACnetServer {
                 .transpose()?,
             align_intervals,
             interval_offset,
+            total_record_count,
         };
         let obj = trend_log_multiple(instance, name, buffer_size, settings).map_err(to_py_err)?;
         self.push_pending(Box::new(obj))
@@ -99,6 +104,8 @@ struct TrendLogMultipleSettings {
     stop_time: Option<(Date, Time)>,
     align_intervals: Option<bool>,
     interval_offset: Option<u32>,
+    /// Total_Record_Count to seed the empty log at.
+    total_record_count: u32,
 }
 
 /// Build the log through the Rust setters, so Python gets their checks.
@@ -110,6 +117,7 @@ fn trend_log_multiple(
     settings: TrendLogMultipleSettings,
 ) -> Result<TrendLogMultipleObject, Error> {
     let mut log = TrendLogMultipleObject::new(instance, name, buffer_size)?;
+    log.restore_log_buffer(settings.total_record_count, [])?;
     for member in settings.members {
         log.add_property_reference(member)?;
     }

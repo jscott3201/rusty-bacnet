@@ -6,7 +6,8 @@
 //! the change, and a Command or Channel run the write started goes ahead
 //! and reports its end. `stop()` aborts that task with the other request
 //! tasks, so a run it hadn't started ends as if none of its writes were made
-//! (#1324).
+//! (#1324). `set_life_safety_operation_expected_local` hands its
+//! timestamped capture and COV fanout to such a task the same way (#1520).
 //!
 //! Each test holds the COV table for writing, so the work after the commit
 //! parks on it, at the timestamped capture under the write's guard; polls the
@@ -298,4 +299,171 @@ fn a_local_write_outside_a_tokio_runtime_fails_and_writes_nothing() {
     drop(write);
     assert_eq!(runtime.block_on(read_db(&h, target, PV, None)), before);
     runtime.block_on(h.server.stop()).unwrap();
+}
+
+/// LSP-1, whose Operation_Expected the application rearms.
+fn life_safety_point(db: &mut ObjectDatabase) {
+    db.add(Box::new(
+        bacnet_objects::life_safety::LifeSafetyPointObject::new(1, "LSP-1").unwrap(),
+    ))
+    .unwrap();
+}
+
+fn lsp1() -> ObjectIdentifier {
+    ObjectIdentifier::new(ObjectType::LIFE_SAFETY_POINT, 1).unwrap()
+}
+
+/// `set_life_safety_operation_expected_local` of SILENCE on `point`.
+fn silence<'a>(h: &'a Harness, point: &'a ObjectIdentifier) -> Write<'a> {
+    Box::pin(
+        h.server
+            .set_life_safety_operation_expected_local(point, LifeSafetyOperation::SILENCE),
+    )
+}
+
+#[tokio::test(start_paused = true)]
+async fn life_safety_rearm_dropped_after_its_change_still_notifies_operation_expected() {
+    let mut h = Harness::start_with(ServerConfig::default(), life_safety_point).await;
+    let expected = PropertyIdentifier::OPERATION_EXPECTED;
+    h.subscribe_specs(false, vec![(lsp1(), vec![(expected, true)])])
+        .await;
+    h.notification().await;
+    h.set_clock(41);
+    let table = Arc::clone(&h.server.cov_table).write_owned().await;
+    // Changed, then dropped while the caller waits for the work it owes.
+    // With that work in the caller's future, the held table would park the
+    // timestamped capture there and the drop would skip it and the fanout;
+    // in its own task, the work runs on once the table is free.
+    let point = lsp1();
+    commit_and_drop(&h, silence(&h, &point));
+
+    drop(table);
+    let report = h.notification().await;
+    let rows: Vec<_> = report.list_of_cov_notifications[0]
+        .list_of_values
+        .iter()
+        .filter(|row| row.property_identifier == expected)
+        .collect();
+    let mut value = BytesMut::new();
+    let silence = PropertyValue::Enumerated(LifeSafetyOperation::SILENCE.to_raw());
+    encode_property_value(&mut value, &silence).unwrap();
+    assert_eq!(rows.len(), 1, "{report:?}");
+    assert_eq!(rows[0].value, value.to_vec());
+    assert_eq!(rows[0].time_of_change, Some(time(41)), "{report:?}");
+    h.server.stop().await.unwrap();
+}
+
+/// AV-2, a custom object that takes a Life Safety rearm by changing its
+/// Description, though it isn't a Life Safety object.
+struct Rearmable(bacnet_objects::analog::AnalogValueObject);
+
+impl bacnet_objects::traits::BACnetObject for Rearmable {
+    fn object_identifier(&self) -> ObjectIdentifier {
+        self.0.object_identifier()
+    }
+
+    fn object_name(&self) -> &str {
+        self.0.object_name()
+    }
+
+    fn read_property(&self, p: PropertyIdentifier, i: Option<u32>) -> Result<PropertyValue, Error> {
+        self.0.read_property(p, i)
+    }
+
+    fn write_property(
+        &mut self,
+        p: PropertyIdentifier,
+        i: Option<u32>,
+        value: PropertyValue,
+        priority: Option<u8>,
+    ) -> Result<(), Error> {
+        self.0.write_property(p, i, value, priority)
+    }
+
+    fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
+        self.0.property_list()
+    }
+
+    fn supports_cov(&self) -> bool {
+        true
+    }
+
+    fn set_life_safety_operation_expected_internal(
+        &mut self,
+        operation: LifeSafetyOperation,
+    ) -> Result<(), Error> {
+        self.0
+            .set_description(format!("rearmed {}", operation.to_raw()));
+        Ok(())
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_rearm_of_an_object_that_isnt_life_safety_owes_no_cov() {
+    let mut h = Harness::start_with(ServerConfig::default(), |db| {
+        let inner = bacnet_objects::analog::AnalogValueObject::new(2, "AV-2", 62).unwrap();
+        db.add(Box::new(Rearmable(inner))).unwrap();
+    })
+    .await;
+    let av2 = ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 2).unwrap();
+    let description = PropertyIdentifier::DESCRIPTION;
+    h.subscribe_specs(false, vec![(av2, vec![(description, false)])])
+        .await;
+    h.notification().await;
+    silence(&h, &av2).await.unwrap();
+    let rearmed = format!("rearmed {}", LifeSafetyOperation::SILENCE.to_raw());
+    assert_eq!(
+        read_db(&h, av2, description, None).await,
+        PropertyValue::CharacterString(rearmed)
+    );
+    // As before #1520, only a Life Safety Point or Zone reports a rearm.
+    h.no_notification().await;
+    h.server.stop().await.unwrap();
+}
+
+#[test]
+fn a_life_safety_rearm_outside_a_tokio_runtime_fails_and_changes_nothing() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let start = Harness::start_with(ServerConfig::default(), life_safety_point);
+    let mut h = runtime.block_on(start);
+    let (point, expected) = (lsp1(), PropertyIdentifier::OPERATION_EXPECTED);
+    let before = runtime.block_on(read_db(&h, point, expected, None));
+    // Polled with no runtime entered, as another executor would poll it.
+    let mut rearm = silence(&h, &point);
+    let polled = rearm.as_mut().poll(&mut Context::from_waker(Waker::noop()));
+    assert!(
+        matches!(polled, Poll::Ready(Err(Error::Encoding(_)))),
+        "{polled:?}"
+    );
+    drop(rearm);
+    assert_eq!(runtime.block_on(read_db(&h, point, expected, None)), before);
+    runtime.block_on(h.server.stop()).unwrap();
+}
+
+/// The work a committed local change owes shares the server's config with
+/// it, not a copy (#1521): while that work waits, it holds one more
+/// reference to the server's own config.
+#[tokio::test(start_paused = true)]
+async fn the_work_a_local_change_owes_shares_the_server_config() {
+    let h = Harness::start_with(ServerConfig::default(), life_safety_point).await;
+    let shared = Arc::strong_count(&h.server.config);
+    let (target, point) = (av1(), lsp1());
+    let changes = [
+        write_local(&h, &target, PropertyValue::Real(70.0), None),
+        silence(&h, &point),
+    ];
+    for mut change in changes {
+        let table = Arc::clone(&h.server.cov_table).write_owned().await;
+        assert!(change
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_pending());
+        assert_eq!(Arc::strong_count(&h.server.config), shared + 1);
+        drop(table);
+        change.await.unwrap();
+        assert_eq!(Arc::strong_count(&h.server.config), shared);
+    }
 }

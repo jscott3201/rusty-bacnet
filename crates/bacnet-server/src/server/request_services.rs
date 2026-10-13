@@ -166,7 +166,10 @@ impl<T: TransportPort + 'static> RequestServices<T> {
 impl<T: TransportPort + 'static> RequestServices<T> {
     /// Fresh, empty handles around `network` and `config`. Tests overwrite the
     /// fields whose state they share or inspect.
-    pub(super) fn for_test(network: Arc<NetworkLayer<T>>, config: ServerConfig) -> Self {
+    pub(super) fn for_test(
+        network: Arc<NetworkLayer<T>>,
+        config: impl Into<Arc<ServerConfig>>,
+    ) -> Self {
         Self {
             db: Arc::new(RwLock::new(ObjectDatabase::new())),
             network,
@@ -184,7 +187,7 @@ impl<T: TransportPort + 'static> RequestServices<T> {
             confirmed_event_repeats: Arc::default(),
             received_event_log: Arc::default(),
             mutation_decisions: Arc::new(crate::mutation::MutationDecisions::default()),
-            config: Arc::new(config),
+            config: config.into(),
         }
     }
 }
@@ -211,11 +214,14 @@ impl<T: TransportPort + 'static> UnconfirmedServices<T> {
     /// default limiters. Tests overwrite the fields they share or tune. The
     /// task spawner's owner is gone, so a WriteGroup's distributions don't
     /// start.
-    pub(super) fn for_test(network: Arc<NetworkLayer<T>>, config: ServerConfig) -> Self {
+    pub(super) fn for_test(
+        network: Arc<NetworkLayer<T>>,
+        config: impl Into<Arc<ServerConfig>>,
+    ) -> Self {
         Self {
             db: Arc::new(RwLock::new(ObjectDatabase::new())),
             network,
-            config: Arc::new(config),
+            config: config.into(),
             clock: None,
             comm_state: Arc::default(),
             device_bindings: Arc::new(RwLock::new(DeviceBindingTable::new())),
@@ -235,6 +241,15 @@ impl<T: TransportPort + 'static> UnconfirmedServices<T> {
 
 #[cfg(test)]
 impl<T: TransportPort + 'static> BACnetServer<T> {
+    /// The server's own config, for a test to change once the server runs.
+    /// It is shared (#1521), so the first change copies it: the server's
+    /// local writes and the handles taken from it afterwards see the change,
+    /// and dispatch and the tasks already started keep the config they were
+    /// started with.
+    pub(super) fn config_mut(&mut self) -> &mut ServerConfig {
+        Arc::make_mut(&mut self.config)
+    }
+
     /// The retained server's own confirmed-request handles.
     pub(super) fn test_services(&self) -> RequestServices<T> {
         RequestServices {
@@ -256,7 +271,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             confirmed_event_repeats: Arc::default(),
             received_event_log: Arc::default(),
             mutation_decisions: Arc::clone(&self.mutation_decisions),
-            config: Arc::new(self.config.clone()),
+            config: Arc::clone(&self.config),
         }
     }
 
@@ -265,7 +280,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         UnconfirmedServices {
             db: Arc::clone(&self.db),
             network: Arc::clone(self.test_network()),
-            config: Arc::new(self.config.clone()),
+            config: Arc::clone(&self.config),
             clock: self._clock.clone(),
             comm_state: Arc::clone(&self.comm_state),
             device_bindings: Arc::clone(&self.device_bindings),

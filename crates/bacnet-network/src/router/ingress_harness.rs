@@ -196,15 +196,30 @@ pub(super) async fn wire(peer: &mut Peer) -> SendRequest {
         .expect("wire closed")
 }
 
+/// Take the startup announcements off each peer's wire, in order: the
+/// port's Network-Number-Is, configured (R3), then, with another port, its
+/// I-Am-Router.
 pub(super) async fn drain_announcements(peers: &mut [Peer]) {
-    for peer in peers {
-        let SendRequest::Broadcast { npdu, .. } = wire(peer).await else {
-            panic!("expected startup announcement")
-        };
-        assert_eq!(
-            decode_npdu(npdu).unwrap().message_type,
-            Some(NetworkMessageType::I_AM_ROUTER_TO_NETWORK.to_raw())
-        );
+    let ports = peers.len();
+    for (port, peer) in peers.iter_mut().enumerate() {
+        let mut number = network(port).to_be_bytes().to_vec();
+        number.push(1);
+        let mut expected = vec![(NetworkMessageType::NETWORK_NUMBER_IS, number)];
+        if ports > 1 {
+            let beyond = (0..ports)
+                .filter(|&other| other != port)
+                .flat_map(|other| network(other).to_be_bytes())
+                .collect();
+            expected.push((NetworkMessageType::I_AM_ROUTER_TO_NETWORK, beyond));
+        }
+        for (message_type, data) in expected {
+            let SendRequest::Broadcast { npdu, .. } = wire(peer).await else {
+                panic!("expected startup announcement")
+            };
+            let npdu = decode_npdu(npdu).unwrap();
+            assert_eq!(npdu.message_type, Some(message_type.to_raw()));
+            assert_eq!(npdu.payload[..], data[..]);
+        }
     }
 }
 

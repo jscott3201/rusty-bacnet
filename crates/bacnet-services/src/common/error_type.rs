@@ -73,18 +73,16 @@ pub(crate) fn encode_element_error(
 }
 
 /// Decode one complete `[0]` Error, `[1]` Unsigned body with no trailing
-/// content.
+/// content. Errors call the body `what` and its `[1]` member `number`, which
+/// is written out whole (`ChangeList-Error first-failed-element-number`), so
+/// a body that decodes builds no label (#1645).
 pub(crate) fn decode_element_error(
     data: &[u8],
     what: &str,
+    number: &str,
 ) -> Result<(ErrorClass, ErrorCode, u32), Error> {
     let ((class, code), offset) = decode_error_type(data, what)?;
-    let (number, end) = decode_ctx_unsigned::<u32>(
-        data,
-        offset,
-        1,
-        &format!("{what} first-failed-element-number"),
-    )?;
+    let (number, end) = decode_ctx_unsigned::<u32>(data, offset, 1, number)?;
     expect_end(data, end, end, what)?;
     Ok((class, code, number))
 }

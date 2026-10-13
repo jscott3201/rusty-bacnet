@@ -490,6 +490,7 @@ async fn missing_or_invalid_device_apdu_timeout_is_operational_problem_without_m
     for device_config in [
         None,
         Some(DeviceConfig {
+            apdu_segment_timeout: 5000,
             apdu_timeout: 0,
             ..DeviceConfig::default()
         }),

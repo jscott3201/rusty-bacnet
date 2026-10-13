@@ -168,7 +168,9 @@ fn cov_sample_structured_color_and_accumulator_ignore_increment() {
     let mut color = ColorObject::new(1, "color").unwrap();
     let first = prepared(&color, PropertyIdentifier::PRESENT_VALUE, None, Some(-1.0));
     assert!(!first.reports(Some(&first.sample)));
-    color.set_present_value(0.1, 0.2);
+    color
+        .set_present_value(bacnet_types::constructed::BACnetXyColor::new(0.1, 0.2))
+        .unwrap();
     assert!(prepared(
         &color,
         PropertyIdentifier::PRESENT_VALUE,

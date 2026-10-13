@@ -1,47 +1,34 @@
-use super::control_messages::handle_network_message;
-use super::*;
-use crate::router_table::{ReachabilityStatus, RoutingClaimSnapshot};
-use bacnet_encoding::npdu::decode_npdu;
+//! Routing-claim counting and dampening (RB-06): rejects and their
+//! hold-down, learning at the route cap, management writes and malformed
+//! tails, on the router's engine through [`super::envelope_harness`]. The
+//! harness router has direct routes to 1000 on port 0 and 2000 on port 1.
 
-// Invoke the real handler with in-memory port queues; no sleeps, sockets or
-// background aging. Exact hold-down boundaries are covered by injected table time.
+use bacnet_encoding::npdu::{decode_npdu, Npdu, NpduAddress};
+use bacnet_types::enums::NetworkMessageType;
+use bacnet_types::MacAddr;
+use bytes::Bytes;
+
+use super::envelope_harness::*;
+use super::SendRequest;
+use crate::router_table::{ClaimCounters, PortId, Reachability};
+
+// Invoke the real dispatch with in-memory port queues; no sleeps, sockets or
+// background aging.
 async fn deliver(
-    table: &Arc<Mutex<RouterTable>>,
+    h: &mut Harness,
     port: usize,
     source_mac: &[u8],
     message_type: NetworkMessageType,
     payload: &[u8],
 ) -> [Vec<SendRequest>; 2] {
-    let (tx0, mut rx0) = mpsc::channel(16);
-    let (tx1, mut rx1) = mpsc::channel(16);
-    let npdu = Npdu {
-        is_network_message: true,
-        message_type: Some(message_type.to_raw()),
-        payload: Bytes::copy_from_slice(payload),
-        ..Default::default()
-    };
-    let ctx = IngressContext::test_local(port, 1000, source_mac, npdu);
-    handle_network_message(
-        table,
-        &[tx0, tx1],
-        &ctx,
-        &super::control_policy::ControlGate::permissive(),
-        &LocalControl::default(),
-    )
-    .await;
-    let mut output = [Vec::new(), Vec::new()];
-    while let Ok(request) = rx0.try_recv() {
-        output[0].push(request);
-    }
-    while let Ok(request) = rx1.try_recv() {
-        output[1].push(request);
-    }
-    output
+    let ctx = h.ctx(port, source_mac, control_npdu(message_type, payload));
+    h.handle(ctx).await;
+    [h.drain(0), h.drain(1)]
 }
 
-async fn reject(table: &Arc<Mutex<RouterTable>>, port: usize, source_mac: &[u8], reason: u8) {
+async fn reject(h: &mut Harness, port: usize, source_mac: &[u8], reason: u8) {
     let output = deliver(
-        table,
+        h,
         port,
         source_mac,
         NetworkMessageType::REJECT_MESSAGE_TO_NETWORK,
@@ -51,66 +38,60 @@ async fn reject(table: &Arc<Mutex<RouterTable>>, port: usize, source_mac: &[u8],
     assert!(output.iter().all(Vec::is_empty));
 }
 
+fn reachability(h: &Harness, network: u16) -> Option<Reachability> {
+    h.table().effective_reachability(network, h.now())
+}
+
+/// Reasons 1 and 2 apply once and then count as changing nothing; any
+/// other reason never changes the route (R2, Clause 6.6.3.5), where the
+/// router before #1679's fix removed it.
 #[tokio::test]
-async fn first_rejects_keep_legacy_effects_and_repeated_claims_count_once() {
-    for reason in [0, 1, 2] {
-        let mut table = RouterTable::new();
-        table.add_learned(3000, 0, MacAddr::from_slice(&[1]));
-        let table = Arc::new(Mutex::new(table));
+async fn first_rejects_apply_once_and_other_reasons_never() {
+    for reason in [0, 1, 2, 4] {
+        let mut h = Harness::two_port();
+        h.learned(3000, 0, &[1]);
         for _ in 0..12 {
-            reject(&table, 0, &[1], reason).await;
+            reject(&mut h, 0, &[1], reason).await;
         }
-        let table = table.lock().await;
-        match reason {
-            1 => assert_eq!(
-                table.effective_reachability(3000),
-                Some(ReachabilityStatus::Unreachable)
-            ),
-            2 => assert_eq!(
-                table.effective_reachability(3000),
-                Some(ReachabilityStatus::Busy)
-            ),
-            _ => assert!(table.lookup(3000).is_none()),
-        }
+        let (state, applied) = match reason {
+            1 => (Reachability::Unreachable, 1),
+            2 => (Reachability::Busy, 1),
+            _ => (Reachability::Reachable, 0),
+        };
+        assert_eq!(reachability(&h, 3000), Some(state));
+        // Reasons 1 and 2 apply once, then change nothing; the others are
+        // kept every time.
+        let (dampened, kept) = if applied == 1 { (11, 0) } else { (0, 12) };
         assert_eq!(
-            table.claim_snapshot(),
-            RoutingClaimSnapshot {
-                reject_applied: 1,
-                reject_dampened: 11,
-                reject_dampened_same_state: 11,
-                ..Default::default()
-            }
+            h.table().claim_counters(),
+            claim_counts(|c| {
+                c.reject_applied = applied;
+                c.reject_dampened = dampened;
+                c.reject_dampened_same_state = dampened;
+                c.reject_kept = kept;
+            })
         );
     }
 }
 
 #[tokio::test]
 async fn spoofing_mac_does_not_bypass_hold_down_but_another_ingress_is_independent() {
-    let mut table = RouterTable::new();
-    table.add_learned(3000, 0, MacAddr::from_slice(&[1]));
-    let table = Arc::new(Mutex::new(table));
-    reject(&table, 0, &[1], 2).await;
+    let mut h = Harness::two_port();
+    h.learned(3000, 0, &[1]);
+    reject(&mut h, 0, &[1], 2).await;
     for mac in 1..=10 {
-        reject(&table, 0, &[mac], 1).await;
+        reject(&mut h, 0, &[mac], 1).await;
     }
+    assert_eq!(reachability(&h, 3000), Some(Reachability::Busy));
+    reject(&mut h, 1, &[1], 1).await;
+    assert_eq!(reachability(&h, 3000), Some(Reachability::Unreachable));
     assert_eq!(
-        table.lock().await.effective_reachability(3000),
-        Some(ReachabilityStatus::Busy)
-    );
-    reject(&table, 1, &[1], 1).await;
-    let table = table.lock().await;
-    assert_eq!(
-        table.effective_reachability(3000),
-        Some(ReachabilityStatus::Unreachable)
-    );
-    assert_eq!(
-        table.claim_snapshot(),
-        RoutingClaimSnapshot {
-            reject_applied: 2,
-            reject_dampened: 10,
-            reject_dampened_hold_down: 10,
-            ..Default::default()
-        }
+        h.table().claim_counters(),
+        claim_counts(|c| {
+            c.reject_applied = 2;
+            c.reject_dampened = 10;
+            c.reject_dampened_hold_down = 10;
+        })
     );
 }
 
@@ -118,11 +99,11 @@ async fn spoofing_mac_does_not_bypass_hold_down_but_another_ingress_is_independe
 async fn i_am_refresh_rearms_rejects_and_corroborated_learning_still_warns() {
     // Hardened gate: cross-port moves need two claims; same-port refreshes
     // re-arm reject hold-down immediately in both modes.
-    let table = Arc::new(Mutex::new(RouterTable::new_hardened()));
+    let mut h = Harness::two_port().hardened();
     for (index, port) in [0, 0, 1, 0, 1, 0].into_iter().enumerate() {
         if index >= 2 {
             deliver(
-                &table,
+                &mut h,
                 port,
                 &[index as u8],
                 NetworkMessageType::I_AM_ROUTER_TO_NETWORK,
@@ -131,7 +112,7 @@ async fn i_am_refresh_rearms_rejects_and_corroborated_learning_still_warns() {
             .await;
         }
         let output = deliver(
-            &table,
+            &mut h,
             port,
             &[index as u8],
             NetworkMessageType::I_AM_ROUTER_TO_NETWORK,
@@ -141,30 +122,26 @@ async fn i_am_refresh_rearms_rejects_and_corroborated_learning_still_warns() {
         assert!(output[port].is_empty());
         assert_eq!(output[1 - port].len(), 1); // Existing unconditional rebroadcast.
         {
-            let table = table.lock().await;
+            let table = h.table();
             let route = table.lookup(3000).unwrap();
-            assert_eq!(route.port_index, port);
-            assert_eq!(route.next_hop_mac.as_slice(), &[index as u8]);
-            assert_eq!(route.reachability, ReachabilityStatus::Reachable);
+            assert_eq!(route.port(), PortId(port as u8));
+            assert_eq!(route.next_hop().as_slice(), &[index as u8]);
+            assert_eq!(route.reachability(), Reachability::Reachable);
         }
-        reject(&table, 0, &[1], 1).await;
-        assert_eq!(
-            table.lock().await.effective_reachability(3000),
-            Some(ReachabilityStatus::Unreachable)
-        );
+        reject(&mut h, 0, &[1], 1).await;
+        assert_eq!(reachability(&h, 3000), Some(Reachability::Unreachable));
     }
-    let table = table.lock().await;
-    assert_eq!(table.lookup(3000).unwrap().flap_count, 4);
+    let table = h.table();
+    assert_eq!(table.lookup(3000).unwrap().flap_count(), 4);
     assert_eq!(
-        table.claim_snapshot(),
-        RoutingClaimSnapshot {
-            learned_ok: 6,
-            reject_applied: 6,
-            flap_warned: 2,
-            pending_started: 4,
-            corroborated_applied: 4,
-            ..Default::default()
-        }
+        table.claim_counters(),
+        claim_counts(|c| {
+            c.learned_ok = 6;
+            c.reject_applied = 6;
+            c.flap_warned = 2;
+            c.pending_started = 4;
+            c.corroborated_applied = 4;
+        })
     );
 }
 
@@ -175,13 +152,11 @@ async fn truncated_tails_change_nothing_and_send_no_ack() {
     // silently ignored — prefix entries were applied and the rebroadcast
     // (I-Am) or ACK (Init) was still emitted. Now the whole message is
     // dropped: no table change, no forward, no rebroadcast, no ACK.
-    let mut table = RouterTable::new();
-    table.add_direct(1000, 0);
-    let table = Arc::new(Mutex::new(table));
+    let mut h = Harness::two_port();
 
     // I-Am with a 1-octet tail: 3000 must not be learned, nothing rebroadcast.
     let output = deliver(
-        &table,
+        &mut h,
         0,
         &[1],
         NetworkMessageType::I_AM_ROUTER_TO_NETWORK,
@@ -189,14 +164,14 @@ async fn truncated_tails_change_nothing_and_send_no_ack() {
     )
     .await;
     assert!(output.iter().all(Vec::is_empty));
-    assert_eq!(table.lock().await.len(), 1);
+    assert_eq!(h.table().len(), 2);
 
     // Init with a truncated tail is rejected whole: nothing applied, no ACK.
     let init = [
         6, 0, 0, 0, 0, 0xff, 0xff, 0, 0, 0x03, 0xe8, 0, 0, 0x0b, 0xb8, 0, 0, 0x0f, 0xa0, 0, 0, 0x13,
     ];
     let output = deliver(
-        &table,
+        &mut h,
         1,
         &[2],
         NetworkMessageType::INITIALIZE_ROUTING_TABLE,
@@ -204,23 +179,32 @@ async fn truncated_tails_change_nothing_and_send_no_ack() {
     )
     .await;
     assert!(output.iter().all(Vec::is_empty)); // No ACK for an invalid envelope.
-    assert_eq!(table.lock().await.len(), 1);
+    assert_eq!(h.table().len(), 2);
 
     // The same truncation in an ACK still learns nothing.
     deliver(
-        &table,
+        &mut h,
         1,
         &[2],
         NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK,
         &init,
     )
     .await;
-    let table = table.lock().await;
-    assert_eq!(table.len(), 1);
-    assert!(table.lookup(1000).unwrap().directly_connected);
+    let table = h.table();
+    assert_eq!(table.len(), 2);
+    assert!(table.lookup(1000).unwrap().is_direct());
     assert!(table.lookup(3000).is_none());
     assert!(table.lookup(4000).is_none());
-    assert_eq!(table.claim_snapshot(), RoutingClaimSnapshot::default());
+    assert_eq!(table.claim_counters(), ClaimCounters::default());
+}
+
+/// The router's two direct routes and 254 learned ones on port 0 fill the
+/// table to its 256-route cap.
+fn full(h: &Harness) {
+    for net in 1..=254 {
+        h.learned(net, 0, &[1]);
+    }
+    assert_eq!(h.table().len(), 256);
 }
 
 #[tokio::test]
@@ -232,29 +216,23 @@ async fn each_learning_cap_counts_its_inspected_stop_without_changing_tail_handl
         // Hardened: the existing-net cross-port move needs two claims to
         // corroborate, preserving the two-step assertion below in both modes
         // for I-Am (standard would converge on the first claim).
-        let mut table = RouterTable::new_hardened();
-        for net in 1..=256 {
-            table.add_learned(net, 0, MacAddr::from_slice(&[1]));
-        }
-        let table = Arc::new(Mutex::new(table));
+        let mut h = Harness::two_port().hardened();
+        full(&h);
         // The unknown 3000 triggers the cap; the existing 1 behind it stays unexamined.
         let payload: &[u8] = if message_type == NetworkMessageType::I_AM_ROUTER_TO_NETWORK {
             &[0x0b, 0xb8, 0, 1]
         } else {
             &[2, 0x0b, 0xb8, 0, 0, 0, 1, 0, 0]
         };
-        deliver(&table, 1, &[2], message_type, payload).await;
+        deliver(&mut h, 1, &[2], message_type, payload).await;
         {
-            let table = table.lock().await;
+            let table = h.table();
             assert_eq!(table.len(), 256);
             assert!(table.lookup(3000).is_none());
-            assert_eq!(table.lookup(1).unwrap().port_index, 0);
+            assert_eq!(table.lookup(1).unwrap().port(), PortId(0));
             assert_eq!(
-                table.claim_snapshot(),
-                RoutingClaimSnapshot {
-                    learned_cap_ignored: 1,
-                    ..Default::default()
-                }
+                table.claim_counters(),
+                claim_counts(|c| c.learned_cap_ignored = 1)
             );
         }
         // Existing per-message cap behavior is preserved, including ACK's cap
@@ -264,17 +242,17 @@ async fn each_learning_cap_counts_its_inspected_stop_without_changing_tail_handl
         } else {
             &[1, 0, 1, 0, 0]
         };
-        deliver(&table, 1, &[2], message_type, existing).await;
+        deliver(&mut h, 1, &[2], message_type, existing).await;
         if message_type == NetworkMessageType::I_AM_ROUTER_TO_NETWORK {
-            assert_eq!(table.lock().await.lookup(1).unwrap().port_index, 0);
-            deliver(&table, 1, &[2], message_type, existing).await;
+            assert_eq!(h.table().lookup(1).unwrap().port(), PortId(0));
+            deliver(&mut h, 1, &[2], message_type, existing).await;
         }
-        let table = table.lock().await;
+        let table = h.table();
         let refreshed = message_type == NetworkMessageType::I_AM_ROUTER_TO_NETWORK;
-        assert_eq!(table.lookup(1).unwrap().port_index, usize::from(refreshed));
-        assert_eq!(table.claim_snapshot().learned_ok, u64::from(refreshed));
+        assert_eq!(table.lookup(1).unwrap().port(), PortId(u8::from(refreshed)));
+        assert_eq!(table.claim_counters().learned_ok, u64::from(refreshed));
         assert_eq!(
-            table.claim_snapshot().learned_cap_ignored,
+            table.claim_counters().learned_cap_ignored,
             if message_type == NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK {
                 2
             } else {
@@ -286,15 +264,12 @@ async fn each_learning_cap_counts_its_inspected_stop_without_changing_tail_handl
 
 #[tokio::test]
 async fn init_management_keeps_cap_for_new_entries_and_replaces_existing() {
-    let mut table = RouterTable::new();
-    for net in 1..=256 {
-        table.add_learned(net, 0, MacAddr::from_slice(&[1]));
-    }
-    let table = Arc::new(Mutex::new(table));
+    let mut h = Harness::two_port();
+    full(&h);
     // Two unknown networks via Port ID 2 (local port 1): the first trips the
     // cap and stops the message; the second stays unexamined.
     deliver(
-        &table,
+        &mut h,
         1,
         &[2],
         NetworkMessageType::INITIALIZE_ROUTING_TABLE,
@@ -302,56 +277,49 @@ async fn init_management_keeps_cap_for_new_entries_and_replaces_existing() {
     )
     .await;
     {
-        let table = table.lock().await;
+        let table = h.table();
         assert_eq!(table.len(), 256);
         assert!(table.lookup(3000).is_none());
         assert!(table.lookup(3001).is_none());
         assert_eq!(
-            table.claim_snapshot(),
-            RoutingClaimSnapshot {
-                learned_cap_ignored: 1,
-                ..Default::default()
-            }
+            table.claim_counters(),
+            claim_counts(|c| c.learned_cap_ignored = 1)
         );
     }
     // Replacement of an existing learned entry bypasses the cap and rewrites
     // the port mapping immediately (no corroboration gate, no learned_ok:
     // management writes are not learning claims).
     deliver(
-        &table,
+        &mut h,
         1,
         &[2],
         NetworkMessageType::INITIALIZE_ROUTING_TABLE,
         &[1, 0, 1, 2, 0],
     )
     .await;
-    let table = table.lock().await;
+    let table = h.table();
     let route = table.lookup(1).unwrap();
-    assert_eq!(route.port_index, 1);
-    assert!(!route.directly_connected);
-    assert_eq!(route.next_hop_mac.as_slice(), &[2]);
+    assert_eq!(route.port(), PortId(1));
+    assert!(!route.is_direct());
+    assert_eq!(route.next_hop().as_slice(), &[2]);
     assert_eq!(
-        table.claim_snapshot(),
-        RoutingClaimSnapshot {
-            learned_cap_ignored: 1,
-            ..Default::default()
-        }
+        table.claim_counters(),
+        claim_counts(|c| c.learned_cap_ignored = 1)
     );
 }
 
 #[tokio::test]
 async fn direct_route_immunity_and_malformed_rejects_under_spam() {
-    let mut table = RouterTable::new();
-    table.add_direct(3000, 0);
-    let table = Arc::new(Mutex::new(table));
+    let mut h = Harness::two_port();
+    h.table().add_direct(3000, PortId(0));
     for _ in 0..10 {
         for reason in [0, 1, 2] {
-            reject(&table, 1, &[1], reason).await;
+            reject(&mut h, 1, &[1], reason).await;
         }
     }
     for payload in [&[][..], &[1][..], &[1, 0x0b][..]] {
         deliver(
-            &table,
+            &mut h,
             0,
             &[1],
             NetworkMessageType::REJECT_MESSAGE_TO_NETWORK,
@@ -359,19 +327,15 @@ async fn direct_route_immunity_and_malformed_rejects_under_spam() {
         )
         .await;
     }
-    let table = table.lock().await;
+    assert_eq!(reachability(&h, 3000), Some(Reachability::Reachable));
+    let table = h.table();
+    assert!(table.lookup(3000).unwrap().is_direct());
     assert_eq!(
-        table.effective_reachability(3000),
-        Some(ReachabilityStatus::Reachable)
-    );
-    assert!(table.lookup(3000).unwrap().directly_connected);
-    assert_eq!(
-        table.claim_snapshot(),
-        RoutingClaimSnapshot {
-            reject_dampened: 30,
-            reject_dampened_same_state: 30,
-            ..Default::default()
-        }
+        table.claim_counters(),
+        claim_counts(|c| {
+            c.reject_dampened = 30;
+            c.reject_dampened_same_state = 30;
+        })
     );
 }
 
@@ -380,62 +344,48 @@ async fn init_replace_and_ack_refresh_both_rearm_reject_hold_down() {
     // RB-05: a management replace installs a fresh learned entry (clearing
     // reject records like fresh learning), so a later reject applies again;
     // the ACK same-port refresh re-arms the same way.
-    let mut table = RouterTable::new();
-    table.add_learned(3000, 0, MacAddr::from_slice(&[1]));
-    let table = Arc::new(Mutex::new(table));
-    reject(&table, 0, &[1], 2).await;
+    let mut h = Harness::two_port();
+    h.learned(3000, 0, &[1]);
+    reject(&mut h, 0, &[1], 2).await;
     // Port ID 1 names local port 0: replaces 3000 in place, re-arming.
     deliver(
-        &table,
+        &mut h,
         1,
         &[2],
         NetworkMessageType::INITIALIZE_ROUTING_TABLE,
         &[1, 0x0b, 0xb8, 1, 0],
     )
     .await;
-    reject(&table, 0, &[1], 1).await;
-    assert_eq!(
-        table.lock().await.effective_reachability(3000),
-        Some(ReachabilityStatus::Unreachable)
-    );
+    reject(&mut h, 0, &[1], 1).await;
+    assert_eq!(reachability(&h, 3000), Some(Reachability::Unreachable));
     deliver(
-        &table,
+        &mut h,
         0,
         &[2],
         NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK,
         &[1, 0x0b, 0xb8, 0, 0],
     )
     .await;
-    reject(&table, 0, &[1], 2).await;
-    let table = table.lock().await;
-    assert_eq!(
-        table.effective_reachability(3000),
-        Some(ReachabilityStatus::Busy)
-    );
+    reject(&mut h, 0, &[1], 2).await;
+    assert_eq!(reachability(&h, 3000), Some(Reachability::Busy));
+    let table = h.table();
     let route = table.lookup(3000).unwrap();
-    assert_eq!(route.port_index, 0);
-    assert_eq!(route.next_hop_mac.as_slice(), &[2]);
+    assert_eq!(route.port(), PortId(0));
+    assert_eq!(route.next_hop().as_slice(), &[2]);
     assert_eq!(
-        table.claim_snapshot(),
-        RoutingClaimSnapshot {
-            learned_ok: 1,
-            reject_applied: 3,
-            ..Default::default()
-        }
+        table.claim_counters(),
+        claim_counts(|c| {
+            c.learned_ok = 1;
+            c.reject_applied = 3;
+        })
     );
 }
 
 #[tokio::test]
 async fn dampened_table_transition_still_relays_every_reject() {
-    use bacnet_encoding::npdu::NpduAddress;
-
-    let mut table = RouterTable::new();
-    table.add_learned(3000, 0, MacAddr::from_slice(&[1]));
-    table.add_direct(4000, 1);
-    let table = Arc::new(Mutex::new(table));
-    let (tx0, mut rx0) = mpsc::channel(16);
-    let (tx1, mut rx1) = mpsc::channel(16);
-    let send_txs = [tx0, tx1];
+    let mut h = Harness::two_port();
+    h.learned(3000, 0, &[1]);
+    h.table().add_direct(4000, PortId(1));
     // The reject names the originator, 4000/[7], as its DNET/DADR (#1158).
     let origin = NpduAddress {
         network: 4000,
@@ -449,17 +399,10 @@ async fn dampened_table_transition_still_relays_every_reject() {
             payload: Bytes::from(vec![reason, 0x0b, 0xb8]),
             ..Default::default()
         };
-        handle_network_message(
-            &table,
-            &send_txs,
-            &IngressContext::test_local(0, 1000, &[1], npdu.clone()),
-            &super::control_policy::ControlGate::permissive(),
-            &LocalControl::default(),
-        )
-        .await;
+        h.handle(h.ctx(0, &[1], npdu.clone())).await;
         let SendRequest::Unicast {
             npdu: data, mac, ..
-        } = rx1.try_recv().unwrap()
+        } = h.rxs[1].try_recv().unwrap()
         else {
             panic!("expected original reject relay");
         };
@@ -477,19 +420,17 @@ async fn dampened_table_transition_still_relays_every_reject() {
                 mac_address: MacAddr::from_slice(&[1]),
             })
         );
-        assert!(rx0.try_recv().is_err());
-        assert!(rx1.try_recv().is_err());
+        h.assert_quiet();
     }
     assert_eq!(
-        table.lock().await.claim_snapshot(),
-        RoutingClaimSnapshot {
-            reject_applied: 1,
-            reject_dampened: 2,
+        h.table().claim_counters(),
+        claim_counts(|c| {
+            c.reject_applied = 1;
+            c.reject_dampened = 2;
             // The trailing Busy claim on a permanently Unreachable route is
             // a same-state no-op (it can never resurrect via auto-clear), not
             // a held-down change — while every reject still relays above.
-            reject_dampened_same_state: 2,
-            ..Default::default()
-        }
+            c.reject_dampened_same_state = 2;
+        })
     );
 }

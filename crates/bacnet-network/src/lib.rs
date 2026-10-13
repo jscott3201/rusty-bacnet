@@ -14,6 +14,8 @@ mod address_bound_tests;
 mod broadcast_pdu_type_tests;
 #[cfg(test)]
 mod global_broadcast_dadr_tests;
+#[cfg(test)]
+mod group_dadr_tests;
 
 #[cfg(test)]
 mod link_source_bound_tests;

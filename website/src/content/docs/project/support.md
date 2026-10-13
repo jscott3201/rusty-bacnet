@@ -7,13 +7,13 @@ Rusty BACnet is pre-1.0, with changing APIs and partial conformance coverage. It
 
 ## Choose the version and owner first
 
-The [installation and local tutorials](/rusty-bacnet/start/installation/), the [integration guides](/rusty-bacnet/development/overview/) (shared endpoints, SC requirements and local Network Number controls) and the operating guides describe **v0.12.0**. A `dev` checkout may hold later changes while it still reports the release's version; use its commit to identify behavior.
+The [installation and local tutorials](/rusty-bacnet/start/installation/), the [integration guides](/rusty-bacnet/development/overview/) (shared endpoints, SC requirements and local Network Number controls) and the operating guides describe **v0.13.0**. A `dev` checkout may hold later changes while it still reports the release's version; use its commit to identify behavior.
 
 Standalone client, full server, shared endpoint and language binding are different surfaces. The shared endpoint's bounded responder does not acquire the full server's service set. Use the [transport matrix](/rusty-bacnet/development/transports/) to choose a starting point, then follow its evidence links.
 
 ## What's supported
 
-This summary describes v0.12.0; its [release notes](https://github.com/jscott3201/rusty-bacnet/releases/tag/v0.12.0) list what changed. It lists what the code implements, not what has been certified or tried against other vendors' devices.
+This summary describes v0.13.0; its [release notes](https://github.com/jscott3201/rusty-bacnet/releases/tag/v0.13.0) list what changed. It lists what the code implements, not what has been certified or tried against other vendors' devices.
 
 **Objects.** `bacnet-objects` implements 64 of the 65 standard object types; Network Security is the one it leaves out. That covers the analog, binary and multi-state inputs, outputs and values; the integer, positive integer, large analog, character string, octet string, bit string, date, time, date-time and pattern values; Device, Network Port, File, Program, Loop, Accumulator, Pulse Converter, Averaging, Calendar, Schedule, Timer, Command, Channel, Group, Global Group, Structured View and Staging; Trend Log, Trend Log Multiple, Event Log, Audit Log and Audit Reporter; Notification Class, Notification Forwarder, and Event and Alert Enrollment; Load Control and the lighting and color objects; and the life safety, access control, elevator group, escalator and lift objects. A server keeps them in an `ObjectDatabase`, which also holds your own `BACnetObject` implementations.
 
@@ -24,12 +24,14 @@ This summary describes v0.12.0; its [release notes](https://github.com/jscott320
 **Transports.** BACnet/IP is always built; the others are Cargo features of `bacnet-transport`:
 
 - BACnet/IP: BBMD and foreign-device registration. NAT traversal and B/IP multicast are not implemented.
-- BACnet/IPv6 (`ipv6`): selects one concrete local interface and address and keeps traffic on that link; the socket itself binds the wildcard address.
+- BACnet/IPv6 (`ipv6`): selects one concrete local interface and address and keeps traffic on that link; the socket itself binds the wildcard address. Peers are named by their 3-octet VMAC, found by address resolution, and a server's VMAC is its device instance.
 - BACnet/SC (`sc-tls`): nodes, direct connections and a hub over TLS 1.3. Each device needs a site CA, its own certificate and key, and a provisioned device UUID.
-- MS/TP (`serial`): standard frames only. RS-485 kernel options and GPIO direction control (`serial-gpio`) are Linux-only, and on-wire timing is not qualified on any adapter.
+- MS/TP (`serial`): standard frames, and extended (COBS-encoded) frames for NPDUs up to 1497 octets with `MstpConfig::extended_frames`, which a router turns on for its MS/TP ports. RS-485 kernel options and GPIO direction control (`serial-gpio`) are Linux-only, and on-wire timing is not qualified on any adapter.
 - Ethernet (`ethernet`): Linux only, through `AF_PACKET`, with `CAP_NET_RAW` or root.
 
 `bacnet-network` routes between networks and transports, and `bacnet-endpoint` lets one transport serve both client and server roles.
+
+**Embedded (`no_std`).** `bacnet-time`, `bacnet-mstp-codec`, `bacnet-mstp-core`, `bacnet-bip-codec`, `bacnet-bip-core` and `bacnet-router-core` build without the standard library or an allocator and take their time from the caller, so firmware can run MS/TP, BACnet/IP (BBMD included) and a router between them. The MS/TP and BACnet/IP transports and `BACnetRouter` run on these cores. `bacnet-types`, `bacnet-encoding` and `bacnet-services` build without the standard library when given an allocator.
 
 **Python.** The `rusty-bacnet` package (CPython 3.11 or later) wraps the client as `BACnetClient`, the full server as `BACnetServer`, the SC hub as `ScHub` and the shared endpoints as `BipEndpoint`, `ScEndpoint` and `MstpEndpoint`, with asyncio methods. It includes BACnet/IP, BACnet/IPv6, BACnet/SC and MS/TP, but not Ethernet, and it does not wrap every Rust API.
 

@@ -1,5 +1,8 @@
 //! Detailed confirmed-COV decoding and Reject classification.
 
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
 use bacnet_encoding::constructed::tagged::{
     decode_canonical_unsigned, decode_ctx_primitive, expect_end, misplaced_tag,
 };

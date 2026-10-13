@@ -4,9 +4,12 @@
 //! 5.2) and move under windowed flow control (Clause 5.3). This module
 //! provides the basic payload splitting and reassembly primitives.
 
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
+use alloc::collections::BTreeMap;
 use bacnet_types::error::Error;
 use bytes::Bytes;
-use std::collections::HashMap;
 
 /// Return whether `sequence_number` is a duplicate in the current incomplete window.
 ///
@@ -81,7 +84,7 @@ pub fn split_payload(payload: &[u8], max_segment_size: usize) -> Result<Vec<Byte
 /// Segments can arrive out of order. Call [`reassemble`](SegmentReceiver::reassemble)
 /// once all segments have been received.
 pub struct SegmentReceiver {
-    segments: HashMap<u8, Bytes>,
+    segments: BTreeMap<u8, Bytes>,
 }
 
 impl Default for SegmentReceiver {
@@ -94,7 +97,7 @@ impl SegmentReceiver {
     /// Create a new empty receiver.
     pub fn new() -> Self {
         Self {
-            segments: HashMap::new(),
+            segments: BTreeMap::new(),
         }
     }
 

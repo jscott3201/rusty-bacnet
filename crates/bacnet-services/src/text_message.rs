@@ -1,6 +1,9 @@
 //! ConfirmedTextMessage / UnconfirmedTextMessage services
 //! per ASHRAE 135-2020 Clauses 16.5 and 16.6.
 
+#[cfg(not(feature = "std"))]
+use alloc::string::String;
+
 use bacnet_encoding::constructed::tagged::{
     decode_ctx_character_string, decode_ctx_constructed, decode_ctx_object_id, decode_ctx_unsigned,
     expect_end, misplaced_kind, next_is_context, next_is_opening,

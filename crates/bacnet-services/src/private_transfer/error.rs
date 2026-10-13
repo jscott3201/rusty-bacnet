@@ -1,6 +1,9 @@
 //! ConfirmedPrivateTransfer-Error (Clause 21): `[0]` Error, `[1]` vendor
 //! identifier, `[2]` service number and optional `[3]` error parameters.
 
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
 use crate::common::error_type::{
     decode_error_pdu, decode_error_type, encode_error_type, error_pdu,
 };

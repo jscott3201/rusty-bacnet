@@ -31,7 +31,9 @@ mod load_control;
 mod loop_program;
 mod network_port;
 mod schedule;
+mod tags_profile;
 mod timer;
+mod value_source;
 
 /// Expected (identifier, optional, writable) row for one property.
 type PropertyRow = (PropertyIdentifier, bool, bool);

@@ -171,6 +171,42 @@ async fn a_flood_from_one_source_is_held_to_its_allowance() {
     h.server.stop().await.unwrap();
 }
 
+/// The receive path reads the allowance's window on tokio's clock (#1550),
+/// so it closes exactly one second after it opened: a notification 1 ms
+/// before then is still over the allowance, and one at the second is logged.
+#[tokio::test(start_paused = true)]
+async fn a_source_allowance_reopens_exactly_one_window_later() {
+    let mut h = Harness::start_with(ServerConfig::default(), |db| collecting(db, 0)).await;
+    h.set_clock(41);
+    let opened = tokio::time::Instant::now();
+    let rate = RECEIVED_EVENT_LOG_RATE;
+    for process in 0..rate {
+        receive_from(&h, PEER, true, &alarm_numbered(process)).await;
+    }
+    h.settle().await;
+    // `settle` lets a millisecond pass; step to the instant each send needs.
+    let advance_to =
+        |at: tokio::time::Instant| tokio::time::advance(at - tokio::time::Instant::now());
+
+    advance_to(opened + Duration::from_millis(999)).await;
+    receive_from(&h, PEER, true, &alarm_numbered(100)).await;
+    h.settle().await;
+    let not_logged = || h.server.event_notification_counters().received_not_logged;
+    assert_eq!(not_logged(), 1, "1 ms before the window ends");
+
+    advance_to(opened + Duration::from_secs(1)).await;
+    receive_from(&h, PEER, true, &alarm_numbered(200)).await;
+    h.settle().await;
+    assert_eq!(not_logged(), 1, "at the window's end");
+
+    let mut expected: Vec<_> = (0..rate)
+        .map(|process| arrived(41, &alarm_numbered(process)))
+        .collect();
+    expected.push(arrived(41, &alarm_numbered(200)));
+    assert_eq!(read_log(&mut h, el(1)).await, expected);
+    h.server.stop().await.unwrap();
+}
+
 /// With Notification_Threshold 2, the device's own alarm and return to
 /// normal make one BUFFER_READY report to `PEER`, carrying both counts. The
 /// report goes in no log and doesn't count toward the next one, which comes
@@ -241,7 +277,8 @@ async fn every_two_records_make_one_report_that_adds_no_record() {
 
 /// A confirmed notification sent again with the same invoke ID, as a sender
 /// that missed the acknowledgment does, is acknowledged twice and logged
-/// once.
+/// once. The window that recognizes the repeat is on tokio's clock (#1556),
+/// so a runner stall between the two can't end it.
 #[tokio::test(start_paused = true)]
 async fn a_retransmitted_confirmed_notification_is_logged_once() {
     let mut h = Harness::start_with(ServerConfig::default(), |db| collecting(db, 0)).await;

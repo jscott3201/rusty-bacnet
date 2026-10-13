@@ -100,7 +100,7 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
-    /// BACnet reinitialized state of device (Clause 16.5).
+    /// BACnet reinitialized state of device (Clause 16.4).
     pub struct ReinitializedState(u32);
 
     const COLDSTART = 0;

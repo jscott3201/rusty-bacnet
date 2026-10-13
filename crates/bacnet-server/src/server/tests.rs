@@ -396,8 +396,13 @@ fn default_apdu_retries_constant() {
 }
 
 #[test]
-fn seg_receiver_timeout_is_4s() {
-    assert_eq!(SEG_RECEIVER_TIMEOUT, Duration::from_secs(4));
+fn seg_receiver_timeout_is_four_times_configured_tseg() {
+    let timeout = super::segmented_receive::validate_segment_timeout(
+        &ServerConfig::default(),
+        &ObjectDatabase::new(),
+    )
+    .unwrap();
+    assert_eq!(timeout, Duration::from_secs(20));
 }
 
 #[test]
@@ -593,4 +598,20 @@ async fn reply_tx_response_preserves_routed_npdu_destination() {
 #[test]
 fn max_neg_segment_ack_retries_constant() {
     assert_eq!(MAX_NEG_SEGMENT_ACK_RETRIES, 3);
+}
+
+/// The B/IP builder hands `share_port_by_address` to its transport, which
+/// refuses it without an explicit interface (#1538).
+#[tokio::test]
+async fn bip_builder_shares_the_port_by_address_only_with_an_address() {
+    let built = BACnetServer::<BipTransport>::bip_builder()
+        .interface(Ipv4Addr::UNSPECIFIED)
+        .port(0xBAC0)
+        .share_port_by_address(true)
+        .build()
+        .await;
+    let Err(Error::Transport(refused)) = built else {
+        panic!("build must refuse");
+    };
+    assert_eq!(refused.kind(), std::io::ErrorKind::InvalidInput);
 }

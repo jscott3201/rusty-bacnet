@@ -100,6 +100,72 @@ impl TrendLogObject {
         self.log_buffer.records()
     }
 
+    /// Total_Record_Count: the records collected since the log was created
+    /// or restored, going from 2^32 - 1 on to 1. The newest record in
+    /// [`records`](Self::records) carries this number. Save the two to
+    /// [restore](Self::restore_log_buffer) the log later.
+    pub fn total_record_count(&self) -> u32 {
+        self.log_buffer.total_record_count()
+    }
+
+    /// Restore the log buffer, as a device restarting with saved records
+    /// does, or seed Total_Record_Count with no records, as a test that
+    /// needs the count near its wrap does (#1537).
+    ///
+    /// `records` become the resident records, oldest first. The newest is
+    /// numbered `total_record_count` and each one before it one less, going
+    /// from 1 back to 2^32 - 1, so a count below the number of records is a
+    /// count that has wrapped. The records are kept as given, whatever
+    /// Enable and the Start_Time / Stop_Time window say, and nothing is
+    /// recorded for the restore. BUFFER_READY counts from the restored
+    /// count, as when detection starts.
+    ///
+    /// Fails with [`Error::OutOfRange`], or a record's encoding error,
+    /// leaving the log unchanged, when there are more records than
+    /// Buffer_Size, when records come with a count of zero, when Stop_When_Full
+    /// and Enable are both TRUE and the records fill the buffer (such a log
+    /// stops before its last slot is taken), or when a record would not
+    /// encode.
+    ///
+    /// Restore a log before adding it to an `ObjectDatabase`. A running
+    /// server reaches its objects only through `BACnetObject`, which offers
+    /// no restore on purpose: renumbering a log that peers are reading would
+    /// change what their sequence numbers mean, with no BUFFER_PURGED record
+    /// to tell them, and the BUFFER_READY reports already sent would name
+    /// counts that no longer hold.
+    ///
+    /// A device restoring its saved records after a restart then calls
+    /// [`record_interruption`](Self::record_interruption) with the time it
+    /// came back: Clause 12.25.14 gives a log that status when a power
+    /// failure or reset broke its collection, so readers know samples may
+    /// be missing. That record counts toward Total_Record_Count like any
+    /// other, numbered one past the restored count.
+    pub fn restore_log_buffer(
+        &mut self,
+        total_record_count: u32,
+        records: impl IntoIterator<Item = BACnetLogRecord>,
+    ) -> Result<(), Error> {
+        self.lifecycle()
+            .restore(total_record_count, records.into_iter().collect())
+    }
+
+    /// Append a LOG_INTERRUPTED status record stamped `date` and `time`, as
+    /// a log restored after a restart does (#1537); see
+    /// [`restore_log_buffer`](Self::restore_log_buffer).
+    ///
+    /// The record goes in whatever Enable and the window say, counts toward
+    /// Total_Record_Count, and pushes out the oldest record of a full
+    /// buffer. It also carries LOG_DISABLED while collection is off; when it
+    /// fills a Stop_When_Full buffer it does so and turns Enable FALSE, as
+    /// the log's own status records do. Without a clock bound, as before the
+    /// log is added to a database, the time has to come from the caller: a
+    /// `date` and `time` that aren't an actual moment (every field given,
+    /// the weekday matching the date) fail with [`Error::OutOfRange`] and
+    /// change nothing.
+    pub fn record_interruption(&mut self, date: Date, time: Time) -> Result<(), Error> {
+        self.lifecycle().record_interruption((date, time))
+    }
+
     /// Clear the buffer.
     pub fn clear(&mut self) {
         self.log_buffer.clear();

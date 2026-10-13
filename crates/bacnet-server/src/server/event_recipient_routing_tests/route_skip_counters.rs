@@ -24,7 +24,7 @@ fn device(instance: u32) -> BACnetRecipient {
 fn bindings() -> Arc<RwLock<DeviceBindingTable>> {
     let id = |instance| ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap();
     let mut table = DeviceBindingTable::new();
-    let expired = Instant::now() - OBSERVED_BINDING_TTL;
+    let expired = runtime_clock::now() - OBSERVED_BINDING_TTL;
     assert_eq!(
         table.observe_i_am_at(id(STALE), &PEER, None, expired, |_| false),
         ObservationOutcome::Inserted

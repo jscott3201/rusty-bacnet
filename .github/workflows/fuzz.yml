@@ -1,0 +1,185 @@
+name: Fuzz
+
+# Fuzzes the MS/TP and B/IP codecs (#1610) and the MS/TP master core
+# (#1640): the cargo-fuzz targets in crates/bacnet-mstp-codec/fuzz,
+# crates/bacnet-bip-codec/fuzz and crates/bacnet-mstp-core/fuzz, through
+# scripts/ci/fuzz.sh, on the nightly that .github/ci-pins.env pins. See
+# docs/ci.md, "Fuzzing".
+#
+#   pull request  a PR to dev or main that changes either codec crate, the
+#                 core or its time crate, the fuzz crates included, or this
+#                 workflow, its scripts or the pins: the fuzz crates' lockfiles, rustfmt
+#                 and clippy, every target built, then each target fuzzed
+#                 for 60 seconds
+#   scheduled     twice a week on dev (the default branch): each target for
+#                 10 minutes, then its corpus minimized and saved for the next
+#                 run, and the fuzz crates' lockfiles checked for advisories
+#   manual        the same as scheduled, on the branch picked
+#
+# No check here is required for merging. Every job's name starts with
+# "Fuzz:", so none can pass for CI OK or Native OK, and the release's CI gate
+# reads only ci.yml and native-tests.yml runs. A target that fails uploads
+# what libFuzzer saved, the minimized input and the log as the artifact
+# fuzz-<target>.
+
+on:
+  pull_request:
+    branches: [dev, main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - crates/bacnet-mstp-codec/**
+      - crates/bacnet-bip-codec/**
+      - crates/bacnet-mstp-core/**
+      # The master core's time type, which its fuzz crate builds.
+      - crates/bacnet-time/**
+      - .github/workflows/fuzz.yml
+      - .github/ci-pins.env
+      - scripts/ci/fuzz.sh
+      - scripts/ci/install-tools.sh
+  schedule:
+    # Early Sunday and Wednesday, off the hour. GitHub evicts a cache entry
+    # after 7 days without use, and only these runs save the corpora, so two
+    # runs a week keep a late one from finding them gone.
+    - cron: "41 3 * * 0,3"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # A newer push to a PR cancels its superseded run. Scheduled and manual runs
+  # are never cancelled; a manual run waits for the one before it.
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  # How long each target runs.
+  FUZZ_SECONDS: ${{ github.event_name == 'pull_request' && '60' || '600' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: "Fuzz: check and build"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      matrix: ${{ steps.targets.outputs.matrix }}
+    env:
+      COMPONENTS: rustfmt,clippy
+    steps:
+      - &checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The dated nightly from the pins, with the minimal profile plus the
+      # job's COMPONENTS, as every later cargo's toolchain: RUSTUP_TOOLCHAIN
+      # overrides rust-toolchain.toml's release. Then cargo-fuzz, from its
+      # release archive, checked against its pinned SHA-256.
+      - &tools
+        name: Install the pinned nightly and cargo-fuzz
+        run: |
+          nightly=$(sed -n 's/^RUST_FUZZ_NIGHTLY=//p' .github/ci-pins.env)
+          [[ $nightly =~ ^nightly-[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] \
+            || { echo "::error::no RUST_FUZZ_NIGHTLY in .github/ci-pins.env"; exit 1; }
+          rustup toolchain install "$nightly" --profile minimal ${COMPONENTS:+--component "$COMPONENTS"}
+          echo "RUSTUP_TOOLCHAIN=$nightly" >> "$GITHUB_ENV"
+          export RUSTUP_TOOLCHAIN=$nightly
+          rustc -vV
+          bash scripts/ci/install-tools.sh cargo-fuzz
+      - id: targets
+        name: List the targets
+        run: |
+          bash scripts/ci/fuzz.sh list
+          matrix=$(bash scripts/ci/fuzz.sh matrix)
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+      - name: Lockfiles, rustfmt and clippy
+        run: bash scripts/ci/fuzz.sh check
+      - name: Build every target
+        if: ${{ !cancelled() }}
+        run: bash scripts/ci/fuzz.sh build
+
+  # One job per target, from the list above, so a new target in a fuzz
+  # crate's Cargo.toml runs without a change here.
+  fuzz:
+    name: "Fuzz: ${{ matrix.target }}"
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ github.event_name == 'pull_request' && 15 || 30 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.build.outputs.matrix) }}
+    env:
+      TARGET: ${{ matrix.target }}
+    steps:
+      - *checkout
+      - *tools
+      - name: Work directory
+        run: echo "FUZZ_WORK=$RUNNER_TEMP/fuzz" >> "$GITHUB_ENV"
+      # The newest corpus a scheduled or manual run on dev saved. PR runs
+      # start from it too, so they replay what earlier runs found first.
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
+      - name: Build
+        run: bash scripts/ci/fuzz.sh build "$TARGET"
+      - name: Fuzz
+        id: fuzz
+        run: |
+          mkdir -p "$FUZZ_WORK/artifacts/$TARGET"
+          bash scripts/ci/fuzz.sh run "$TARGET" "$FUZZ_SECONDS" 2>&1 | tee "$FUZZ_WORK/artifacts/$TARGET/fuzz.log"
+      # libFuzzer saved the input that failed as crash-* or timeout-*; this
+      # writes a minimized copy, minimized-from-*, next to it.
+      - name: Minimize the failing input
+        if: ${{ failure() && steps.fuzz.outcome == 'failure' }}
+        run: bash scripts/ci/fuzz.sh tmin "$TARGET"
+      # A re-run of the job replaces the artifact its first attempt uploaded.
+      - name: Upload the failing input
+        if: ${{ always() && steps.fuzz.outcome == 'failure' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-${{ matrix.target }}
+          path: ${{ runner.temp }}/fuzz/artifacts/${{ matrix.target }}
+          retention-days: 30
+          if-no-files-found: warn
+          overwrite: true
+      # Only runs on dev save, as with the Rust caches, and a failed run's
+      # corpus is still good: the failing input isn't in it. The corpus is
+      # minimized first, so it doesn't grow from run to run.
+      - name: Minimize the corpus
+        id: cmin
+        if: ${{ always() && github.event_name != 'pull_request' && github.ref == 'refs/heads/dev' && (steps.fuzz.outcome == 'success' || steps.fuzz.outcome == 'failure') }}
+        run: bash scripts/ci/fuzz.sh cmin "$TARGET"
+      - name: Save the corpus
+        if: ${{ always() && steps.cmin.outcome == 'success' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+  # The fuzz crates' lockfiles against the RustSec advisories, on scheduled
+  # and manual runs: ci.yml's Cargo Deny reads only the workspace's lockfile.
+  # A job of its own, so an advisory doesn't hold up the fuzzing.
+  advisories:
+    name: "Fuzz: advisories"
+    if: ${{ github.event_name != 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - *checkout
+      - *tools
+      - name: Cargo Deny (advisories) for each fuzz crate
+        run: |
+          bash scripts/ci/install-tools.sh cargo-deny
+          status=0
+          for manifest in crates/*/fuzz/Cargo.toml; do
+            cargo deny --manifest-path "$manifest" --config deny.toml check advisories || status=1
+          done
+          exit "$status"

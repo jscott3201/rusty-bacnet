@@ -1,8 +1,8 @@
 use super::deadline_test_support::*;
 use super::*;
+use crate::port_ownership::connect_loopback;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 
 #[test]
 fn hub_timeout_configuration_checks_phase_boundaries() {
@@ -72,8 +72,8 @@ async fn hub_default_deadline_releases_silent_and_partial_tls() {
         .await
         .unwrap();
     let address = hub.local_addr().unwrap();
-    let mut silent = poll_io(TcpStream::connect(address)).await.unwrap();
-    let mut partial = poll_io(TcpStream::connect(address)).await.unwrap();
+    let mut silent = poll_io(connect_loopback(address)).await;
+    let mut partial = poll_io(connect_loopback(address)).await;
     poll_io(partial.write_all(&[0x16, 0x03, 0x03, 0x00, 0x10, 0x01]))
         .await
         .unwrap();
@@ -128,9 +128,7 @@ async fn hub_http_upgrade_has_independent_deadline_after_tls_success() {
     .await
     .unwrap();
     for (armed, partial) in [(1, false), (2, true)] {
-        let tcp = poll_io(TcpStream::connect(hub.local_addr().unwrap()))
-            .await
-            .unwrap();
+        let tcp = poll_io(connect_loopback(hub.local_addr().unwrap())).await;
         until(|| hub.active.load(Ordering::Acquire) == 1).await;
         // More than the entire HTTP budget passes before TLS succeeds.
         tokio::time::advance(upgrade + Duration::from_millis(100)).await;

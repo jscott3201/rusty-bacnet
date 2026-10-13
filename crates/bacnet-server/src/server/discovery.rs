@@ -422,8 +422,11 @@ pub(crate) struct DiscoveryLimiter {
 }
 
 impl DiscoveryLimiter {
+    /// Every throttle and coalescing window here is measured on
+    /// [`runtime_clock::now`](super::runtime_clock::now), as its callers'
+    /// instants are.
     pub(crate) fn new(policy: DiscoveryPolicy, device_instance: Option<u32>) -> Self {
-        let now = Instant::now();
+        let now = super::runtime_clock::now();
         let state = DiscoveryState {
             global_tokens: policy.global_burst_capacity as f64,
             global_byte_tokens: policy.max_bytes_per_sec_global as f64,
@@ -751,8 +754,8 @@ fn ensure_source_capacity(state: &mut DiscoveryState, policy: &DiscoveryPolicy, 
 }
 
 /// Broadcast this device's I-Am unless DeviceCommunicationControl restricts
-/// initiation. Clause 16.1.2 exempts only an I-Am answering a Who-Is, so an
-/// announcement made under DISABLE_INITIATION sends nothing and fails with
+/// initiation. This call announces independently of any received Who-Is;
+/// under DISABLE_INITIATION it sends nothing and fails with
 /// `SERVICES` / `COMMUNICATION_DISABLED`, the code Clause 18.6 keeps for local
 /// work that could not initiate a service for that reason.
 pub(crate) async fn broadcast_i_am_from<T: TransportPort + 'static>(
@@ -792,7 +795,13 @@ pub(crate) async fn broadcast_i_am_from<T: TransportPort + 'static>(
         });
     }
     if let Some(limiter) = limiter {
-        limiter.record_i_am_sent(buf.len(), false, &MacAddr::new(), None, Instant::now());
+        limiter.record_i_am_sent(
+            buf.len(),
+            false,
+            &MacAddr::new(),
+            None,
+            super::runtime_clock::now(),
+        );
     }
 
     network

@@ -1,6 +1,6 @@
 use super::deadline_test_support::*;
 use super::*;
-use crate::port_ownership::ATTEMPTS;
+use crate::port_ownership::{connect_loopback, ATTEMPTS};
 use std::time::Duration;
 
 #[tokio::test]
@@ -35,7 +35,6 @@ async fn hub_stop_releases_established_peer_before_returning() {
 
 use super::deadline_capacity_tests::CountedHub;
 use tokio::io::AsyncReadExt;
-use tokio::net::TcpStream;
 
 async fn registered(tls: &TestTls, hub: &CountedHub, id: u8) -> ClientWs {
     let mut ws = tls.websocket(hub.address).await;
@@ -58,11 +57,9 @@ async fn hub_stop_drains_every_accepted_phase_and_registry() {
     // Each run starts on a fresh port; see `rebind` for why it can lose it.
     for attempt in 1..=ATTEMPTS {
         let mut hub = CountedHub::start(&tls, ScHubHandshakeTimeouts::default()).await;
-        let mut tls_pending = TcpStream::connect(hub.address).await.unwrap();
+        let mut tls_pending = connect_loopback(hub.address).await;
         until(|| hub.active.load(Ordering::Acquire) == 1).await;
-        let mut upgrade_pending = tls
-            .connect_tls(TcpStream::connect(hub.address).await.unwrap())
-            .await;
+        let mut upgrade_pending = tls.connect_tls(connect_loopback(hub.address).await).await;
         let mut connect_pending = tls.websocket(hub.address).await;
         let mut established = registered(&tls, &hub, 0x42).await;
         until(|| hub.active.load(Ordering::Acquire) == 4).await;
@@ -182,7 +179,7 @@ async fn supervisor_reaps_completed_connections_while_running() {
     let tls = TestTls::new();
     let mut hub = CountedHub::start(&tls, ScHubHandshakeTimeouts::default()).await;
     for _ in 0..40 {
-        let peer = TcpStream::connect(hub.address).await.unwrap();
+        let peer = connect_loopback(hub.address).await;
         until(|| hub.active.load(Ordering::Acquire) == 1).await;
         drop(peer);
         until(|| hub.active.load(Ordering::Acquire) == 0).await;

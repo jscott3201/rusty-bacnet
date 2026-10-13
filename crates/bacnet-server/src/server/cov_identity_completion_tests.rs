@@ -89,7 +89,7 @@ struct Fixture {
     permits: Arc<Semaphore>,
     transactions: Arc<NotificationTransactions>,
     comm: Arc<CommState>,
-    config: ServerConfig,
+    config: Arc<ServerConfig>,
     fail: Arc<std::sync::atomic::AtomicBool>,
     sent: Arc<StdMutex<Vec<Bytes>>>,
     routes: Arc<StdMutex<Vec<MacAddr>>>,
@@ -127,7 +127,7 @@ impl Fixture {
             permits: Arc::new(Semaphore::new(8)),
             transactions: NotificationTransactions::new(),
             comm: Arc::new(CommState::default()),
-            config: ServerConfig::default(),
+            config: Arc::default(),
             fail,
             sent,
             routes,
@@ -383,3 +383,5 @@ mod value_source;
 mod value_source_contract;
 
 mod completion_order;
+
+mod noncommandable_value_source;

@@ -158,7 +158,7 @@ async fn initial_single_and_multiple_life_safety_payloads_include_one_status_fla
             cov_in_flight: &fixture.cov_in_flight,
             notification_transactions: &fixture.transactions,
             comm_state: &fixture.comm_state,
-            config: &ServerConfig::default(),
+            config: &Arc::default(),
         },
         &single,
     )
@@ -171,7 +171,7 @@ async fn initial_single_and_multiple_life_safety_payloads_include_one_status_fla
             cov_in_flight: &fixture.cov_in_flight,
             notification_transactions: &fixture.transactions,
             comm_state: &fixture.comm_state,
-            config: &ServerConfig::default(),
+            config: &Arc::default(),
         },
         &[multiple],
     )

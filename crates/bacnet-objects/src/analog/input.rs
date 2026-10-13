@@ -3,7 +3,9 @@ use crate::common::{
     read_analog_event_properties, read_generic_event_properties, write_analog_event_properties,
     write_generic_event_properties,
 };
+use crate::object_profile::{ObjectProfile, ProfileState, TagsPersistence};
 use crate::property_metadata::PropertyMetadata;
+use std::sync::Arc;
 
 mod metadata;
 
@@ -13,6 +15,7 @@ mod metadata;
 
 /// BACnet Analog Input object.
 pub struct AnalogInputObject {
+    profile: ProfileState,
     oid: ObjectIdentifier,
     name: String,
     description: String,
@@ -45,6 +48,7 @@ impl AnalogInputObject {
     pub fn new(instance: u32, name: impl Into<String>, units: u32) -> Result<Self, Error> {
         let _oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, instance)?;
         Ok(Self {
+            profile: ProfileState::default(),
             oid: _oid,
             name: name.into(),
             description: String::new(),
@@ -63,6 +67,34 @@ impl AnalogInputObject {
             max_pres_value: None,
             event_history: EventHistory::default(),
         })
+    }
+
+    /// Build with application-owned Tags storage. Saved Tags override configured
+    /// Tags only while [`Self::set_profile`] provisions the row. Loaded data must
+    /// satisfy the shared Tags rules and opt-in 1 MiB snapshot limit.
+    pub fn with_tags_persistence(
+        instance: u32,
+        name: impl Into<String>,
+        units: u32,
+        persistence: Arc<dyn TagsPersistence>,
+    ) -> Result<Self, Error> {
+        let mut object = Self::new(instance, name, units)?;
+        object.profile = ProfileState::persistent(object.oid, persistence)?;
+        Ok(object)
+    }
+
+    /// Provision independent optional Tags, Profile_Location and Profile_Name
+    /// rows before registration. Tags is writable in either Out_Of_Service state;
+    /// the text rows are network read-only. Invalid configuration leaves the
+    /// previous profile and its attached storage unchanged.
+    pub fn set_profile(&mut self, profile: ObjectProfile) -> Result<(), Error> {
+        self.profile.provision(profile)
+    }
+
+    /// Wait for queued save attempts to finish; writes report their own outcomes.
+    /// This is not a success receipt. Unstaged synchronous writes block their caller.
+    pub fn wait_for_tag_saves(&self) {
+        self.profile.wait_for_saves();
     }
 
     /// Mutate `Present_Value` on an unattached or otherwise application-owned object.
@@ -162,6 +194,9 @@ impl BACnetObject for AnalogInputObject {
         if let Some(value) = self.fault_out_of_range.read_limit(property) {
             return Ok(value);
         }
+        if let Some(result) = self.profile.read(property, array_index) {
+            return result;
+        }
         match property {
             p if p == PropertyIdentifier::OBJECT_TYPE => {
                 Ok(PropertyValue::Enumerated(ObjectType::ANALOG_INPUT.to_raw()))
@@ -198,6 +233,9 @@ impl BACnetObject for AnalogInputObject {
                 return Err(common::write_access_denied_error());
             }
             return self.apply_present_value(value);
+        }
+        if let Some(result) = self.profile.write(property, array_index, &value) {
+            return result;
         }
         if let Some(result) = self.reliability_inhibit.write_inhibit(
             &mut self.reliability,
@@ -267,6 +305,15 @@ impl BACnetObject for AnalogInputObject {
             property,
             array_index,
         ))
+    }
+
+    fn durable_writes_internal(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
+        self.profile.capability()
+    }
+
+    fn advance_monotonic_time_internal(&mut self, now: std::time::Duration) -> bool {
+        self.profile.expire(now);
+        false
     }
 
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {

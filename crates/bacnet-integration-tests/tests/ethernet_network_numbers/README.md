@@ -45,8 +45,15 @@ by an exact same-worker positive response; XID/TEST uses its separate receive-lo
 fence. The final bounded receive window supplements the positive FD-release
 check; silence alone is not the cleanup proof.
 
-Run direct transport lifecycle checks in one isolated container with the same
-interface setting:
+Run direct transport checks in one isolated container with the same interface
+setting. Besides the lifecycle checks, `ethernet_transport_drops_group_source_frames`
+sends XID, TEST and data frames from group source MACs (#1492). A Linux bridge,
+such as Docker's, drops a frame with a group source before the other side sees
+it, so the peer container cannot deliver one. The test sends them from its own
+raw socket on the same interface instead: the kernel hands each outgoing frame
+to the transport's socket too. It checks that the first frame the transport
+sends answers a station's TEST, that the first NPDU handed up is the station's,
+and that all six group-source frames are counted.
 
 ```sh
 cargo test --offline --locked -p bacnet-integration-tests --features ethernet \

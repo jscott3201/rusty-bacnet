@@ -85,6 +85,11 @@ pub enum PolicyReason {
     RouteFull(IngressRoute),
     /// The selected role queue had no receiver.
     RouteClosed(IngressRoute),
+    /// A confirmed request from a link-layer address that is a group
+    /// destination of the transport
+    /// ([`TransportPort::is_group_destination`]). Its answer would go back
+    /// there, to every node in the group, so it reaches no role (#1504).
+    GroupSource,
 }
 
 /// An APDU returned to the endpoint policy owner instead of a role queue.
@@ -102,9 +107,10 @@ pub struct IngressReceivers {
     /// other links retain discard behavior.
     #[doc(hidden)]
     pub network_controls: Option<mpsc::Receiver<bacnet_network::layer::ReceivedNetworkControl>>,
-    /// Post-bind registration capability and independently supported port capacity.
+    /// Post-bind registration capability, with the B/IP mode, and
+    /// independently supported port capacity.
     #[doc(hidden)]
-    pub normal_bip_port: Option<(std::net::SocketAddrV4, u16)>,
+    pub bip_port: Option<(bacnet_transport::port::BipPort, u16)>,
     /// Actual announced IPv4 address and bound UDP port, when this is B/IP.
     #[doc(hidden)]
     pub bip_local_address: Option<std::net::SocketAddrV4>,
@@ -173,10 +179,10 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
         self.network.as_ref()?.transport().bip_broadcast_endpoint()
     }
 
-    /// Pre-bind NORMAL B/IP registration capability.
+    /// Pre-bind B/IP registration capability, with the configured mode.
     #[doc(hidden)]
-    pub fn normal_bip_endpoint(&self) -> Option<std::net::SocketAddrV4> {
-        self.network.as_ref()?.transport().normal_bip_endpoint()
+    pub fn bip_port(&self) -> Option<bacnet_transport::port::BipPort> {
+        self.network.as_ref()?.transport().bip_port()
     }
     /// Attach selected-object protection before starting the transport.
     #[doc(hidden)]
@@ -222,10 +228,10 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
             .supports_local_nonrouter_number_controls()
             .then_some(controls)
             .flatten();
-        let normal_bip_port = network
+        let bip_port = network
             .transport()
-            .normal_bip_endpoint()
-            .map(|address| (address, network.transport().local_receive_apdu_capacity()));
+            .bip_port()
+            .map(|port| (port, network.transport().local_receive_apdu_capacity()));
         let bip_broadcast_endpoint = network.transport().bip_broadcast_endpoint();
         let bip_local_address = bip_broadcast_endpoint.and_then(|_| {
             bacnet_transport::bvll::decode_bip_mac(network.local_mac())
@@ -270,7 +276,7 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
 
         Ok(IngressReceivers {
             network_controls: controls,
-            normal_bip_port,
+            bip_port,
             bip_local_address,
             bip_broadcast_endpoint,
             inbound_requests,
@@ -373,7 +379,7 @@ async fn session_task<T: TransportPort + 'static>(
             SessionEvent::Cancelled => break ClassifierExit::Cancelled,
             SessionEvent::Received(Some(received)) => {
                 prefer_ingress = !prefer_ingress;
-                if let Some(exit) = route_received(received, &queues) {
+                if let Some(exit) = route_received(received, &queues, network.transport()) {
                     break exit;
                 }
             }
@@ -561,7 +567,7 @@ async fn drive_network_service<T: TransportPort + 'static>(
                 PendingEvent::Cancelled => break EgressDrive::Cancelled,
                 PendingEvent::Received(Some(received)) => {
                     *prefer_ingress = !*prefer_ingress;
-                    if let Some(exit) = route_received(received, queues) {
+                    if let Some(exit) = route_received(received, queues, network.transport()) {
                         break EgressDrive::Exit(exit);
                     }
                 }
@@ -710,13 +716,17 @@ fn validate_effective_group_apdu(
     }
 }
 
-fn route_received(received: ReceivedApdu, queues: &IngressQueues) -> Option<ClassifierExit> {
+fn route_received(
+    received: ReceivedApdu,
+    queues: &IngressQueues,
+    transport: &impl TransportPort,
+) -> Option<ClassifierExit> {
     let IngressQueues {
         inbound_tx,
         terminal_tx,
         policy_tx,
     } = queues;
-    let route = match classify(&received) {
+    let route = match classify(&received, transport) {
         Ok(route) => route,
         Err(reason) => return send_policy(policy_tx, PolicyOutcome { reason, received }),
     };
@@ -737,7 +747,10 @@ fn route_received(received: ReceivedApdu, queues: &IngressQueues) -> Option<Clas
     None
 }
 
-fn classify(received: &ReceivedApdu) -> Result<IngressRoute, PolicyReason> {
+fn classify(
+    received: &ReceivedApdu,
+    transport: &impl TransportPort,
+) -> Result<IngressRoute, PolicyReason> {
     let Some(first) = received.apdu.first() else {
         return Err(PolicyReason::MalformedApdu);
     };
@@ -747,6 +760,9 @@ fn classify(received: &ReceivedApdu) -> Result<IngressRoute, PolicyReason> {
     }
 
     match decode_apdu(received.apdu.clone()) {
+        Ok(Apdu::ConfirmedRequest(_)) if transport.is_group_destination(&received.source_mac) => {
+            Err(PolicyReason::GroupSource)
+        }
         Ok(Apdu::ConfirmedRequest(_) | Apdu::UnconfirmedRequest(_)) => {
             Ok(IngressRoute::InboundRequest)
         }

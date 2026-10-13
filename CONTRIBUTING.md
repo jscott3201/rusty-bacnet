@@ -9,6 +9,10 @@ Issues, pull requests and CI all live on
   the bug report or feature request form. A packet capture (PCAP) of the
   exchange is welcome; leave out credentials and anything from a real network
   you don't want public.
+- **Where the project is going:** the public
+  [Rusty BACnet Roadmap](https://github.com/users/jscott3201/projects/4)
+  board shows every open issue by track, priority and target release. Its
+  **Good first issues** and **Needs decision** views are good places to start.
 - **Security vulnerabilities:** report them privately, as the
   [security policy](.github/SECURITY.md) describes, not in a public issue.
 

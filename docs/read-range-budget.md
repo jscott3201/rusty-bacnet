@@ -58,8 +58,11 @@ encoded, including after the item cap is reached. The public unconfigured Rust
 ## Scope of the bounds
 
 Only response item count and accumulated accepted logical service bytes are
-bounded. Complete-list property production/allocations, identity vector retrieval,
-existing selection scans and time validation, one trial item's recursive encoding
+bounded. Complete-list property production/allocations, identity vectors an
+object lists itself, the selection walks a log still makes (By Time over a log
+whose clock went back, an Audit Log ring's time validation, an Audit Log
+sequence number not found where it is computed to be; see
+[the log lookups](rust-api.md#logging--trending-5)), one trial item's recursive encoding
 and allocations, callbacks, allocator capacity/OOM/RSS/CPU/deadlines and rollback
 are excluded. One trial encoding can exceed the cap and is discarded. No total
 read-work, whole-memory, authorization, fairness or full-conformance claim follows.

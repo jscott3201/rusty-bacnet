@@ -263,7 +263,7 @@ async fn terminal_cov_snapshot_survives_a_later_command_before_delivery() {
                             issue_confirmed_notifications: false,
                             // A Multiple context always has a finite lifetime.
                             expires_at: (kind == CovNotificationKind::Multiple)
-                                .then(|| std::time::Instant::now() + Duration::from_secs(3600)),
+                                .then(|| runtime_clock::now() + Duration::from_secs(3600)),
                             last_notified_observation: None,
                             monitored_property: property,
                             monitored_property_array_index: None,
@@ -408,7 +408,7 @@ async fn a_snapshot_report_times_a_timestamped_field_only_with_its_own_value() {
                         subscriber_process_identifier: 33,
                         monitored_object_identifier: oid,
                         issue_confirmed_notifications: false,
-                        expires_at: Some(std::time::Instant::now() + Duration::from_secs(3600)),
+                        expires_at: Some(runtime_clock::now() + Duration::from_secs(3600)),
                         last_notified_observation: None,
                         monitored_property: Some(property),
                         monitored_property_array_index: None,

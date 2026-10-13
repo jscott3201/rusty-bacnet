@@ -16,7 +16,7 @@ struct Fixture {
     permits: Arc<Semaphore>,
     transactions: Arc<NotificationTransactions>,
     comm: Arc<CommState>,
-    config: ServerConfig,
+    config: Arc<ServerConfig>,
 }
 
 fn av1() -> ObjectIdentifier {
@@ -39,7 +39,7 @@ fn proposal_on(
         subscriber_process_identifier: 7,
         monitored_object_identifier: object,
         issue_confirmed_notifications: true,
-        expires_at: Some(Instant::now() + Duration::from_secs(3600)),
+        expires_at: Some(runtime_clock::now() + Duration::from_secs(3600)),
         last_notified_observation: None,
         monitored_property: (kind == CovNotificationKind::Multiple).then_some(property),
         monitored_property_array_index: None,
@@ -76,7 +76,7 @@ impl Fixture {
             permits: Arc::new(Semaphore::new(255)),
             transactions: NotificationTransactions::new(),
             comm: Arc::new(CommState::default()),
-            config,
+            config: Arc::new(config),
         }
     }
 

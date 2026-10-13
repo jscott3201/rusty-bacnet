@@ -7,8 +7,9 @@
 use std::time::Duration;
 
 use crate::resolve::{parse_target, Target};
-use crate::tui::message::{AddressStyle, WhoIsScope, WhoIsSpec, MAX_INSTANCE};
+use crate::tui::message::{AddressStyle, DirectedTo, WhoIsScope, WhoIsSpec, MAX_INSTANCE};
 use bacnet_services::who_is::DeviceInstanceRange;
+use bacnet_transport::bip6::VMAC_TEXT_PREFIX;
 
 /// Which scope the form's first field selects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -239,7 +240,7 @@ impl WhoIsForm {
             ScopeChoice::Local => WhoIsScope::Local,
             ScopeChoice::Global => WhoIsScope::Global,
             ScopeChoice::Directed => WhoIsScope::Directed {
-                mac: parse_directed(target, style)?,
+                to: parse_directed(target, style)?,
                 label: target.to_string(),
             },
             ScopeChoice::Network => WhoIsScope::Network(parse_network(target)?),
@@ -252,19 +253,30 @@ impl WhoIsForm {
     }
 }
 
-fn parse_directed(target: &str, style: AddressStyle) -> Result<Vec<u8>, String> {
+fn parse_directed(target: &str, style: AddressStyle) -> Result<DirectedTo, String> {
     if target.is_empty() {
         return Err("enter the address to send the Who-Is to".into());
     }
     if style == AddressStyle::Hex {
         if let Ok(vmac) = crate::transport::parse_sc_vmac_arg(target) {
-            return Ok(vmac.to_vec());
+            return Ok(DirectedTo::Mac(vmac.to_vec()));
         }
     }
+    if target.starts_with(VMAC_TEXT_PREFIX) && style != AddressStyle::Bip6 {
+        return Err(format!(
+            "'{target}' is a B/IPv6 VMAC; bip6: addresses need the --ipv6 transport"
+        ));
+    }
     match parse_target(target)? {
-        Target::Mac(mac) => Ok(mac),
+        Target::Mac(mac) => Ok(DirectedTo::Mac(mac)),
+        // The worker finds the VMAC of the node at this address.
+        Target::Bip6(peer) if style == AddressStyle::Bip6 => Ok(DirectedTo::Bip6(peer)),
+        Target::Bip6(_) => Err(format!(
+            "'{target}' is a B/IPv6 address; start the TUI with --ipv6"
+        )),
         Target::Instance(_) | Target::Routed(..) => Err(format!(
-            "'{target}' is not an address; a directed Who-Is needs IP[:port] or [IPv6]:port"
+            "'{target}' is not an address; a directed Who-Is needs {}",
+            style.directed_forms()
         )),
     }
 }
@@ -414,7 +426,7 @@ mod tests {
         assert_eq!(
             spec.scope,
             WhoIsScope::Directed {
-                mac: vec![10, 0, 0, 7, 0xBA, 0xC0],
+                to: DirectedTo::Mac(vec![10, 0, 0, 7, 0xBA, 0xC0]),
                 label: "10.0.0.7".into()
             }
         );
@@ -423,6 +435,20 @@ mod tests {
         form.target = "1234".into();
         form.key(FormKey::Submit, AddressStyle::Bip, 0);
         assert!(form.error.as_deref().unwrap().contains("not an address"));
+        // An IPv6 address needs the B/IPv6 transport, which resolves it.
+        form.target = "[::1]:47808".into();
+        form.key(FormKey::Submit, AddressStyle::Bip, 0);
+        assert!(form.error.as_deref().unwrap().contains("--ipv6"));
+        // So does a B/IPv6 VMAC, which B/IP and SC can't send to.
+        for style in [AddressStyle::Bip, AddressStyle::Hex] {
+            form.target = "bip6:1234".into();
+            form.key(FormKey::Submit, style, 0);
+            assert!(form
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("bip6: addresses need the --ipv6 transport"));
+        }
 
         let mut sc = form.clone();
         sc.target = "020000000009".into();
@@ -433,6 +459,33 @@ mod tests {
                 ..
             })
         ));
+
+        // B/IPv6: a VMAC as the table prints it, or an address the worker
+        // resolves to one.
+        let mut bip6 = form.clone();
+        for (target, to) in [
+            ("bip6:0x0004D2", DirectedTo::Mac(vec![0, 4, 0xD2])),
+            ("bip6:1234", DirectedTo::Mac(vec![0, 4, 0xD2])),
+            (
+                "[::1]:47809",
+                DirectedTo::Bip6("[::1]:47809".parse().unwrap()),
+            ),
+        ] {
+            bip6.target = target.into();
+            let FormOutcome::Send(spec) = bip6.key(FormKey::Submit, AddressStyle::Bip6, 0) else {
+                panic!("expected Send for {target}");
+            };
+            assert_eq!(
+                spec.scope,
+                WhoIsScope::Directed {
+                    to,
+                    label: target.into()
+                }
+            );
+        }
+        bip6.target = "1234".into();
+        bip6.key(FormKey::Submit, AddressStyle::Bip6, 0);
+        assert!(bip6.error.as_deref().unwrap().contains("bip6:N"));
 
         form.scope = ScopeChoice::Network;
         for (target, expected) in [("0", "not a network"), ("65535", "global broadcast")] {

@@ -23,7 +23,11 @@ use tokio::net::UdpSocket;
 type Client = BACnetClient<BipTransport>;
 async fn client(transport: BipTransport) -> (Client, SocketAddrV4) {
     assert!(transport.supports_local_nonrouter_number_controls());
-    assert!(transport.normal_bip_endpoint().is_none());
+    // A BBMD or foreign device; no Network Port is registered here.
+    assert_ne!(
+        transport.bip_port().unwrap().mode.ip_mode(),
+        bacnet_types::enums::IPMode::NORMAL
+    );
     let client = bounded(BACnetClient::start(ClientConfig::default(), transport))
         .await
         .unwrap();
@@ -127,6 +131,7 @@ async fn client_number_foreign_wire_alternate_sender_retry_and_progress() {
     transport.register_as_foreign_device(ForeignDeviceConfig {
         bbmd_ip: Ipv4Addr::LOCALHOST,
         bbmd_port: address(&bbmd).port(),
+        renewal_interval: None,
         ttl: 60,
     });
     let (client, local) = client(transport).await;
@@ -139,9 +144,15 @@ async fn client_number_foreign_wire_alternate_sender_retry_and_progress() {
     forward(&bbmd, local, &number(77, 0)).await;
     send(&bbmd, local, &frame(10, QUERY)).await;
     own_number(&bbmd, local, 9, 77).await;
-    // Existing compatibility accepts another UDP sender; output still uses BBMD.
+    // A foreign device takes a Forwarded-NPDU only from its BBMD by unicast
+    // (#1622): another sender's announcement teaches nothing, and its query
+    // draws no reply, so the BBMD's query is answered with 77.
     forward(&alternate, local, &number(78, 1)).await;
     forward(&alternate, local, QUERY).await;
+    forward(&bbmd, local, QUERY).await;
+    own_number(&bbmd, local, 9, 77).await;
+    forward(&bbmd, local, &number(78, 1)).await;
+    forward(&bbmd, local, QUERY).await;
     own_number(&bbmd, local, 9, 78).await;
     for invalid in [
         number(79, 0),
@@ -149,22 +160,25 @@ async fn client_number_foreign_wire_alternate_sender_retry_and_progress() {
         vec![1, 0x80, 0x13, 0, 200],
         vec![1, 0x88, 0, 4, 1, 9, 0x13, 0, 200, 1],
     ] {
-        forward(&alternate, local, &invalid).await;
-        forward(&alternate, local, QUERY).await;
+        forward(&bbmd, local, &invalid).await;
+        forward(&bbmd, local, QUERY).await;
         own_number(&bbmd, local, 9, 78).await;
     }
-    forward(&alternate, local, &[1, 0x80, 0x12, 0]).await;
-    forward(&alternate, local, &number(79, 1)).await;
-    forward(&alternate, local, QUERY).await;
+    forward(&bbmd, local, &[1, 0x80, 0x12, 0]).await;
+    forward(&bbmd, local, &number(79, 1)).await;
+    forward(&bbmd, local, QUERY).await;
     own_number(&bbmd, local, 9, 79).await;
     send(&bbmd, local, &frame(0, &[0, 0x30])).await;
     send(&bbmd, local, &frame(0, &[0, 0x60])).await;
-    forward(&bbmd, local, QUERY).await;
-    own_number(&bbmd, local, 9, 79).await;
+    // The distribution NAK brings the next registration forward (#1622). Let
+    // it fall due and read it here, so it can't arrive among the replies
+    // below, however slow the runner.
     tokio::time::pause();
     tokio::time::advance(std::time::Duration::from_secs(31)).await;
     tokio::time::resume();
     assert_eq!(receive(&bbmd).await, (frame(5, &[0, 60]), local));
+    forward(&bbmd, local, QUERY).await;
+    own_number(&bbmd, local, 9, 79).await;
     send(&bbmd, local, &frame(0, &[0, 0])).await;
     forward(&bbmd, local, &number(80, 1)).await;
     forward(&bbmd, local, QUERY).await;

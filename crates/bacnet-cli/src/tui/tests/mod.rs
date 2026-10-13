@@ -2,6 +2,8 @@
 //!
 //! - `app_core`: `update` driven by synthetic keys and worker events, with no
 //!   terminal.
+//! - `bip6_worker`: the worker on a real B/IPv6 client on `::1`: its status
+//!   line and a directed Who-Is to an IPv6 address.
 //! - `frames`: `TestBackend` frames at 80x24 and 120x40, compared with
 //!   insta snapshots in `snapshots/`.
 //! - `inprocess`: real `BACnetServer`s and a client on an in-memory network.
@@ -14,6 +16,7 @@
 //! `cargo insta review` to accept the new `.snap` files.
 
 mod app_core;
+mod bip6_worker;
 mod event_loop;
 mod frames;
 mod inprocess;

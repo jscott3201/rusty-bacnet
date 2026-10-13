@@ -636,7 +636,7 @@ impl<W: WebSocketPort> DirectShared<W> {
                     continue;
                 }
                 (
-                    (p.hub_max_bvlc_length, p.hub_max_apdu_length),
+                    (p.hub_max_bvlc_length, p.hub_max_npdu_length),
                     (p.max_bvlc_length, p.max_apdu_length),
                     p.hub_device_uuid.ok_or(Failure::Unavailable)?,
                     p.device_uuid,

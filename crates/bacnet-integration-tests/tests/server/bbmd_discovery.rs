@@ -7,8 +7,10 @@ use bacnet_encoding::npdu::decode_npdu;
 use bacnet_server::server::ServerConfig;
 use bacnet_services::who_is::IAmRequest;
 use bacnet_transport::bbmd::{BdtEntry, ForeignDevicePolicy};
-use bacnet_transport::bvll::{decode_bip_mac, decode_bvll, encode_bvll};
-use bacnet_types::enums::{BvlcFunction, BvlcResultCode, UnconfirmedServiceChoice};
+use bacnet_transport::bvll::{
+    decode_bip_mac, decode_bvll, encode_bvll, BvlcFunction, BvlcResultCode, Bvll,
+};
+use bacnet_types::enums::UnconfirmedServiceChoice;
 use std::net::SocketAddrV4;
 use tokio::net::UdpSocket;
 use tokio::time::timeout;
@@ -55,12 +57,7 @@ async fn bbmd_own_i_am_reaches_bdt_peer_device_and_foreign_device() {
     let (bbmd_ip, bbmd_port) = decode_bip_mac(&bbmd_mac).unwrap();
 
     let mut register = BytesMut::new();
-    encode_bvll(
-        &mut register,
-        BvlcFunction::REGISTER_FOREIGN_DEVICE,
-        &60u16.to_be_bytes(),
-    )
-    .unwrap();
+    encode_bvll(&mut register, &Bvll::RegisterForeignDevice { ttl: 60 }).unwrap();
     foreign
         .send_to(
             &register,
@@ -80,9 +77,11 @@ async fn bbmd_own_i_am_reaches_bdt_peer_device_and_foreign_device() {
     // The foreign device gets the I-Am with the BBMD's own address as origin.
     let forwarded = recv_frame(&foreign).await;
     assert_eq!(forwarded.function, BvlcFunction::FORWARDED_NPDU);
-    assert_eq!(forwarded.originating_ip, Some(bbmd_ip));
-    assert_eq!(forwarded.originating_port, Some(bbmd_port));
-    let npdu = decode_npdu(forwarded.payload).unwrap();
+    assert_eq!(
+        forwarded.origin(),
+        Some(SocketAddrV4::new(Ipv4Addr::from(bbmd_ip), bbmd_port))
+    );
+    let npdu = decode_npdu(forwarded.npdu().unwrap()).unwrap();
     let Apdu::UnconfirmedRequest(apdu) = decode_apdu(npdu.payload).unwrap() else {
         panic!("expected an unconfirmed request");
     };

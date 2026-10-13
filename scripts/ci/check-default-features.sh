@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Clippy and rustdoc for each publishable crate on its own, with default
 # features and only its lib/bin targets, denying warnings. Also covers the
-# feature-off builds of bacnet-types (no_std) and bacnet-cli (no TUI). Every
-# rustdoc run documents private items, so a broken intra-doc link on an item
-# that exists only in one feature configuration fails here (#1192).
+# feature-off builds of bacnet-types, bacnet-encoding and bacnet-services
+# (no_std with alloc) and of bacnet-cli (no TUI), and the rustdoc of the
+# MS/TP and B/IP crates with each storage feature alone. Every rustdoc run documents
+# private items, so a broken intra-doc link on an item that exists only in one
+# feature configuration fails here (#1192).
 #
 #   check-default-features.sh               for the host
 #   check-default-features.sh <triple>...   for those targets; cargo checks
@@ -48,9 +50,26 @@ for crate in $crates; do
   cargo_for doc -p "$crate" --no-deps --locked --document-private-items
 done
 
-echo "==> bacnet-types (no_std$label)"
-cargo_for clippy -p bacnet-types --no-default-features --locked -- -D warnings
-cargo_for doc -p bacnet-types --no-default-features --no-deps --locked --document-private-items
+# The no_std builds (std off, alloc on) of the crates that have one. Without
+# either feature they refuse to build (#1604).
+for crate in bacnet-types bacnet-encoding bacnet-services; do
+  echo "==> $crate (no_std with alloc$label)"
+  cargo_for clippy -p "$crate" --no-default-features --features alloc --locked -- -D warnings
+  cargo_for doc -p "$crate" --no-default-features --features alloc --no-deps --locked --document-private-items
+done
+
+# The rustdoc of the MS/TP and B/IP crates with each storage feature alone,
+# and of the router core with each glue feature alone. Their defaults have
+# none, and the workspace runs turn on all of them, so an intra-doc link to
+# an item behind the other feature breaks only here (#1681, #1679).
+for spec in "bacnet-mstp-core alloc" \
+  "bacnet-mstp-codec alloc" "bacnet-mstp-codec heapless" \
+  "bacnet-bip-codec alloc" "bacnet-bip-codec heapless" \
+  "bacnet-router-core bip" "bacnet-router-core mstp"; do
+  read -r crate features <<<"$spec"
+  echo "==> $crate (rustdoc, features: $features$label)"
+  cargo_for doc -p "$crate" --no-default-features --features "$features" --no-deps --locked --document-private-items
+done
 
 echo "==> bacnet-cli (rustdoc, no default features, without the TUI$label)"
 cargo_for doc -p bacnet-cli --no-default-features --no-deps --locked --document-private-items

@@ -1,10 +1,12 @@
 //! Configured Network Port snapshots and selected live state (135-2020 Clause 12.56).
 //!
-//! The B/IP constructor supplies the flat application-level IPV4/NORMAL
-//! profile. Configuration is read-only over BACnet: this object has no pending
+//! The B/IP constructor supplies the flat application-level IPV4 profile.
+//! Configuration is read-only over BACnet: this object has no pending
 //! activation owner, socket, or NIC discovery. Reconstruct it to change local
-//! configuration. An explicit NORMAL B/IP owner may publish its actual bind and
-//! learn Network_Number/Quality without changing configured provenance.
+//! configuration. An explicit B/IP owner may publish its actual bind and mode,
+//! and learn Network_Number/Quality, without changing configured provenance.
+//! In FOREIGN or BBMD mode the object serves that mode's properties, a
+//! BBMD's tables read live from the transport (see `bip_mode`).
 //! Non-B/IP snapshots expose only the common application rows;
 //! they do not claim a complete transport-specific SC, Ethernet or MS/TP profile.
 
@@ -18,6 +20,7 @@ use crate::common::{self, read_common_properties};
 use crate::traits::BACnetObject;
 
 mod bip_config;
+mod bip_mode;
 mod metadata;
 mod registration;
 use bacnet_types::network_number::NetworkNumber;
@@ -36,12 +39,17 @@ pub struct NetworkPortObject {
     mac_address: MacAddr,
     apdu_length: u32,
     bip: Option<BipPortConfig>,
+    /// The mode the last published owner reported; NORMAL until one
+    /// publishes. Like the bind, it stays after that owner stops, until a
+    /// new registration reserves the port.
+    mode: bip_mode::LiveMode,
     binding: std::sync::Weak<()>,
 }
 
 impl NetworkPortObject {
-    /// Complete IPV4/NORMAL snapshot. Instance is the declared local Port ID
-    /// (local policy: 1..=255); UDP port zero remains valid unbound configuration.
+    /// Complete IPV4 snapshot, in NORMAL mode until a registered owner
+    /// publishes another. Instance is the declared local Port ID (local
+    /// policy: 1..=255); UDP port zero remains valid unbound configuration.
     pub fn new_bip(
         instance: u32,
         name: impl Into<String>,
@@ -63,6 +71,7 @@ impl NetworkPortObject {
             mac_address: mac,
             apdu_length: config.apdu_length,
             bip: Some(config),
+            mode: Default::default(),
             binding: std::sync::Weak::new(),
         })
     }
@@ -97,6 +106,7 @@ impl NetworkPortObject {
             mac_address,
             apdu_length,
             bip: None,
+            mode: Default::default(),
             binding: std::sync::Weak::new(),
         })
     }
@@ -145,7 +155,9 @@ impl BACnetObject for NetworkPortObject {
                     .as_ref()
                     .ok_or_else(common::unknown_property_error)?;
                 match property {
-                    P::BACNET_IP_MODE => Ok(PropertyValue::Enumerated(0)),
+                    P::BACNET_IP_MODE => {
+                        Ok(PropertyValue::Enumerated(self.mode.ip_mode().to_raw()))
+                    }
                     P::IP_ADDRESS => Ok(PropertyValue::OctetString(config.ip_address.to_vec())),
                     P::IP_SUBNET_MASK => {
                         Ok(PropertyValue::OctetString(config.subnet_mask.to_vec()))
@@ -169,7 +181,10 @@ impl BACnetObject for NetworkPortObject {
                             .map(|ip| PropertyValue::OctetString(ip.to_vec()))
                             .ok_or_else(common::invalid_array_index_error),
                     },
-                    _ => Err(common::unknown_property_error()),
+                    _ => self
+                        .mode
+                        .read(property)
+                        .unwrap_or_else(|| Err(common::unknown_property_error())),
                 }
             }
         }
@@ -220,5 +235,7 @@ impl BACnetObject for NetworkPortObject {
     }
 }
 
+#[cfg(test)]
+mod mode_tests;
 #[cfg(test)]
 mod tests;

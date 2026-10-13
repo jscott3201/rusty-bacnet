@@ -3,11 +3,12 @@
 # .github/ci-pins.env, from their prebuilt Linux x86_64 release archives. Each
 # download must match the pinned SHA-256 before anything is unpacked. The
 # binaries go to $CARGO_HOME/bin (default ~/.cargo/bin), which is on the
-# runner's PATH. ci.yml's jobs run it on GitHub's Ubuntu runners:
+# runner's PATH. ci.yml's and fuzz.yml's jobs run it on GitHub's Ubuntu
+# runners:
 #
 #   bash scripts/ci/install-tools.sh cargo-nextest maturin
 #
-# Tools: cargo-nextest, cargo-deny, cargo-audit, maturin.
+# Tools: cargo-nextest, cargo-deny, cargo-audit, maturin, cargo-fuzz.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
@@ -64,6 +65,12 @@ for tool in "$@"; do
         "$(pin MATURIN_SHA256)"
       tar xzf "$tmp/archive" -C "$bin" maturin
       maturin --version ;;
+    cargo-fuzz)
+      version=$(pin CARGO_FUZZ_VERSION)
+      fetch "https://github.com/rust-fuzz/cargo-fuzz/releases/download/$version/cargo-fuzz-$version-x86_64-unknown-linux-musl.tar.gz" \
+        "$(pin CARGO_FUZZ_SHA256)"
+      tar xzf "$tmp/archive" -C "$bin" cargo-fuzz
+      cargo fuzz --version ;;
     *) fail "unknown tool $tool" ;;
   esac
 done

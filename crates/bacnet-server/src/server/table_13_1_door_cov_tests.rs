@@ -1,7 +1,7 @@
 //! The Access Door row of Table 13-1 (#1061): Present_Value, Status_Flags
 //! and Door_Alarm_State, with Door_Alarm_State the trigger, reported on a
-//! device change (an object holding the new state replaces the old one) and
-//! on a client's simulated value while the door is out of service (#1131).
+//! device change (`report_door_state_local`, #1132) and on a client's
+//! simulated value while the door is out of service (#1131).
 
 use super::*;
 
@@ -50,17 +50,38 @@ async fn access_door_cov_reports_and_triggers_on_door_alarm_state() {
     );
 
     // A Door_Alarm_State change alone sends a report.
-    h.replace_and_fan_out(door(DoorAlarmState::FORCED_OPEN))
-        .await;
+    let alarm = |state| DoorStateReport {
+        door_alarm_state: Some(state),
+        ..DoorStateReport::default()
+    };
+    h.server
+        .report_door_state_local(&oid, alarm(DoorAlarmState::FORCED_OPEN))
+        .await
+        .unwrap();
     assert_eq!(
         values(&h.cov_notification().await, oid),
         report(DoorAlarmState::FORCED_OPEN)
     );
     h.no_notification().await;
 
-    // Row values unchanged: neither a fanout nor a pulse-time write reports.
-    h.replace_and_fan_out(door(DoorAlarmState::FORCED_OPEN))
-        .await;
+    // Row values unchanged: neither the same state again, nor Door_Status
+    // and Lock_Status, which aren't in the row, nor a pulse-time write
+    // reports.
+    h.server
+        .report_door_state_local(&oid, alarm(DoorAlarmState::FORCED_OPEN))
+        .await
+        .unwrap();
+    h.server
+        .report_door_state_local(
+            &oid,
+            DoorStateReport {
+                door_status: Some(DoorStatus::OPENED),
+                lock_status: Some(LockStatus::UNLOCKED),
+                door_alarm_state: None,
+            },
+        )
+        .await
+        .unwrap();
     write(
         &mut h,
         oid,

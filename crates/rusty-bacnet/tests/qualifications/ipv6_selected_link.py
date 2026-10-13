@@ -70,7 +70,8 @@ async def server_case(explicit):
     try:
         await server.start()
         local = await server.local_address()
-        assert local == f"[{ADDRESS}]:{port}", local
+        # The server's VMAC is its device instance, 321 (H.7.2).
+        assert local == "bip6:0x000141", local
         # The independently encoded group Who-Is asks only for Device 321.
         npdu = b"\x01\x00\x10\x08\x0a\x01\x41\x1a\x01\x41"
         peer.sendto(frame(2, b"\x40\x88\x31", npdu), (GROUP, port, 0, INDEX))
@@ -78,7 +79,7 @@ async def server_case(explicit):
             receive, peer,
             lambda b: b[:2] == b"\x82\x01" and b[10:14] == b"\x01\x00\x10\x00")
         assert source[1] == port and destination == ADDRESS
-        assert data[7:10] == b"\x40\x88\x31"
+        assert data[4:7] == b"\x00\x01\x41" and data[7:10] == b"\x40\x88\x31"
         assert data[14] == 0xc4 and int.from_bytes(data[15:19], "big") == (8 << 22) | 321
         print(json.dumps({"server_explicit": explicit, "published": local,
                           "iam_source": source, "destination": destination, "frame": data.hex()}))
@@ -114,7 +115,8 @@ async def client_case(explicit):
             assert len(devices) == 1
             device = devices[0]
             assert device.object_identifier.instance == 654
-            assert device.mac_address == socket.inet_pton(socket.AF_INET6, ADDRESS) + peer.getsockname()[1].to_bytes(2, "big")
+            # A B/IPv6 device's MAC is the VMAC it sent from (U.1.3).
+            assert device.mac_address == b"\x40\x88\x32"
             assert device.max_apdu_length == 1024 and device.vendor_id == 999
             print(json.dumps({"client_explicit": explicit, "who_is_source": source,
                               "destination": destination, "frame": data.hex(), "discovered": 654}))

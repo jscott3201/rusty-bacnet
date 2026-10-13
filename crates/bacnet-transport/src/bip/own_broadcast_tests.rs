@@ -44,9 +44,8 @@ fn assert_local_broadcast(frame: &BvllMessage) {
 
 pub(super) fn assert_own_forwarded(frame: &BvllMessage, origin: ([u8; 4], u16), label: &str) {
     assert_eq!(frame.function, BvlcFunction::FORWARDED_NPDU, "{label}");
-    assert_eq!(frame.originating_ip, Some(origin.0), "{label}");
-    assert_eq!(frame.originating_port, Some(origin.1), "{label}");
-    assert_eq!(frame.payload.as_ref(), NPDU, "{label}");
+    assert_eq!(origin_of(frame), Some(origin), "{label}");
+    assert_eq!(frame.npdu().unwrap().as_ref(), NPDU, "{label}");
 }
 
 fn bdt_entry(ip: [u8; 4], port: u16, broadcast_mask: [u8; 4]) -> BdtEntry {
@@ -96,10 +95,10 @@ fn hand_wired_bbmd(
         Arc::clone(&transport.fanout_limiter),
         Arc::clone(&transport.fanout_counters),
     );
-    let bbmd = Arc::new(Mutex::new(state));
+    let bbmd = Arc::new(std::sync::Mutex::new(state));
     transport.own_broadcast = Some(OwnBroadcastForwarder::new(Arc::clone(&bbmd), dispatcher));
     transport.bbmd = Some(bbmd);
-    transport.socket = Some(Arc::clone(socket));
+    transport.wire_for_test(Arc::clone(socket));
     (transport, rx)
 }
 
@@ -221,7 +220,7 @@ async fn bbmd_own_broadcast_skips_an_expired_foreign_device() {
         "only the live foreign device is a target"
     );
     assert!(rx.try_recv().is_err(), "exactly one fanout job");
-    let state = bbmd.bbmd_state().unwrap().lock().await;
+    let state = bbmd.bbmd_state().unwrap().lock().unwrap();
     assert_eq!(state.fdt_len_for_test(), 1, "the expired entry is purged");
 }
 
@@ -301,12 +300,10 @@ async fn started_bbmd_forwards_its_own_broadcasts_across_restart() {
         let origin = decode_bip_mac(bbmd.local_mac()).unwrap();
 
         let mut register = BytesMut::new();
-        encode_bvll(
-            &mut register,
+        register.extend_from_slice(&raw_frame(
             BvlcFunction::REGISTER_FOREIGN_DEVICE,
             &60u16.to_be_bytes(),
-        )
-        .unwrap();
+        ));
         foreign
             .send_to(
                 &register,
@@ -360,6 +357,7 @@ async fn plain_and_foreign_device_modes_do_not_forward_own_broadcasts() {
     foreign.register_as_foreign_device(ForeignDeviceConfig {
         bbmd_ip: Ipv4Addr::LOCALHOST,
         bbmd_port: port_of(&bbmd),
+        renewal_interval: None,
         ttl: 60,
     });
     let _foreign_rx = foreign.start().await.unwrap();
@@ -368,6 +366,12 @@ async fn plain_and_foreign_device_modes_do_not_forward_own_broadcasts() {
         recv_bvll(&bbmd).await.function,
         BvlcFunction::REGISTER_FOREIGN_DEVICE
     );
+    // Accept the registration, which a foreign device's broadcasts wait for
+    // (#1622).
+    let device = SocketAddrV4::new(Ipv4Addr::LOCALHOST, foreign.port);
+    bbmd.send_to(&[0x81, 0x00, 0x00, 0x06, 0x00, 0x00], device)
+        .await
+        .unwrap();
     // A foreign device still hands its broadcast to its BBMD only.
     foreign.send_broadcast(NPDU).await.unwrap();
     let frame = recv_bvll(&bbmd).await;

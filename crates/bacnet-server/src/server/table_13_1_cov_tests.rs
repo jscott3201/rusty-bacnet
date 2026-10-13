@@ -7,10 +7,13 @@
 //! the next report. Access Point has no Present_Value, so its report starts
 //! with Access_Event. Update_Time and the Access Point event rows have no
 //! network write route, and Door_Alarm_State has one only while the door is out
-//! of service (#1131), so those tests put an object holding the changed value
-//! into the database (`ObjectDatabase::add` replaces by identifier) and run the
-//! fanout a write commit would. The door's simulation test writes it over the
-//! wire instead, as the Load Control test does Requested_Shed_Level.
+//! of service (#1131), so those tests report them through the application's
+//! routes, `report_access_event_local`, `report_credential_read_local` and
+//! `report_door_state_local` (#1132). The door's simulation test writes it
+//! over the wire instead, as the Load Control test does Requested_Shed_Level.
+//! A Load Control's Actual_Shed_Level has no such route, so its test puts an
+//! object holding the changed value into the database (`ObjectDatabase::add`
+//! replaces by identifier) and runs the fanout a write commit would.
 //!
 //! The BACnetTimeStamp, BACnetAuthenticationFactor and BACnetShedLevel values
 //! go out in their Clause 21 forms (#1133). A Credential Data Input's
@@ -20,7 +23,8 @@
 use super::cov_wire_test_support::*;
 use super::*;
 use bacnet_objects::access_control::{
-    AccessDoorObject, AccessPointObject, CredentialDataInputObject,
+    AccessDoorObject, AccessEventReport, AccessPointObject, CredentialDataInputObject,
+    CredentialReadReport, DoorStateReport,
 };
 use bacnet_objects::load_control::LoadControlObject;
 use bacnet_objects::traits::BACnetObject;
@@ -170,15 +174,44 @@ async fn write_multiple(
     assert_eq!(response(h).await, Ok(()), "WritePropertyMultiple");
 }
 
-/// AP-1, whose last event, transaction `tag`, came from Access Credential
-/// `tag` at `second` past 15:00.
+/// `event` in transaction `tag`, from Access Credential `tag` at `second`
+/// past 15:00.
+fn access_event(event: AccessEvent, tag: u64, second: u8) -> AccessEventReport {
+    let card = ObjectIdentifier::new(ObjectType::ACCESS_CREDENTIAL, tag as u32).unwrap();
+    AccessEventReport {
+        time: Some(stamp(second)),
+        credential: Some(card.into()),
+        ..AccessEventReport::new(event, tag)
+    }
+}
+
+/// AP-1, whose last event is `access_event(event, tag, second)`.
 fn point(event: AccessEvent, tag: u64, second: u8) -> Box<dyn BACnetObject> {
     let mut point = AccessPointObject::new(1, "AP-1").unwrap();
-    let card = ObjectIdentifier::new(ObjectType::ACCESS_CREDENTIAL, tag as u32).unwrap();
     point
-        .set_access_event(event, tag, stamp(second), Some(card.into()))
+        .set_access_event(access_event(event, tag, second))
         .unwrap();
     Box::new(point)
+}
+
+/// The UNDEFINED authentication factor: format type [0] 0, class [1] 0 and
+/// no value [2].
+fn undefined_factor_bytes() -> Vec<u8> {
+    vec![0x09, 0x00, 0x19, 0x00, 0x28]
+}
+
+/// The Wiegand 26 card 12 34 56, class 0.
+fn card() -> BACnetAuthenticationFactor {
+    BACnetAuthenticationFactor {
+        format_type: AuthenticationFactorType::WIEGAND26,
+        format_class: 0,
+        value: vec![0x12, 0x34, 0x56],
+    }
+}
+
+/// [`card`] as Clause 21 puts it on the wire.
+fn card_bytes() -> Vec<u8> {
+    vec![0x09, 0x08, 0x19, 0x00, 0x2B, 0x12, 0x34, 0x56]
 }
 
 /// Access_Event_Credential naming Access Credential `instance` (below 256),
@@ -199,9 +232,9 @@ async fn access_point_cov_leads_with_access_event_and_triggers_on_its_time() {
         db.add(point(AccessEvent::GRANTED, 1, 7)).unwrap();
     })
     .await;
-    // Access_Event_Authentication_Factor isn't served, so the report leaves
-    // it out; Access_Event_Credential follows the time (#1284).
-    let report = |event: AccessEvent, tag: u64, second: u8| {
+    // Access_Event_Credential and Access_Event_Authentication_Factor follow
+    // the time (#1284, #1132).
+    let report = |event: AccessEvent, tag: u64, second: u8, factor: Vec<u8>| {
         vec![
             (PropertyIdentifier::ACCESS_EVENT, enumerated(event.to_raw())),
             (SF, normal()),
@@ -211,25 +244,37 @@ async fn access_point_cov_leads_with_access_event_and_triggers_on_its_time() {
                 PropertyIdentifier::ACCESS_EVENT_CREDENTIAL,
                 credential_bytes(tag as u8),
             ),
+            (
+                PropertyIdentifier::ACCESS_EVENT_AUTHENTICATION_FACTOR,
+                factor,
+            ),
         ]
     };
     assert_eq!(
         subscribed(&mut h, oid).await,
-        report(AccessEvent::GRANTED, 1, 7)
+        report(AccessEvent::GRANTED, 1, 7, undefined_factor_bytes())
     );
 
-    // Access_Event, Access_Event_Tag and Access_Event_Credential only ride
-    // along.
-    h.replace_and_fan_out(point(AccessEvent::DENIED_DENY_ALL, 2, 7))
-        .await;
+    // Access_Event, Access_Event_Tag, Access_Event_Credential and the factor
+    // only ride along.
+    h.server
+        .report_access_event_local(&oid, access_event(AccessEvent::DENIED_DENY_ALL, 2, 7))
+        .await
+        .unwrap();
     h.no_notification().await;
 
     // A new Access_Event_Time sends a report with the current values.
-    h.replace_and_fan_out(point(AccessEvent::GRANTED, 3, 9))
-        .await;
+    let granted = AccessEventReport {
+        authentication_factor: Some(card()),
+        ..access_event(AccessEvent::GRANTED, 3, 9)
+    };
+    h.server
+        .report_access_event_local(&oid, granted)
+        .await
+        .unwrap();
     assert_eq!(
         values(&h.cov_notification().await, oid),
-        report(AccessEvent::GRANTED, 3, 9)
+        report(AccessEvent::GRANTED, 3, 9, card_bytes())
     );
     h.no_notification().await;
     h.server.stop().await.unwrap();
@@ -257,6 +302,10 @@ async fn access_point_out_of_service_edges_record_events_and_report() {
             (PropertyIdentifier::ACCESS_EVENT_TAG, unsigned(tag)),
             (PropertyIdentifier::ACCESS_EVENT_TIME, stamp_bytes(second)),
             (PropertyIdentifier::ACCESS_EVENT_CREDENTIAL, credential),
+            (
+                PropertyIdentifier::ACCESS_EVENT_AUTHENTICATION_FACTOR,
+                undefined_factor_bytes(),
+            ),
         ]
     };
     assert_eq!(
@@ -334,6 +383,10 @@ async fn access_point_out_of_service_round_trip_reports_without_a_clock() {
                 PropertyIdentifier::ACCESS_EVENT_CREDENTIAL,
                 no_credential_bytes(),
             ),
+            (
+                PropertyIdentifier::ACCESS_EVENT_AUTHENTICATION_FACTOR,
+                undefined_factor_bytes(),
+            ),
         ]
     };
     assert_eq!(
@@ -385,8 +438,8 @@ async fn access_point_out_of_service_round_trip_reports_without_a_clock() {
     h.server.stop().await.unwrap();
 }
 
-/// CDI-1, a reader of Wiegand 26 cards (class 0), having read the same card
-/// at `second` past 15:00.
+/// CDI-1, a reader of Wiegand 26 cards (class 0), having read [`card`] at
+/// `second` past 15:00.
 fn reader(second: u8) -> Box<dyn BACnetObject> {
     let mut reader = CredentialDataInputObject::new(1, "CDI-1").unwrap();
     reader
@@ -395,12 +448,7 @@ fn reader(second: u8) -> Box<dyn BACnetObject> {
             0,
         )])
         .unwrap();
-    let card = BACnetAuthenticationFactor {
-        format_type: AuthenticationFactorType::WIEGAND26,
-        format_class: 0,
-        value: vec![0x12, 0x34, 0x56],
-    };
-    reader.set_present_value(card, stamp(second)).unwrap();
+    reader.set_present_value(card(), stamp(second)).unwrap();
     Box::new(reader)
 }
 
@@ -414,7 +462,7 @@ async fn credential_data_input_cov_reports_and_triggers_on_update_time() {
     let report = |second: u8| {
         vec![
             // format type [0] WIEGAND26, format class [1] 0, value [2].
-            (PV, vec![0x09, 0x08, 0x19, 0x00, 0x2B, 0x12, 0x34, 0x56]),
+            (PV, card_bytes()),
             (SF, normal()),
             (PropertyIdentifier::UPDATE_TIME, stamp_bytes(second)),
         ]
@@ -422,8 +470,21 @@ async fn credential_data_input_cov_reports_and_triggers_on_update_time() {
     assert_eq!(subscribed(&mut h, oid).await, report(7));
 
     // The same input read again moves Update_Time alone, and that reports.
-    h.replace_and_fan_out(reader(9)).await;
+    let read_at = |second| CredentialReadReport {
+        update_time: Some(stamp(second)),
+        ..CredentialReadReport::new(card())
+    };
+    h.server
+        .report_credential_read_local(&oid, read_at(9))
+        .await
+        .unwrap();
     assert_eq!(values(&h.cov_notification().await, oid), report(9));
+    h.no_notification().await;
+    // A read stamped with the time Update_Time already holds moves nothing.
+    h.server
+        .report_credential_read_local(&oid, read_at(9))
+        .await
+        .unwrap();
     h.no_notification().await;
 
     // Row values unchanged: a Description write doesn't report.
@@ -684,3 +745,6 @@ async fn load_control_requested_shed_level_write_takes_the_choice_form() {
 
 #[path = "table_13_1_door_cov_tests.rs"]
 mod door;
+
+#[path = "table_13_1_access_input_tests.rs"]
+mod access_inputs;

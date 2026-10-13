@@ -7,8 +7,6 @@
 
 use std::time::{Duration, Instant};
 
-use bacnet_types::enums::BvlcFunction;
-
 /// Fixed window length for management quota accounting.
 pub(super) const MANAGEMENT_RATE_WINDOW: Duration = Duration::from_secs(1);
 /// Maximum covered requests admitted per source IPv4 address per window.
@@ -41,20 +39,6 @@ struct SourceQuota {
     ip: [u8; 4],
     requests: u32,
     response_bytes: usize,
-}
-
-/// Whether an inbound BVLC function shares the combined management quota.
-///
-/// Covered: Read-BDT, Read-FDT, Register-Foreign-Device,
-/// Delete-FDT-Entry. Everything else — including Write-BDT (which must
-/// always answer not-supported), Distribute-Broadcast-To-Network, NPDU
-/// data functions, BVLC-Result, Read ACKs, and unknown functions — is
-/// outside the limiter.
-pub(super) fn is_covered_management_request(function: BvlcFunction) -> bool {
-    function == BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE
-        || function == BvlcFunction::READ_FOREIGN_DEVICE_TABLE
-        || function == BvlcFunction::REGISTER_FOREIGN_DEVICE
-        || function == BvlcFunction::DELETE_FOREIGN_DEVICE_TABLE_ENTRY
 }
 
 /// Fixed-window, strictly bounded management quota.

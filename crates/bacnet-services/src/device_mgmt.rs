@@ -5,6 +5,9 @@
 //! - TimeSynchronization (§16.7)
 //! - UTCTimeSynchronization (§16.8)
 
+#[cfg(not(feature = "std"))]
+use alloc::string::String;
+
 use bacnet_encoding::constructed::tagged::{
     decode_app_fixed, decode_ctx_character_string, decode_ctx_unsigned, decode_optional_ctx,
     expect_end,

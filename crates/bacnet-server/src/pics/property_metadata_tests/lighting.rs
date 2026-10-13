@@ -122,3 +122,92 @@ fn pics_lighting_property_metadata_is_exact() {
         }
     }
 }
+
+/// The PICS rows of a database holding only `object`, and its required
+/// properties as the PICS should list them.
+fn pics_rows(
+    object: Box<dyn bacnet_objects::traits::BACnetObject>,
+) -> (Vec<PropertyRow>, Vec<PropertyIdentifier>) {
+    let required = sorted_required(object.required_properties().as_ref());
+    let mut db = ObjectDatabase::new();
+    db.add(object).unwrap();
+    let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default());
+    let rows = pics.supported_object_types[0]
+        .supported_properties
+        .iter()
+        .map(|row| (row.property_id, row.access.optional, row.access.writable))
+        .collect();
+    (rows, required)
+}
+
+/// The required rows among `rows`, as the PICS orders them.
+fn required_of(rows: &[PropertyRow]) -> Vec<PropertyIdentifier> {
+    rows.iter()
+        .filter_map(|&(p, optional, _)| (!optional).then_some(p))
+        .collect()
+}
+
+#[test]
+fn pics_lighting_output_lists_its_trims_once_set() {
+    // A high trim alone (#1528): High_End_Trim is optional, and the
+    // Trim_Fade_Time it brings is required by the table's footnote.
+    let mut object = LightingOutputObject::new(7, "LO-7").unwrap();
+    object.set_high_end_trim(Some(90.0)).unwrap();
+    let mut expected = expected_rows(ObjectType::LIGHTING_OUTPUT);
+    expected.extend([
+        (P::HIGH_END_TRIM, true, true),
+        (P::TRIM_FADE_TIME, false, true),
+    ]);
+    let (rows, required) = pics_rows(Box::new(object));
+    assert_eq!(rows, sorted_rows(&expected));
+    assert_eq!(required_of(&rows), required);
+    // Both trims.
+    let mut object = LightingOutputObject::new(7, "LO-7").unwrap();
+    object.set_low_end_trim(Some(10.0)).unwrap();
+    object.set_high_end_trim(Some(90.0)).unwrap();
+    expected.push((P::LOW_END_TRIM, true, true));
+    let (rows, required) = pics_rows(Box::new(object));
+    assert_eq!(rows, sorted_rows(&expected));
+    assert_eq!(required_of(&rows), required);
+}
+
+#[test]
+fn pics_lighting_outputs_list_their_colour_links_as_required_and_writable() {
+    use bacnet_objects::lighting::{ColorLink, ColorOverride};
+    // Each row is required while present (the tables' footnotes, #1527).
+    let colour = ObjectIdentifier::new(ObjectType::COLOR, 1).unwrap();
+    let rows_for = |overridable: bool| {
+        let mut rows = vec![(P::COLOR_REFERENCE, false, true)];
+        if overridable {
+            rows.extend([
+                (P::COLOR_OVERRIDE, false, true),
+                (P::OVERRIDE_COLOR_REFERENCE, false, true),
+            ]);
+        }
+        rows
+    };
+    for overridable in [false, true] {
+        let link = ColorLink {
+            color_override: overridable.then_some(ColorOverride {
+                active: false,
+                reference: colour,
+            }),
+            ..ColorLink::new(colour)
+        };
+        let mut lo = LightingOutputObject::new(7, "LO-7").unwrap();
+        lo.set_color_link(Some(link)).unwrap();
+        let mut blo = BinaryLightingOutputObject::new(7, "BLO-7").unwrap();
+        blo.set_color_link(Some(link)).unwrap();
+        let objects: [(Box<dyn bacnet_objects::traits::BACnetObject>, ObjectType); 2] = [
+            (Box::new(lo), ObjectType::LIGHTING_OUTPUT),
+            (Box::new(blo), ObjectType::BINARY_LIGHTING_OUTPUT),
+        ];
+        for (object, kind) in objects {
+            let mut expected = expected_rows(kind);
+            expected.extend(rows_for(overridable));
+            let (rows, required) = pics_rows(object);
+            assert_eq!(rows, sorted_rows(&expected), "{kind:?}");
+            assert_eq!(required_of(&rows), required);
+        }
+    }
+}

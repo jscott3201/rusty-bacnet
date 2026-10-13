@@ -1,5 +1,8 @@
 //! GetEnrollmentSummary service per ASHRAE 135-2020 Clause 13.11.
 
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
 use bacnet_encoding::constructed::tagged::{
     decode_app_enumerated, decode_app_object_id, decode_app_unsigned, decode_ctx_constructed,
     decode_ctx_primitive, decode_ctx_unsigned, decode_optional_ctx, expect_end,

@@ -1,4 +1,5 @@
-//! Optional instance-owned overrides for the supported AV/BV Audit profile.
+//! Optional instance-owned Audit overrides: Analog and Binary Values, and
+//! the Color and Color Temperature objects (#1525).
 use crate::{
     common,
     property_metadata::{
@@ -21,13 +22,16 @@ pub enum AuditPriorityPolicy {
     Filter(BACnetPriorityFilter),
 }
 
-/// Independently optional Audit properties owned by an Analog Value or Binary Value.
+/// Independently optional Audit properties owned by an Analog Value, a Binary
+/// Value, a Color object or a Color Temperature object.
 ///
 /// Provisioning any field opts that instance into the implemented Audit property
 /// subset. Absent fields inherit the associated Reporter. DEFAULT level and a
 /// present NULL priority filter also inherit. AV/BV follow their object-specific
 /// clauses for absent priority inheritance; generic §19.6.3 has conflicting wording.
-/// Both supported objects have commandable Present_Value; these properties do not
+/// The priority filter applies to a commandable Present_Value: a noncommandable
+/// AV/BV leaves its row out, and the colour objects, which have no commandable
+/// property, drop the field when provisioned (#1525). These properties do not
 /// install a Reporter or enable reporting by themselves.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct ObjectAuditPolicy {

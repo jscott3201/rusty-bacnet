@@ -1,0 +1,35 @@
+[package]
+name = "bacnet-bip-codec"
+description = "Portable no-std BACnet/IP and BACnet/IPv6 (Annexes J and U) BVLL codec"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["bacnet", "bip", "bvll", "ipv6", "no-std"]
+categories = ["embedded", "network-programming", "no-std", "no-std::no-alloc"]
+
+# No feature needs std: each one only adds a BvllSink impl.
+[features]
+default = []
+alloc = []
+bytes = ["alloc", "dep:bytes"]
+heapless = ["dep:heapless"]
+
+[dependencies]
+bytes = { workspace = true, optional = true }
+heapless = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[package.metadata.docs.rs]
+# Every feature, and a bare-metal target too, so the docs show each sink
+# and the crate without std; --cfg docsrs labels feature-gated items.
+all-features = true
+targets = ["x86_64-unknown-linux-gnu", "thumbv7em-none-eabihf"]
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true

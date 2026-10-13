@@ -3,6 +3,9 @@
 //! Both requests use only application tags, as in the Who-Am-I-Request and You-Are-Request
 //! productions of Clause 21.3.3.
 
+#[cfg(not(feature = "std"))]
+use alloc::{string::String, vec::Vec};
+
 use bacnet_encoding::constructed::{check_decoded_mac_len, check_encoded_mac_len};
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;
@@ -20,13 +23,36 @@ use bacnet_encoding::constructed::tagged::{
 // Shared helpers
 // ---------------------------------------------------------------------------
 
+/// What a request calls the members that start it in errors, each written
+/// out whole, so a request that decodes builds no label (#1645).
+struct IdentityLabels {
+    vendor_id: &'static str,
+    model_name: &'static str,
+    serial_number: &'static str,
+}
+
+/// A Who-Am-I's.
+const WHO_AM_I: IdentityLabels = IdentityLabels {
+    vendor_id: "WhoAmI vendor-id",
+    model_name: "WhoAmI model-name",
+    serial_number: "WhoAmI serial-number",
+};
+
+/// A You-Are's.
+const YOU_ARE: IdentityLabels = IdentityLabels {
+    vendor_id: "YouAre vendor-id",
+    model_name: "YouAre model-name",
+    serial_number: "YouAre serial-number",
+};
+
 /// Decode the vendor ID, model name and serial number that start both requests.
-fn decode_identity(data: &[u8], context: &str) -> Result<(u16, String, String, usize), Error> {
-    let (vendor_id, offset) = decode_app_unsigned::<u16>(data, 0, &format!("{context} vendor-id"))?;
-    let (model_name, offset) =
-        decode_app_character_string(data, offset, &format!("{context} model-name"))?;
-    let (serial_number, offset) =
-        decode_app_character_string(data, offset, &format!("{context} serial-number"))?;
+fn decode_identity(
+    data: &[u8],
+    labels: &IdentityLabels,
+) -> Result<(u16, String, String, usize), Error> {
+    let (vendor_id, offset) = decode_app_unsigned::<u16>(data, 0, labels.vendor_id)?;
+    let (model_name, offset) = decode_app_character_string(data, offset, labels.model_name)?;
+    let (serial_number, offset) = decode_app_character_string(data, offset, labels.serial_number)?;
     Ok((vendor_id, model_name, serial_number, offset))
 }
 
@@ -81,7 +107,7 @@ impl WhoAmIRequest {
     ///
     /// Fails on missing, mistagged or truncated fields and on trailing data.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let (vendor_id, model_name, serial_number, offset) = decode_identity(data, "WhoAmI")?;
+        let (vendor_id, model_name, serial_number, offset) = decode_identity(data, &WHO_AM_I)?;
         if offset != data.len() {
             return Err(Error::decoding(offset, "WhoAmI has trailing data"));
         }
@@ -177,7 +203,7 @@ impl YouAreRequest {
     /// Fails on missing, mistagged or truncated fields, on a request carrying neither optional
     /// field, on a MAC address longer than 18 octets, and on trailing data.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let (vendor_id, model_name, serial_number, mut offset) = decode_identity(data, "YouAre")?;
+        let (vendor_id, model_name, serial_number, mut offset) = decode_identity(data, &YOU_ARE)?;
 
         let mut device_identifier = None;
         if next_is_application(data, offset, tags::app_tag::OBJECT_IDENTIFIER)? {

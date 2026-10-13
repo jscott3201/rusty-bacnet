@@ -6,6 +6,9 @@
 //! decoder reads one element at `offset` and returns the offset just past
 //! it: walking a list calls it at each element's start (#1046).
 
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
 use bacnet_types::constructed::{
     BACnetCOVMultipleSubscription, BACnetCOVReference, BACnetCOVSubscription,
     BACnetCOVSubscriptionSpecification, BACnetRecipientProcess,

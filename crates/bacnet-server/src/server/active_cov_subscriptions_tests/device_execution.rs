@@ -520,3 +520,6 @@ fn device_execution_view_keeps_context_free_helpers_on_raw_declared_profile() {
 
 #[path = "device_execution_writes.rs"]
 mod writes;
+
+#[path = "device_profiles.rs"]
+mod device_profiles;

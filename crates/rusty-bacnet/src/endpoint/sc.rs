@@ -39,6 +39,7 @@ struct ScEndpointConfig {
     identity: DeviceIdentity,
     queue_capacity: usize,
     read_work_limit: usize,
+    min_request_interval_ms: u64,
 }
 
 impl ScEndpointConfig {
@@ -59,6 +60,7 @@ impl ScEndpointConfig {
             .role(SessionRole::Both)
             .queue_capacity(config.queue_capacity)
             .read_work_limit(config.read_work_limit)
+            .min_request_interval_ms(config.min_request_interval_ms)
             .heartbeat(config.heartbeat_interval_ms, config.heartbeat_timeout_ms)
             .database(db)
             .identity(config.identity.clone())
@@ -127,6 +129,9 @@ impl PyScEndpoint {
     ///         role may expand (must be >0, default 256): its own row plus,
     ///         for a Group's Present_Value, one per member property. A read
     ///         past it is aborted with OUT_OF_RESOURCES.
+    ///     min_request_interval_ms: Least time between the client role's
+    ///         confirmed requests to one destination (default 0, no pacing;
+    ///         at most 3600000), as for `BACnetClient`.
     #[new]
     #[pyo3(signature = (
         device_instance,
@@ -147,7 +152,8 @@ impl PyScEndpoint {
         segmentation=None,
         services=None,
         queue_capacity=16,
-        read_work_limit=256
+        read_work_limit=256,
+        min_request_interval_ms=0
     ))]
     fn new(
         device_instance: u32,
@@ -168,6 +174,7 @@ impl PyScEndpoint {
         services: Option<Vec<u8>>,
         queue_capacity: usize,
         read_work_limit: usize,
+        min_request_interval_ms: u64,
     ) -> PyResult<Self> {
         if queue_capacity == 0 {
             return Err(PyValueError::new_err(
@@ -175,6 +182,8 @@ impl PyScEndpoint {
             ));
         }
         let read_work_limit = parse_read_work_limit(read_work_limit)?;
+        let min_request_interval_ms =
+            crate::client::parse_min_request_interval_ms(min_request_interval_ms)?;
         // Credential presence first (mirrors hub/client ordering).
         crate::tls::required_sc_credentials(
             (!sc_ca_cert.is_empty()).then_some(sc_ca_cert),
@@ -231,6 +240,7 @@ impl PyScEndpoint {
                 identity,
                 queue_capacity,
                 read_work_limit,
+                min_request_interval_ms,
             },
         })
     }

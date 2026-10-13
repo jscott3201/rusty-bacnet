@@ -10,9 +10,13 @@ keywords = ["bacnet", "building-automation", "transport", "bip", "mstp"]
 categories = ["network-programming"]
 
 [dependencies]
-bacnet-types.workspace = true
-bacnet-encoding.workspace = true
-bytes.workspace = true
+bacnet-types = { workspace = true, features = ["std"] }
+bacnet-encoding = { workspace = true, features = ["std"] }
+bacnet-bip-codec = { workspace = true, features = ["bytes"] }
+bacnet-bip-core = { workspace = true }
+bacnet-mstp-codec = { workspace = true, features = ["alloc"] }
+bacnet-mstp-core = { workspace = true, features = ["alloc"] }
+bytes = { workspace = true, features = ["std"] }
 tracing.workspace = true
 tokio = { workspace = true, features = ["net", "rt", "sync", "macros", "time"] }
 socket2 = { workspace = true, features = ["all"] }
@@ -51,7 +55,7 @@ ethernet = []
 
 [dev-dependencies]
 rcgen.workspace = true
-tokio = { workspace = true, features = ["test-util"] }
+tokio = { workspace = true, features = ["test-util", "rt-multi-thread"] }
 
 [lints]
 workspace = true

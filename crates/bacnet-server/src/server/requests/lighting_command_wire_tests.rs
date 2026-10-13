@@ -173,3 +173,6 @@ async fn lighting_command_default_priority_refuses_six_over_the_wire() {
         read_ack(&[0x1A, 0x01, 0x7D], &[0x21, 0x07])
     );
 }
+
+#[path = "lighting_link_wire_tests.rs"]
+mod link;

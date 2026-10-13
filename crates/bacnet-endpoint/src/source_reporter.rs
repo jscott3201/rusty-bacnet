@@ -5,6 +5,7 @@ use std::borrow::Cow;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
+use bacnet_objects::access_control::AccessControlInput;
 use bacnet_objects::audit::{
     AuditLogForwarding, AuditLogNotificationSink, AuditLogStorage, AuditReporterObject,
 };
@@ -210,6 +211,10 @@ impl BACnetObject for SourceReporter {
 
     fn next_monotonic_deadline_internal(&self) -> Option<Duration> {
         self.wrapped.next_monotonic_deadline_internal()
+    }
+
+    fn set_tracking_cov_increment_internal(&mut self, finest: Option<f64>) {
+        self.wrapped.set_tracking_cov_increment_internal(finest)
     }
 
     fn cov_snapshot_internal(&self) -> Option<Box<dyn BACnetObject>> {
@@ -475,8 +480,20 @@ impl BACnetObject for SourceReporter {
         self.wrapped.set_present_value_internal(value)
     }
 
+    fn set_present_value_from_internal(
+        &mut self,
+        value: PropertyValue,
+        origin: &bacnet_objects::command_source::CommandOrigin,
+    ) -> Result<(), Error> {
+        self.wrapped.set_present_value_from_internal(value, origin)
+    }
+
     fn set_tracking_value_internal(&mut self, value: PropertyValue) -> Result<(), Error> {
         self.wrapped.set_tracking_value_internal(value)
+    }
+
+    fn report_access_input_internal(&mut self, input: AccessControlInput) -> Result<(), Error> {
+        self.wrapped.report_access_input_internal(input)
     }
 
     fn set_controlled_variable_value_internal(

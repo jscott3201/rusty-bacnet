@@ -123,7 +123,7 @@ async fn audit_forwarding_observed_binding_and_local_alias_do_not_send() {
         oid(ObjectType::DEVICE, 20),
         &[2],
         None,
-        Instant::now(),
+        runtime_clock::now(),
         |_| false,
     );
     f.unconfirmed(payload(false)).await;
@@ -152,15 +152,19 @@ async fn audit_forwarding_observed_binding_and_local_alias_do_not_send() {
 #[tokio::test(start_paused = true)]
 async fn audit_forwarding_denial_disabled_and_malformed_batches_are_silent() {
     let mut f = ready().await;
-    f.server.config.audit_notification_authorizer = Some(Arc::new(|_| false));
-    f.server.config.unconfirmed_audit_notification_authorizer = Some(Arc::new(|_| false));
+    f.server.config_mut().audit_notification_authorizer = Some(Arc::new(|_| false));
+    f.server
+        .config_mut()
+        .unconfirmed_audit_notification_authorizer = Some(Arc::new(|_| false));
     assert!(matches!(
         f.confirmed(1, &[3], payload(false)).await,
         Some(Apdu::Error(_))
     ));
     f.unconfirmed(payload(false)).await;
-    f.server.config.audit_notification_authorizer = Some(Arc::new(|_| true));
-    f.server.config.unconfirmed_audit_notification_authorizer = Some(Arc::new(|_| true));
+    f.server.config_mut().audit_notification_authorizer = Some(Arc::new(|_| true));
+    f.server
+        .config_mut()
+        .unconfirmed_audit_notification_authorizer = Some(Arc::new(|_| true));
     let mut malformed = payload(false).to_vec();
     malformed.pop();
     assert!(matches!(
@@ -197,7 +201,7 @@ async fn audit_forwarding_denial_disabled_and_malformed_batches_are_silent() {
 /// request from `[3]`, so the DCC timer is live.
 async fn disable_initiation(f: &mut Fixture) {
     use bacnet_services::device_mgmt::DeviceCommunicationControlRequest;
-    f.server.config.dcc_policy = DccPolicy::LegacyPermissive;
+    f.server.config_mut().dcc_policy = DccPolicy::LegacyPermissive;
     let mut data = BytesMut::new();
     DeviceCommunicationControlRequest {
         time_duration: Some(1),
@@ -263,7 +267,7 @@ async fn audit_forwarding_goes_out_under_disable_initiation() {
 #[tokio::test(start_paused = true)]
 async fn audit_forwarding_oversize_and_send_errors_leave_local_success() {
     let mut f = ready().await;
-    f.server.config.max_apdu_length = 50;
+    f.server.config_mut().max_apdu_length = 50;
     assert!(matches!(
         f.confirmed(2, &[3], payload(false)).await,
         Some(Apdu::SimpleAck(_))
@@ -273,7 +277,7 @@ async fn audit_forwarding_oversize_and_send_errors_leave_local_success() {
         f.requests().is_empty(),
         "oversized forward is not segmented"
     );
-    f.server.config.max_apdu_length = 1476;
+    f.server.config_mut().max_apdu_length = 1476;
     f.wire.fail.store(true, Ordering::Release);
     assert!(matches!(
         f.confirmed(3, &[3], payload(false)).await,

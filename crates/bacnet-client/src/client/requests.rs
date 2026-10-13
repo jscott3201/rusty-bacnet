@@ -180,6 +180,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 Some(forwarded_npci_len(dest_mac.len(), self.local_mac.len())?)
             }
         };
+        // Pace before the path lease, so the wait holds up no other request
+        // through the same router. The guard lives until this request
+        // returns, by any path or by being dropped, and then starts the
+        // interval for the next request to this destination.
+        let _pace = self.pacer.wait(pacing::PaceKey::of(target)).await;
         // The lease serializes one active request per (immediate router, DNET)
         // and remains live through every return path, including cancellation.
         let path_lease = match target {

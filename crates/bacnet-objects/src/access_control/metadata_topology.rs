@@ -67,7 +67,15 @@ use crate::property_metadata::{
 // Active_Authentication_Policy and Authorization_Mode have routed write arms,
 // so RequiredRead/Always; the application sets
 // Number_Of_Authentication_Policies and Priority_For_Writing, which have no
-// write arm, so RequiredRead/ReadOnly.
+// write arm, so RequiredRead/ReadOnly. Authentication_Policy_List and
+// Authentication_Policy_Names (#1325) carry the table O code with footnote 1
+// and no write arm, so Optional/ReadOnly; they are per-instance rows,
+// present once the application sets the policies, before Property_List.
+// The point's Reliability can read CONFIGURATION_ERROR since #1325, so
+// Clause 12.31.8 opens it to writes while out of service:
+// RequiredRead/WhenOutOfService. Access_Event_Authentication_Factor (#1132)
+// carries the table O code with no write arm, so Optional/ReadOnly, after
+// Priority_For_Writing.
 // Zone Global_Identifier carries the table W code with the routed Unsigned
 // arm, so RequiredWrite/Always. Table 12-37 has neither Present_Value nor
 // Access_Doors, so the zone serves neither (#1064 removed the
@@ -214,7 +222,7 @@ const ACCESS_POINT_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::EVENT_STATE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
-    PropertyMetadata::new(P::RELIABILITY, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::RELIABILITY, RequiredRead, None, WhenOutOfService),
     PropertyMetadata::new(P::AUTHENTICATION_STATUS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::ACCESS_EVENT_CREDENTIAL, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::ACTIVE_AUTHENTICATION_POLICY, RequiredRead, None, Always),
@@ -226,6 +234,12 @@ const ACCESS_POINT_BASE: &[PropertyMetadata] = &[
     ),
     PropertyMetadata::new(P::AUTHORIZATION_MODE, RequiredRead, None, Always),
     PropertyMetadata::new(P::PRIORITY_FOR_WRITING, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(
+        P::ACCESS_EVENT_AUTHENTICATION_FACTOR,
+        Optional,
+        None,
+        ReadOnly,
+    ),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
@@ -333,8 +347,23 @@ pub(super) fn for_access_door_object(_object: &AccessDoorObject) -> Cow<'_, [Pro
     Cow::Borrowed(ACCESS_DOOR_BASE)
 }
 
-pub(super) fn for_access_point_object(_object: &AccessPointObject) -> Cow<'_, [PropertyMetadata]> {
-    Cow::Borrowed(ACCESS_POINT_BASE)
+pub(super) fn for_access_point_object(object: &AccessPointObject) -> Cow<'_, [PropertyMetadata]> {
+    if !object.serves_policy_list() {
+        return Cow::Borrowed(ACCESS_POINT_BASE);
+    }
+    let mut rows = ACCESS_POINT_BASE.to_vec();
+    let before_property_list = rows
+        .iter()
+        .position(|row| row.property_identifier == P::PROPERTY_LIST)
+        .expect("Property_List row");
+    rows.splice(
+        before_property_list..before_property_list,
+        [
+            PropertyMetadata::new(P::AUTHENTICATION_POLICY_LIST, Optional, None, ReadOnly),
+            PropertyMetadata::new(P::AUTHENTICATION_POLICY_NAMES, Optional, None, ReadOnly),
+        ],
+    );
+    Cow::Owned(rows)
 }
 
 pub(super) fn for_access_zone_object(_object: &AccessZoneObject) -> Cow<'_, [PropertyMetadata]> {

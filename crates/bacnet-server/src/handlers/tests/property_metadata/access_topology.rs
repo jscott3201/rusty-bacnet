@@ -143,6 +143,8 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
             P::NUMBER_OF_AUTHENTICATION_POLICIES,
             P::AUTHORIZATION_MODE,
             P::PRIORITY_FOR_WRITING,
+            // The optional row #1132 added.
+            P::ACCESS_EVENT_AUTHENTICATION_FACTOR,
         ],
         _ => vec![
             P::OBJECT_IDENTIFIER,
@@ -183,7 +185,7 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
         ],
         // Tables 12-36 and 12-37 have no Present_Value, and Table 12-37 no
         // Access_Doors (#1064).
-        ObjectType::ACCESS_POINT => vec![P::DESCRIPTION],
+        ObjectType::ACCESS_POINT => vec![P::DESCRIPTION, P::ACCESS_EVENT_AUTHENTICATION_FACTOR],
         _ => vec![
             P::DESCRIPTION,
             P::OCCUPANCY_UPPER_LIMIT,

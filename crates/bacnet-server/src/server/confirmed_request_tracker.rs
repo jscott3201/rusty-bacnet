@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use super::request_peer::{canonical_requester, CanonicalRequester};
@@ -32,6 +33,8 @@ struct TrackerState {
 pub(super) struct ConfirmedRequestTracker {
     state: Mutex<TrackerState>,
     pub(super) lso: Arc<super::lso_replay::LsoReplayCache>,
+    /// See [`super::BACnetServer::group_source_request_drops`].
+    group_source_drops: AtomicU64,
 }
 
 pub(super) enum ConfirmedRequestAdmission {
@@ -96,6 +99,45 @@ impl ConfirmedRequestTracker {
         })
     }
 }
+impl ConfirmedRequestTracker {
+    /// Whether to ignore a confirmed request from link-layer `source_mac`
+    /// because that address reaches a group of nodes (`is_group`, the
+    /// transport's `is_group_destination`). Its answer, any segment ACK, and
+    /// the confirmed COV notifications of a subscription it makes would all
+    /// go back there, to every node in the group (#1504). Each one is
+    /// counted.
+    pub(super) fn refuse_group_source(
+        &self,
+        source_mac: &[u8],
+        is_group: impl FnOnce(&[u8]) -> bool,
+    ) -> bool {
+        if !is_group(source_mac) {
+            return false;
+        }
+        self.group_source_drops.fetch_add(1, Ordering::Relaxed);
+        tracing::debug!(
+            ?source_mac,
+            "Ignoring a ConfirmedRequest from a group address"
+        );
+        true
+    }
+}
+
+impl<T: bacnet_transport::port::TransportPort + 'static> super::BACnetServer<T> {
+    /// Confirmed requests ignored since start because the link-layer address
+    /// they came from is a group destination of the transport
+    /// ([`TransportPort::is_group_destination`](bacnet_transport::port::TransportPort::is_group_destination)),
+    /// such as a B/IP broadcast or multicast address (#1504). The answer, and
+    /// the confirmed COV notifications of a subscription such a request
+    /// makes, would go back to that address, so the request is neither
+    /// executed nor answered. No built-in transport hands one up; a custom
+    /// one can.
+    pub fn group_source_request_drops(&self) -> u64 {
+        let tracker = &self.confirmed_request_tracker;
+        tracker.group_source_drops.load(Ordering::Relaxed)
+    }
+}
+
 impl PendingConfirmedRequest {
     fn untracked(tracker: &Arc<ConfirmedRequestTracker>) -> Self {
         Self {
@@ -120,3 +162,7 @@ impl Drop for PendingConfirmedRequest {
 #[cfg(test)]
 #[path = "confirmed_tracker_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "group_source_request_tests.rs"]
+mod group_source_tests;

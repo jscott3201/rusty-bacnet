@@ -30,7 +30,9 @@ this network's number and that MAC as SNET and SADR, so the records it causes
 name that Device as their source (#1404). The route is resolved for each notification,
 so a number learned after startup applies from the next one; a notification
 already queued or sent keeps its route. The endpoint source uses `BipEndpointBuilder::source_audit_device_binding`
-for direct IPv4 Device route facts. Observed I-Am entries are not eligible. An unresolved Device provision
+for direct IPv4 Device route facts. Observed I-Am entries are not eligible. Unlike event
+notifications, Audit never looks for a Device recipient it has no binding for: it sends no
+Who-Is and waits for no I-Am, so a Device recipient needs a configured binding (#1522). An unresolved Device provision
 may start with CONFIGURATION_ERROR; it emits no ordinary records. A live change
 must resolve both old and new destinations, so an unavailable old binding requires
 restart with corrected configuration. Address recipients require an explicit

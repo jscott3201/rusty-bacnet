@@ -1,0 +1,132 @@
+# Stack budget for the firmware link test's images under emulation (#1660,
+# #1664, #1667, #1679), in octets: one table per board, `[<board>]`, named
+# by its QEMU machine, with a key per image. scripts/emu/emulate-firmware.sh,
+# the manual emulation check, runs each image on each board it fits (the
+# router doesn't fit the two 16 KiB boards; see below); the image reports
+# how deep its stack went, and scripts/ci/firmware_size.py --stack fails the
+# run when a peak is over its budget, or when an image the table lists has
+# no peak or a peak has no budget; a run of every board also fails on a
+# table for a board it doesn't have. CI never runs the emulator, so CI never
+# reads this file; the size budget, firmware/link/size-budget.toml, is the
+# one it checks. See docs/ci.md, "Emulation (manual)".
+#
+# A peak is the depth of the deepest word the scenario wrote, measured from
+# the stack paint (firmware/link/src/bin/emulate/mod.rs). The board sets
+# the target the image is built for, so each board has its own table, though
+# lm3s6965evb's and netduinoplus2's budgets are the same today.
+#
+# Each budget is the peak measured when it was set plus 25%, rounded up to
+# 16 octets, as the size budgets are rounded: what `emulate-firmware.sh
+# --suggest` prints. Raising a budget is a reviewed change: say why the stack
+# grew. Re-measure after a toolchain bump.
+#
+# Measured 2026-10-12 with Rust 1.99.0 and QEMU 10.0.13, as mstp / bip /
+# apdu peaks:
+#
+#   microbit        4664 / 2220 / 2768
+#   lm3s6965evb     4228 / 2100 / 2536
+#   netduinoplus2   4228 / 2100 / 2536
+#   sifive_e        4100 / 2020 / 2464
+#
+# The mstp rows were measured again on 2026-10-12, same toolchain and QEMU,
+# when the MS/TP core stopped copying each received frame onto the stack
+# (#1611): about 1.4 KB shallower on every board.
+#
+#   microbit        3208
+#   lm3s6965evb     2780
+#   netduinoplus2   2780
+#   sifive_e        2644
+#
+# The mstp-extended, node and bbmd rows are from when those images joined,
+# on 2026-10-12, same toolchain and QEMU (#1664, #1667), as mstp-extended
+# / node / bbmd peaks:
+#
+#   microbit        6136 / 5364 / 2300
+#   lm3s6965evb     4836 / 4732 / 2228
+#   netduinoplus2   4836 / 4732 / 2228
+#   sifive_e        4676 / 4584 / 2132
+#
+# The node rows were measured again the same day, when the scenario
+# stopped moving its node and summary into the struct that drives them,
+# and the engine stopped rotating its events with rotate_left (#1667):
+# 544 to 648 octets shallower.
+#
+#   microbit        4716
+#   lm3s6965evb     4188
+#   netduinoplus2   4188
+#   sifive_e        4008
+#
+# The mstp-extended image's statics take 7,712 octets of the 16 KiB boards'
+# RAM, so its stack has 8,672 octets of room there, more than its budget.
+# Its deepest call was the core's send of a queued NPDU, whose buffers on
+# the stack grew from 501 octets to 1497 with extended frames on: about
+# 2 KB deeper than the mstp image's on ARMv7-M. The same run measured the
+# mstp image's peaks at 3216, 2796, 2788 and 2676 octets, as on the dev
+# branch these images were added to: a little deeper than the rows above,
+# within their budgets. The bip and apdu peaks are as above.
+#
+# The mstp and mstp-extended rows were measured again the same day, same
+# toolchain and QEMU, when the core began building a queued NPDU's frame
+# straight from the queue's slot, and the queues and the codec's stream
+# decoder stopped shifting their buffers (#1691), as mstp / mstp-extended
+# peaks:
+#
+#   microbit        2040 / 3020
+#   lm3s6965evb     1824 / 2868
+#   netduinoplus2   1832 / 2868
+#   sifive_e        1712 / 2732
+#
+# That is 1.9-3.1 KB shallower for mstp-extended and 1.0-1.2 KB for mstp.
+# The mstp-extended image's deepest point is now its scenario's: the core
+# takes in the peer's 600-octet reply while the scenario's own buffers for
+# it, about 1.2 KB, are live. Run with that reply skipped, the image peaked
+# at 2004 octets on micro:bit and 1796 on lm3s6965evb, under the mstp
+# image's peaks: the core's send of a queued NPDU no longer grows with
+# extended frames.
+#
+# The router rows are from when that image joined, on 2026-10-13, same
+# toolchain and QEMU (#1679): peaks of 5648 octets on lm3s6965evb and 5640
+# on netduinoplus2. Most of it is the scenario's own frame, 3.8 KB on
+# ARMv7-M, which holds the 704-octet summary, the MS/TP core (528), the
+# BBMD port with its node (712), the router (88) and the BBMD's tables
+# (72); the router's receive and the B/IP port's send go about 1.8 KB
+# deeper. micro:bit and SiFive E have no router row: the image's statics,
+# 15,504 octets, leave 880 octets of their 16 KiB for a stack that needs
+# 5.6 KB, so emulate-firmware.sh builds it for them but doesn't run it.
+# Run there, it faults as its stack reaches the statics. No smaller router
+# image is offered: Clause 9.3 asks a router's MS/TP port for extended
+# frames, and their buffers are most of the statics.
+
+[microbit]
+mstp = 2560
+mstp-extended = 3776
+bip = 2784
+node = 5904
+bbmd = 2880
+apdu = 3472
+
+[lm3s6965evb]
+mstp = 2288
+mstp-extended = 3600
+bip = 2640
+node = 5248
+bbmd = 2800
+router = 7072
+apdu = 3184
+
+[netduinoplus2]
+mstp = 2304
+mstp-extended = 3600
+bip = 2640
+node = 5248
+bbmd = 2800
+router = 7056
+apdu = 3184
+
+[sifive_e]
+mstp = 2144
+mstp-extended = 3424
+bip = 2528
+node = 5024
+bbmd = 2672
+apdu = 3088

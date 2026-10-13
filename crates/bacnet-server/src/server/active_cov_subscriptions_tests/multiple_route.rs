@@ -7,7 +7,7 @@ fn router_b() -> Peer {
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn multiple_two_routers_share_one_live_recipient_context() {
     let mut wire = Wire::start(ServerConfig::default()).await;
     simple_ack(
@@ -48,7 +48,7 @@ async fn multiple_two_routers_share_one_live_recipient_context() {
     assert_eq!(contexts[0].recipient.recipient, address(&routed()));
     assert_eq!(contexts[0].max_notification_delay, 2);
     assert_eq!(contexts[0].list_of_cov_subscription_specifications.len(), 2);
-    assert!((599..=600).contains(&contexts[0].time_remaining));
+    assert_eq!(contexts[0].time_remaining, 600);
     changed_value_uses(&wire, &router_b(), av(1), 21.0).await;
 
     // Empty finite renewal retargets all retained references without resetting
@@ -373,7 +373,7 @@ async fn multiple_route_wire_delete_expiry_and_current_peer_cleanup_remove_migra
             .subscribe_multiple(
                 old.key().multiple_context().unwrap(),
                 &crate::cov::SubscriberEndpoint::new(&router_b().mac, router_b().network.as_ref()),
-                Instant::now(),
+                runtime_clock::now(),
                 0,
                 None,
                 vec![],

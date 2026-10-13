@@ -36,7 +36,8 @@ const ATTEMPTS: usize = 3;
 
 /// One unicast address and what its adapter reports about itself.
 #[derive(Clone, Copy, Debug)]
-// The IPv4 listing reads only `ip` and `dad_state`; B/IPv6 reads the rest.
+// The IPv4 listing and interface lookup read `ip`, `dad_state`, `loopback`
+// and `prefix_length`; B/IPv6 reads the rest.
 #[cfg_attr(not(feature = "ipv6"), allow(dead_code))]
 pub(crate) struct UnicastAddress {
     pub(crate) ip: IpAddr,
@@ -50,6 +51,8 @@ pub(crate) struct UnicastAddress {
     pub(crate) multicast: bool,
     /// The adapter is the software loopback interface.
     pub(crate) loopback: bool,
+    /// The length of the address's on-link prefix, in bits.
+    pub(crate) prefix_length: u8,
 }
 
 /// Every unicast address of `family` (`AF_INET`, `AF_INET6` or `AF_UNSPEC`)
@@ -133,6 +136,7 @@ unsafe fn copy_addresses(head: *const IP_ADAPTER_ADDRESSES_LH) -> Vec<UnicastAdd
                     up: adapter.OperStatus == IfOperStatusUp,
                     multicast: flags & IP_ADAPTER_NO_MULTICAST == 0,
                     loopback: adapter.IfType == IF_TYPE_SOFTWARE_LOOPBACK,
+                    prefix_length: unicast.OnLinkPrefixLength,
                 });
             }
             unicast_ptr = unicast.Next.cast_const();

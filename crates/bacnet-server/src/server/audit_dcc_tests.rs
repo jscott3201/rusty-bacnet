@@ -18,7 +18,7 @@ use bacnet_types::{constructed::BACnetDestination, enums::EnableDisable};
 /// Put the server under DISABLE_INITIATION through a wire request, as a peer
 /// would, so the one-minute DCC timer is live and re-enables on its own.
 async fn disable_initiation(f: &mut Fixture) {
-    f.server.config.dcc_policy = DccPolicy::LegacyPermissive;
+    f.server.config_mut().dcc_policy = DccPolicy::LegacyPermissive;
     let mut data = BytesMut::new();
     DeviceCommunicationControlRequest {
         time_duration: Some(1),

@@ -3,8 +3,8 @@ use super::CovSample;
 use bacnet_types::{error::Error, primitives::PropertyValue};
 
 /// A bounded selected sample and its declared optional four-bit Status_Flags.
-/// Specialized commandable Value_Source reports also retain their captured PV
-/// and command priority; command time is reported but is not a trigger.
+/// Specialized Value_Source reports also retain their captured PV and, for
+/// commandable objects, command priority; command time is not a trigger.
 /// Whole-object reports also retain the Table 13-1 values whose changes
 /// trigger a notification (Staging's Present_Stage).
 /// No delivered observation is represented by the subscription's outer `None`;
@@ -13,7 +13,7 @@ use bacnet_types::{error::Error, primitives::PropertyValue};
 pub struct CovObservation {
     sample: CovSample,
     flags: Option<u8>,
-    command: Option<(CovSample, CovSample)>,
+    source_companions: Option<(CovSample, Option<CovSample>)>,
     triggers: Box<[CovSample]>,
 }
 impl CovObservation {
@@ -22,7 +22,7 @@ impl CovObservation {
     pub fn new(sample: CovSample, flags: Option<&PropertyValue>) -> Result<Self, Error> {
         Ok(Self {
             sample,
-            command: None,
+            source_companions: None,
             flags: flags.map(validate_flags).transpose()?,
             triggers: Box::default(),
         })
@@ -37,13 +37,17 @@ impl CovObservation {
     pub(crate) fn triggers_changed(&self, previous: Option<&Self>) -> bool {
         !self.triggers.is_empty() && previous.map(|p| &p.triggers) != Some(&self.triggers)
     }
-    /// Attach the bounded PV/priority tuple captured with a commandable source.
-    pub(crate) fn with_command(mut self, pv: CovSample, priority: CovSample) -> Self {
-        self.command = Some((pv, priority));
+    /// Attach the bounded PV and optional command priority captured with a source.
+    pub(crate) fn with_source_companions(
+        mut self,
+        pv: CovSample,
+        priority: Option<CovSample>,
+    ) -> Self {
+        self.source_companions = Some((pv, priority));
         self
     }
-    pub(crate) fn command(&self) -> Option<&(CovSample, CovSample)> {
-        self.command.as_ref()
+    pub(crate) fn source_companions(&self) -> Option<&(CovSample, Option<CovSample>)> {
+        self.source_companions.as_ref()
     }
     /// The immutable bounded selected value.
     pub fn sample(&self) -> &CovSample {

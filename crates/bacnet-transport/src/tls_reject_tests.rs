@@ -7,15 +7,16 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::time::Instant;
 
 use super::{close_after_alert, ALERT_LINGER, DRAIN_LIMIT};
+use crate::port_ownership::connect_loopback;
 
 /// A connected pair: (the refusing side, the peer).
 async fn pair() -> (TcpStream, TcpStream) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let (peer, accepted) = tokio::join!(
-        TcpStream::connect(listener.local_addr().unwrap()),
+        connect_loopback(listener.local_addr().unwrap()),
         listener.accept()
     );
-    (accepted.unwrap().0, peer.unwrap())
+    (accepted.unwrap().0, peer)
 }
 
 #[tokio::test(start_paused = true)]

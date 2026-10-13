@@ -10,7 +10,7 @@ use bacnet_services::who_has::{IHaveRequest, WhoHasObject, WhoHasRequest};
 use bacnet_services::who_is::{IAmRequest, WhoIsRequest};
 use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn lowest_device_owns_wildcard_reads_and_both_live_cov_lists_in_both_orders() {
     for instances in [[900, 813], [813, 900]] {
         let mut wire = Wire::start_with_devices(ServerConfig::default(), &instances).await;
@@ -229,15 +229,15 @@ async fn device_selection_preserves_no_device_and_wildcard_only_reads() {
 fn assert_same_list(property: PropertyIdentifier, actual: &[u8], expected: &[u8]) {
     if property == MULTIPLE {
         assert_eq!(
-            untimed(&decode_contexts(actual), &[(290, 300)]),
-            untimed(&decode_contexts(expected), &[(290, 300)])
+            untimed(&decode_contexts(actual), &[300]),
+            untimed(&decode_contexts(expected), &[300])
         );
     } else {
         let normalize = |bytes: &[u8]| {
             let mut entries = decode_subscriptions(bytes);
             for entry in &mut entries {
                 if entry.recipient.process_identifier == 62 {
-                    assert!((290..=300).contains(&entry.time_remaining));
+                    assert_eq!(entry.time_remaining, 300);
                     entry.time_remaining = 0;
                 }
             }

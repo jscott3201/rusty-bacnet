@@ -116,6 +116,33 @@ impl DeviceInstanceRange {
     }
 }
 
+/// What a Who-Is or Who-Has calls itself and its limits in errors. The
+/// limits' labels are written out whole, so a request that decodes builds
+/// none (#1645).
+pub(crate) struct LimitLabels {
+    /// The service, which names the pairing errors.
+    service: &'static str,
+    /// The `[0]` low limit.
+    low: &'static str,
+    /// The `[1]` high limit.
+    high: &'static str,
+}
+
+impl LimitLabels {
+    /// A Who-Is's.
+    pub(crate) const WHO_IS: Self = Self {
+        service: "WhoIs",
+        low: "WhoIs low limit",
+        high: "WhoIs high limit",
+    };
+    /// A Who-Has's.
+    pub(crate) const WHO_HAS: Self = Self {
+        service: "WhoHas",
+        low: "WhoHas low limit",
+        high: "WhoHas high limit",
+    };
+}
+
 /// A Who-Is or Who-Has request's optional `[0]` low and `[1]` high limits,
 /// as read from the start of its service-request octets. The decoders read
 /// the rest of the request before [`Self::range`] checks the pairing.
@@ -126,30 +153,23 @@ pub(crate) struct WireLimits {
     after_low: usize,
     /// The offset after the limits.
     pub(crate) end: usize,
+    /// What errors call the service and its limits.
+    labels: &'static LimitLabels,
 }
 
 impl WireLimits {
-    /// Read the limits; `service` (`WhoIs` or `WhoHas`) names them in errors.
-    pub(crate) fn decode(data: &[u8], service: &str) -> Result<Self, Error> {
-        let (low, after_low) = decode_optional_ctx(
-            data,
-            0,
-            0,
-            &format!("{service} low limit"),
-            decode_ctx_unsigned::<u32>,
-        )?;
-        let (high, end) = decode_optional_ctx(
-            data,
-            after_low,
-            1,
-            &format!("{service} high limit"),
-            decode_ctx_unsigned::<u32>,
-        )?;
+    /// Read the limits, which `labels` names in errors.
+    pub(crate) fn decode(data: &[u8], labels: &'static LimitLabels) -> Result<Self, Error> {
+        let (low, after_low) =
+            decode_optional_ctx(data, 0, 0, labels.low, decode_ctx_unsigned::<u32>)?;
+        let (high, end) =
+            decode_optional_ctx(data, after_low, 1, labels.high, decode_ctx_unsigned::<u32>)?;
         Ok(Self {
             low,
             high,
             after_low,
             end,
+            labels,
         })
     }
 
@@ -157,7 +177,8 @@ impl WireLimits {
     /// (#1447, #1483): a receiver drops it rather than reading it as a
     /// request for every device, which would make every device answer one
     /// that probably meant a range. So is a low limit above the high one.
-    pub(crate) fn range(&self, service: &str) -> Result<Option<DeviceInstanceRange>, Error> {
+    pub(crate) fn range(&self) -> Result<Option<DeviceInstanceRange>, Error> {
+        let service = self.labels.service;
         match (self.low, self.high) {
             (None, None) => Ok(None),
             (Some(low), Some(high)) => {
@@ -209,10 +230,10 @@ impl WhoIsRequest {
     /// tag or anything after the limits refuses the request rather than reading as no limits,
     /// on one limit without the other (#1447), and on a low limit above the high one.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let limits = WireLimits::decode(data, "WhoIs")?;
+        let limits = WireLimits::decode(data, &LimitLabels::WHO_IS)?;
         expect_end(data, limits.end, limits.end, "WhoIs")?;
         Ok(Self {
-            range: limits.range("WhoIs")?,
+            range: limits.range()?,
         })
     }
 }

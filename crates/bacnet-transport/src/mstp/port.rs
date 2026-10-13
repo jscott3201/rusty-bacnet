@@ -1,127 +1,46 @@
-use std::sync::Arc;
-
+use bacnet_mstp_codec::BROADCAST_MAC;
+use bacnet_mstp_core::{Duration as CoreDuration, QueueRefusal};
 use bacnet_types::error::Error;
-use bytes::{Bytes, BytesMut};
-use tokio::sync::{mpsc, oneshot, Mutex};
-use tracing::{debug, warn};
+use tokio::sync::{mpsc, Mutex};
 
-use crate::mstp_frame::{
-    decode_frame_stream, encode_frame, find_preamble, retain_lone_preamble_byte, FrameType,
-    MstpFrame, StreamDecode, BROADCAST_MAC,
-};
+use super::adapter::Task;
+use super::diagnostics::increment;
+use super::queues::{CoreClock, EnqueueError, SharedQueues};
+use super::{DedicatedRuntime, Echo, MstpConfig, MstpDiagnostics, MstpExecutionMode, SerialPort};
 use crate::port::{ReceivedNpdu, TransportPort};
-
-use super::{
-    calculate_host_stale_partial_timeout_us, calculate_t_turnaround_us, increment, next_addr,
-    Counters, DedicatedRuntime, MasterNode, MasterState, MstpConfig, MstpDiagnostics,
-    MstpExecutionMode, SerialPort, MSTP_MAX_FRAME_BUF, T_NO_TOKEN_MS, T_REPLY_DELAY_MS,
-    T_REPLY_TIMEOUT_MS, T_REPLY_TRANSMIT_MARGIN_MS, T_USAGE_TIMEOUT_MS,
-};
-
-/// Add one host read to the persistent receive buffer and drain all complete frames.
-///
-/// The persistent buffer never exceeds one maximum standard frame. A host read may
-/// contain any number of coalesced frames; complete frames are drained before more
-/// bytes from that same read are appended.
-fn assemble_host_chunk(frame_buf: &mut Vec<u8>, chunk: &[u8], counts: &Counters) -> Vec<MstpFrame> {
-    let mut frames = Vec::new();
-    let mut remaining = chunk;
-
-    while !remaining.is_empty() {
-        let available = MSTP_MAX_FRAME_BUF.saturating_sub(frame_buf.len());
-        if available == 0 {
-            // A valid standard frame is decidable at this size. This fallback
-            // guarantees progress if malformed input somehow remains NeedMore.
-            warn!("MS/TP: full incomplete host assembly, discarding one byte");
-            increment(&counts.invalid_frame_discards);
-            frame_buf.drain(..1);
-            continue;
-        }
-
-        let take = available.min(remaining.len());
-        frame_buf.extend_from_slice(&remaining[..take]);
-        remaining = &remaining[take..];
-
-        loop {
-            let preamble_pos = match find_preamble(frame_buf) {
-                Some(pos) => pos,
-                None => {
-                    let before = frame_buf.len();
-                    retain_lone_preamble_byte(frame_buf);
-                    if frame_buf.len() < before {
-                        increment(&counts.invalid_frame_discards);
-                    }
-                    break;
-                }
-            };
-
-            if preamble_pos > 0 {
-                increment(&counts.invalid_frame_discards);
-                frame_buf.drain(..preamble_pos);
-            }
-
-            match decode_frame_stream(frame_buf) {
-                StreamDecode::Complete { frame, consumed } => {
-                    counts.received(frame.frame_type);
-                    frame_buf.drain(..consumed);
-                    frames.push(frame);
-                }
-                StreamDecode::NeedMore => break,
-                StreamDecode::Invalid { discard } => {
-                    increment(&counts.invalid_frame_discards);
-                    let discard = discard.min(frame_buf.len()).max(1);
-                    frame_buf.drain(..discard);
-                }
-            }
-        }
-    }
-
-    debug_assert!(frame_buf.len() <= MSTP_MAX_FRAME_BUF);
-    frames
-}
-
-fn finish_data_request_at_transport_boundary(
-    node: &mut MasterNode,
-    reply_data: Option<Bytes>,
-    counts: &Counters,
-) -> Option<MstpFrame> {
-    if reply_data
-        .as_ref()
-        .is_some_and(|data| data.len() > super::MAX_STANDARD_MPDU_DATA)
-    {
-        increment(&counts.outbound_oversize);
-    }
-    match node.finish_data_request(reply_data) {
-        Ok(frame) => Some(frame),
-        Err(error) => {
-            warn!("MS/TP application reply rejected: {error}");
-            node.abandon_data_request();
-            None
-        }
-    }
-}
-
-/// Wait only for the unelapsed part of receive-to-transmit turnaround silence.
-async fn wait_for_turnaround(earliest_tx: tokio::time::Instant) {
-    if earliest_tx > tokio::time::Instant::now() {
-        tokio::time::sleep_until(earliest_tx).await;
-    }
-}
 
 // ---------------------------------------------------------------------------
 // MS/TP Transport
 // ---------------------------------------------------------------------------
 
 /// MS/TP transport implementing [`TransportPort`].
+///
+/// [`start`](TransportPort::start) validates the [`MstpConfig`] and spawns a
+/// task that owns the serial port and runs the portable master core (see the
+/// [module docs](super)). Sends queue NPDUs for the core, which sends them
+/// when this station holds the token; a full queue or an NPDU longer than
+/// the port sends ([`Self::max_npdu_length`]) is refused at once.
+///
+/// `bacnet_network`'s `BACnetRouter` turns on
+/// [`MstpConfig::extended_frames`] for every MS/TP port it routes,
+/// through [`TransportPort::prepare_for_routing`], since Clause 9.3 requires
+/// them of a routing node; any other use keeps the configured setting.
 pub struct MstpTransport<S: SerialPort> {
     serial: Option<S>,
     config: MstpConfig,
     local_mac: [u8; 1],
-    node: Option<Arc<Mutex<MasterNode>>>,
-    recv_task: Option<tokio::task::JoinHandle<()>>,
+    link: Option<Link>,
+    task: Option<tokio::task::JoinHandle<()>>,
     execution_mode: MstpExecutionMode,
     dedicated_runtime: Option<DedicatedRuntime>,
     diagnostics: MstpDiagnostics,
+}
+
+/// What a send needs from a started transport.
+struct Link {
+    queues: SharedQueues,
+    clock: CoreClock,
+    queue_max_age: CoreDuration,
 }
 
 impl<S: SerialPort> MstpTransport<S> {
@@ -132,8 +51,8 @@ impl<S: SerialPort> MstpTransport<S> {
             serial: Some(serial),
             config,
             local_mac: [mac],
-            node: None,
-            recv_task: None,
+            link: None,
+            task: None,
             execution_mode: MstpExecutionMode::default(),
             dedicated_runtime: None,
             diagnostics: MstpDiagnostics::new(),
@@ -154,17 +73,9 @@ impl<S: SerialPort> MstpTransport<S> {
         self
     }
 
-    /// The live master node. Test-only: its lock is the one the token loop
-    /// takes, so holding it across an await stalls token passing.
-    #[cfg(test)]
-    pub(crate) fn node_state(&self) -> Option<&Arc<Mutex<MasterNode>>> {
-        self.node.as_ref()
-    }
-
     /// Obtain a cloneable, counts-only handle before transferring transport ownership.
     /// Cloning retains no serial or runtime ownership; snapshots remain readable
     /// after stop/drop. See [`MstpDiagnostics`] for lifecycle and coherence limits.
-    /// The counters see only traffic that goes through the transport API.
     ///
     /// ```
     /// use bacnet_transport::mstp::{LoopbackSerial, MstpConfig, MstpTransport};
@@ -183,13 +94,72 @@ impl<S: SerialPort> MstpTransport<S> {
         self.diagnostics.clone()
     }
 
-    fn abort_receive_task_and_release_state(&mut self) {
-        if let Some(task) = self.recv_task.take() {
+    /// The configuration the next `start` uses: what [`Self::new`] was
+    /// given, with extended frames on if a router prepared the port
+    /// ([`TransportPort::prepare_for_routing`]).
+    pub fn config(&self) -> &MstpConfig {
+        &self.config
+    }
+
+    /// The longest NPDU the port sends or takes, as the network layer sees
+    /// it: 1497 octets with extended frames, 501 without
+    /// ([`MstpConfig::max_npdu_length`]).
+    pub fn max_npdu_length(&self) -> usize {
+        self.config.max_npdu_length()
+    }
+
+    fn abort_task_and_release_state(&mut self) {
+        if let Some(task) = self.task.take() {
             task.abort();
         }
         self.dedicated_runtime.take();
         self.serial.take();
-        self.node.take();
+        self.link.take();
+    }
+
+    /// Queue an NPDU for the core, refusing it at once if it cannot be sent.
+    fn enqueue(&self, destination: u8, npdu: &[u8]) -> Result<(), Error> {
+        let Some(link) = &self.link else {
+            return Err(Error::Transport(std::io::Error::new(
+                std::io::ErrorKind::NotConnected,
+                "MS/TP transport not started",
+            )));
+        };
+        let result = link
+            .queues
+            .enqueue(destination, npdu, link.clock.now(), link.queue_max_age);
+        let counts = &self.diagnostics.counters;
+        counts.publish_queues(&link.queues);
+        match result {
+            Ok(()) => Ok(()),
+            Err(EnqueueError::Closed) => Err(Error::Transport(std::io::Error::new(
+                std::io::ErrorKind::NotConnected,
+                "MS/TP transport is no longer running",
+            ))),
+            Err(EnqueueError::Rejected(QueueRefusal::Oversize)) => {
+                increment(&counts.outbound_oversize);
+                let class = if self.config.extended_frames {
+                    "extended"
+                } else {
+                    "standard"
+                };
+                Err(Error::Encoding(format!(
+                    "MS/TP NPDU length {} exceeds {class}-frame maximum {}",
+                    npdu.len(),
+                    self.config.max_npdu_length()
+                )))
+            }
+            Err(EnqueueError::Rejected(QueueRefusal::Full)) => {
+                increment(&counts.outbound_queue_full);
+                Err(Error::Transport(std::io::Error::new(
+                    std::io::ErrorKind::WouldBlock,
+                    "MS/TP TX queue full",
+                )))
+            }
+            Err(EnqueueError::Rejected(reason)) => Err(Error::Transport(std::io::Error::other(
+                format!("MS/TP NPDU not queued: {reason:?}"),
+            ))),
+        }
     }
 }
 
@@ -202,11 +172,10 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
         /// NPDU receive channel capacity — smaller than BIP/Ethernet for low-bandwidth serial.
         const NPDU_CHANNEL_CAPACITY: usize = 64;
 
-        let (npdu_tx, npdu_rx) = mpsc::channel(NPDU_CHANNEL_CAPACITY);
-
-        let node = Arc::new(Mutex::new(MasterNode::new(self.config.clone())?));
-        self.node = Some(node.clone());
-
+        let config = self.config.core_config()?;
+        if let Some(serial) = &self.serial {
+            serial.echo().validate()?;
+        }
         let serial = self
             .serial
             .take()
@@ -217,425 +186,91 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
             MstpExecutionMode::DedicatedThread => Some(DedicatedRuntime::new().await?),
         };
 
-        let serial = Arc::new(serial);
-        let serial_clone = serial.clone();
-        let counts = self.diagnostics.counters.clone();
-        let t_turnaround_us = calculate_t_turnaround_us(self.config.baud_rate);
-        // Host reassembly policy: tolerate USB read chunk gaps, not wire T_frame_abort.
-        let host_stale_partial_timeout_us =
-            calculate_host_stale_partial_timeout_us(self.config.baud_rate);
-        let reply_decision_delay_ms = T_REPLY_DELAY_MS
-            .saturating_sub(t_turnaround_us.div_ceil(1_000) + T_REPLY_TRANSMIT_MARGIN_MS);
-
-        // Receive loop using tokio::select! with timer
-        let mac_loop = async move {
-            let mut recv_buf = vec![0u8; 2048];
-            let mut frame_buf = Vec::with_capacity(MSTP_MAX_FRAME_BUF);
-            let mut last_byte_time = tokio::time::Instant::now();
-            let mut earliest_tx = last_byte_time;
-
-            // Start with T_NO_TOKEN timeout — if we don't see anything, claim the token
-            let sleep = tokio::time::sleep(tokio::time::Duration::from_millis(T_NO_TOKEN_MS));
-            tokio::pin!(sleep);
-
-            let mut encode_buf = BytesMut::with_capacity(1024);
-            // Reuse both storage and frame boundaries; no per-frame byte Vecs.
-            let mut pending_write_ends = Vec::new();
-            let mut pending_reply_rx: Option<oneshot::Receiver<Bytes>> = None;
-            let mut pending_reply_deadline: Option<tokio::time::Instant> = None;
-
-            loop {
-                tokio::select! {
-                    biased;
-                    // A DataExpectingReply application response must wake the
-                    // loop immediately; waiting for T_reply_delay would begin
-                    // transmission after the Standard's deadline.
-                    reply = async {
-                        pending_reply_rx
-                            .as_mut()
-                            .expect("reply branch is guarded")
-                            .await
-                    }, if pending_reply_rx.is_some() => {
-                        pending_reply_rx = None;
-                        pending_reply_deadline = None;
-                        let mut node_guard = node.lock().await;
-                        let response = finish_data_request_at_transport_boundary(
-                            &mut node_guard,
-                            reply.ok(),
-                            &counts,
-                        );
-                        drop(node_guard);
-
-                        if let Some(response) = response {
-                            encode_buf.clear();
-                            if encode_frame(&mut encode_buf, &response).is_ok() {
-                                wait_for_turnaround(earliest_tx).await;
-                                if let Err(e) = serial_clone.write(&encode_buf).await {
-                                    increment(&counts.serial_write_errors);
-                                    warn!("MS/TP write error: {}", e);
-                                } else {
-                                    counts.transmitted(&encode_buf, true);
-                                }
-                            }
-                        }
-                        sleep.as_mut().reset(
-                            tokio::time::Instant::now()
-                                + tokio::time::Duration::from_millis(T_USAGE_TIMEOUT_MS),
-                        );
-                    }
-                    // Branch 1: serial data arrives
-                    result = serial_clone.read(&mut recv_buf) => {
-                        let frames = match result {
-                            Ok(0) => continue,
-                            Ok(n) => {
-                                // Host stale-partial timeout: drop abandoned assembly if no
-                                // bytes arrive for a long host-side gap (USB scheduling, not
-                                // wire inter-byte silence).
-                                let now = tokio::time::Instant::now();
-                                if !frame_buf.is_empty() {
-                                    let gap = now.duration_since(last_byte_time);
-                                    if gap
-                                        > tokio::time::Duration::from_micros(
-                                            host_stale_partial_timeout_us,
-                                        )
-                                    {
-                                        debug!(
-                                            "MS/TP: host stale partial frame timeout ({gap:?}), discarding partial assembly"
-                                        );
-                                        frame_buf.clear();
-                                        increment(&counts.stale_partial_resets);
-                                    }
-                                }
-                                last_byte_time = now;
-                                // Host arrival is no earlier than wire reception.
-                                // Anchor to the latest chunk, including a late tail,
-                                // without estimating backwards through USB batching.
-                                earliest_tx = now
-                                    + tokio::time::Duration::from_micros(t_turnaround_us);
-                                assemble_host_chunk(&mut frame_buf, &recv_buf[..n], &counts)
-                            }
-                            Err(e) => {
-                                increment(&counts.serial_read_errors);
-                                warn!("MS/TP serial read error: {}", e);
-                                break;
-                            }
-                        };
-
-                        for frame in frames {
-                                    // Process through state machine — collect
-                                    // frames under lock, drop before writing.
-                                    let mut node_guard = node.lock().await;
-                                    let response =
-                                        node_guard.handle_received_frame_observed(&frame, &npdu_tx, Some(&counts));
-                                    let mut started_reply = false;
-                                    if pending_reply_rx.is_none()
-                                        && node_guard.state == MasterState::AnswerDataRequest
-                                    {
-                                        pending_reply_rx = node_guard.reply_rx.take();
-                                        started_reply = pending_reply_rx.is_some();
-                                    }
-                                    if started_reply {
-                                        pending_reply_deadline = Some(
-                                            last_byte_time
-                                                + tokio::time::Duration::from_millis(
-                                                    reply_decision_delay_ms,
-                                                ),
-                                        );
-                                    }
-                                    encode_buf.clear();
-                                    pending_write_ends.clear();
-                                    if let Some(response) = response {
-                                        if let Err(e) = encode_frame(&mut encode_buf, &response) {
-                                            warn!("MS/TP encode error: {}", e);
-                                            drop(node_guard);
-                                            continue;
-                                        }
-                                        pending_write_ends.push(encode_buf.len());
-                                    }
-
-                                    // If we got the token, use it
-                                    while node_guard.state == MasterState::UseToken
-                                        || node_guard.state == MasterState::DoneWithToken
-                                    {
-                                        let frame_to_send =
-                                            if node_guard.state == MasterState::DoneWithToken {
-                                                node_guard.done_with_token()
-                                            } else {
-                                                node_guard.use_token()
-                                            };
-                                        if let Err(e) = encode_frame(&mut encode_buf, &frame_to_send)
-                                        {
-                                            warn!("MS/TP encode error: {}", e);
-                                            break;
-                                        }
-                                        pending_write_ends.push(encode_buf.len());
-                                        // After sending DataExpectingReply, enter WaitForReply
-                                        if frame_to_send.frame_type
-                                            == FrameType::BACnetDataExpectingReply
-                                        {
-                                            node_guard.state = MasterState::WaitForReply;
-                                            break;
-                                        }
-                                        // After Token or PFM, leave the use/done loop
-                                        if matches!(
-                                            frame_to_send.frame_type,
-                                            FrameType::Token | FrameType::PollForMaster
-                                        ) {
-                                            break;
-                                        }
-                                        // SoleMaster may return to UseToken with no wire
-                                        // progress; break if still UseToken after empty cycle
-                                        if node_guard.state == MasterState::UseToken
-                                            && node_guard.tx_queue.is_empty()
-                                            && node_guard.frame_count
-                                                >= node_guard.config.max_info_frames
-                                        {
-                                            break;
-                                        }
-                                    }
-
-                                    // Capture timeout before dropping lock
-                                    let timeout_ms = match node_guard.state {
-                                        MasterState::Idle => T_NO_TOKEN_MS,
-                                        MasterState::NoToken => T_NO_TOKEN_MS,
-                                        MasterState::PollForMaster => node_guard.t_slot_ms,
-                                        MasterState::WaitForReply => T_REPLY_TIMEOUT_MS,
-                                        MasterState::AnswerDataRequest => reply_decision_delay_ms,
-                                        MasterState::PassToken => T_USAGE_TIMEOUT_MS,
-                                        MasterState::UseToken
-                                        | MasterState::DoneWithToken => T_USAGE_TIMEOUT_MS,
-                                    };
-                                    drop(node_guard);
-
-                                    if !pending_write_ends.is_empty() {
-                                        wait_for_turnaround(earliest_tx).await;
-                                    }
-                                    let mut start = 0;
-                                    for &end in &pending_write_ends {
-                                        if let Err(e) = serial_clone.write(&encode_buf[start..end]).await {
-                                            increment(&counts.serial_write_errors);
-                                            warn!("MS/TP write error: {}", e);
-                                            break;
-                                        }
-                                        counts.transmitted(&encode_buf[start..end], false);
-                                        start = end;
-                                    }
-
-                                    sleep.as_mut().reset(
-                                        pending_reply_deadline.unwrap_or_else(|| {
-                                            tokio::time::Instant::now()
-                                                + tokio::time::Duration::from_millis(timeout_ms)
-                                        }),
-                                    );
-                        }
-                    }
-                    // Branch 2: timeout
-                    () = &mut sleep => {
-                        let mut node_guard = node.lock().await;
-                        encode_buf.clear();
-                        let was_answering_data_request =
-                            node_guard.pending_reply_source.is_some();
-                        let timeout_ms = match node_guard.state {
-                            MasterState::Idle => {
-                                node_guard.state = MasterState::NoToken;
-                                node_guard.retry_token_count = 0;
-                                let ts = node_guard.config.this_station as u64;
-                                T_NO_TOKEN_MS + node_guard.t_slot_ms * ts
-                            }
-                            MasterState::NoToken => {
-                                // GenerateToken: send PFM to discover successor.
-                                let ts = node_guard.config.this_station;
-                                let pfm = MstpFrame {
-                                    frame_type: FrameType::PollForMaster,
-                                    destination: next_addr(ts, node_guard.config.max_master),
-                                    source: ts,
-                                    data: Bytes::new(),
-                                };
-                                let _ = encode_frame(&mut encode_buf, &pfm);
-                                node_guard.poll_station =
-                                    next_addr(ts, node_guard.config.max_master);
-                                node_guard.state = MasterState::PollForMaster;
-                                node_guard.poll_count = 0;
-                                node_guard.t_slot_ms
-                            }
-                            MasterState::PollForMaster => {
-                                // No reply to PFM — try next
-                                let frame_to_send = node_guard.poll_timeout();
-                                let _ = encode_frame(&mut encode_buf, &frame_to_send);
-                                if node_guard.state == MasterState::PollForMaster {
-                                    node_guard.t_slot_ms
-                                } else {
-                                    T_USAGE_TIMEOUT_MS
-                                }
-                            }
-                            MasterState::WaitForReply => {
-                                increment(&counts.wait_for_reply_timeouts);
-                                // ReplyTimeout: enter DoneWithToken then run transitions.
-                                node_guard.expected_reply_source = None;
-                                node_guard.frame_count = node_guard.config.max_info_frames;
-                                node_guard.state = MasterState::DoneWithToken;
-                                let frame_to_send = node_guard.done_with_token();
-                                let _ = encode_frame(&mut encode_buf, &frame_to_send);
-                                match node_guard.state {
-                                    MasterState::PassToken => T_USAGE_TIMEOUT_MS,
-                                    MasterState::PollForMaster => node_guard.t_slot_ms,
-                                    MasterState::UseToken => T_USAGE_TIMEOUT_MS,
-                                    _ => T_USAGE_TIMEOUT_MS,
-                                }
-                            }
-                            MasterState::AnswerDataRequest => {
-                                // The timer fires early enough to include
-                                // turnaround and scheduling before the first
-                                // octet's T_reply_delay deadline. Prefer a
-                                // response that became ready at the boundary.
-                                let reply_data = pending_reply_rx
-                                    .take()
-                                    .and_then(|mut rx| rx.try_recv().ok());
-                                if let Some(reply_frame) = finish_data_request_at_transport_boundary(
-                                    &mut node_guard,
-                                    reply_data,
-                                    &counts,
-                                ) {
-                                    let _ = encode_frame(&mut encode_buf, &reply_frame);
-                                }
-                                T_USAGE_TIMEOUT_MS
-                            }
-                            MasterState::PassToken => {
-                                if let Some(frame) = node_guard.pass_token_timeout() {
-                                    let _ = encode_frame(&mut encode_buf, &frame);
-                                }
-                                match node_guard.state {
-                                    MasterState::PassToken => T_USAGE_TIMEOUT_MS,
-                                    MasterState::NoToken => {
-                                        // Per spec Clause 9.5.6: T_no_token + T_slot * TS
-                                        let ts = node_guard.config.this_station as u64;
-                                        T_NO_TOKEN_MS + node_guard.t_slot_ms * ts
-                                    }
-                                    MasterState::UseToken => T_USAGE_TIMEOUT_MS,
-                                    _ => T_USAGE_TIMEOUT_MS,
-                                }
-                            }
-                            MasterState::UseToken
-                            | MasterState::DoneWithToken => {
-                                // Should not typically timeout here; run DONE_WITH_TOKEN
-                                // transitions (never unconditional pass_token).
-                                node_guard.state = MasterState::DoneWithToken;
-                                let frame_to_send = node_guard.done_with_token();
-                                let _ = encode_frame(&mut encode_buf, &frame_to_send);
-                                match node_guard.state {
-                                    MasterState::PassToken => T_USAGE_TIMEOUT_MS,
-                                    MasterState::PollForMaster => node_guard.t_slot_ms,
-                                    MasterState::UseToken => T_USAGE_TIMEOUT_MS,
-                                    _ => T_USAGE_TIMEOUT_MS,
-                                }
-                            }
-                        };
-                        if was_answering_data_request {
-                            pending_reply_deadline = None;
-                        }
-                        drop(node_guard);
-
-                        if !encode_buf.is_empty() {
-                            wait_for_turnaround(earliest_tx).await;
-                            if let Err(e) = serial_clone.write(&encode_buf).await {
-                                increment(&counts.serial_write_errors);
-                                warn!("MS/TP write error: {}", e);
-                            } else {
-                                counts.transmitted(&encode_buf, was_answering_data_request);
-                            }
-                        }
-
-                        sleep.as_mut().reset(
-                            tokio::time::Instant::now()
-                                + tokio::time::Duration::from_millis(timeout_ms),
-                        );
-                    }
-                }
-            }
+        let (npdu_tx, npdu_rx) = mpsc::channel(NPDU_CHANNEL_CAPACITY);
+        let queues = SharedQueues::new(self.config.extended_frames);
+        let clock = CoreClock::new();
+        let task = Task {
+            serial,
+            config,
+            queues: queues.clone(),
+            clock,
+            npdus: npdu_tx,
+            counts: self.diagnostics.counters.clone(),
+            transmit_pad: self.config.transmit_latency_pad,
         };
-
         let task = match &dedicated_runtime {
-            Some(runtime) => runtime.handle.spawn(mac_loop),
-            None => tokio::spawn(mac_loop),
+            Some(runtime) => runtime.handle.spawn(task.run()),
+            None => tokio::spawn(task.run()),
         };
         self.dedicated_runtime = dedicated_runtime;
-        self.recv_task = Some(task);
+        self.task = Some(task);
+        self.link = Some(Link {
+            queues,
+            clock,
+            queue_max_age: config.queue_max_age,
+        });
         Ok(npdu_rx)
     }
 
     async fn stop(&mut self) -> Result<(), Error> {
-        if let Some(task) = self.recv_task.take() {
+        if let Some(task) = self.task.take() {
             task.abort();
             let _ = task.await;
         }
         if let Some(runtime) = self.dedicated_runtime.take() {
             runtime.stop().await;
         }
-        // Clear the node's queue to prevent stale sends after stop
-        if let Some(ref node) = self.node {
-            let mut n = node.lock().await;
-            n.tx_queue.clear();
-            n.state = MasterState::Idle;
-            n.expected_reply_source = None;
-        }
+        // Queued NPDUs go with the task; later sends are refused.
+        self.link = None;
         Ok(())
     }
 
     fn abort(&mut self) {
-        self.abort_receive_task_and_release_state();
+        self.abort_task_and_release_state();
     }
 
     async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        if mac.len() != 1 {
+        let [destination] = mac else {
             return Err(Error::Encoding(format!(
                 "MS/TP MAC must be 1 byte, got {}",
                 mac.len()
             )));
-        }
-        let dest = mac[0];
-        if let Some(ref node) = self.node {
-            let mut node = node.lock().await;
-            node.queue_npdu_observed(
-                dest,
-                Bytes::copy_from_slice(npdu),
-                Some(&self.diagnostics.counters),
-            )?;
-            Ok(())
-        } else {
-            Err(Error::Transport(std::io::Error::new(
-                std::io::ErrorKind::NotConnected,
-                "MS/TP transport not started",
-            )))
-        }
+        };
+        self.enqueue(*destination, npdu)
     }
 
     async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        if let Some(ref node) = self.node {
-            let mut node = node.lock().await;
-            node.queue_npdu_observed(
-                BROADCAST_MAC,
-                Bytes::copy_from_slice(npdu),
-                Some(&self.diagnostics.counters),
-            )?;
-            Ok(())
-        } else {
-            Err(Error::Transport(std::io::Error::new(
-                std::io::ErrorKind::NotConnected,
-                "MS/TP transport not started",
-            )))
+        self.enqueue(BROADCAST_MAC, npdu)
+    }
+
+    /// Turns on extended frames, which Clause 9.3 requires of a routing
+    /// node, unless the transport has started already.
+    fn prepare_for_routing(&mut self) {
+        if self.serial.is_some() {
+            self.config.extended_frames = true;
         }
     }
 
+    /// [`MstpConfig::max_apdu_length`]: 1476 with extended frames, 480
+    /// without.
     fn local_receive_apdu_capacity(&self) -> u16 {
-        480
+        self.config.max_apdu_length()
     }
 
     fn local_mac(&self) -> &[u8] {
         &self.local_mac
     }
 
+    /// [`MstpConfig::max_apdu_length`], as for the receive capacity.
     fn egress_apdu_limit(&self) -> u16 {
-        480
+        self.config.max_apdu_length()
+    }
+
+    /// [`MstpConfig::max_npdu_length`] both ways: 1497 octets with extended
+    /// frames, 501 without.
+    fn max_npdu(&self) -> crate::port::NpduLimits {
+        let octets = u16::try_from(self.config.max_npdu_length()).unwrap_or(u16::MAX);
+        crate::port::NpduLimits::both(octets)
     }
 
     fn is_broadcast_mac(&self, mac: &[u8]) -> bool {
@@ -649,7 +284,7 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
 
 impl<S: SerialPort> Drop for MstpTransport<S> {
     fn drop(&mut self) {
-        self.abort_receive_task_and_release_state();
+        self.abort_task_and_release_state();
     }
 }
 
@@ -658,9 +293,21 @@ impl<S: SerialPort> Drop for MstpTransport<S> {
 // ---------------------------------------------------------------------------
 
 /// In-memory loopback serial port for unit testing.
+///
+/// [`Self::pair`] connects two ports: what one writes, the other reads, in
+/// whole writes (an empty write delivers nothing, and a read always returns
+/// at least one octet). Writes are delivered at once, so a frame takes no
+/// time on this "wire"; the transport times it by the baud rate (see the
+/// [module docs](super)). By default a port does not hear its own writes;
+/// [`Self::with_echo`] makes it hear them, as a transceiver whose receiver
+/// stays on does.
 pub struct LoopbackSerial {
     rx: Mutex<mpsc::Receiver<Vec<u8>>>,
     tx: mpsc::Sender<Vec<u8>>,
+    /// This port's own receive channel, for its echo. Weak, so that a port
+    /// still sees its peer go away.
+    own: mpsc::WeakSender<Vec<u8>>,
+    echo: Echo,
     /// Leftover bytes from a previous read that didn't fit in the caller's buffer.
     leftover: Mutex<Vec<u8>>,
 }
@@ -670,23 +317,44 @@ impl LoopbackSerial {
     pub fn pair() -> (Self, Self) {
         let (tx_a, rx_b) = mpsc::channel(64);
         let (tx_b, rx_a) = mpsc::channel(64);
+        let own_a = tx_b.downgrade();
+        let own_b = tx_a.downgrade();
         (
             Self {
                 rx: Mutex::new(rx_a),
                 tx: tx_a,
+                own: own_a,
+                echo: Echo::None,
                 leftover: Mutex::new(Vec::new()),
             },
             Self {
                 rx: Mutex::new(rx_b),
                 tx: tx_b,
+                own: own_b,
+                echo: Echo::None,
                 leftover: Mutex::new(Vec::new()),
             },
         )
+    }
+
+    /// Set whether this port hears its own writes. With [`Echo::Full`] each
+    /// write is delivered to this port's own reader first, then to the peer;
+    /// its grace is what the port reports to the transport.
+    pub fn with_echo(mut self, echo: Echo) -> Self {
+        self.echo = echo;
+        self
     }
 }
 
 impl SerialPort for LoopbackSerial {
     async fn write(&self, data: &[u8]) -> Result<(), Error> {
+        if matches!(self.echo, Echo::Full { .. }) {
+            if let Some(own) = self.own.upgrade() {
+                own.send(data.to_vec())
+                    .await
+                    .map_err(|_| Error::Encoding("loopback echo failed".into()))?;
+            }
+        }
         self.tx
             .send(data.to_vec())
             .await
@@ -699,7 +367,9 @@ impl SerialPort for LoopbackSerial {
     }
 
     async fn read(&self, buf: &mut [u8]) -> Result<usize, Error> {
-        // Serve leftover bytes first
+        // Hold the remainder's lock across the receive, so nothing taken off
+        // the channel waits on a later await: a read dropped at any await
+        // point loses no data.
         let mut leftover = self.leftover.lock().await;
         if !leftover.is_empty() {
             let len = leftover.len().min(buf.len());
@@ -707,22 +377,26 @@ impl SerialPort for LoopbackSerial {
             leftover.drain(..len);
             return Ok(len);
         }
-        drop(leftover);
-
         let mut rx = self.rx.lock().await;
-        match rx.recv().await {
-            Some(data) => {
-                let len = data.len().min(buf.len());
-                buf[..len].copy_from_slice(&data[..len]);
-                // Buffer excess bytes for next read
-                if data.len() > buf.len() {
-                    let mut leftover = self.leftover.lock().await;
-                    leftover.extend_from_slice(&data[buf.len()..]);
+        loop {
+            match rx.recv().await {
+                // An empty write puts nothing on the line, and a read that
+                // returns nothing would mean the end of it.
+                Some(data) if data.is_empty() => {}
+                Some(data) => {
+                    let len = data.len().min(buf.len());
+                    buf[..len].copy_from_slice(&data[..len]);
+                    // Keep what did not fit for the next read.
+                    leftover.extend_from_slice(&data[len..]);
+                    return Ok(len);
                 }
-                Ok(len)
+                None => return Err(Error::Encoding("loopback channel closed".into())),
             }
-            None => Err(Error::Encoding("loopback channel closed".into())),
         }
+    }
+
+    fn echo(&self) -> Echo {
+        self.echo
     }
 }
 
@@ -747,13 +421,10 @@ impl SerialPort for NoSerial {
 }
 
 #[cfg(test)]
-#[path = "assembly_tests.rs"]
-mod assembly_tests;
-
-#[cfg(test)]
 mod abort_tests {
     use std::future::pending;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
     use std::time::Duration;
 
     use super::*;
@@ -807,8 +478,9 @@ mod abort_tests {
         assert!(ExclusiveSerial::open(in_use.clone()).is_none());
 
         transport.abort();
-        assert!(transport.recv_task.is_none());
-        assert!(transport.node.is_none());
+        assert!(transport.task.is_none());
+        assert!(transport.link.is_none());
+        assert!(transport.send_broadcast(&[1, 0]).await.is_err());
         drop(reopen(&in_use).await);
         assert!(!in_use.load(Ordering::SeqCst));
     }
@@ -823,5 +495,20 @@ mod abort_tests {
         drop(transport);
         drop(reopen(&in_use).await);
         assert!(!in_use.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn a_refused_configuration_keeps_the_serial_port() {
+        let in_use = Arc::new(AtomicBool::new(false));
+        let serial = ExclusiveSerial::open(in_use.clone()).unwrap();
+        let config = MstpConfig {
+            this_station: 9,
+            max_master: 7,
+            ..MstpConfig::default()
+        };
+        let mut transport = MstpTransport::new(serial, config);
+        let error = transport.start().await.unwrap_err();
+        assert!(error.to_string().contains("exceeds configured max_master"));
+        assert!(transport.serial.is_some(), "the serial port was consumed");
     }
 }

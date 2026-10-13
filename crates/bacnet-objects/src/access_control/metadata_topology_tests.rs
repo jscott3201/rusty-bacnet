@@ -281,6 +281,8 @@ fn property_metadata_access_point_exact_sets_readable_rows_and_indexed_list() {
         P::NUMBER_OF_AUTHENTICATION_POLICIES,
         P::AUTHORIZATION_MODE,
         P::PRIORITY_FOR_WRITING,
+        // The optional factor of each event (#1132).
+        P::ACCESS_EVENT_AUTHENTICATION_FACTOR,
     ];
     let required = [
         P::OBJECT_IDENTIFIER,
@@ -343,6 +345,14 @@ fn property_metadata_access_point_exact_sets_readable_rows_and_indexed_list() {
             .read_property(P::ACCESS_EVENT_CREDENTIAL, None)
             .unwrap(),
         PropertyValue::ApplicationData(vec![0x1C, 0x08, 0x3F, 0xFF, 0xFF])
+    );
+    // And the UNDEFINED factor: format type [0] 0, class [1] 0, no value
+    // [2] (Clause 12.31.31).
+    assert_eq!(
+        object
+            .read_property(P::ACCESS_EVENT_AUTHENTICATION_FACTOR, None)
+            .unwrap(),
+        PropertyValue::ApplicationData(vec![0x09, 0x00, 0x19, 0x00, 0x28])
     );
     // Access_Event_Time is one BACnetTimeStamp, so an index is rejected;
     // Access_Doors is a BACnetARRAY and takes one (#1169).
@@ -484,7 +494,9 @@ fn property_metadata_access_trio_write_capabilities_match_dispatch() {
                 P::ACTIVE_AUTHENTICATION_POLICY,
                 P::AUTHORIZATION_MODE,
             ],
-            &[],
+            // Reliability, which a zero active policy moves (Clause 12.31.8,
+            // #1325).
+            &[P::RELIABILITY],
         ),
         (
             || Box::new(AccessZoneObject::new(1, "ZONE-1").unwrap()),
@@ -586,7 +598,6 @@ fn property_metadata_access_point_and_zone_writes_store_verbatim() {
             P::ACCESS_DOORS,
             P::EVENT_STATE,
             P::STATUS_FLAGS,
-            P::RELIABILITY,
             P::AUTHENTICATION_STATUS,
             P::ACCESS_EVENT_CREDENTIAL,
             P::NUMBER_OF_AUTHENTICATION_POLICIES,
@@ -599,6 +610,16 @@ fn property_metadata_access_point_and_zone_writes_store_verbatim() {
             );
             assert!(!point.is_writable_property(p));
         }
+        // Reliability takes its own readback only while out of service
+        // (#1325).
+        let value = point.read_property(P::RELIABILITY, None).unwrap();
+        let result = point.write_property(P::RELIABILITY, None, value, None);
+        if out_of_service {
+            result.unwrap();
+        } else {
+            assert_error(result.unwrap_err(), ErrorCode::WRITE_ACCESS_DENIED);
+        }
+        assert!(point.is_writable_property(P::RELIABILITY));
         let mut zone = AccessZoneObject::new(1, "ZONE-1").unwrap();
         zone.write_property(
             P::OUT_OF_SERVICE,
@@ -688,12 +709,14 @@ fn property_metadata_access_trio_unserved_rows_stay_unknown() {
     let mut door = AccessDoorObject::new(1, "DOOR-1").unwrap();
     assert_unserved(&mut door, P::DOOR_UNLOCK_DELAY_TIME);
     assert_unserved(&mut door, P::MAINTENANCE_REQUIRED);
-    // Access_Event_Authentication_Factor is a Table 12-36 O row with no read
-    // arm; Present_Value is no Table 12-36 row (#1064). Authentication_Status
-    // is served (#1284).
+    // Present_Value is no Table 12-36 row (#1064). Authentication_Status
+    // (#1284) and Access_Event_Authentication_Factor (#1132) are served. The
+    // two policy arrays are served only once the application sets them
+    // (#1325).
     let mut point = AccessPointObject::new(1, "AP-1").unwrap();
-    assert_unserved(&mut point, P::ACCESS_EVENT_AUTHENTICATION_FACTOR);
     assert_unserved(&mut point, P::PRESENT_VALUE);
+    assert_unserved(&mut point, P::AUTHENTICATION_POLICY_LIST);
+    assert_unserved(&mut point, P::AUTHENTICATION_POLICY_NAMES);
     // Credentials_In_Zone is a Table 12-37 O row with no read arm;
     // Present_Value and Access_Doors are no Table 12-37 rows (#1064).
     // Occupancy_State is served (#1284).

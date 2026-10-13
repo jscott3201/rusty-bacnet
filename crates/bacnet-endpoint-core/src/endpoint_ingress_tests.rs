@@ -83,6 +83,11 @@ impl TransportPort for TestTransport {
     fn local_mac(&self) -> &[u8] {
         &self.local_mac
     }
+
+    /// MAC 0xFF reaches a group of nodes.
+    fn is_group_destination(&self, mac: &[u8]) -> bool {
+        mac == [0xFF]
+    }
 }
 
 struct BlockingTransport {
@@ -348,6 +353,39 @@ async fn malformed_and_unsupported_apdus_have_policy_outcomes() {
     assert_eq!(unsupported.received.apdu.as_ref(), &[0x80]);
     assert!(ingress.inbound_requests.try_recv().is_err());
     assert!(ingress.terminal_or_segment.try_recv().is_err());
+
+    endpoint.stop().await.unwrap();
+}
+
+/// A confirmed request from a group address goes to policy, not to the
+/// server role, whose answer would reach every node in the group (#1504).
+#[tokio::test]
+async fn a_confirmed_request_from_a_group_source_goes_to_policy() {
+    let (transport, handle) = test_transport();
+    let mut endpoint = EndpointIngress::new(transport, 4);
+    let mut ingress = endpoint.start().await.unwrap();
+    // ReadProperty, and Who-Is.
+    let confirmed = [
+        0x00, 0x05, 0x01, 0x0C, 0x0C, 0x02, 0x00, 0x00, 0x01, 0x19, 0x4D,
+    ];
+    let unconfirmed = [0x10, 0x08];
+    for apdu in [&confirmed[..], &unconfirmed] {
+        let mut from_group = received_npdu(apdu);
+        from_group.source_mac = MacAddr::from_slice(&[0xFF]);
+        handle.sender.send(from_group).await.unwrap();
+    }
+    inject(&handle, &confirmed).await;
+
+    let refused = receive(&mut ingress.policy_outcomes).await;
+    assert_eq!(refused.reason, PolicyReason::GroupSource);
+    assert_eq!(refused.received.source_mac[..], [0xFF]);
+    // The group's unconfirmed request, and a station's confirmed one, still
+    // reach the role.
+    let who_is = receive(&mut ingress.inbound_requests).await;
+    assert_eq!(who_is.apdu.as_ref(), unconfirmed);
+    let request = receive(&mut ingress.inbound_requests).await;
+    assert_eq!(request.source_mac[..], [0x11]);
+    assert!(ingress.policy_outcomes.try_recv().is_err());
 
     endpoint.stop().await.unwrap();
 }

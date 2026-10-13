@@ -279,7 +279,7 @@ async fn dcc_outcomes_cancellation_denial_timer_identity_and_decode_failure() {
     }
     assert_eq!(server.dcc_outcome_counters().accepted_total, 1);
     tokio::task::yield_now().await; // Arm the accepted timer before advancing time.
-    server.config.dcc_policy = DccPolicy::DenyAll;
+    server.config_mut().dcc_policy = DccPolicy::DenyAll;
     let lock = server.dcc_timer.lock().await;
     let identity = lock.as_ref().unwrap().id();
     for _ in 0..2 {

@@ -144,6 +144,8 @@ async fn fixture_with_config(
     db.add(Box::new(
         DeviceObject::new(bacnet_objects::device::DeviceConfig {
             name: name.into(),
+            segmentation_supported: config.segmentation_supported,
+            apdu_segment_timeout: config.apdu_segment_timeout_ms,
             ..Default::default()
         })
         .unwrap(),

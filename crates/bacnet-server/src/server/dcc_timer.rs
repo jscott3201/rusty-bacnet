@@ -39,6 +39,22 @@ pub(super) async fn cancel(slot: &mut Option<JoinHandle<()>>) {
     *slot = None;
 }
 
+/// Commit accepted WARMSTART/COLDSTART while the caller holds the timer slot.
+/// Abort first so the old deadline cannot outlive this transition. Joining
+/// remains a separate cancellable cleanup step; acceptance must enable now.
+/// This is not a DCC request or timer expiry and records neither outcome/Audit.
+pub(super) fn enable_for_restart(
+    slot: &Option<JoinHandle<()>>,
+    comm: &CommState,
+    cov_resume: &crate::cov::timed::TimedStore,
+) {
+    if let Some(task) = slot {
+        task.abort();
+    }
+    comm.set(DccState::Enable);
+    cov_resume.rearm();
+}
+
 /// One DeviceCommunicationControl request and where it came from.
 pub(super) struct DccRequest<'a> {
     pub(super) service_data: &'a [u8],
@@ -152,6 +168,11 @@ pub(super) async fn replace<T: TransportPort + 'static>(
                     minutes
                 );
             }
+            // A timer nothing cancelled may outlive every other handle on
+            // the database (#1560).
+            if let Some(audit) = expiry_audit {
+                audit.release();
+            }
         }));
     }
     if let Some(db) = audit_db.as_deref_mut() {
@@ -190,6 +211,12 @@ impl<T: TransportPort + 'static> DccAudit<T> {
             transactions: Arc::clone(&services.notification_transactions),
             config: Arc::clone(&services.config),
         })
+    }
+
+    /// Let go of the database through [`drop_database_off_runtime`], for a
+    /// timer that ends on its own.
+    fn release(self) {
+        drop(drop_database_off_runtime(self.db));
     }
 
     /// Report a timed disable running out: DEVICE_ENABLE_COMM, with this

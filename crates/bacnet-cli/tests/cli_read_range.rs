@@ -111,8 +111,30 @@ async fn server() -> BACnetServer<BipTransport> {
         })
         .unwrap();
 
-    let objects: Vec<Box<dyn BACnetObject>> =
-        vec![Box::new(trend), Box::new(events), Box::new(multiple)];
+    // Trend Log 2: 100 records a second apart from 08:00:00, each holding
+    // its own sequence number, enough that a 40-record page needs three.
+    let mut long = TrendLogObject::new(2, "TL-2", 200).unwrap();
+    for sequence in 1..=100u8 {
+        long.add_record(BACnetLogRecord {
+            date: DATE,
+            time: Time {
+                hour: 8,
+                minute: (sequence - 1) / 60,
+                second: (sequence - 1) % 60,
+                hundredths: 0,
+            },
+            log_datum: LogDatum::UnsignedValue(u64::from(sequence)),
+            status_flags: None,
+        })
+        .unwrap();
+    }
+
+    let objects: Vec<Box<dyn BACnetObject>> = vec![
+        Box::new(trend),
+        Box::new(events),
+        Box::new(multiple),
+        Box::new(long),
+    ];
     let mut list = vec![device.object_identifier()];
     list.extend(objects.iter().map(|object| object.object_identifier()));
     device.set_object_list(list);
@@ -141,7 +163,12 @@ fn target(server: &BACnetServer<BipTransport>) -> String {
 /// Run `read-range` against `target` for `object` with output `format`,
 /// returning its stdout.
 async fn read_range(target: &str, object: &str, format: &str) -> String {
-    let output = run([
+    read_range_with(target, object, format, &[]).await
+}
+
+/// `read_range` with extra flags after the object.
+async fn read_range_with(target: &str, object: &str, format: &str, flags: &[&str]) -> String {
+    let mut args = vec![
         "--interface",
         "127.0.0.1",
         "--port",
@@ -151,14 +178,25 @@ async fn read_range(target: &str, object: &str, format: &str) -> String {
         "read-range",
         target,
         object,
-    ])
-    .await;
+    ];
+    args.extend_from_slice(flags);
+    let output = run(args).await;
     assert!(
         output.status.success(),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8(output.stdout).unwrap()
+}
+
+/// The unsigned values of `records`: Trend Log 2's sequence numbers.
+fn values(json: &serde_json::Value) -> Vec<u64> {
+    json["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|record| record["datum"].as_str().unwrap().parse().unwrap())
+        .collect()
 }
 
 #[tokio::test]
@@ -174,6 +212,9 @@ async fn read_range_prints_decoded_log_records() {
             "object": "TREND_LOG:1",
             "property": "LOG_BUFFER",
             "item_count": 2,
+            "result_flags": {"first_item": true, "last_item": true, "more_items": false},
+            "first_sequence_number": null,
+            "violations": [],
             "records": [
                 {
                     "timestamp": "2026-10-03 08:00:00.00",
@@ -196,6 +237,9 @@ async fn read_range_prints_decoded_log_records() {
             "object": "EVENT_LOG:1",
             "property": "LOG_BUFFER",
             "item_count": 2,
+            "result_flags": {"first_item": true, "last_item": true, "more_items": false},
+            "first_sequence_number": null,
+            "violations": [],
             "records": [
                 {
                     "timestamp": "2026-10-03 08:00:00.00",
@@ -219,7 +263,8 @@ async fn read_range_prints_decoded_log_records() {
     // The table shows the same records, one row each, with nothing left as
     // hex; only the Trend Log's has a status flags column.
     let table = read_range(&target, "event-log:1", "table").await;
-    assert!(table.starts_with("ReadRange EVENT_LOG:1  LOG_BUFFER  count=2\n"));
+    assert!(table
+        .starts_with("ReadRange EVENT_LOG:1  LOG_BUFFER  count=2  flags=FIRST_ITEM,LAST_ITEM\n"));
     for cell in [
         "2026-10-03 08:00:00.00",
         "ALARM OUT_OF_RANGE ANALOG_INPUT:3 NORMAL -> HIGH_LIMIT \"too hot\"",
@@ -232,6 +277,110 @@ async fn read_range_prints_decoded_log_records() {
     let table = read_range(&target, "trend-log:1", "table").await;
     assert!(table.contains("Status flags"), "{table}");
     assert!(table.contains("IN_ALARM"), "{table}");
+
+    server.stop().await.unwrap();
+}
+
+/// A range, its flags and first sequence number, and `--all` paging a log
+/// that needs several pages, ending with the checkpoint (#1532).
+#[tokio::test]
+async fn read_range_takes_a_range_shows_its_flags_and_pages_a_whole_log() {
+    let mut server = server().await;
+    let target = target(&server);
+    let read = |format: &'static str, flags: &'static [&'static str]| {
+        let target = target.clone();
+        async move { read_range_with(&target, "trend-log:2", format, flags).await }
+    };
+    let json = |text: String| serde_json::from_str::<serde_json::Value>(&text).unwrap();
+
+    let by_position = json(read("json", &["--position", "1", "--count", "5"]).await);
+    assert_eq!(values(&by_position), [1, 2, 3, 4, 5]);
+    assert_eq!(
+        by_position["result_flags"],
+        json!({"first_item": true, "last_item": false, "more_items": false})
+    );
+    assert_eq!(by_position["first_sequence_number"], json!(null));
+
+    let by_sequence = json(read("json", &["--sequence", "50", "--count", "3"]).await);
+    assert_eq!(values(&by_sequence), [50, 51, 52]);
+    assert_eq!(by_sequence["first_sequence_number"], json!(50));
+
+    let backward = json(read("json", &["--sequence", "50", "--count", "-2"]).await);
+    assert_eq!(values(&backward), [49, 50]);
+
+    // Records a second apart from 08:00:00: after 08:00:30 is record 32.
+    let by_time = json(read("json", &["--time", "2026-10-03T08:00:30", "--count", "2"]).await);
+    assert_eq!(values(&by_time), [32, 33]);
+    assert_eq!(by_time["first_sequence_number"], json!(32));
+
+    let all = json(read("json", &["--all", "--count", "40"]).await);
+    assert_eq!(values(&all), (1..=100).collect::<Vec<u64>>());
+    assert_eq!(all["item_count"], json!(100));
+    assert_eq!(all["pages"], json!(3));
+    assert_eq!(all["next"], json!("--sequence 101"));
+    assert_eq!(all["gaps"], json!([]));
+    assert_eq!(all["first_sequence_number"], json!(1));
+    assert_eq!(all["result_flags"]["last_item"], json!(true));
+
+    let resumed = json(read("json", &["--all", "--sequence", "91", "--count", "40"]).await);
+    assert_eq!(values(&resumed), (91..=100).collect::<Vec<u64>>());
+
+    let table = read("table", &["--sequence", "50", "--count", "3"]).await;
+    assert!(
+        table.starts_with("ReadRange TREND_LOG:2  LOG_BUFFER  count=3  flags=none  first-seq=50\n"),
+        "{table}"
+    );
+    let table = read("table", &["--all", "--count", "40"]).await;
+    assert!(table.contains("pages=3  next: --sequence 101"), "{table}");
+
+    // Pacing changes the timing, not the records.
+    let paced = run([
+        "--interface",
+        "127.0.0.1",
+        "--port",
+        "0",
+        "--format",
+        "json",
+        "--min-interval-ms",
+        "5",
+        "read-range",
+        &target,
+        "trend-log:2",
+        "--all",
+        "--count",
+        "40",
+    ])
+    .await;
+    assert!(paced.status.success());
+    assert_eq!(
+        values(&json(String::from_utf8(paced.stdout).unwrap())).len(),
+        100
+    );
+
+    for (flags, diagnostic) in [
+        (&["--count", "5"][..], "--count needs"),
+        (&["--all", "--count", "-5"][..], "--all reads forward"),
+        (
+            &["--position", "1", "--sequence", "2"][..],
+            "cannot be used with",
+        ),
+        (&["--time", "2026-13-01T00:00"][..], "--time"),
+    ] {
+        let mut args = vec![
+            "--interface",
+            "127.0.0.1",
+            "--port",
+            "0",
+            "read-range",
+            &target,
+            "trend-log:2",
+        ];
+        args.extend_from_slice(flags);
+        let output = run(args).await;
+        assert!(!output.status.success(), "{flags:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(diagnostic), "{flags:?}: {stderr}");
+    }
 
     server.stop().await.unwrap();
 }

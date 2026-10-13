@@ -86,6 +86,59 @@ fn directional_pages_preserve_sparse_wrapped_resident_identity() {
     }
 }
 
+/// Every page the server serves keeps the rules a client checks
+/// (`ReadRangeAck::violations`, #1531): each range form, both directions,
+/// references at either end, in the middle and missing, whole and cut.
+#[test]
+fn every_page_keeps_the_rules_a_client_checks() {
+    let items = unsigned_items(&[10, 20, 30, 40, 50]);
+    let ids = vec![
+        identity(u64::from(u32::MAX), 1),
+        identity(1, 2),
+        identity(255, 3),
+        identity(65536, 4),
+        identity(9, 5),
+    ];
+    let sequences = [u64::from(u32::MAX), 1, 255, 65536, 9, 7];
+    let (db, oid) = list_db(PropertyIdentifier::LOG_BUFFER, items, Some(ids));
+    let mut ranges = vec![None];
+    for count in [1, 2, 5, 9, -1, -2, -5, -9] {
+        for reference in 0..=6u8 {
+            ranges.push(Some(RangeSpec::ByPosition {
+                reference_index: u64::from(reference),
+                count,
+            }));
+            ranges.push(Some(RangeSpec::ByTime {
+                reference_time: (DATE, time(reference)),
+                count,
+            }));
+        }
+        for reference_seq in sequences {
+            ranges.push(Some(RangeSpec::BySequenceNumber {
+                reference_seq,
+                count,
+            }));
+        }
+    }
+    for range in ranges {
+        for cap in [1, 2, 3, 256] {
+            let request = ReadRangeRequest {
+                object_identifier: oid,
+                property_identifier: PropertyIdentifier::LOG_BUFFER,
+                property_array_index: None,
+                range: range.clone(),
+            };
+            let ack = page(&db, oid, range.clone(), cap, 16384).unwrap();
+            assert_eq!(
+                ack.violations(&request),
+                [],
+                "{range:?} cap {cap}: {:?}",
+                ack.result_flags
+            );
+        }
+    }
+}
+
 #[test]
 fn count_width_255_256_and_default_exact_limit() {
     for total in [256, 257] {

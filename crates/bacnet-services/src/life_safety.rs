@@ -1,5 +1,8 @@
 //! LifeSafetyOperation service per ASHRAE 135-2020 Clause 13.13.
 
+#[cfg(not(feature = "std"))]
+use alloc::string::String;
+
 use bacnet_encoding::constructed::tagged::{
     decode_ctx_object_id, decode_ctx_primitive, decode_ctx_unsigned, decode_optional_ctx,
     expect_end,

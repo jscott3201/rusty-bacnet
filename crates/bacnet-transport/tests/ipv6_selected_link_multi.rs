@@ -8,7 +8,7 @@ mod wire;
 use support::*;
 
 use bacnet_transport::{
-    bip6::{decode_bip6_mac, encode_bip6_mac, Bip6Transport},
+    bip6::{Bip6Transport, Bip6Vmac},
     port::TransportPort,
 };
 use std::net::{Ipv6Addr, SocketAddrV6};
@@ -34,12 +34,13 @@ async fn two_links_explicit_selection_rejects_other_interface_and_local_destinat
     assert!(
         matches!(error, bacnet_types::error::Error::Transport(e) if e.kind() == std::io::ErrorKind::AddrNotAvailable)
     );
-    assert_eq!(ambiguous.local_mac(), &[0; 18]);
+    assert_eq!(ambiguous.local_mac(), &[0; 3]);
 
     let (observer, port) = observer(index, true);
     let mut transport = Bip6Transport::new(selected, port, None);
     let mut incoming = transport.start().await.unwrap();
-    let (announced, published) = decode_bip6_mac(transport.local_mac()).unwrap();
+    let local = transport.local_address().unwrap();
+    let (announced, published) = (*local.ip(), local.port());
     assert_eq!((announced, published), (selected, port));
     observer.join_multicast_v6(&GROUP, other_index).unwrap();
     let peer = udp(selected, 0, index, false);
@@ -80,17 +81,22 @@ async fn two_links_explicit_selection_rejects_other_interface_and_local_destinat
         .unwrap()
         .unwrap();
     assert_eq!(admitted.npdu.as_ref(), NPDU);
+    assert_eq!(admitted.source_mac.as_slice(), [0x40, 0x88, 0x01]);
     assert_eq!(
-        decode_bip6_mac(&admitted.source_mac).unwrap(),
-        (selected, peer.local_addr().unwrap().port())
+        transport
+            .lookup_vmac(Bip6Vmac::new([0x40, 0x88, 0x01]))
+            .map(|peer| (*peer.ip(), peer.port())),
+        Some((selected, peer.local_addr().unwrap().port()))
     );
     assert!(
         incoming.try_recv().is_err(),
         "off-link traffic reached NPDU admission"
     );
-    let unknown = encode_bip6_mac(other, outsider.local_addr().unwrap().port());
-    assert!(matches!(transport.send_unicast(NPDU, &unknown).await,
-        Err(bacnet_types::error::Error::Transport(e)) if e.kind() == std::io::ErrorKind::AddrNotAvailable));
+    // Nothing from the other link taught the table the outsider's VMAC.
+    assert_eq!(
+        transport.lookup_vmac(Bip6Vmac::new([0x40, 0x77, 0x01])),
+        None
+    );
     transport
         .send_unicast(NPDU, &admitted.source_mac)
         .await

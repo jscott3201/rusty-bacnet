@@ -76,6 +76,7 @@ async fn endpoint_requester_terminal_precedes_send_failure_and_tracks_prior_atte
                 PropertyIdentifier::PRESENT_VALUE,
                 None,
             )
+            .await
             .unwrap();
         let exact_id = prepared.invoke_id();
         let task = tokio::spawn(prepared.execute());
@@ -163,6 +164,7 @@ async fn endpoint_requester_queue_rejection_is_silent_and_releases_prepared_leas
             PropertyIdentifier::PRESENT_VALUE,
             None,
         )
+        .await
         .unwrap();
     let outcome = prepared.execute().await;
     assert!(outcome.result.is_err());
@@ -193,6 +195,7 @@ async fn endpoint_requester_no_source_caller_and_prepared_drop_keep_raii_cancell
             PropertyIdentifier::PRESENT_VALUE,
             None,
         )
+        .await
         .unwrap();
     assert_eq!(coordinator.active_count().unwrap(), 1);
     drop(prepared);

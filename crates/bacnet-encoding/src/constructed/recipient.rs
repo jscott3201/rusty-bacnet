@@ -33,6 +33,9 @@
 //! it too: the NPDU codec bounds SADR the same way (#1141), and the network
 //! layer drops a frame from a longer link-layer source MAC (#1198).
 
+#[cfg(not(feature = "std"))]
+use alloc::{string::String, vec::Vec};
+
 use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
 use bacnet_types::constructed::{BACnetAddress, BACnetDestination, BACnetRecipient};
 use bacnet_types::error::Error;

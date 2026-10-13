@@ -172,14 +172,22 @@ fn acknowledges(apdu: &Apdu, invoke_id: u8) -> bool {
         && ack.service_choice == ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION)
 }
 
-#[tokio::test]
-async fn a_retransmitted_confirmed_notification_is_acknowledged_but_not_forwarded_again() {
+/// One forwarder sending each notification to `PEER_A` as process 40, the
+/// send log, and the services that dispatch to it.
+fn forwarding_to_peer_a() -> (RequestServices<TestTransport>, SendLog) {
     let mut nf = NotificationForwarderObject::new(1, "NF").unwrap();
     nf.add_destination(destination(address_recipient(0, &PEER_A), 40, false))
         .unwrap();
     let transport = forwarding_transport();
     let sent: SendLog = transport.sent();
-    let services = confirmed_services(database(vec![nf]), transport);
+    (confirmed_services(database(vec![nf]), transport), sent)
+}
+
+/// Paused: the record's window is measured on tokio's clock (#1556), so a
+/// runner stall between the sends can't close it.
+#[tokio::test(start_paused = true)]
+async fn a_retransmitted_confirmed_notification_is_acknowledged_but_not_forwarded_again() {
+    let (services, sent) = forwarding_to_peer_a();
     let request = notification(5);
     let copy = [unconfirmed(To::Local(PEER_A.to_vec()), 40)];
 
@@ -198,4 +206,30 @@ async fn a_retransmitted_confirmed_notification_is_acknowledged_but_not_forwarde
     later.timestamp = bacnet_types::primitives::BACnetTimeStamp::SequenceNumber(10);
     assert!(acknowledges(&dispatch(&services, 7, &later).await, 7));
     assert_eq!(copies(&sent, &later), copy);
+}
+
+/// A received notification is remembered for exactly its window from the
+/// first receipt, on tokio's clock (#1556): a retransmission 1 ms before the
+/// window ends is answered and not forwarded, and one at its end is
+/// forwarded again. The repeat in between didn't renew the entry.
+#[tokio::test(start_paused = true)]
+async fn a_retransmission_is_recognized_until_exactly_the_window_ends() {
+    let (services, sent) = forwarding_to_peer_a();
+    let request = notification(5);
+    let copy = [unconfirmed(To::Local(PEER_A.to_vec()), 40)];
+    let window = super::event_forwarding_repeats::RECORD_WINDOW;
+
+    assert!(acknowledges(&dispatch(&services, 7, &request).await, 7));
+    assert_eq!(copies(&sent, &request), copy);
+
+    tokio::time::advance(window - Duration::from_millis(1)).await;
+    assert!(acknowledges(&dispatch(&services, 7, &request).await, 7));
+    assert!(
+        copies(&sent, &request).is_empty(),
+        "1 ms before the window ends"
+    );
+
+    tokio::time::advance(Duration::from_millis(1)).await;
+    assert!(acknowledges(&dispatch(&services, 7, &request).await, 7));
+    assert_eq!(copies(&sent, &request), copy, "at the window's end");
 }

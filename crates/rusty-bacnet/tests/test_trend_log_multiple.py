@@ -111,14 +111,21 @@ class TrendLogMultipleStubContractTests(unittest.TestCase):
     def test_runtime_and_stub_take_the_same_keyword_arguments(self) -> None:
         parameters = inspect.signature(BACnetServer.add_trend_log_multiple).parameters
         self.assertEqual(
-            list(parameters), ["self", "instance", "name", "buffer_size", *KEYWORDS]
+            list(parameters),
+            ["self", "instance", "name", "buffer_size", *KEYWORDS, "total_record_count"],
         )
-        for name in KEYWORDS:
+        for name in [*KEYWORDS, "total_record_count"]:
             with self.subTest(keyword=name):
                 self.assertEqual(parameters[name].kind, inspect.Parameter.KEYWORD_ONLY)
+        for name in KEYWORDS:
+            with self.subTest(keyword=name):
                 self.assertIsNone(parameters[name].default)
+        self.assertEqual(parameters["total_record_count"].default, 0)
         method = installed_stub_method("add_trend_log_multiple")
-        self.assertEqual([argument.arg for argument in method.args.kwonlyargs], KEYWORDS)
+        self.assertEqual(
+            [argument.arg for argument in method.args.kwonlyargs],
+            [*KEYWORDS, "total_record_count"],
+        )
         docs = ast.get_docstring(method)
         assert docs is not None
         for phrase in ("Trigger", "write_property_local", "VALUE_OUT_OF_RANGE"):

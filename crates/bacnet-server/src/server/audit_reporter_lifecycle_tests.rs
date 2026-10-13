@@ -519,9 +519,9 @@ async fn audit_reporter_lifecycle_denials_and_decode_failures_are_silent() {
     for policy_denial in [true, false] {
         let mut fixture = server(lifecycle_reporter()).await;
         if policy_denial {
-            fixture.server.config.mutation_policy = MutationPolicy::DenyAll;
+            fixture.server.config_mut().mutation_policy = MutationPolicy::DenyAll;
         } else {
-            fixture.server.config.mutation_authorizer = Some(Arc::new(|_| false));
+            fixture.server.config_mut().mutation_authorizer = Some(Arc::new(|_| false));
         }
         for (service, request) in [
             (
@@ -539,8 +539,8 @@ async fn audit_reporter_lifecycle_denials_and_decode_failures_are_silent() {
             };
             assert_eq!(error.error_code, ErrorCode::SERVICE_REQUEST_DENIED);
         }
-        fixture.server.config.mutation_policy = MutationPolicy::Permissive;
-        fixture.server.config.mutation_authorizer = None;
+        fixture.server.config_mut().mutation_policy = MutationPolicy::Permissive;
+        fixture.server.config_mut().mutation_authorizer = None;
         for service in [
             ConfirmedServiceChoice::CREATE_OBJECT,
             ConfirmedServiceChoice::DELETE_OBJECT,

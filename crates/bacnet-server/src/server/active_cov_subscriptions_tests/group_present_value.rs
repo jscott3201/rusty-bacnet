@@ -108,7 +108,7 @@ async fn subscribe(wire: &mut Wire) -> Lists {
     );
     let lists = Lists {
         active: wire.active().await,
-        multiple: untimed(&wire.multiple().await, &[(1, 300)]),
+        multiple: untimed(&wire.multiple().await, &[300]),
     };
     assert_eq!((lists.active.len(), lists.multiple.len()), (1, 1));
     lists
@@ -125,10 +125,7 @@ fn assert_live(rows: &[ReadResultElement], lists: &Lists, expected: &[PropertyId
         if property == ACTIVE {
             assert_eq!(decode_subscriptions(value), lists.active);
         } else {
-            assert_eq!(
-                untimed(&decode_contexts(value), &[(1, 300)]),
-                lists.multiple
-            );
+            assert_eq!(untimed(&decode_contexts(value), &[300]), lists.multiple);
         }
     }
 }
@@ -144,7 +141,7 @@ fn cases() -> [(u32, Member, &'static [PropertyIdentifier]); 3] {
     ]
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn group_members_read_the_live_device_cov_lists_through_rp_readrange_and_local_reads() {
     let mut wire = Wire::start(ServerConfig::default()).await;
     let lists = subscribe(&mut wire).await;
@@ -178,7 +175,7 @@ async fn group_members_read_the_live_device_cov_lists_through_rp_readrange_and_l
     wire.server.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn group_members_read_the_live_device_cov_lists_through_rpm() {
     let mut wire = Wire::start(ServerConfig::default()).await;
     let lists = subscribe(&mut wire).await;
@@ -214,7 +211,7 @@ pub(super) fn abort(response: Apdu) -> (bool, AbortReason) {
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn group_present_value_past_the_work_limit_aborts_as_any_rpm_does() {
     let mut wire = Wire::start(ServerConfig {
         read_property_multiple_budget: ReadPropertyMultipleBudget {

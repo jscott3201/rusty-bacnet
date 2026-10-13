@@ -1,6 +1,8 @@
 //! Closed set of endpoint reads sharing transaction and source-reporting ownership.
 use super::*;
-use bacnet_services::read_range::{ReadRangeAck, ReadRangeRequest};
+use bacnet_services::read_range::{
+    ReadRangeAck, ReadRangeReply, ReadRangeRequest, ReadRangeValidation,
+};
 use bacnet_services::rpm::{ReadPropertyMultipleACK, ReadPropertyMultipleRequest};
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
 
@@ -9,7 +11,7 @@ use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
 #[derive(Clone)]
 pub enum EndpointReadRequest {
     Property(ReadPropertyRequest),
-    Range(ReadRangeRequest),
+    Range(ReadRangeRequest, ReadRangeValidation),
     Multiple(ReadPropertyMultipleRequest),
 }
 
@@ -18,7 +20,7 @@ pub enum EndpointReadRequest {
 #[derive(Debug)]
 pub enum EndpointReadAck {
     Property(ReadPropertyACK),
-    Range(ReadRangeAck),
+    Range(ReadRangeReply),
     Multiple(ReadPropertyMultipleACK),
 }
 
@@ -41,7 +43,7 @@ impl EndpointReadRequest {
                 r.property_identifier,
                 r.property_array_index,
             )],
-            Self::Range(r) => vec![(
+            Self::Range(r, _) => vec![(
                 r.object_identifier,
                 r.property_identifier,
                 r.property_array_index,
@@ -69,7 +71,7 @@ impl EndpointReadRequest {
                 r.encode(buf);
                 Ok(())
             }
-            Self::Range(r) => r.encode(buf),
+            Self::Range(r, _) => r.encode(buf),
             Self::Multiple(r) => r.encode(buf),
         }
     }
@@ -77,7 +79,7 @@ impl EndpointReadRequest {
     pub(super) fn service(&self) -> ConfirmedServiceChoice {
         match self {
             Self::Property(_) => ConfirmedServiceChoice::READ_PROPERTY,
-            Self::Range(_) => ConfirmedServiceChoice::READ_RANGE,
+            Self::Range(..) => ConfirmedServiceChoice::READ_RANGE,
             Self::Multiple(_) => ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
         }
     }
@@ -90,10 +92,9 @@ impl EndpointReadRequest {
             Self::Multiple(request) => {
                 crate::endpoint_rpm::decode_ack(request, bytes).map(EndpointReadAck::Multiple)
             }
-            Self::Range(request) => {
-                let ack = ReadRangeAck::decode(bytes)?;
-                crate::read_range::validate_ack(request, &ack)?;
-                Ok(EndpointReadAck::Range(ack))
+            Self::Range(request, validation) => {
+                ReadRangeReply::check(request, ReadRangeAck::decode(bytes)?, *validation)
+                    .map(EndpointReadAck::Range)
             }
         }
     }
@@ -105,7 +106,7 @@ impl EndpointReadAck {
     pub fn audit_results(&self) -> Vec<(ObjectIdentifier, Option<(ErrorClass, ErrorCode)>)> {
         match self {
             Self::Property(ack) => vec![(ack.object_identifier, None)],
-            Self::Range(ack) => vec![(ack.object_identifier, None)],
+            Self::Range(reply) => vec![(reply.ack.object_identifier, None)],
             Self::Multiple(ack) => ack
                 .list_of_read_access_results
                 .iter()
@@ -151,9 +152,9 @@ impl EndpointReadAck {
     }
 
     #[doc(hidden)]
-    pub fn into_range(self) -> Result<ReadRangeAck, Error> {
+    pub fn into_range(self) -> Result<ReadRangeReply, Error> {
         match self {
-            Self::Range(ack) => Ok(ack),
+            Self::Range(reply) => Ok(reply),
             _ => Err(Error::Encoding("endpoint read result kind mismatch".into())),
         }
     }

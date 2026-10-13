@@ -6,12 +6,14 @@
 //!
 //! Shares [`super::envelope_harness`] with the discovery module.
 
+use bacnet_encoding::npdu::{decode_npdu, Npdu, NpduAddress};
+use bacnet_types::enums::{NetworkMessageType, RejectMessageReason};
+use bacnet_types::MacAddr;
+use bytes::Bytes;
+
 use super::envelope_harness::*;
-use super::forwarding::forward_unicast;
-use super::*;
-use crate::router_table::ReachabilityStatus;
-use bacnet_encoding::npdu::{decode_npdu, NpduAddress};
-use bacnet_types::enums::RejectMessageReason;
+use super::SendRequest;
+use crate::router_table::Reachability;
 
 // --- I-Am / Busy / Available complete-list validation ---
 
@@ -27,14 +29,14 @@ async fn i_am_empty_and_truncated_payloads_learn_nothing() {
         .await;
         h.assert_quiet();
     }
-    let table = h.table.lock().await;
+    let table = h.table();
     assert_eq!(table.len(), 2);
     assert!(table.lookup(3000).is_none());
 }
 
 #[tokio::test]
 async fn busy_available_empty_valid_and_odd_payloads() {
-    let mut table = RouterTable::new();
+    let mut table = TableSeed::new();
     table.add_direct(1000, 0);
     table.add_direct(2000, 1);
     table.add_learned(3000, 0, MacAddr::from_slice(&[1]));
@@ -49,12 +51,12 @@ async fn busy_available_empty_valid_and_odd_payloads() {
         h.handle(h.ctx(1, &[2], control_npdu(kind, &[0x0b]))).await;
         h.assert_quiet();
         assert_eq!(
-            h.table.lock().await.effective_reachability(3000),
-            Some(ReachabilityStatus::Reachable)
+            h.table().effective_reachability(3000, h.now()),
+            Some(Reachability::Reachable)
         );
         assert_eq!(
-            h.table.lock().await.effective_reachability(3001),
-            Some(ReachabilityStatus::Reachable)
+            h.table().effective_reachability(3001, h.now()),
+            Some(Reachability::Reachable)
         );
     }
 
@@ -71,12 +73,12 @@ async fn busy_available_empty_valid_and_odd_payloads() {
     assert_eq!(broadcast_data(h.drain(0)).len(), 1);
     assert!(h.drain(1).is_empty());
     assert_eq!(
-        h.table.lock().await.effective_reachability(3001),
-        Some(ReachabilityStatus::Busy)
+        h.table().effective_reachability(3001, h.now()),
+        Some(Reachability::Busy)
     );
     assert_eq!(
-        h.table.lock().await.effective_reachability(3000),
-        Some(ReachabilityStatus::Reachable)
+        h.table().effective_reachability(3000, h.now()),
+        Some(Reachability::Reachable)
     );
 
     // Omitted Available re-enables exactly that set.
@@ -88,8 +90,8 @@ async fn busy_available_empty_valid_and_odd_payloads() {
     .await;
     assert_eq!(broadcast_data(h.drain(0)).len(), 1);
     assert_eq!(
-        h.table.lock().await.effective_reachability(3001),
-        Some(ReachabilityStatus::Reachable)
+        h.table().effective_reachability(3001, h.now()),
+        Some(Reachability::Reachable)
     );
 
     // Explicit lists intersect with the announcing path: 3000 (served via
@@ -106,12 +108,12 @@ async fn busy_available_empty_valid_and_odd_payloads() {
     .await;
     assert_eq!(broadcast_data(h.drain(0)).len(), 1);
     assert_eq!(
-        h.table.lock().await.effective_reachability(3000),
-        Some(ReachabilityStatus::Reachable)
+        h.table().effective_reachability(3000, h.now()),
+        Some(Reachability::Reachable)
     );
     assert_eq!(
-        h.table.lock().await.effective_reachability(2000),
-        Some(ReachabilityStatus::Reachable)
+        h.table().effective_reachability(2000, h.now()),
+        Some(Reachability::Reachable)
     );
 
     // Valid list via the announcing peer: marked busy and rebroadcast verbatim.
@@ -123,8 +125,8 @@ async fn busy_available_empty_valid_and_odd_payloads() {
     ctx.data_attributes = attributes();
     h.handle(ctx).await;
     assert_eq!(
-        h.table.lock().await.effective_reachability(3001),
-        Some(ReachabilityStatus::Busy)
+        h.table().effective_reachability(3001, h.now()),
+        Some(Reachability::Busy)
     );
     let rebroadcasts = broadcast_data(h.drain(0));
     assert_eq!(rebroadcasts.len(), 1);
@@ -147,8 +149,8 @@ async fn busy_available_empty_valid_and_odd_payloads() {
     ))
     .await;
     assert_eq!(
-        h.table.lock().await.effective_reachability(3001),
-        Some(ReachabilityStatus::Reachable)
+        h.table().effective_reachability(3001, h.now()),
+        Some(Reachability::Reachable)
     );
     assert_eq!(broadcast_data(h.drain(0)).len(), 1);
 }
@@ -157,7 +159,7 @@ async fn busy_available_empty_valid_and_odd_payloads() {
 
 #[tokio::test]
 async fn reject_requires_exact_length_for_table_change_and_relay() {
-    let mut table = RouterTable::new();
+    let mut table = TableSeed::new();
     table.add_learned(3000, 0, MacAddr::from_slice(&[1]));
     table.add_direct(4000, 1);
     let mut h = Harness::with_table(table);
@@ -172,8 +174,8 @@ async fn reject_requires_exact_length_for_table_change_and_relay() {
         h.handle(h.ctx(0, &[1], npdu)).await;
         h.assert_quiet();
         assert_eq!(
-            h.table.lock().await.effective_reachability(3000),
-            Some(ReachabilityStatus::Reachable)
+            h.table().effective_reachability(3000, h.now()),
+            Some(Reachability::Reachable)
         );
     }
 
@@ -191,8 +193,8 @@ async fn reject_requires_exact_length_for_table_change_and_relay() {
     ctx.data_attributes = attributes();
     h.handle(ctx).await;
     assert_eq!(
-        h.table.lock().await.effective_reachability(3000),
-        Some(ReachabilityStatus::Unreachable)
+        h.table().effective_reachability(3000, h.now()),
+        Some(Reachability::Unreachable)
     );
     let mut relayed = h.drain(1);
     assert_eq!(relayed.len(), 1);
@@ -233,7 +235,7 @@ async fn fixed_length_controls_ignore_malformed_tails() {
     ))
     .await;
     h.assert_quiet();
-    assert!(h.table.lock().await.lookup(3000).is_none());
+    assert!(h.table().lookup(3000).is_none());
 
     // Establish needs exactly DNET(2) + termination(1); Disconnect exactly 2.
     h.handle(h.ctx(
@@ -255,14 +257,7 @@ async fn fixed_length_controls_ignore_malformed_tails() {
     ))
     .await;
     h.assert_quiet();
-    assert_eq!(
-        h.table
-            .lock()
-            .await
-            .claim_snapshot()
-            .disconnect_removal_ignored,
-        0
-    );
+    assert_eq!(h.table().claim_counters().disconnect_removal_ignored, 0);
 
     // The exact Disconnect envelope still counts.
     h.handle(h.ctx(
@@ -274,14 +269,7 @@ async fn fixed_length_controls_ignore_malformed_tails() {
         ),
     ))
     .await;
-    assert_eq!(
-        h.table
-            .lock()
-            .await
-            .claim_snapshot()
-            .disconnect_removal_ignored,
-        1
-    );
+    assert_eq!(h.table().claim_counters().disconnect_removal_ignored, 1);
 }
 
 // --- What-Is / Network-Number-Is non-routed restrictions ---
@@ -400,16 +388,15 @@ async fn what_is_and_number_is_directed_are_never_routed() {
         h.dispatch(h.ctx(0, &[7], npdu)).await;
         h.assert_quiet();
     }
-    assert_eq!(h.table.lock().await.len(), 2);
+    assert_eq!(h.table().len(), 2);
 }
 
 // --- Proprietary opacity (Clauses 6.2.4 / 6.5.4) ---
 
 #[tokio::test]
 async fn proprietary_unicast_forward_preserves_identity() {
-    let (tx0, _rx0) = mpsc::channel::<SendRequest>(16);
-    let (tx1, mut rx1) = mpsc::channel::<SendRequest>(16);
-    let send_txs = vec![tx0, tx1];
+    let mut h = Harness::two_port();
+    h.learned(3000, 1, &[5]);
 
     let mut npdu = Npdu {
         is_network_message: true,
@@ -425,27 +412,10 @@ async fn proprietary_unicast_forward_preserves_identity() {
     };
 
     // Remote route: destination, identity, and attributes all preserved.
-    let route = crate::router_table::RouteEntry {
-        port_index: 1,
-        directly_connected: false,
-        next_hop_mac: MacAddr::from_slice(&[5]),
-        last_seen: None,
-        last_used: None,
-        reachability: ReachabilityStatus::Reachable,
-        busy_until: None,
-        flap_count: 0,
-        last_port_change: None,
-    };
-    forward_unicast(
-        &send_txs,
-        &route,
-        1000,
-        &[7],
-        npdu.clone(),
-        0,
-        &attributes(),
-    );
-    match rx1.try_recv().unwrap() {
+    let mut ctx = h.ctx(0, &[7], npdu.clone());
+    ctx.data_attributes = attributes();
+    h.dispatch(ctx).await;
+    match h.rxs[1].try_recv().unwrap() {
         SendRequest::Unicast {
             npdu,
             mac,
@@ -473,19 +443,8 @@ async fn proprietary_unicast_forward_preserves_identity() {
         network: 2000,
         mac_address: MacAddr::from_slice(&[9]),
     });
-    let route = crate::router_table::RouteEntry {
-        port_index: 1,
-        directly_connected: true,
-        next_hop_mac: MacAddr::new(),
-        last_seen: None,
-        last_used: None,
-        reachability: ReachabilityStatus::Reachable,
-        busy_until: None,
-        flap_count: 0,
-        last_port_change: None,
-    };
-    forward_unicast(&send_txs, &route, 1000, &[7], npdu, 0, &[]);
-    match rx1.try_recv().unwrap() {
+    h.dispatch(h.ctx(0, &[7], npdu)).await;
+    match h.rxs[1].try_recv().unwrap() {
         SendRequest::Unicast { npdu, mac, .. } => {
             assert_eq!(mac.as_slice(), &[9]);
             let decoded = decode_npdu(npdu).unwrap();
@@ -495,11 +454,12 @@ async fn proprietary_unicast_forward_preserves_identity() {
         }
         SendRequest::Broadcast { .. } => panic!("expected unicast"),
     }
+    h.assert_quiet();
 }
 
 #[tokio::test]
 async fn proprietary_directed_is_routed_opaquely_not_consumed() {
-    let mut table = RouterTable::new();
+    let mut table = TableSeed::new();
     table.add_direct(1000, 0);
     table.add_direct(2000, 1);
     table.add_learned(3000, 1, MacAddr::from_slice(&[5]));

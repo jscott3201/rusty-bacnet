@@ -27,6 +27,19 @@ impl Default for ValueSourceTracking {
         }
     }
 }
+/// The source a correction claims: one complete BACnetValueSource and
+/// nothing after it, or INVALID_DATA_TYPE.
+pub(super) fn decode_claim(value: PropertyValue) -> Result<BACnetValueSource, Error> {
+    let PropertyValue::ApplicationData(bytes) = value else {
+        return Err(common::invalid_data_type_error());
+    };
+    let (source, end) =
+        decode_value_source(&bytes, 0).map_err(|_| common::invalid_data_type_error())?;
+    if end != bytes.len() {
+        return Err(common::invalid_data_type_error());
+    }
+    Ok(source)
+}
 fn active<T>(slots: &[Option<T>; 16]) -> Option<usize> {
     slots.iter().position(Option::is_some)
 }
@@ -87,15 +100,7 @@ impl ValueSourceTracking {
         {
             return Err(common::write_access_denied_error());
         }
-        let PropertyValue::ApplicationData(bytes) = value else {
-            return Err(common::invalid_data_type_error());
-        };
-        let (source, end) =
-            decode_value_source(&bytes, 0).map_err(|_| common::invalid_data_type_error())?;
-        if end != bytes.len() {
-            return Err(common::invalid_data_type_error());
-        }
-        self.sources[index] = source;
+        self.sources[index] = decode_claim(value)?;
         // Never replace the original command owner or timestamp on correction.
         Ok(())
     }
