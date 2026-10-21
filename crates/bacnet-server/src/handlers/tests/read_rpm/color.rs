@@ -73,7 +73,7 @@ fn assert_cases(
                 assert!(result.property_value.is_none());
                 assert_eq!(result.error, Some((ErrorClass::PROPERTY, expected)));
                 assert!(matches!(rp, Err(Error::Protocol { class, code })
-                    if class == ErrorClass::PROPERTY.to_raw() as u32 && code == expected.to_raw() as u32));
+                    if class == ErrorClass::PROPERTY && code == expected));
                 assert!(response.is_empty());
             }
         }
@@ -200,7 +200,12 @@ fn rpm_color_indexed_reads_and_bytes_are_unchanged() {
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (P::IN_PROGRESS, None, Ok(&[0x91, 0])),
+            // Undriven until a write or the device start drives it (#1526).
+            (
+                P::IN_PROGRESS,
+                None,
+                Ok(if configured { &[0x91, 0] } else { &[0x91, 3] }),
+            ),
             (
                 P::IN_PROGRESS,
                 Some(0),
@@ -353,7 +358,11 @@ fn rpm_color_temperature_indexed_reads_and_bytes_are_unchanged() {
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (P::IN_PROGRESS, None, Ok(&[0x91, 0])),
+            (
+                P::IN_PROGRESS,
+                None,
+                Ok(if configured { &[0x91, 0] } else { &[0x91, 3] }),
+            ),
             (
                 P::IN_PROGRESS,
                 Some(0),

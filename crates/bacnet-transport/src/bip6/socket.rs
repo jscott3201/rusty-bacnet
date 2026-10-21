@@ -10,13 +10,22 @@ use super::{
     link::SelectedLink, send::SelectedSender, BACNET_IPV6_MULTICAST_LINK_LOCAL,
     BACNET_IPV6_MULTICAST_ORG_LOCAL, BACNET_IPV6_MULTICAST_SITE_LOCAL,
 };
+use crate::tap::{FrameTap, TapDirection, TapPeer};
 use crate::udp_metadata::{DestinationReceiver, IpVersion, ReceivedDatagram};
+use bacnet_types::data_link::DataLink;
 
+/// Every task that owns the socket owns it through one `Arc`, so the
+/// registered Network Port's lease lives as long as the last of them. Rust
+/// drops fields in declaration order: the socket closes before the lease.
 pub(super) struct Bip6Socket {
     udp: UdpSocket,
+    _network_port_lease: Option<std::sync::Arc<()>>,
     receiver: DestinationReceiver,
     pub selection: Option<SelectedLink>,
     sender: Option<SelectedSender>,
+    /// The transport's tap: every datagram sent, and every one read that
+    /// the transport takes.
+    tap: FrameTap,
 }
 
 /// The unbound B/IPv6 socket. Only an explicit port sets SO_REUSEADDR: Linux
@@ -74,10 +83,26 @@ impl Bip6Socket {
         };
         Ok(Self {
             udp: UdpSocket::from_std(socket.into())?,
+            _network_port_lease: None,
             receiver,
             selection,
             sender,
+            tap: FrameTap::default(),
         })
+    }
+
+    /// This socket, reporting its datagrams to `tap`.
+    pub fn tapped(self, tap: FrameTap) -> Self {
+        Self { tap, ..self }
+    }
+
+    /// This socket, keeping a registered Network Port's lease while it
+    /// lives.
+    pub fn leased(self, lease: Option<std::sync::Arc<()>>) -> Self {
+        Self {
+            _network_port_lease: lease,
+            ..self
+        }
     }
 
     pub fn local_address(&self) -> io::Result<SocketAddrV6> {
@@ -92,7 +117,7 @@ impl Bip6Socket {
 
     pub async fn send_to(&self, bytes: &[u8], peer: impl Into<SocketAddr>) -> io::Result<usize> {
         let peer = peer.into();
-        match (self.selection, &self.sender, peer) {
+        let sent = match (self.selection, &self.sender, peer) {
             (Some(link), Some(sender), SocketAddr::V6(peer)) => {
                 sender.send(&self.udp, bytes, peer, link).await
             }
@@ -101,14 +126,27 @@ impl Bip6Socket {
                 io::ErrorKind::InvalidInput,
                 "invalid selected IPv6 socket destination",
             )),
+        };
+        if sent.is_ok() {
+            let to = || TapPeer::Udp(peer);
+            self.tap
+                .record(TapDirection::Outbound, DataLink::Bip6, to, bytes);
         }
+        sent
     }
 
     /// Read the next datagram. In normal mode one the selected link doesn't
     /// take is read and refused ([`Inbound::OffLink`]); the caller reads on.
     pub async fn recv_from(&self, bytes: &mut [u8]) -> io::Result<Inbound> {
         let received = self.receiver.recv_from(&self.udp, bytes).await?;
-        Ok(classify(self.selection, received))
+        let inbound = classify(self.selection, received);
+        if let Inbound::Datagram(datagram) = &inbound {
+            let from = || TapPeer::Udp(datagram.peer);
+            let read = bytes.get(..datagram.len).unwrap_or_default();
+            self.tap
+                .record(TapDirection::Inbound, DataLink::Bip6, from, read);
+        }
+        Ok(inbound)
     }
 }
 
@@ -151,17 +189,23 @@ fn foreign_bind_address(
     if !requested.is_unspecified() {
         return Ok(SocketAddrV6::new(requested, port, 0, 0));
     }
-    // A UDP connect selects a route/source without sending a packet. Bind the
-    // production socket to that exact source, so subsequent registration and
-    // DBTN cannot silently advertise one address while using another.
+    // Bind the production socket to the route's exact source, so subsequent
+    // registration and DBTN cannot silently advertise one address while
+    // using another.
+    route_source(bbmd).map(|source| SocketAddrV6::new(source, port, 0, 0))
+}
+
+/// The source address this host's routes would send from to reach `bbmd`.
+/// A UDP connect selects a route and source without sending a packet, so
+/// this is a local, synchronous probe.
+pub(super) fn route_source(bbmd: SocketAddrV6) -> io::Result<Ipv6Addr> {
     let probe = std::net::UdpSocket::bind(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0))?;
     probe.connect(bbmd)?;
     match probe.local_addr()? {
-        SocketAddr::V6(mut address)
+        SocketAddr::V6(address)
             if !address.ip().is_unspecified() && !address.ip().is_multicast() =>
         {
-            address.set_port(port);
-            Ok(address)
+            Ok(*address.ip())
         }
         _ => Err(io::Error::new(
             io::ErrorKind::AddrNotAvailable,
@@ -206,6 +250,7 @@ mod tests {
             destination: IpAddr::V6(BACNET_IPV6_MULTICAST_SITE_LOCAL),
             arrival_index: Some(3),
             os_group_delivery: None,
+            arrival_stamp: None,
         };
         assert!(admits(link, &datagram));
         for index in [None, Some(0), Some(4)] {
@@ -236,6 +281,7 @@ mod tests {
             destination: destination.parse().unwrap(),
             arrival_index,
             os_group_delivery: None,
+            arrival_stamp: None,
         };
         let elsewhere = [
             datagram("[fd12::2]:47808", "fd12::9", Some(3)),

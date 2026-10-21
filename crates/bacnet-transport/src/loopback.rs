@@ -13,8 +13,13 @@
 //! [`LoopbackTransport::carry_data_attributes`] asks for them to reach the
 //! peer. The link has no broadcast MAC unless
 //! [`LoopbackTransport::set_broadcast_mac`] names one.
+//!
+//! Like the real data links, a send never waits for the peer: a frame that
+//! finds the peer's 256-frame receive queue full is dropped and counted in
+//! the peer's [`LoopbackTransport::receive_drops`] (#1713).
 
-use std::sync::{Mutex, PoisonError};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
@@ -31,6 +36,10 @@ pub struct LoopbackTransport {
     peer_tx: mpsc::Sender<ReceivedNpdu>,
     /// Receiver for NPDUs from the peer. Taken by `start()`.
     self_rx: Option<mpsc::Receiver<ReceivedNpdu>>,
+    /// Frames the peer dropped because this side's queue was full.
+    receive_drops: Arc<AtomicU64>,
+    /// The peer's count of the same, for frames this side sends.
+    peer_drops: Arc<AtomicU64>,
     /// Where each unicast's destination MAC goes, once
     /// [`Self::record_unicast_destinations`] asks for it.
     unicast_destinations: Option<mpsc::UnboundedSender<MacAddr>>,
@@ -56,9 +65,11 @@ impl LoopbackTransport {
 
         let (tx_a, rx_a) = mpsc::channel(NPDU_CHANNEL_CAPACITY);
         let (tx_b, rx_b) = mpsc::channel(NPDU_CHANNEL_CAPACITY);
+        let (drops_a, drops_b) = (Arc::default(), Arc::default());
 
-        let a = Self::new(mac_a.into(), tx_b, rx_a); // A sends to B's rx
-        let b = Self::new(mac_b.into(), tx_a, rx_b); // B sends to A's rx
+        // A sends to B's rx, and counts B's drops.
+        let a = Self::new(mac_a.into(), tx_b, rx_a, &drops_a, &drops_b);
+        let b = Self::new(mac_b.into(), tx_a, rx_b, &drops_b, &drops_a);
         (a, b)
     }
 
@@ -66,11 +77,15 @@ impl LoopbackTransport {
         local_mac: MacAddr,
         peer_tx: mpsc::Sender<ReceivedNpdu>,
         self_rx: mpsc::Receiver<ReceivedNpdu>,
+        receive_drops: &Arc<AtomicU64>,
+        peer_drops: &Arc<AtomicU64>,
     ) -> Self {
         Self {
             local_mac,
             peer_tx,
             self_rx: Some(self_rx),
+            receive_drops: Arc::clone(receive_drops),
+            peer_drops: Arc::clone(peer_drops),
             unicast_destinations: None,
             record_order: Mutex::new(()),
             carries_data_attributes: false,
@@ -120,6 +135,25 @@ impl LoopbackTransport {
         self.broadcast_mac = Some(mac.into());
     }
 
+    /// Frames the peer sent that were dropped because this transport's
+    /// receive queue was full.
+    pub fn receive_drops(&self) -> u64 {
+        self.receive_drops.load(Ordering::Relaxed)
+    }
+
+    /// Room for one frame in the peer's queue: `None` when it is full, the
+    /// drop counted, as a full data link drops a frame.
+    fn reserve(&self) -> Result<Option<mpsc::Permit<'_, ReceivedNpdu>>, Error> {
+        match self.peer_tx.try_reserve() {
+            Ok(permit) => Ok(Some(permit)),
+            Err(mpsc::error::TrySendError::Full(())) => {
+                self.peer_drops.fetch_add(1, Ordering::Relaxed);
+                Ok(None)
+            }
+            Err(mpsc::error::TrySendError::Closed(())) => Err(peer_closed()),
+        }
+    }
+
     /// The frame the peer receives for `npdu`.
     fn frame(
         &self,
@@ -149,13 +183,17 @@ impl LoopbackTransport {
         mac: &[u8],
         data_attributes: &[DataAttribute],
     ) -> Result<(), Error> {
+        // Take room first, then record the MAC and queue the frame under one
+        // lock: the record and the peer's queue then share one order. A frame
+        // dropped for want of room isn't recorded.
+        let Some(permit) = self.reserve()? else {
+            return Ok(());
+        };
         let msg = self.frame(npdu, false, data_attributes);
         let Some(destinations) = self.unicast_destinations.as_ref() else {
-            return self.peer_tx.send(msg).await.map_err(|_| peer_closed());
+            permit.send(msg);
+            return Ok(());
         };
-        // Wait for room first, then record the MAC and queue the frame under
-        // one lock: the record and the peer's queue then share one order.
-        let permit = self.peer_tx.reserve().await.map_err(|_| peer_closed())?;
         let _order = self
             .record_order
             .lock()
@@ -167,8 +205,10 @@ impl LoopbackTransport {
     }
 
     async fn broadcast(&self, npdu: &[u8], data_attributes: &[DataAttribute]) -> Result<(), Error> {
-        let msg = self.frame(npdu, true, data_attributes);
-        self.peer_tx.send(msg).await.map_err(|_| peer_closed())
+        if let Some(permit) = self.reserve()? {
+            permit.send(self.frame(npdu, true, data_attributes));
+        }
+        Ok(())
     }
 }
 
@@ -322,8 +362,10 @@ mod tests {
         let a = std::sync::Arc::new(a);
 
         // Four threads send 300 unicasts between them, more than the peer
-        // queue holds, so some wait for room. Each goes to the MAC that
-        // matches its bytes.
+        // queue holds. Loopback drops a frame when the peer's queue is full
+        // (#1713), so wait for every send, then check that each delivered
+        // frame matches its recorded MAC in order, and that every frame was
+        // either delivered or counted as dropped.
         let threads: Vec<_> = (0..4u16)
             .map(|thread| {
                 let a = std::sync::Arc::clone(&a);
@@ -338,14 +380,21 @@ mod tests {
                 })
             })
             .collect();
-        for _ in 0..300 {
-            let frame = rx_b.recv().await.unwrap();
-            let mac = destinations.recv().await.unwrap();
-            assert_eq!(mac.as_slice(), &frame.npdu[..]);
-        }
         for thread in threads {
             thread.join().unwrap();
         }
+        let mut delivered = 0u64;
+        while let Ok(frame) = rx_b.try_recv() {
+            let mac = destinations.try_recv().unwrap();
+            assert_eq!(mac.as_slice(), &frame.npdu[..]);
+            delivered += 1;
+        }
+        assert!(
+            destinations.try_recv().is_err(),
+            "a dropped frame was recorded"
+        );
+        assert!(delivered > 0);
+        assert_eq!(delivered + b.receive_drops(), 300);
     }
 
     #[tokio::test]

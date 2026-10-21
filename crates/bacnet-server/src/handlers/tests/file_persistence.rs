@@ -46,16 +46,8 @@ pub(super) fn assert_protocol_error(
             class: got_class,
             code: got_code,
         } => {
-            assert_eq!(
-                got_class,
-                class.to_raw() as u32,
-                "{context}: wrong error class"
-            );
-            assert_eq!(
-                got_code,
-                code.to_raw() as u32,
-                "{context}: wrong error code"
-            );
+            assert_eq!(got_class, class, "{context}: wrong error class");
+            assert_eq!(got_code, code, "{context}: wrong error code");
         }
         other => panic!("{context}: expected {class:?}/{code:?}, got {other:?}"),
     }
@@ -531,7 +523,7 @@ fn record_write_with_short_payload_list_is_rejected_without_mutation() {
     match result.expect_err("short record list must be refused") {
         Error::Reject { reason } => assert_eq!(
             reason,
-            RejectReason::MISSING_REQUIRED_PARAMETER.to_raw(),
+            RejectReason::MISSING_REQUIRED_PARAMETER,
             "wrong reject reason"
         ),
         other => panic!("expected Reject/MISSING_REQUIRED_PARAMETER, got {other:?}"),
@@ -626,8 +618,10 @@ fn read_only_and_access_method_gates_still_precede_mutation() {
 #[test]
 fn non_file_identifier_and_unknown_object_precede_start_position_gate() {
     let mut db = stream_file_db();
-    db.add(Box::new(AnalogInputObject::new(1, "AI-1", 62).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+    ))
+    .unwrap();
     let out_of_range = FileAccessMethod::Stream {
         file_start_position: 999,
         requested_octet_count: 1,

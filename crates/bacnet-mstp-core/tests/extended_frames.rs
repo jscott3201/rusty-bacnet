@@ -10,14 +10,15 @@ use bacnet_mstp_codec::{
     MAX_EXTENDED_FRAME_LENGTH, MAX_EXTENDED_MPDU_DATA, MAX_STANDARD_FRAME_LENGTH,
     MAX_STANDARD_MPDU_DATA,
 };
+use bacnet_mstp_core::npdu::NetworkPriority;
 use bacnet_mstp_core::{
-    Action, ActionBuffers, ConfigError, CoreBuffer, CoreError, DequeuedNpdu, Direction, Duration,
-    ExtendedActionBuffers, HeaplessQueues, Instant, MasterCore, MasterState, MstpCoreConfig,
-    NetworkPriority, QueueCounters, QueueItemInfo, QueueKind, QueueRefusal, QueueStorage,
-    ReplyDecision, RequestId,
+    Action, ActionBuffers, ConfigError, CoreBuffer, DequeuedNpdu, Direction, Duration,
+    ExtendedActionBuffers, FixedQueues, Instant, MasterCore, MasterState, MstpCoreConfig,
+    QueueCounters, QueueItemInfo, QueueKind, QueueRefusal, QueueStorage, ReplyDecision,
+    RequestError, RequestId,
 };
 
-type Queues = HeaplessQueues<4, 4, MAX_EXTENDED_MPDU_DATA>;
+type Queues = FixedQueues<4, 4, MAX_EXTENDED_MPDU_DATA>;
 type Actions = ExtendedActionBuffers<2>;
 type Core<'a> = MasterCore<'a, Queues, MAX_EXTENDED_MPDU_DATA>;
 
@@ -52,7 +53,7 @@ impl Storage {
     }
 
     fn core(&mut self, extended: bool) -> Core<'_> {
-        Core::new(
+        Core::from_parts(
             config(extended),
             Queues::new(),
             &mut self.rx,
@@ -100,7 +101,7 @@ fn feed(core: &mut Core<'_>, wire: &[u8], start: Instant) -> Instant {
     let mut now = start;
     for &octet in wire {
         now += Duration::from_micros(100);
-        core.on_octet(octet, now).unwrap();
+        core.on_octet(octet, now);
     }
     now
 }
@@ -121,7 +122,7 @@ fn decoded(octets: &[u8]) -> (FrameType, u8, Vec<u8>) {
 /// it was sent and its octets.
 fn send_next(core: &mut Core<'_>) -> (Instant, Vec<u8>) {
     let due = core.next_deadline().unwrap();
-    core.on_deadline(due).unwrap();
+    core.on_deadline(due);
     send_handed_over(core, due)
 }
 
@@ -131,13 +132,14 @@ fn send_handed_over(core: &mut Core<'_>, due: Instant) -> (Instant, Vec<u8>) {
         core.poll_action(),
         Action::SetDirection(Direction::Transmit)
     );
-    let (id, octets) = match core.poll_action() {
-        Action::Transmit { id, frame } => (id, frame.to_vec()),
+    let (id, length) = match core.poll_action() {
+        Action::Transmit { id, length, .. } => (id, length),
         other => panic!("expected a transmit, got {other:?}"),
     };
-    core.on_transmit_started(id, due).unwrap();
+    let octets = core.on_transmit_started(id, due).unwrap().to_vec();
+    assert_eq!(octets.len(), length);
     let done = due + Duration::from_millis(1);
-    core.on_transmit_complete(id, done).unwrap();
+    core.on_transmit_complete(id, done);
     assert_eq!(core.poll_action(), Action::SetDirection(Direction::Receive));
     (done, octets)
 }
@@ -163,8 +165,7 @@ fn take_token_and_send(core: &mut Core<'_>, queued: &[u8]) -> (Instant, Vec<u8>)
     core.on_validated_frame(
         Frame::new(FrameType::TOKEN, STATION, PEER, &[]),
         Instant::from_micros(10_000),
-    )
-    .unwrap();
+    );
     send_next(core)
 }
 
@@ -173,14 +174,14 @@ fn take_token_and_send(core: &mut Core<'_>, queued: &[u8]) -> (Instant, Vec<u8>)
 /// flag the standard sizes are enough, as before.
 #[test]
 fn extended_frames_need_extended_buffers() {
-    let refused = |error: Result<(), CoreError>, buffer, length, minimum| {
+    let refused = |error: Result<(), ConfigError>, buffer, length, minimum| {
         assert_eq!(
             error,
-            Err(CoreError::Config(ConfigError::ExtendedStorageTooSmall {
+            Err(ConfigError::ExtendedStorageTooSmall {
                 buffer,
                 length,
                 minimum,
-            }))
+            })
         );
     };
     let mut standard_rx = [0u8; MAX_STANDARD_FRAME_LENGTH];
@@ -188,7 +189,7 @@ fn extended_frames_need_extended_buffers() {
     let mut extended_actions: Box<Actions> = Box::default();
 
     // Standard receive storage.
-    let result = MasterCore::new(
+    let result = MasterCore::from_parts(
         config(true),
         Queues::new(),
         &mut standard_rx,
@@ -203,9 +204,9 @@ fn extended_frames_need_extended_buffers() {
     );
     // Standard action buffers: the frame buffer comes first.
     let mut standard_actions = ActionBuffers::<1>::new();
-    let result = MasterCore::new(
+    let result = MasterCore::from_parts(
         config(true),
-        HeaplessQueues::<4, 4, MAX_STANDARD_MPDU_DATA>::new(),
+        FixedQueues::<4, 4, MAX_STANDARD_MPDU_DATA>::new(),
         &mut extended_rx,
         &mut standard_actions,
         Instant::ZERO,
@@ -222,9 +223,9 @@ fn extended_frames_need_extended_buffers() {
         MAX_STANDARD_MPDU_DATA,
         MAX_EXTENDED_FRAME_LENGTH,
     >::new());
-    let result = MasterCore::new(
+    let result = MasterCore::from_parts(
         config(true),
-        HeaplessQueues::<4, 4, MAX_STANDARD_MPDU_DATA>::new(),
+        FixedQueues::<4, 4, MAX_STANDARD_MPDU_DATA>::new(),
         &mut extended_rx,
         &mut small_slots,
         Instant::ZERO,
@@ -236,9 +237,9 @@ fn extended_frames_need_extended_buffers() {
         MAX_EXTENDED_MPDU_DATA,
     );
     // Everything but the queues.
-    let result = MasterCore::new(
+    let result = MasterCore::from_parts(
         config(true),
-        HeaplessQueues::<4, 4>::new(),
+        FixedQueues::<4, 4>::new(),
         &mut extended_rx,
         &mut extended_actions,
         Instant::ZERO,
@@ -250,7 +251,7 @@ fn extended_frames_need_extended_buffers() {
         MAX_EXTENDED_MPDU_DATA,
     );
     // All extended: accepted. All standard, flag off: accepted as before.
-    assert!(MasterCore::new(
+    assert!(MasterCore::from_parts(
         config(true),
         Queues::new(),
         &mut extended_rx,
@@ -258,9 +259,9 @@ fn extended_frames_need_extended_buffers() {
         Instant::ZERO,
     )
     .is_ok());
-    assert!(MasterCore::new(
+    assert!(MasterCore::from_parts(
         config(false),
-        HeaplessQueues::<4, 4>::new(),
+        FixedQueues::<4, 4>::new(),
         &mut standard_rx,
         &mut standard_actions,
         Instant::ZERO,
@@ -334,7 +335,7 @@ fn queue_storage_that_does_not_say_is_refused_for_extended_frames() {
     let mut actions: Box<Actions> = Box::default();
     let unsized_queues = Unsized(Queues::new());
     assert_eq!(unsized_queues.max_npdu(), MAX_STANDARD_MPDU_DATA);
-    let result = MasterCore::new(
+    let result = MasterCore::from_parts(
         config(true),
         unsized_queues,
         &mut rx,
@@ -343,11 +344,11 @@ fn queue_storage_that_does_not_say_is_refused_for_extended_frames() {
     );
     assert_eq!(
         result.map(drop),
-        Err(CoreError::Config(ConfigError::ExtendedStorageTooSmall {
+        Err(ConfigError::ExtendedStorageTooSmall {
             buffer: CoreBuffer::QueueSlot,
             length: MAX_STANDARD_MPDU_DATA,
             minimum: MAX_EXTENDED_MPDU_DATA,
-        }))
+        })
     );
     assert_eq!(Queues::new().max_npdu(), MAX_EXTENDED_MPDU_DATA);
 }
@@ -451,8 +452,7 @@ fn idle_takes_extended_data_that_needs_no_reply() {
             let mut core = storage.core(true);
             let frame = Frame::new(frame_type, destination, PEER, data);
             if host {
-                core.on_validated_frame(frame, Instant::from_micros(1_000))
-                    .unwrap();
+                core.on_validated_frame(frame, Instant::from_micros(1_000));
             } else {
                 feed(&mut core, &encode(frame), Instant::ZERO);
             }
@@ -503,7 +503,7 @@ fn a_type_32_request_is_answered() {
                 ReplyDecision::Data(&[0; MAX_EXTENDED_MPDU_DATA + 1]),
                 decided
             ),
-            Err(CoreError::ReplyOversize {
+            Err(RequestError::Oversize {
                 length: MAX_EXTENDED_MPDU_DATA + 1,
                 maximum: MAX_EXTENDED_MPDU_DATA,
             })
@@ -551,8 +551,7 @@ fn a_postponed_type_32_request_is_answered_with_the_token() {
     core.on_validated_frame(
         Frame::new(FrameType::TOKEN, STATION, PEER, &[]),
         sent + Duration::from_millis(30),
-    )
-    .unwrap();
+    );
     let (_, octets) = send_next(&mut core);
     assert_eq!(
         decoded(&octets),
@@ -611,7 +610,7 @@ fn a_type_32_for_a_station_answering_a_request_is_discarded() {
             let frame = Frame::new(frame_type, destination, OTHER, data);
             at += Duration::from_millis(1);
             if host {
-                core.on_validated_frame(frame, at).unwrap();
+                core.on_validated_frame(frame, at);
             } else {
                 at = feed(&mut core, &encode(frame), at);
             }
@@ -658,8 +657,7 @@ fn wait_for_reply_takes_a_type_33() {
             let reply = npdu(1400, false);
             let frame = Frame::new(frame_type, STATION, source, &reply);
             if host {
-                core.on_validated_frame(frame, sent + Duration::from_millis(30))
-                    .unwrap();
+                core.on_validated_frame(frame, sent + Duration::from_millis(30));
             } else {
                 feed(&mut core, &encode(frame), sent);
             }
@@ -715,8 +713,7 @@ fn reserved_cobs_types_are_checked_with_the_flag() {
     let mut core = storage.core(true);
     let (sent, _) = take_token_and_send(&mut core, &npdu(10, true));
     let frame = Frame::new(FrameType::from_raw(0x40), STATION, PEER, &data);
-    core.on_validated_frame(frame, sent + Duration::from_millis(5))
-        .unwrap();
+    core.on_validated_frame(frame, sent + Duration::from_millis(5));
     assert_eq!(core.state(), MasterState::Idle);
 }
 
@@ -734,14 +731,11 @@ fn validated_extended_frames_follow_the_flag() {
         PEER,
         &long[..600],
     );
-    assert!(core
-        .on_validated_frame(frame, Instant::from_micros(1))
-        .is_err());
+    core.on_validated_frame(frame, Instant::from_micros(1));
     let small = Frame::new(FrameType::from_raw(0x22), STATION, PEER, &long[..10]);
-    assert!(core
-        .on_validated_frame(small, Instant::from_micros(1))
-        .is_err());
+    core.on_validated_frame(small, Instant::from_micros(1));
     assert_eq!(core.counters().frames_received, 0);
+    assert_eq!(core.counters().adapter_errors, 2);
 
     let mut storage = Storage::new();
     let mut core = storage.core(true);
@@ -751,8 +745,7 @@ fn validated_extended_frames_follow_the_flag() {
         PEER,
         &long,
     );
-    assert!(core
-        .on_validated_frame(frame, Instant::from_micros(1))
-        .is_err());
+    core.on_validated_frame(frame, Instant::from_micros(1));
     assert_eq!(core.counters().frames_received, 0);
+    assert_eq!(core.counters().adapter_errors, 1);
 }

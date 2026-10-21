@@ -1,201 +1,15 @@
 //! Network-layer message payloads: layouts, whole-or-nothing parsing, and
-//! agreement with `bacnet-types` and `bacnet-encoding` where they have the
-//! same thing.
+//! messages the router writes decoding in `bacnet-encoding`.
 
-use bacnet_encoding::npdu::{decode_npdu, decode_reject_message_to_network};
+use bacnet_encoding::npdu::decode_npdu;
 use bacnet_router_core::message::{
-    DataError, DisconnectConnection, EstablishConnection, ICouldBeRouter, MessageType,
-    NetworkNumberIs, Networks, Reject, RejectReason, RoutingEntries, RoutingEntry, WhoIsRouter,
+    DataError, DisconnectConnection, EstablishConnection, ICouldBeRouter, NetworkNumberIs,
+    Networks, RoutingEntries, RoutingEntry, WhoIsRouter,
 };
 use bacnet_router_core::npdu::Npdu;
-use bacnet_types::enums::{NetworkMessageType, RejectMessageReason};
+use bacnet_router_core::npdu::{NetworkMessageType, RejectMessageReason, RejectMessageToNetwork};
 use bytes::Bytes;
 use proptest::prelude::*;
-
-/// The message types the core names, as `ALL_NAMED` lists them: grouped
-/// by what a router does with them, by name within a group.
-const NAMED_TYPES: [(u8, &str); 12] = [
-    (0x01, "I_AM_ROUTER_TO_NETWORK"),
-    (0x02, "I_COULD_BE_ROUTER_TO_NETWORK"),
-    (0x03, "REJECT_MESSAGE_TO_NETWORK"),
-    (0x00, "WHO_IS_ROUTER_TO_NETWORK"),
-    (0x05, "ROUTER_AVAILABLE_TO_NETWORK"),
-    (0x04, "ROUTER_BUSY_TO_NETWORK"),
-    (0x06, "INITIALIZE_ROUTING_TABLE"),
-    (0x07, "INITIALIZE_ROUTING_TABLE_ACK"),
-    (0x09, "DISCONNECT_CONNECTION_TO_NETWORK"),
-    (0x08, "ESTABLISH_CONNECTION_TO_NETWORK"),
-    (0x13, "NETWORK_NUMBER_IS"),
-    (0x12, "WHAT_IS_NETWORK_NUMBER"),
-];
-
-/// The reject reasons the core names, in order: 5 is withdrawn.
-const NAMED_REASONS: [(u8, &str); 6] = [
-    (0, "OTHER"),
-    (1, "NOT_DIRECTLY_CONNECTED"),
-    (2, "ROUTER_BUSY"),
-    (3, "UNKNOWN_MESSAGE_TYPE"),
-    (4, "MESSAGE_TOO_LONG"),
-    (6, "ADDRESSING_ERROR"),
-];
-
-/// Every octet converts and comes back as a message type; only the twelve
-/// named ones have names; 0x80 and up are proprietary and 0x0A to 0x11 the
-/// removed security types; Debug and Display print the name, or else the
-/// octet in decimal.
-#[test]
-fn every_message_type_octet_round_trips() {
-    let listed: Vec<(u8, &str)> = MessageType::ALL_NAMED
-        .iter()
-        .map(|&(name, kind)| (kind.to_raw(), name))
-        .collect();
-    assert_eq!(listed, NAMED_TYPES);
-    for raw in 0..=u8::MAX {
-        let kind = MessageType::from_raw(raw);
-        assert_eq!(kind.to_raw(), raw);
-        let name = NAMED_TYPES
-            .iter()
-            .find(|&&(named, _)| named == raw)
-            .map(|&(_, name)| name);
-        assert_eq!(kind.name(), name, "{raw}");
-        assert_eq!(kind.is_defined(), name.is_some(), "{raw}");
-        assert_eq!(kind.is_proprietary(), raw >= 0x80, "{raw}");
-        assert_eq!(kind.is_removed_security(), (0x0A..=0x11).contains(&raw));
-        match name {
-            Some(name) => {
-                assert_eq!(format!("{kind:?}"), format!("MessageType::{name}"));
-                assert_eq!(kind.to_string(), name);
-            }
-            None => {
-                assert_eq!(format!("{kind:?}"), format!("MessageType({raw})"));
-                assert_eq!(kind.to_string(), raw.to_string());
-            }
-        }
-    }
-}
-
-/// The same for reject reasons.
-#[test]
-fn every_reject_reason_octet_round_trips() {
-    let listed: Vec<(u8, &str)> = RejectReason::ALL_NAMED
-        .iter()
-        .map(|&(name, reason)| (reason.to_raw(), name))
-        .collect();
-    assert_eq!(listed, NAMED_REASONS);
-    for raw in 0..=u8::MAX {
-        let reason = RejectReason::from_raw(raw);
-        assert_eq!(reason.to_raw(), raw);
-        let name = NAMED_REASONS
-            .iter()
-            .find(|&&(named, _)| named == raw)
-            .map(|&(_, name)| name);
-        assert_eq!(reason.name(), name, "{raw}");
-        assert_eq!(reason.is_defined(), name.is_some(), "{raw}");
-        match name {
-            Some(name) => {
-                assert_eq!(format!("{reason:?}"), format!("RejectReason::{name}"));
-                assert_eq!(reason.to_string(), name);
-            }
-            None => {
-                assert_eq!(format!("{reason:?}"), format!("RejectReason({raw})"));
-                assert_eq!(reason.to_string(), raw.to_string());
-            }
-        }
-    }
-}
-
-#[test]
-fn codes_and_reasons_match_bacnet_types() {
-    let codes = [
-        (
-            MessageType::WHO_IS_ROUTER_TO_NETWORK,
-            NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK,
-        ),
-        (
-            MessageType::I_AM_ROUTER_TO_NETWORK,
-            NetworkMessageType::I_AM_ROUTER_TO_NETWORK,
-        ),
-        (
-            MessageType::I_COULD_BE_ROUTER_TO_NETWORK,
-            NetworkMessageType::I_COULD_BE_ROUTER_TO_NETWORK,
-        ),
-        (
-            MessageType::REJECT_MESSAGE_TO_NETWORK,
-            NetworkMessageType::REJECT_MESSAGE_TO_NETWORK,
-        ),
-        (
-            MessageType::ROUTER_BUSY_TO_NETWORK,
-            NetworkMessageType::ROUTER_BUSY_TO_NETWORK,
-        ),
-        (
-            MessageType::ROUTER_AVAILABLE_TO_NETWORK,
-            NetworkMessageType::ROUTER_AVAILABLE_TO_NETWORK,
-        ),
-        (
-            MessageType::INITIALIZE_ROUTING_TABLE,
-            NetworkMessageType::INITIALIZE_ROUTING_TABLE,
-        ),
-        (
-            MessageType::INITIALIZE_ROUTING_TABLE_ACK,
-            NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK,
-        ),
-        (
-            MessageType::ESTABLISH_CONNECTION_TO_NETWORK,
-            NetworkMessageType::ESTABLISH_CONNECTION_TO_NETWORK,
-        ),
-        (
-            MessageType::DISCONNECT_CONNECTION_TO_NETWORK,
-            NetworkMessageType::DISCONNECT_CONNECTION_TO_NETWORK,
-        ),
-        (
-            MessageType::WHAT_IS_NETWORK_NUMBER,
-            NetworkMessageType::WHAT_IS_NETWORK_NUMBER,
-        ),
-        (
-            MessageType::NETWORK_NUMBER_IS,
-            NetworkMessageType::NETWORK_NUMBER_IS,
-        ),
-    ];
-    for (core, types) in codes {
-        assert_eq!(core.to_raw(), types.to_raw());
-        let named = NetworkMessageType::ALL_NAMED
-            .iter()
-            .find(|(_, named)| *named == types);
-        assert_eq!(core.name(), named.map(|(name, _)| *name));
-    }
-    // The security types the standard no longer defines: 0x0A to 0x11.
-    let removed = [
-        NetworkMessageType::CHALLENGE_REQUEST,
-        NetworkMessageType::SET_MASTER_KEY,
-    ];
-    for types in removed {
-        let core = MessageType::from_raw(types.to_raw());
-        assert!(core.is_removed_security() && !core.is_defined());
-    }
-    let reasons = [
-        (RejectReason::OTHER, RejectMessageReason::OTHER),
-        (
-            RejectReason::NOT_DIRECTLY_CONNECTED,
-            RejectMessageReason::NOT_DIRECTLY_CONNECTED,
-        ),
-        (RejectReason::ROUTER_BUSY, RejectMessageReason::ROUTER_BUSY),
-        (
-            RejectReason::UNKNOWN_MESSAGE_TYPE,
-            RejectMessageReason::UNKNOWN_MESSAGE_TYPE,
-        ),
-        (
-            RejectReason::MESSAGE_TOO_LONG,
-            RejectMessageReason::MESSAGE_TOO_LONG,
-        ),
-        (
-            RejectReason::ADDRESSING_ERROR,
-            RejectMessageReason::ADDRESSING_ERROR,
-        ),
-    ];
-    for (core, types) in reasons {
-        assert_eq!(core.to_raw(), types.to_raw());
-    }
-}
 
 /// An independent walk of a routing-table payload, as the hosted router's
 /// tests make it: the count, then each entry, with nothing left over.
@@ -246,20 +60,6 @@ fn routing_payload() -> impl Strategy<Value = Vec<u8>> {
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(2048))]
-
-    /// The reject view takes exactly what bacnet-encoding's does, and writes
-    /// it back unchanged.
-    #[test]
-    fn reject_agrees_with_bacnet_encoding(payload in prop::collection::vec(any::<u8>(), 0..5)) {
-        let view = Reject::parse(&payload).ok();
-        let decoded = decode_reject_message_to_network(&payload).ok();
-        prop_assert_eq!(view.is_some(), decoded.is_some());
-        if let (Some(view), Some(decoded)) = (view, decoded) {
-            prop_assert_eq!(view.reason.to_raw(), decoded.reason.to_raw());
-            prop_assert_eq!(view.network, decoded.dnet);
-            prop_assert_eq!(&view.to_bytes()[..], &payload[..]);
-        }
-    }
 
     /// The routing-table view accepts what the independent walk accepts,
     /// reads the same entries, and writes them back as it read them when
@@ -412,7 +212,6 @@ fn fixed_payloads_take_exactly_their_length() {
         assert_eq!(ICouldBeRouter::parse(short), Err(refused));
         assert_eq!(EstablishConnection::parse(short), Err(refused));
         assert_eq!(NetworkNumberIs::parse(short), Err(refused));
-        assert_eq!(Reject::parse(short), Err(refused));
     }
     for bad in [&[][..], &[0x0B], &[0x0B, 0xB8, 0]] {
         assert_eq!(DisconnectConnection::parse(bad), Err(wrong(bad)));
@@ -442,27 +241,27 @@ fn data_errors_say_what_was_wrong() {
 
 #[test]
 fn messages_written_in_an_npdu_decode_in_bacnet_encoding() {
-    let reject = Reject {
-        reason: RejectReason::MESSAGE_TOO_LONG,
+    let reject = RejectMessageToNetwork {
+        reason: RejectMessageReason::MESSAGE_TOO_LONG,
         network: 3000,
     }
     .to_bytes();
-    let npdu = Npdu::message(MessageType::REJECT_MESSAGE_TO_NETWORK, &reject);
+    let npdu = Npdu::message(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK, &reject);
     let mut out = [0u8; 16];
-    let len = npdu.write(&mut out).unwrap();
+    let len = npdu.encode_into(&mut out).unwrap();
     let decoded = decode_npdu(Bytes::copy_from_slice(&out[..len])).unwrap();
-    assert!(decoded.is_network_message);
+    assert!(decoded.is_network_message());
     assert_eq!(
         decoded.message_type,
-        Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK.to_raw())
+        Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK)
     );
-    let body = decode_reject_message_to_network(&decoded.payload).unwrap();
+    let body = RejectMessageToNetwork::decode(&decoded.payload).unwrap();
     assert_eq!(body.reason, RejectMessageReason::MESSAGE_TOO_LONG);
-    assert_eq!(body.dnet, 3000);
+    assert_eq!(body.network, 3000);
 
     // A header with no payload, then the payload written after it.
-    let header = Npdu::message(MessageType::I_AM_ROUTER_TO_NETWORK, &[]);
-    let at = header.write(&mut out).unwrap();
+    let header = Npdu::message(NetworkMessageType::I_AM_ROUTER_TO_NETWORK, &[]);
+    let at = header.encode_into(&mut out).unwrap();
     let len = at + Networks::write([1, 2], &mut out[at..]).unwrap();
     let decoded = decode_npdu(Bytes::copy_from_slice(&out[..len])).unwrap();
     assert_eq!(

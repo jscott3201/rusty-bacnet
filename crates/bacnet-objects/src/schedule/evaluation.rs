@@ -89,7 +89,7 @@ impl ScheduleTargetOutcome {
             Err(Error::Protocol { code, .. } | Error::Structured { code, .. }) => *code,
             Err(_) => return Self::Failed,
         };
-        let names = |codes: &[ErrorCode]| codes.iter().any(|known| known.to_raw() as u32 == code);
+        let names = |codes: &[ErrorCode]| codes.contains(&code);
         if names(&DATATYPE) {
             Self::DatatypeRefused
         } else if names(&REFERENCE) {

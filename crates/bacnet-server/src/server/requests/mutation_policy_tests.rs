@@ -1,5 +1,6 @@
+use super::mutation_tests::MutationAuthorizer;
 use super::*;
-use crate::mutation::{MutationAuthorizer, MutationDecisionCounters, MutationServiceCounters};
+use crate::mutation::{MutationDecisionCounters, MutationServiceCounters};
 use crate::server::requests::mutation_tests::{
     apdu, assert_denied, cases, oid, route, value, wpm, Fixture, SOURCE,
 };
@@ -13,6 +14,8 @@ use bacnet_transport::port::TransportProvenance;
 use bacnet_types::enums::EnableDisable;
 use std::sync::atomic::AtomicUsize;
 
+#[path = "mutation_bip_principal_tests.rs"]
+mod bip_principal_tests;
 #[path = "mutation_runtime_tests.rs"]
 mod runtime_tests;
 
@@ -58,6 +61,7 @@ async fn dispatch(
         SOURCE,
         Apdu::ConfirmedRequest(request(service, bytes, id)),
         ReceivedApdu {
+            router_response: None,
             direct_response: None,
             apdu: Bytes::new(),
             source_mac: MacAddr::from_slice(SOURCE),
@@ -258,7 +262,7 @@ async fn mutation_policy_matrix_all_ten_decisions_and_post_issuance_reauthorizat
 }
 
 #[test]
-fn mutation_policy_builders_preserve_authorizers_and_defaults() {
+fn mutation_policy_builders_preserve_policies_and_defaults() {
     assert_eq!(
         BACnetServer::bip_builder().config.mutation_policy,
         MutationPolicy::Permissive
@@ -270,16 +274,16 @@ fn mutation_policy_builders_preserve_authorizers_and_defaults() {
         MutationPolicy::Permissive
     );
     let generic = BACnetServer::<TestTransport>::generic_builder()
-        .mutation_authorizer(|_| true)
+        .policy(crate::FnPolicy::new().mutation(|_| true))
         .mutation_policy(MutationPolicy::DenyAll)
         .config;
     let bip = BACnetServer::bip_builder()
         .mutation_policy(MutationPolicy::DenyAll)
-        .mutation_authorizer(|_| true)
+        .policy(crate::FnPolicy::new().mutation(|_| true))
         .config;
     for config in [generic, bip] {
         assert_eq!(config.mutation_policy, MutationPolicy::DenyAll);
-        assert!(config.mutation_authorizer.is_some());
+        assert!(config.policy.is_some());
         assert!(format!("{config:?}").contains("mutation_policy: DenyAll"));
     }
     #[cfg(feature = "sc-tls")]
@@ -290,10 +294,10 @@ fn mutation_policy_builders_preserve_authorizers_and_defaults() {
         );
         let config = BACnetServer::sc_builder()
             .mutation_policy(MutationPolicy::DenyAll)
-            .mutation_authorizer(|_| true)
+            .policy(crate::FnPolicy::new().mutation(|_| true))
             .config;
         assert_eq!(config.mutation_policy, MutationPolicy::DenyAll);
-        assert!(config.mutation_authorizer.is_some());
+        assert!(config.policy.is_some());
     }
 }
 
@@ -506,6 +510,7 @@ async fn mutation_deny_all_does_not_gate_reads_discovery_or_dcc() {
             service_request: Bytes::new(),
         },
         &ReceivedApdu {
+            router_response: None,
             direct_response: None,
             apdu: Bytes::new(),
             source_mac: MacAddr::from_slice(SOURCE),

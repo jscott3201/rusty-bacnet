@@ -5,7 +5,7 @@
 //!
 //! Platform: Linux only (AF_PACKET raw sockets). Feature-gated behind `ethernet`.
 
-use bacnet_types::error::Error;
+use bacnet_types::error::{DecodeError, DecodingKind, Error};
 #[cfg(target_os = "linux")]
 use bacnet_types::MacAddr;
 use bytes::{BufMut, Bytes, BytesMut};
@@ -60,6 +60,9 @@ fn is_ethernet_group(destination: &[u8; 6]) -> bool {
     *destination == ETHERNET_BROADCAST
 }
 
+// Off Linux only the tests reach the send path.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod egress;
 mod ingress;
 
 // Local single-link policy: only our unicast or BACnet all-FF broadcast.
@@ -177,6 +180,14 @@ pub fn build_test_response(local_mac: &[u8; 6], remote_mac: &[u8; 6], test_data:
     buf
 }
 
+/// The refusal of a frame's field at `offset`, `label` naming it with its
+/// two numbers.
+fn llc_refusal(offset: usize, label: &'static str, first: u64, second: u64) -> Error {
+    DecodeError::new(DecodingKind::InvalidEncoding, offset, label)
+        .with_values(first, second)
+        .into()
+}
+
 /// Decode a BACnet Ethernet LLC frame from raw bytes.
 ///
 /// Validates minimum length, LLC header fields (DSAP, SSAP, control),
@@ -195,19 +206,21 @@ pub fn decode_ethernet_frame(data: &[u8]) -> Result<EthernetFrame, Error> {
     let length = u16::from_be_bytes([data[12], data[13]]) as usize;
 
     if length > MAX_LLC_LENGTH {
-        return Err(Error::decoding(
+        return Err(llc_refusal(
             12,
-            format!(
-                "length field {length} exceeds IEEE 802.3 maximum ({MAX_LLC_LENGTH}); likely an EtherType"
-            ),
+            "length field {} exceeds IEEE 802.3 maximum ({}); likely an EtherType",
+            length as u64,
+            MAX_LLC_LENGTH as u64,
         ));
     }
 
     // Length must include at least the LLC header.
     if length < LLC_HEADER_LEN {
-        return Err(Error::decoding(
+        return Err(llc_refusal(
             12,
-            format!("length field {length} too small for LLC header ({LLC_HEADER_LEN} bytes)"),
+            "length field {} too small for LLC header ({} bytes)",
+            length as u64,
+            LLC_HEADER_LEN as u64,
         ));
     }
 
@@ -223,21 +236,27 @@ pub fn decode_ethernet_frame(data: &[u8]) -> Result<EthernetFrame, Error> {
     let control = data[16];
 
     if dsap != BACNET_LLC_DSAP {
-        return Err(Error::decoding(
+        return Err(llc_refusal(
             14,
-            format!("invalid DSAP: expected 0x{BACNET_LLC_DSAP:02X}, got 0x{dsap:02X}"),
+            "invalid DSAP: expected {:#04X}, got {:#04X}",
+            BACNET_LLC_DSAP.into(),
+            dsap.into(),
         ));
     }
     if ssap != BACNET_LLC_SSAP {
-        return Err(Error::decoding(
+        return Err(llc_refusal(
             15,
-            format!("invalid SSAP: expected 0x{BACNET_LLC_SSAP:02X}, got 0x{ssap:02X}"),
+            "invalid SSAP: expected {:#04X}, got {:#04X}",
+            BACNET_LLC_SSAP.into(),
+            ssap.into(),
         ));
     }
     if control != LLC_CONTROL_UI {
-        return Err(Error::decoding(
+        return Err(llc_refusal(
             16,
-            format!("invalid LLC control: expected 0x{LLC_CONTROL_UI:02X}, got 0x{control:02X}"),
+            "invalid LLC control: expected {:#04X}, got {:#04X}",
+            LLC_CONTROL_UI.into(),
+            control.into(),
         ));
     }
 
@@ -257,7 +276,12 @@ pub fn decode_ethernet_frame(data: &[u8]) -> Result<EthernetFrame, Error> {
 #[cfg(target_os = "linux")]
 mod transport {
     use super::*;
-    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use nix::ifaddrs::getifaddrs;
+    use nix::net::if_::if_nametoindex;
+    use nix::sys::socket::LinkAddr;
+    use socket2::{Domain, Protocol, SockFilter, Socket, Type};
+    use std::io::Read;
+    use std::os::fd::AsRawFd;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Arc;
     use tokio::io::unix::AsyncFd;
@@ -265,11 +289,22 @@ mod transport {
     use tokio::task::JoinHandle;
     use tracing::{debug, warn};
 
-    use super::ingress::{classify_frame, FrameIngress};
+    use super::egress::{send_whole_frame, LlcReply, ReplyFailures};
+    use super::ingress::{classify_frame, npdu_channel_full, FrameIngress};
     use crate::port::{ReceivedNpdu, TransportPort, TransportProvenance};
+    use crate::warn_throttle::WarnThrottle;
 
     /// Max NPDU size for Ethernet: 1518 (max frame) - 14 (eth header) - 3 (LLC) - 4 (FCS by NIC) = 1497.
     pub const MAX_ETHERNET_NPDU: usize = 1497;
+
+    const _: () = assert!(
+        MAX_ETHERNET_NPDU == bacnet_npdu::MAX_NPDU,
+        "an Ethernet frame carries the longest NPDU any data link carries"
+    );
+
+    /// `ETH_P_ALL` in network byte order: the socket's protocol, so it sees
+    /// every frame on the interface, whatever its length or EtherType field.
+    const ETH_P_ALL_BE: u16 = (libc::ETH_P_ALL as u16).to_be();
 
     /// BACnet Ethernet transport over raw LLC frames.
     ///
@@ -277,11 +312,13 @@ mod transport {
     pub struct EthernetTransport {
         interface_name: String,
         local_mac: [u8; 6],
-        raw_fd: Option<Arc<OwnedFd>>,
-        if_index: i32,
+        /// The raw socket, bound to the interface once started.
+        socket: Option<Arc<Socket>>,
         recv_task: Option<JoinHandle<()>>,
         /// See [`Self::group_source_drops`].
         group_source_drops: Arc<AtomicU64>,
+        /// See [`Self::reply_send_failures`].
+        reply_failures: Arc<ReplyFailures>,
     }
 
     impl EthernetTransport {
@@ -291,10 +328,10 @@ mod transport {
             Self {
                 interface_name: interface_name.to_string(),
                 local_mac: [0; 6],
-                raw_fd: None,
-                if_index: 0,
+                socket: None,
                 recv_task: None,
                 group_source_drops: Arc::default(),
+                reply_failures: Arc::default(),
             }
         }
 
@@ -309,252 +346,155 @@ mod transport {
             self.group_source_drops.load(Ordering::Relaxed)
         }
 
-        /// Query the kernel for the interface index via `SIOCGIFINDEX`.
-        #[allow(unsafe_code)]
-        fn get_if_index(fd: i32, name: &str) -> Result<i32, Error> {
-            // SAFETY: `libc::ifreq` is a C plain-old-data struct; zero-init produces
-            // a valid all-zero `ifreq` (cleared name, zero union members).
-            let mut ifr: libc::ifreq = unsafe { std::mem::zeroed() };
-            let name_bytes = name.as_bytes();
-            if name_bytes.len() >= libc::IFNAMSIZ {
-                return Err(Error::Encoding(format!(
-                    "interface name too long: {}",
-                    name
-                )));
-            }
-            // SAFETY: bounds checked above (`name_bytes.len() < IFNAMSIZ`); src and dst
-            // are non-overlapping (`name_bytes` borrows the caller's str, `ifr` is local).
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    name_bytes.as_ptr(),
-                    ifr.ifr_name.as_mut_ptr().cast::<u8>(),
-                    name_bytes.len(),
-                );
-            }
-            // SAFETY: `fd` is a valid open AF_PACKET socket owned by the caller; `ifr`
-            // is a properly-initialized `ifreq` borrowed mutably for the duration of the call.
-            let ret = unsafe { libc::ioctl(fd, libc::SIOCGIFINDEX as _, &mut ifr) };
-            if ret < 0 {
-                return Err(Error::Transport(std::io::Error::last_os_error()));
-            }
-            // SAFETY: kernel populated `ifr_ifru.ifru_ifindex` on the successful ioctl above
-            // (selected union variant matches the SIOCGIFINDEX request).
-            Ok(unsafe { ifr.ifr_ifru.ifru_ifindex })
-        }
-
-        /// Query the kernel for the hardware (MAC) address via `SIOCGIFHWADDR`.
-        #[allow(unsafe_code)]
-        fn get_hw_addr(fd: i32, name: &str) -> Result<[u8; 6], Error> {
-            // SAFETY: `libc::ifreq` is C plain-old-data; zero-init is a valid value.
-            let mut ifr: libc::ifreq = unsafe { std::mem::zeroed() };
-            let name_bytes = name.as_bytes();
-            if name_bytes.len() >= libc::IFNAMSIZ {
-                return Err(Error::Encoding(format!(
-                    "interface name too long: {}",
-                    name
-                )));
-            }
-            // SAFETY: bounds checked above; src/dst are non-overlapping (separate allocations).
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    name_bytes.as_ptr(),
-                    ifr.ifr_name.as_mut_ptr().cast::<u8>(),
-                    name_bytes.len(),
-                );
-            }
-            // SAFETY: `fd` is a valid open AF_PACKET socket; `ifr` is properly initialized.
-            let ret = unsafe { libc::ioctl(fd, libc::SIOCGIFHWADDR as _, &mut ifr) };
-            if ret < 0 {
-                return Err(Error::Transport(std::io::Error::last_os_error()));
-            }
-            let mut mac = [0u8; 6];
-            // SAFETY: kernel populated the `ifru_hwaddr` union variant on the successful
-            // SIOCGIFHWADDR ioctl above; first 6 bytes of `sa_data` are the IEEE MAC.
-            unsafe {
-                let data = ifr.ifr_ifru.ifru_hwaddr.sa_data;
-                for (i, byte) in mac.iter_mut().enumerate() {
-                    *byte = data[i] as u8;
-                }
-            }
-            Ok(mac)
+        /// XID and TEST responses (Clause 7.1) that failed to go out since
+        /// this transport was created, a short send included (#1918). Each
+        /// failure is also logged, as a warning at most once per ten
+        /// seconds and at debug otherwise. The total survives a restart.
+        pub fn reply_send_failures(&self) -> u64 {
+            self.reply_failures.count()
         }
     }
 
-    impl EthernetTransport {
-        /// Send a raw pre-built Ethernet frame via the AF_PACKET socket.
-        /// Used for LLC command responses (XID, TEST) which bypass the normal
-        /// BACnet NPDU encode path.
-        #[allow(unsafe_code)]
-        fn raw_sendto(
-            fd: i32,
-            if_index: i32,
-            dest_mac: &[u8; 6],
-            frame: &[u8],
-        ) -> Result<(), std::io::Error> {
-            // SAFETY: `sockaddr_ll` is C POD; zero-init is a valid value before fields are set.
-            let mut sll: libc::sockaddr_ll = unsafe { std::mem::zeroed() };
-            sll.sll_family = libc::AF_PACKET as u16;
-            sll.sll_ifindex = if_index;
-            sll.sll_halen = 6;
-            sll.sll_addr[..6].copy_from_slice(dest_mac);
-            // SAFETY: `fd` is a valid AF_PACKET raw socket owned by the caller; `frame.as_ptr()`
-            // is valid for `frame.len()` bytes; `sll` is fully initialized above and valid for
-            // `size_of::<sockaddr_ll>()` bytes.
-            let ret = unsafe {
-                libc::sendto(
-                    fd,
-                    frame.as_ptr() as *const libc::c_void,
-                    frame.len(),
-                    0,
-                    &sll as *const libc::sockaddr_ll as *const libc::sockaddr,
-                    std::mem::size_of::<libc::sockaddr_ll>() as libc::socklen_t,
-                )
-            };
-            if ret < 0 {
-                Err(std::io::Error::last_os_error())
-            } else {
-                Ok(())
-            }
-        }
+    /// An error about the interface `name`, of `kind`.
+    fn interface_error(
+        name: &str,
+        kind: std::io::ErrorKind,
+        detail: impl std::fmt::Display,
+    ) -> Error {
+        Error::Transport(std::io::Error::new(
+            kind,
+            format!("Ethernet interface {name:?}: {detail}"),
+        ))
     }
 
-    /// Attach a BPF filter to the raw socket that accepts BACnet LLC
-    /// frames (DSAP=0x82, SSAP=0x82) with any control byte (UI, XID, TEST).
+    /// A failed interface lookup (`what`) for `name`. No such device or
+    /// address, or a name the kernel can't take, is `NotFound`; anything
+    /// else, such as running out of file descriptors, keeps its own kind.
+    pub(super) fn lookup_error(name: &str, what: &str, errno: nix::errno::Errno) -> Error {
+        use nix::errno::Errno;
+        let kind = match errno {
+            Errno::ENODEV | Errno::ENXIO | Errno::EINVAL => std::io::ErrorKind::NotFound,
+            other => std::io::Error::from(other).kind(),
+        };
+        interface_error(name, kind, format_args!("{what}: {errno}"))
+    }
+
+    /// The AF_PACKET link address of the interface `name` (#1883): its index
+    /// from `if_nametoindex`, and its MAC from that index's packet entry in
+    /// `getifaddrs`. The entry is also the address the socket binds to. Its
+    /// protocol is zero, and a bind with protocol zero keeps the socket's
+    /// own, so nix's safe `bind` needs no hand-built `sockaddr_ll`.
+    pub(super) fn interface_link(name: &str) -> Result<LinkAddr, Error> {
+        use std::io::ErrorKind;
+        let index =
+            if_nametoindex(name).map_err(|errno| lookup_error(name, "interface index", errno))?;
+        let link = getifaddrs()
+            .map_err(|errno| lookup_error(name, "interface addresses", errno))?
+            .filter_map(|entry| entry.address?.as_link_addr().copied())
+            .find(|link| link.ifindex() == index as usize)
+            .ok_or_else(|| interface_error(name, ErrorKind::NotFound, "no link-layer address"))?;
+        if link.halen() != 6 {
+            return Err(interface_error(
+                name,
+                ErrorKind::InvalidInput,
+                format_args!("a {}-octet link address, not a MAC", link.halen()),
+            ));
+        }
+        // Any other protocol would narrow what the bound socket receives.
+        if !matches!(link.protocol(), 0 | ETH_P_ALL_BE) {
+            return Err(interface_error(
+                name,
+                ErrorKind::InvalidData,
+                format_args!(
+                    "link address protocol {:#06x}",
+                    u16::from_be(link.protocol())
+                ),
+            ));
+        }
+        Ok(link)
+    }
+
+    // Classic BPF opcodes (linux/filter.h).
+    const BPF_LD: u16 = 0x00;
+    const BPF_H: u16 = 0x08; // half-word (2 bytes)
+    const BPF_B: u16 = 0x10; // byte
+    const BPF_ABS: u16 = 0x20; // absolute offset
+    const BPF_JMP: u16 = 0x05;
+    const BPF_JGT: u16 = 0x20;
+    const BPF_JEQ: u16 = 0x10;
+    const BPF_RET: u16 = 0x06;
+    const BPF_K: u16 = 0x00;
+    const BPF_ALU: u16 = 0x04;
+    const BPF_AND: u16 = 0x50;
+
+    /// The kernel filter: BACnet LLC frames (DSAP 0x82, SSAP 0x82 with or
+    /// without the response bit) with any control byte, so UI, XID and TEST
+    /// all pass (Clause 7.1):
     ///
-    /// This is best-effort: if the setsockopt call fails, we log a warning
-    /// and continue (software-level filtering in the recv loop still works).
-    #[allow(unsafe_code)]
-    fn attach_bacnet_bpf_filter(fd: i32) {
-        // BPF program (no control byte check — accept UI, XID, and TEST per Clause 7.1):
-        //   ldh [12]          ; load length/EtherType field
-        //   jgt #1500, drop   ; if > 1500, it's an EtherType frame, drop
-        //   ldb [14]          ; DSAP
-        //   jneq #0x82, drop
-        //   ldb [15]          ; SSAP (accept 0x82 and 0x83 response bit)
-        //   and #0xFE         ; mask off response bit
-        //   jneq #0x82, drop
-        //   ret #65535        ; accept
-        //   drop: ret #0      ; reject
-        #[repr(C)]
-        #[derive(Copy, Clone)]
-        struct SockFilter {
-            code: u16,
-            jt: u8,
-            jf: u8,
-            k: u32,
-        }
+    /// ```text
+    /// [0] ldh [12]          ; length/EtherType field
+    /// [1] jgt #1500, [8]    ; above 1500 it is an EtherType: drop
+    /// [2] ldb [14]          ; DSAP
+    /// [3] jeq #0x82, [4], [8]
+    /// [4] ldb [15]          ; SSAP
+    /// [5] and #0xFE         ; mask off the response bit
+    /// [6] jeq #0x82, [7], [8]
+    /// [7] ret #65535        ; accept
+    /// [8] ret #0            ; drop
+    /// ```
+    const BACNET_LLC_FILTER: [SockFilter; 9] = [
+        SockFilter::new(BPF_LD | BPF_H | BPF_ABS, 0, 0, 12),
+        SockFilter::new(BPF_JMP | BPF_JGT | BPF_K, 6, 0, 1500),
+        SockFilter::new(BPF_LD | BPF_B | BPF_ABS, 0, 0, 14),
+        SockFilter::new(BPF_JMP | BPF_JEQ | BPF_K, 0, 4, 0x82),
+        SockFilter::new(BPF_LD | BPF_B | BPF_ABS, 0, 0, 15),
+        SockFilter::new(BPF_ALU | BPF_AND | BPF_K, 0, 0, 0xFE),
+        SockFilter::new(BPF_JMP | BPF_JEQ | BPF_K, 0, 1, 0x82),
+        SockFilter::new(BPF_RET | BPF_K, 0, 0, 65535),
+        SockFilter::new(BPF_RET | BPF_K, 0, 0, 0),
+    ];
 
-        #[repr(C)]
-        struct SockFprog {
-            len: u16,
-            filter: *const SockFilter,
-        }
-
-        // BPF opcodes
-        const BPF_LD: u16 = 0x00;
-        const BPF_H: u16 = 0x08; // half-word (2 bytes)
-        const BPF_B: u16 = 0x10; // byte
-        const BPF_ABS: u16 = 0x20; // absolute offset
-        const BPF_JMP: u16 = 0x05;
-        const BPF_JGT: u16 = 0x20;
-        const BPF_JEQ: u16 = 0x10;
-        const BPF_RET: u16 = 0x06;
-        const BPF_K: u16 = 0x00;
-
-        const BPF_ALU: u16 = 0x04;
-        const BPF_AND: u16 = 0x50;
-
-        // 9 instructions: 7 filter + accept + drop
-        let filter: [SockFilter; 9] = [
-            // [0] ldh [12] — load EtherType/Length field
-            SockFilter {
-                code: BPF_LD | BPF_H | BPF_ABS,
-                jt: 0,
-                jf: 0,
-                k: 12,
-            },
-            // [1] jgt #1500, drop(8) — skip 6 forward on true
-            SockFilter {
-                code: BPF_JMP | BPF_JGT | BPF_K,
-                jt: 6,
-                jf: 0,
-                k: 1500,
-            },
-            // [2] ldb [14] — DSAP
-            SockFilter {
-                code: BPF_LD | BPF_B | BPF_ABS,
-                jt: 0,
-                jf: 0,
-                k: 14,
-            },
-            // [3] jeq #0x82, continue, drop(8) — skip 4 forward on false
-            SockFilter {
-                code: BPF_JMP | BPF_JEQ | BPF_K,
-                jt: 0,
-                jf: 4,
-                k: 0x82,
-            },
-            // [4] ldb [15] — SSAP
-            SockFilter {
-                code: BPF_LD | BPF_B | BPF_ABS,
-                jt: 0,
-                jf: 0,
-                k: 15,
-            },
-            // [5] and #0xFE — mask off LLC response bit
-            SockFilter {
-                code: BPF_ALU | BPF_AND | BPF_K,
-                jt: 0,
-                jf: 0,
-                k: 0xFE,
-            },
-            // [6] jeq #0x82, accept(7), drop(8) — skip 0/1
-            SockFilter {
-                code: BPF_JMP | BPF_JEQ | BPF_K,
-                jt: 0,
-                jf: 1,
-                k: 0x82,
-            },
-            // ret #65535 — accept
-            SockFilter {
-                code: BPF_RET | BPF_K,
-                jt: 0,
-                jf: 0,
-                k: 65535,
-            },
-            // drop: ret #0 — reject
-            SockFilter {
-                code: BPF_RET | BPF_K,
-                jt: 0,
-                jf: 0,
-                k: 0,
-            },
-        ];
-
-        let prog = SockFprog {
-            len: filter.len() as u16,
-            filter: filter.as_ptr(),
-        };
-
-        // SAFETY: `fd` is the caller's open AF_PACKET socket; `prog` references the local
-        // `filter` array which outlives the call (kernel copies the program by value).
-        let ret = unsafe {
-            libc::setsockopt(
-                fd,
-                libc::SOL_SOCKET,
-                libc::SO_ATTACH_FILTER,
-                &prog as *const SockFprog as *const libc::c_void,
-                std::mem::size_of::<SockFprog>() as libc::socklen_t,
-            )
-        };
-        if ret < 0 {
-            warn!(
-                error = %std::io::Error::last_os_error(),
+    /// Attach [`BACNET_LLC_FILTER`] to the raw socket. Best-effort: if the
+    /// kernel refuses it, warn and go on, since the receive loop filters in
+    /// software too.
+    fn attach_bacnet_bpf_filter(socket: &Socket) {
+        match socket.attach_filter(&BACNET_LLC_FILTER) {
+            Ok(()) => debug!(
+                "Attached BPF filter for BACnet LLC frames (DSAP=0x82, SSAP=0x82, UI/XID/TEST)"
+            ),
+            Err(error) => warn!(
+                %error,
                 "Failed to attach BPF filter for BACnet LLC frames (continuing without kernel filter)"
-            );
-        } else {
-            debug!("Attached BPF filter for BACnet LLC frames (DSAP=0x82, SSAP=0x82, UI/XID/TEST)");
+            ),
         }
+    }
+
+    /// Fewer bytes than the kernel charges a receive buffer for any one
+    /// queued frame: its `sk_buff` bookkeeping alone is more.
+    const MIN_QUEUED_FRAME_COST: usize = 256;
+
+    /// Read and drop every frame already queued on the non-blocking
+    /// `socket`, and say how many went. A short buffer is enough: a packet
+    /// socket discards what doesn't fit. The reads stop at the most frames
+    /// the receive buffer could have held, so a steady stream on the bound
+    /// interface can't keep the drain going.
+    pub(super) fn drain_queued_frames(socket: &Socket) -> usize {
+        let most = socket
+            .recv_buffer_size()
+            .map_or(4096, |bytes| bytes / MIN_QUEUED_FRAME_COST + 1);
+        let mut reader = socket;
+        let mut scratch = [0u8; 64];
+        let mut dropped = 0;
+        while dropped < most {
+            match reader.read(&mut scratch) {
+                Ok(_) => dropped += 1,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                // WouldBlock: the queue is empty. Any other error is the
+                // receive loop's to report.
+                Err(_) => break,
+            }
+        }
+        dropped
     }
 
     impl Drop for EthernetTransport {
@@ -572,10 +512,9 @@ mod transport {
             if let Some(task) = &self.recv_task {
                 task.abort();
             }
-            self.raw_fd = None;
+            self.socket = None;
         }
 
-        #[allow(unsafe_code)]
         async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
             if self.recv_task.is_some() {
                 return Err(Error::Transport(std::io::Error::new(
@@ -584,75 +523,44 @@ mod transport {
                 )));
             }
 
-            // Open a raw AF_PACKET socket capturing all EtherType frames.
-            // SAFETY: pure syscall — no Rust-side memory invariants. Returned fd is
-            // checked for `< 0` and wrapped in `OwnedFd` below before any other use.
-            let fd = unsafe {
-                libc::socket(
-                    libc::AF_PACKET,
-                    libc::SOCK_RAW,
-                    (libc::ETH_P_ALL as u16).to_be() as i32,
-                )
-            };
-            if fd < 0 {
-                return Err(Error::Transport(std::io::Error::last_os_error()));
-            }
-            // SAFETY: `fd >= 0` (checked above); we are the sole owner of this freshly
-            // opened socket and transfer ownership to `OwnedFd` so it is closed on drop.
-            let owned_fd = unsafe { OwnedFd::from_raw_fd(fd) };
-
-            self.if_index = Self::get_if_index(owned_fd.as_raw_fd(), &self.interface_name)?;
-            self.local_mac = Self::get_hw_addr(owned_fd.as_raw_fd(), &self.interface_name)?;
+            let link = interface_link(&self.interface_name)?;
+            self.local_mac = link.addr().unwrap_or_default();
 
             debug!(
                 interface = %self.interface_name,
-                if_index = self.if_index,
+                if_index = link.ifindex(),
                 mac = ?self.local_mac,
                 "Ethernet transport binding"
             );
 
+            // A raw AF_PACKET socket that sees every frame, header included,
+            // opened non-blocking (and, by socket2, close-on-exec).
+            let socket = Socket::new(
+                Domain::PACKET,
+                Type::RAW.nonblocking(),
+                Some(Protocol::from(i32::from(ETH_P_ALL_BE))),
+            )
+            .map_err(Error::Transport)?;
+
             // Attach BPF filter (best-effort) to only accept BACnet LLC frames.
-            attach_bacnet_bpf_filter(owned_fd.as_raw_fd());
+            attach_bacnet_bpf_filter(&socket);
 
-            // SAFETY: `sockaddr_ll` is C POD; zero-init is valid before fields are set.
-            let mut sll: libc::sockaddr_ll = unsafe { std::mem::zeroed() };
-            sll.sll_family = libc::AF_PACKET as u16;
-            sll.sll_protocol = (libc::ETH_P_ALL as u16).to_be();
-            sll.sll_ifindex = self.if_index;
-
-            // SAFETY: `owned_fd` is a valid AF_PACKET socket we just opened; `sll` is
-            // fully initialized above and valid for `size_of::<sockaddr_ll>()` bytes.
-            let ret = unsafe {
-                libc::bind(
-                    owned_fd.as_raw_fd(),
-                    &sll as *const libc::sockaddr_ll as *const libc::sockaddr,
-                    std::mem::size_of::<libc::sockaddr_ll>() as libc::socklen_t,
-                )
-            };
-            if ret < 0 {
-                return Err(Error::Transport(std::io::Error::last_os_error()));
+            // Bound to the interface, the socket receives only its frames,
+            // and a send goes out on it with no address of its own.
+            nix::sys::socket::bind(socket.as_raw_fd(), &link)
+                .map_err(|errno| Error::Transport(errno.into()))?;
+            // Until the bind, the socket took frames from every interface,
+            // so drop whatever queued: none of it reaches classification
+            // or draws an XID or TEST reply. Opening with protocol zero and
+            // binding with ETH_P_ALL would close the window instead, but
+            // that bind needs a hand-built `sockaddr_ll`, which is unsafe.
+            let dropped = drain_queued_frames(&socket);
+            if dropped > 0 {
+                debug!(dropped, "Dropped frames queued before the bind");
             }
 
-            // SAFETY: `owned_fd` is a valid open socket; `F_GETFL` reads flags and has no
-            // pointer arguments to validate.
-            let flags = unsafe { libc::fcntl(owned_fd.as_raw_fd(), libc::F_GETFL) };
-            if flags < 0 {
-                return Err(Error::Transport(std::io::Error::last_os_error()));
-            }
-            // SAFETY: `owned_fd` is a valid open socket; `F_SETFL` takes an int flag.
-            let ret = unsafe {
-                libc::fcntl(
-                    owned_fd.as_raw_fd(),
-                    libc::F_SETFL,
-                    flags | libc::O_NONBLOCK,
-                )
-            };
-            if ret < 0 {
-                return Err(Error::Transport(std::io::Error::last_os_error()));
-            }
-
-            let owned_fd = Arc::new(owned_fd);
-            self.raw_fd = Some(Arc::clone(&owned_fd));
+            let socket = Arc::new(socket);
+            self.socket = Some(Arc::clone(&socket));
 
             /// NPDU receive channel capacity for high-throughput raw socket transports.
             const NPDU_CHANNEL_CAPACITY: usize = 256;
@@ -660,17 +568,18 @@ mod transport {
             let (tx, rx) = mpsc::channel(NPDU_CHANNEL_CAPACITY);
             let local_mac = self.local_mac;
 
-            let async_fd = AsyncFd::new(Arc::clone(&owned_fd)).map_err(|e| {
+            let async_fd = AsyncFd::new(Arc::clone(&socket)).map_err(|e| {
                 Error::Transport(std::io::Error::other(format!(
                     "AsyncFd creation failed: {e}"
                 )))
             })?;
 
-            let send_fd = Arc::clone(&owned_fd);
-            let if_index = self.if_index;
+            let send_socket = Arc::clone(&socket);
             let group_source_drops = Arc::clone(&self.group_source_drops);
+            let reply_failures = Arc::clone(&self.reply_failures);
             let recv_task = tokio::spawn(async move {
                 let mut recv_buf = vec![0u8; 2048];
+                let channel_full = WarnThrottle::default();
                 loop {
                     let mut readable = match async_fd.readable().await {
                         Ok(r) => r,
@@ -680,25 +589,7 @@ mod transport {
                         }
                     };
 
-                    match readable.try_io(|fd| {
-                        // SAFETY: `fd` borrows the live `OwnedFd` from `AsyncFd` (still open
-                        // since the task holds `Arc<OwnedFd>`); `recv_buf` is a heap buffer of
-                        // `len()` bytes valid for write for the duration of the call.
-                        #[allow(unsafe_code)]
-                        let n = unsafe {
-                            libc::recv(
-                                fd.get_ref().as_raw_fd(),
-                                recv_buf.as_mut_ptr() as *mut libc::c_void,
-                                recv_buf.len(),
-                                0,
-                            )
-                        };
-                        if n < 0 {
-                            Err(std::io::Error::last_os_error())
-                        } else {
-                            Ok(n as usize)
-                        }
-                    }) {
+                    match readable.try_io(|socket| (&**socket.get_ref()).read(&mut recv_buf)) {
                         Ok(Ok(len)) => {
                             let data = &recv_buf[..len];
                             // Destination admission, then the group-source
@@ -717,11 +608,11 @@ mod transport {
                                 FrameIngress::Xid { source } => {
                                     debug!(src = ?source, "XID command, sending response");
                                     let resp = build_xid_response(&local_mac, &source);
-                                    let _ = EthernetTransport::raw_sendto(
-                                        send_fd.as_raw_fd(),
-                                        if_index,
+                                    reply_failures.send_reply(
+                                        LlcReply::Xid,
                                         &source,
                                         &resp,
+                                        |frame| send_socket.send(frame),
                                     );
                                     continue;
                                 }
@@ -732,11 +623,11 @@ mod transport {
                                         "TEST command, sending response"
                                     );
                                     let resp = build_test_response(&local_mac, &source, data);
-                                    let _ = EthernetTransport::raw_sendto(
-                                        send_fd.as_raw_fd(),
-                                        if_index,
+                                    reply_failures.send_reply(
+                                        LlcReply::Test,
                                         &source,
                                         &resp,
+                                        |frame| send_socket.send(frame),
                                     );
                                     continue;
                                 }
@@ -763,9 +654,7 @@ mod transport {
                                         })
                                         .is_err()
                                     {
-                                        warn!(
-                                            "Ethernet: NPDU channel full, dropping incoming frame"
-                                        );
+                                        npdu_channel_full(&channel_full);
                                     }
                                 }
                                 Err(_) => {
@@ -807,9 +696,8 @@ mod transport {
             Ok(())
         }
 
-        #[allow(unsafe_code)]
         async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-            let fd = self.raw_fd.as_ref().ok_or_else(|| {
+            let socket = self.socket.as_ref().ok_or_else(|| {
                 Error::Transport(std::io::Error::new(
                     std::io::ErrorKind::NotConnected,
                     "Transport not started",
@@ -837,29 +725,10 @@ mod transport {
             let mut buf = BytesMut::with_capacity(MIN_FRAME_LEN + npdu.len());
             encode_ethernet_frame(&mut buf, &dst, &self.local_mac, npdu);
 
-            // SAFETY: `sockaddr_ll` is C POD; zero-init is valid before fields are set.
-            let mut sll: libc::sockaddr_ll = unsafe { std::mem::zeroed() };
-            sll.sll_family = libc::AF_PACKET as u16;
-            sll.sll_ifindex = self.if_index;
-            sll.sll_halen = 6;
-            sll.sll_addr[..6].copy_from_slice(&dst);
-
-            // SAFETY: `fd` is a live `OwnedFd` borrowed via `Arc`; `buf.as_ptr()` is valid
-            // for `buf.len()` bytes; `sll` is fully initialized; size matches `socklen_t`.
-            let ret = unsafe {
-                libc::sendto(
-                    fd.as_raw_fd(),
-                    buf.as_ptr() as *const libc::c_void,
-                    buf.len(),
-                    0,
-                    &sll as *const libc::sockaddr_ll as *const libc::sockaddr,
-                    std::mem::size_of::<libc::sockaddr_ll>() as libc::socklen_t,
-                )
-            };
-            if ret < 0 {
-                return Err(Error::Transport(std::io::Error::last_os_error()));
-            }
-            Ok(())
+            // The frame carries its own 802.3 header, destination first, and
+            // the bound socket sends on its interface: no address needed.
+            // A short send is an error (#1918).
+            send_whole_frame(&buf, |frame| socket.send(frame)).map_err(Error::Transport)
         }
 
         async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {

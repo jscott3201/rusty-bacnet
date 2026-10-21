@@ -6,8 +6,8 @@
 use std::sync::{Arc, Mutex};
 
 use bacnet_types::enums::{
-    ErrorClass, ErrorCode, LifeSafetyOperation, LifeSafetyState, PropertyIdentifier as P,
-    SilencedState,
+    EngineeringUnits, ErrorClass, ErrorCode, LifeSafetyOperation, LifeSafetyState,
+    PropertyIdentifier as P, SilencedState,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
@@ -46,7 +46,7 @@ fn set_out_of_service(object: &mut dyn BACnetObject, out_of_service: bool) {
 fn assert_error(result: Result<(), Error>, class: ErrorClass, code: ErrorCode) {
     assert!(
         matches!(result, Err(Error::Protocol { class: c, code: e })
-            if c == class.to_raw() as u32 && e == code.to_raw() as u32),
+            if c == class && e == code),
         "expected {class:?} / {code:?}, got {result:?}"
     );
 }
@@ -173,8 +173,10 @@ fn application_values_outside_the_state_range_or_datatype_are_refused_unchanged(
 
 #[test]
 fn other_objects_refuse_the_tracking_value_hook() {
-    let mut input: Box<dyn BACnetObject> =
-        Box::new(crate::analog::AnalogInputObject::new(1, "AI-1", 62).unwrap());
+    let mut input: Box<dyn BACnetObject> = Box::new(
+        crate::analog::AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS)
+            .unwrap(),
+    );
     assert_error(
         input.set_tracking_value_internal(state(LifeSafetyState::ALARM)),
         ErrorClass::OBJECT,

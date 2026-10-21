@@ -9,7 +9,7 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, Weak};
 use tokio::sync::Notify;
 
-use bacnet_types::enums::NetworkPriority;
+use bacnet_npdu::NetworkPriority;
 
 /// An item tagged with a BACnet network priority.
 #[derive(Debug, Clone)]
@@ -56,14 +56,11 @@ pub struct PriorityReceiver<T> {
 
 /// Map a `NetworkPriority` to a queue index (0 = highest priority).
 pub fn priority_index(p: NetworkPriority) -> usize {
-    if p == NetworkPriority::LIFE_SAFETY {
-        0
-    } else if p == NetworkPriority::CRITICAL_EQUIPMENT {
-        1
-    } else if p == NetworkPriority::URGENT {
-        2
-    } else {
-        3 // NORMAL and any unknown/vendor values
+    match p {
+        NetworkPriority::LifeSafety => 0,
+        NetworkPriority::CriticalEquipment => 1,
+        NetworkPriority::Urgent => 2,
+        NetworkPriority::Normal => 3,
     }
 }
 
@@ -157,34 +154,34 @@ mod tests {
         let (tx, mut rx) = priority_channel::<Vec<u8>>(16);
 
         tx.send(PrioritizedItem {
-            priority: NetworkPriority::NORMAL,
+            priority: NetworkPriority::Normal,
             data: vec![1],
         })
         .await
         .unwrap();
         tx.send(PrioritizedItem {
-            priority: NetworkPriority::LIFE_SAFETY,
+            priority: NetworkPriority::LifeSafety,
             data: vec![2],
         })
         .await
         .unwrap();
         tx.send(PrioritizedItem {
-            priority: NetworkPriority::URGENT,
+            priority: NetworkPriority::Urgent,
             data: vec![3],
         })
         .await
         .unwrap();
 
         let first = rx.recv().await.unwrap();
-        assert_eq!(first.priority, NetworkPriority::LIFE_SAFETY);
+        assert_eq!(first.priority, NetworkPriority::LifeSafety);
         assert_eq!(first.data, vec![2]);
 
         let second = rx.recv().await.unwrap();
-        assert_eq!(second.priority, NetworkPriority::URGENT);
+        assert_eq!(second.priority, NetworkPriority::Urgent);
         assert_eq!(second.data, vec![3]);
 
         let third = rx.recv().await.unwrap();
-        assert_eq!(third.priority, NetworkPriority::NORMAL);
+        assert_eq!(third.priority, NetworkPriority::Normal);
         assert_eq!(third.data, vec![1]);
     }
 
@@ -193,13 +190,13 @@ mod tests {
         let (tx, mut rx) = priority_channel::<Vec<u8>>(16);
 
         tx.send(PrioritizedItem {
-            priority: NetworkPriority::NORMAL,
+            priority: NetworkPriority::Normal,
             data: vec![1],
         })
         .await
         .unwrap();
         tx.send(PrioritizedItem {
-            priority: NetworkPriority::NORMAL,
+            priority: NetworkPriority::Normal,
             data: vec![2],
         })
         .await
@@ -213,7 +210,7 @@ mod tests {
     async fn sender_drop_closes_channel() {
         let (tx, mut rx) = priority_channel::<Vec<u8>>(16);
         tx.send(PrioritizedItem {
-            priority: NetworkPriority::NORMAL,
+            priority: NetworkPriority::Normal,
             data: vec![1],
         })
         .await
@@ -228,27 +225,27 @@ mod tests {
     async fn capacity_limit() {
         let (tx, mut _rx) = priority_channel::<u8>(2);
         tx.send(PrioritizedItem {
-            priority: NetworkPriority::NORMAL,
+            priority: NetworkPriority::Normal,
             data: 1,
         })
         .await
         .unwrap();
         tx.send(PrioritizedItem {
-            priority: NetworkPriority::NORMAL,
+            priority: NetworkPriority::Normal,
             data: 2,
         })
         .await
         .unwrap();
         let result = tx
             .send(PrioritizedItem {
-                priority: NetworkPriority::NORMAL,
+                priority: NetworkPriority::Normal,
                 data: 3,
             })
             .await;
         assert!(result.is_err());
 
         tx.send(PrioritizedItem {
-            priority: NetworkPriority::URGENT,
+            priority: NetworkPriority::Urgent,
             data: 4,
         })
         .await
@@ -257,9 +254,9 @@ mod tests {
 
     #[test]
     fn priority_index_ordering() {
-        assert_eq!(priority_index(NetworkPriority::LIFE_SAFETY), 0);
-        assert_eq!(priority_index(NetworkPriority::CRITICAL_EQUIPMENT), 1);
-        assert_eq!(priority_index(NetworkPriority::URGENT), 2);
-        assert_eq!(priority_index(NetworkPriority::NORMAL), 3);
+        assert_eq!(priority_index(NetworkPriority::LifeSafety), 0);
+        assert_eq!(priority_index(NetworkPriority::CriticalEquipment), 1);
+        assert_eq!(priority_index(NetworkPriority::Urgent), 2);
+        assert_eq!(priority_index(NetworkPriority::Normal), 3);
     }
 }

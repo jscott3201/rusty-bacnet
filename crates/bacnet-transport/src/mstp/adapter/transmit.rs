@@ -9,12 +9,14 @@
 //!    polled once, outside Tokio's cooperative budget; octets that reached
 //!    the port after the reactor last looked at it are not seen here, and
 //!    are fed after the frame like any later octets.
-//! 2. [`MasterCore::on_transmit_started`](bacnet_mstp_core::MasterCore::on_transmit_started); on any refusal the frame is
-//!    dropped (a deferred one comes back as a new transmit), and the echo
-//!    hunt goes on. Once the start is confirmed, what the filter still
-//!    holds of the last frame's echo is dropped as its continuation, and
-//!    counted.
-//! 3. [`SerialPort::write`], then [`SerialPort::drain`]. The frame ended
+//! 2. [`MasterCore::on_transmit_started`](bacnet_mstp_core::MasterCore::on_transmit_started),
+//!    which hands over the frame's octets only when it confirms the start;
+//!    on any refusal there is nothing to send (a deferred frame comes back
+//!    as a new transmit), and the echo hunt goes on. Once the start is
+//!    confirmed, what the filter still holds of the last frame's echo is
+//!    dropped as its continuation, and counted.
+//! 3. [`SerialPort::write`] of the octets, straight from the core's frame
+//!    buffer with no copy, then [`SerialPort::drain`]. The frame ended
 //!    when the drain returned, but never before its time on the wire at the
 //!    configured baud rate, counted from just before the write: one whose
 //!    drain returns early (a USB adapter still shifting bits out) is held to
@@ -55,7 +57,7 @@ use super::{increment, poll_once, Core, Echo, Mac, Outgoing, ReadFailed, SentKin
 /// never falls quiet cannot hold the task there.
 const DRAIN_READS: usize = 8;
 
-impl<S: SerialPort> Mac<S> {
+impl<S: SerialPort> Mac<'_, S> {
     /// Send the frame the core handed over.
     pub(super) async fn transmit(&mut self, core: &mut Core<'_>) -> Result<(), ReadFailed> {
         self.drain_input(core).await?;
@@ -69,26 +71,36 @@ impl<S: SerialPort> Mac<S> {
             return Ok(());
         };
         let started = Instant::now();
-        if let Err(error) = core.on_transmit_started(outgoing.id, self.clock.at(started)) {
-            debug!(?error, "MS/TP transmit start refused");
-            return Ok(());
-        }
+        let frame =
+            match core.on_transmit_started(outgoing.id, self.clock.instant(started.into_std())) {
+                Ok(frame) => frame,
+                Err(error) => {
+                    debug!(?error, "MS/TP transmit start refused");
+                    return Ok(());
+                }
+            };
         // What the last echo's hunt still holds was its continuation.
         if self.filter.confirmed_start() > 0 {
             increment(&self.counts.echo_fragments_dropped);
         }
-        let octets = u32::try_from(self.tx_frame.len()).unwrap_or(u32::MAX);
+        let octets = u32::try_from(frame.len()).unwrap_or(u32::MAX);
         let wire_end = started + self.octet_time * octets;
         // The earliest the frame can have ended: its wire time, and with no
         // drain to say when the adapter finished, the transmit-latency pad
         // on top, since its first octet left after the write began.
-        let sent = match self.serial.write(&self.tx_frame).await {
-            Ok(()) => match self.serial.drain().await {
-                Err(Error::Transport(error)) if error.kind() == std::io::ErrorKind::Unsupported => {
-                    Ok(wire_end + self.transmit_pad)
+        let sent = match self.serial.write(frame).await {
+            Ok(()) => {
+                // Written: the tap sees it now, whatever the drain says.
+                super::tap::record_sent(&self.tap, frame);
+                match self.serial.drain().await {
+                    Err(Error::Transport(error))
+                        if error.kind() == std::io::ErrorKind::Unsupported =>
+                    {
+                        Ok(wire_end + self.transmit_pad)
+                    }
+                    drained => drained.map(|()| wire_end),
                 }
-                drained => drained.map(|()| wire_end),
-            },
+            }
             Err(error) => {
                 // The failed write may have queued part of the frame.
                 let _ = self.serial.drain().await;
@@ -101,10 +113,7 @@ impl<S: SerialPort> Mac<S> {
                 increment(&self.counts.serial_write_errors);
                 warn!("MS/TP write error: {error}");
                 let now = self.clock.now();
-                if let Err(error) = core.on_transmit_aborted(outgoing.id, TransmitFailure::Io, now)
-                {
-                    debug!(?error, "MS/TP abort refused");
-                }
+                core.on_transmit_aborted(outgoing.id, TransmitFailure::Io, now);
                 return Ok(());
             }
         };
@@ -117,24 +126,33 @@ impl<S: SerialPort> Mac<S> {
         }
         match self.echo {
             Echo::None => self.complete(core, &outgoing, ended),
-            Echo::Full { grace } => self.strip_echo(core, &outgoing, ended, grace).await?,
+            Echo::Full { grace } => {
+                // The filter keeps its own copy of the octets to match the
+                // echo against, so the core is free again.
+                self.filter.start(frame, ended, grace);
+                self.strip_echo(core, &outgoing, ended, grace).await?;
+            }
         }
         Ok(())
     }
 
-    /// Report the frame complete, stamped with its end.
+    /// Report the frame complete, stamped with its end. It counts as sent
+    /// unless the core's watchdog aborted it first.
     fn complete(&mut self, core: &mut Core<'_>, outgoing: &Outgoing, ended: Instant) {
-        match core.on_transmit_complete(outgoing.id, self.clock.at(ended)) {
-            Ok(()) => self.count_sent(outgoing.kind),
-            Err(error) => debug!(?error, "MS/TP completion refused"),
+        let active = core.snapshot().transmit_id == Some(outgoing.id);
+        core.on_transmit_complete(outgoing.id, self.clock.instant(ended.into_std()));
+        if active {
+            self.count_sent(outgoing.kind);
+        } else {
+            debug!("MS/TP transmit was over before its completion");
         }
         self.drain_actions(core);
     }
 
-    /// Hunt for the echo of the frame just sent until the frame can be
-    /// completed: the echo matched, an octet passes on, or the grace ran out.
-    /// Feed the core what passes on, after completion; the hunt goes on in
-    /// the main loop.
+    /// Hunt for the echo of the frame just sent, which the echo filter was
+    /// started on, until the frame can be completed: the echo matched, an
+    /// octet passes on, or the grace ran out. Feed the core what passes on,
+    /// after completion; the hunt goes on in the main loop.
     async fn strip_echo(
         &mut self,
         core: &mut Core<'_>,
@@ -142,7 +160,6 @@ impl<S: SerialPort> Mac<S> {
         ended: Instant,
         grace: std::time::Duration,
     ) -> Result<(), ReadFailed> {
-        self.filter.start(&self.tx_frame, ended, grace);
         let grace_end = ended + grace;
         loop {
             let read = tokio::select! {

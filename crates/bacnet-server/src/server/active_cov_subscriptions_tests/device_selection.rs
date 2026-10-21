@@ -204,7 +204,7 @@ async fn device_selection_preserves_no_device_and_wildcard_only_reads() {
             );
             assert!(
                 matches!(wire.server.read_local(&wildcard(), property, None).await,
-                Err(Error::Protocol { code, .. }) if code == ErrorCode::UNKNOWN_OBJECT.to_raw() as u32)
+                Err(Error::Protocol { code, .. }) if code == ErrorCode::UNKNOWN_OBJECT)
             );
             assert!(wire.server.broadcast_i_am().await.is_err());
         } else {

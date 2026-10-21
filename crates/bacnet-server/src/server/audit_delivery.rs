@@ -59,7 +59,7 @@ pub(in crate::server) async fn deliver_global_broadcast<T: TransportPort + 'stat
 ) -> bool {
     tokio::time::timeout_at(
         deadline,
-        network.broadcast_global_apdu(bytes, false, NetworkPriority::NORMAL),
+        network.broadcast_global_apdu(bytes, false, NetworkPriority::Normal),
     )
     .await
     .is_ok_and(|sent| sent.is_ok())
@@ -87,12 +87,12 @@ pub(in crate::server) async fn deliver_observed<T: TransportPort + 'static>(
         match (&route.local_target, &route.remote) {
             (Some(mac), None) => {
                 network
-                    .send_apdu(bytes, mac, confirmed, NetworkPriority::NORMAL)
+                    .send_apdu(bytes, mac, confirmed, NetworkPriority::Normal)
                     .await
             }
             (None, Some((net, mac, Some(router)))) => {
                 network
-                    .send_apdu_routed(bytes, *net, mac, router, confirmed, NetworkPriority::NORMAL)
+                    .send_apdu_routed(bytes, *net, mac, router, confirmed, NetworkPriority::Normal)
                     .await
             }
             _ => Err(Error::Encoding("audit destination is unavailable".into())),

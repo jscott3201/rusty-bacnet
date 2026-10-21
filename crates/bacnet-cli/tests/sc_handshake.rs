@@ -90,74 +90,93 @@ async fn explicit_site_ca_read_property_and_untrusted_ca_rejection() {
     .await;
 }
 
+/// A BACnet/SC target is the device's VMAC as hex octets (#963), not the
+/// IPv4-and-port spelling of its six octets that `read` in the support
+/// module still uses.
 #[tokio::test]
-async fn hub_rejects_untrusted_expired_and_future_operational_certificates() {
+async fn read_property_with_a_vmac_target() {
+    with_fixture(async |fixture| {
+        let site = Site::new();
+        fixture.start(&site).await;
+        let files = Files::new();
+        let ca = files.write("site.pem", site.ca.pem());
+        let leaf = site.leaf("cli", ClientAuth, None);
+        for vmac in ["02:00:00:00:00:01", "020000000001"] {
+            let mut cmd = cli(&files, &fixture.url, &leaf);
+            cmd.arg("--sc-ca")
+                .arg(&ca)
+                .args(["read", vmac, "dev:123", "object-name"]);
+            let output = Process::spawn(&mut cmd).output().await;
+            assert!(
+                output.status.success(),
+                "{vmac}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(
+                json,
+                serde_json::json!({
+                    "object": "DEVICE:123", "property": "OBJECT_NAME", "value": "\"CLI site device\""
+                }),
+                "{vmac}"
+            );
+        }
+    })
+    .await;
+}
+
+/// An expired or future leaf no longer reaches the hub: the pre-dial lint
+/// refuses it (`sc_ca.rs`). A leaf from another site's CA is only a lint
+/// warning, logged on stderr, so the hub still gets to refuse it.
+#[tokio::test]
+async fn hub_rejects_an_untrusted_operational_certificate() {
     with_fixture(async |fixture| {
         let site = Site::new();
         fixture.start(&site).await;
         let files = Files::new();
         let ca = files.write("site.pem", site.ca.pem());
         let good = site.leaf("cli", ClientAuth, None);
-        for leaf in [
-            Site::new().leaf("rogue", ClientAuth, None),
-            site.leaf("expired", ClientAuth, Some((2000, 2001))),
-            site.leaf("future", ClientAuth, Some((4090, 4091))),
-        ] {
-            let mut cmd = cli(&files, &fixture.url, &leaf);
-            cmd.arg("--sc-ca").arg(&ca);
-            let output = Process::spawn(read(&mut cmd)).output().await;
-            failure(&output, "WebSocket");
-            assert!(!String::from_utf8_lossy(&output.stderr).contains("timed out"));
-            read_value(&files, &fixture.url, &good, &ca, false).await;
-        }
+        let rogue = Site::new().leaf("rogue", ClientAuth, None);
+        let mut cmd = cli(&files, &fixture.url, &rogue);
+        cmd.arg("--sc-ca").arg(&ca);
+        let output = Process::spawn(read(&mut cmd)).output().await;
+        failure(&output, "WebSocket");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!stderr.contains("timed out"));
+        assert!(
+            stderr.contains("signed the identity leaf directly"),
+            "{stderr}"
+        );
+        read_value(&files, &fixture.url, &good, &ca, false).await;
     })
     .await;
 }
 
 #[tokio::test]
-async fn peer_observes_certificate_and_tls_version_errors_not_timeouts() {
+async fn peer_observes_tls_version_errors_not_timeouts() {
     let site = Site::new();
     let files = Files::new();
     let ca = files.write("site.pem", site.ca.pem());
-    for (leaf, version, expected) in [
-        (
-            site.leaf("expired", ClientAuth, Some((2000, 2001))),
-            &rustls::version::TLS13,
-            "Expired",
-        ),
-        (
-            site.leaf("future", ClientAuth, Some((4090, 4091))),
-            &rustls::version::TLS13,
-            "NotValidYet",
-        ),
-        (
-            site.leaf("cli", ClientAuth, None),
-            &rustls::version::TLS12,
-            "PeerIncompatible",
-        ),
-    ] {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("wss://{}", listener.local_addr().unwrap());
-        let acceptor = site.acceptor(version);
-        let mut cmd = cli(&files, &url, &leaf);
-        cmd.arg("--sc-ca").arg(&ca);
-        let (output, error) = tokio::join!(
-            Process::spawn(read(&mut cmd)).output(),
-            bounded(async {
-                let (tcp, _) = listener.accept().await.unwrap();
-                match acceptor.accept(tcp).await {
-                    Ok(_) => panic!("invalid credentials/protocol accepted"),
-                    Err(error) => error,
-                }
-            })
-        );
-        failure(&output, "WebSocket");
-        let peer_error = format!("{error:?}");
-        assert!(peer_error.contains(expected), "{peer_error}");
-        if expected == "PeerIncompatible" {
-            assert!(String::from_utf8_lossy(&output.stderr).contains("ProtocolVersion"));
-        }
-    }
+    let leaf = site.leaf("cli", ClientAuth, None);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("wss://{}", listener.local_addr().unwrap());
+    let acceptor = site.acceptor(&rustls::version::TLS12);
+    let mut cmd = cli(&files, &url, &leaf);
+    cmd.arg("--sc-ca").arg(&ca);
+    let (output, error) = tokio::join!(
+        Process::spawn(read(&mut cmd)).output(),
+        bounded(async {
+            let (tcp, _) = listener.accept().await.unwrap();
+            match acceptor.accept(tcp).await {
+                Ok(_) => panic!("invalid credentials/protocol accepted"),
+                Err(error) => error,
+            }
+        })
+    );
+    failure(&output, "WebSocket");
+    let peer_error = format!("{error:?}");
+    assert!(peer_error.contains("PeerIncompatible"), "{peer_error}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("ProtocolVersion"));
 }
 
 #[tokio::test]

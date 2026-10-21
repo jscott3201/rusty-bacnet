@@ -29,8 +29,7 @@ async fn progress_abort_uses_original_direct_capability_and_retirement_never_fal
         let source = MacAddr::from_slice(SOURCE);
         let (mut state, _) = initial_state(
             payload,
-            provenance,
-            Some(response),
+            bacnet_network::response_route::ResponseRoute::new(provenance, Some(response)),
             source.clone(),
             None,
             &request,

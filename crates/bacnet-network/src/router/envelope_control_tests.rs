@@ -7,7 +7,7 @@
 //! Shares [`super::envelope_harness`] with the discovery module.
 
 use bacnet_encoding::npdu::{decode_npdu, Npdu, NpduAddress};
-use bacnet_types::enums::{NetworkMessageType, RejectMessageReason};
+use bacnet_npdu::{NetworkMessageType, RejectMessageReason};
 use bacnet_types::MacAddr;
 use bytes::Bytes;
 
@@ -203,6 +203,7 @@ async fn reject_requires_exact_length_for_table_change_and_relay() {
             npdu,
             mac,
             data_attributes,
+            ..
         } => {
             assert_eq!(mac.as_slice(), &[7]);
             let decoded = decode_npdu(npdu).unwrap();
@@ -314,11 +315,12 @@ async fn what_is_guards_and_reply() {
         SendRequest::Broadcast {
             npdu,
             data_attributes,
+            ..
         } => {
             let decoded = decode_npdu(npdu).unwrap();
             assert_eq!(
                 decoded.message_type,
-                Some(NetworkMessageType::NETWORK_NUMBER_IS.to_raw())
+                Some(NetworkMessageType::NETWORK_NUMBER_IS)
             );
             assert_eq!(decoded.payload.as_ref(), &[0x03, 0xe8, 1]);
             assert_eq!(data_attributes, attributes());
@@ -399,8 +401,7 @@ async fn proprietary_unicast_forward_preserves_identity() {
     h.learned(3000, 1, &[5]);
 
     let mut npdu = Npdu {
-        is_network_message: true,
-        message_type: Some(0x80),
+        message_type: Some(NetworkMessageType::from_raw(0x80)),
         vendor_id: Some(1234),
         destination: Some(NpduAddress {
             network: 3000,
@@ -420,10 +421,14 @@ async fn proprietary_unicast_forward_preserves_identity() {
             npdu,
             mac,
             data_attributes,
+            ..
         } => {
             assert_eq!(mac.as_slice(), &[5]);
             let decoded = decode_npdu(npdu).unwrap();
-            assert_eq!(decoded.message_type, Some(0x80));
+            assert_eq!(
+                decoded.message_type,
+                Some(NetworkMessageType::from_raw(0x80))
+            );
             assert_eq!(decoded.vendor_id, Some(1234));
             assert_eq!(
                 decoded.destination,
@@ -449,7 +454,10 @@ async fn proprietary_unicast_forward_preserves_identity() {
             assert_eq!(mac.as_slice(), &[9]);
             let decoded = decode_npdu(npdu).unwrap();
             assert!(decoded.destination.is_none());
-            assert_eq!(decoded.message_type, Some(0x80));
+            assert_eq!(
+                decoded.message_type,
+                Some(NetworkMessageType::from_raw(0x80))
+            );
             assert_eq!(decoded.vendor_id, Some(1234));
         }
         SendRequest::Broadcast { .. } => panic!("expected unicast"),
@@ -466,8 +474,7 @@ async fn proprietary_directed_is_routed_opaquely_not_consumed() {
     let mut h = Harness::with_table(table);
 
     let mut npdu = Npdu {
-        is_network_message: true,
-        message_type: Some(0x90),
+        message_type: Some(NetworkMessageType::from_raw(0x90)),
         vendor_id: Some(999),
         destination: Some(NpduAddress {
             network: 3000,
@@ -489,7 +496,10 @@ async fn proprietary_directed_is_routed_opaquely_not_consumed() {
     match forwarded.pop().unwrap() {
         SendRequest::Unicast { npdu, .. } => {
             let decoded = decode_npdu(npdu).unwrap();
-            assert_eq!(decoded.message_type, Some(0x90));
+            assert_eq!(
+                decoded.message_type,
+                Some(NetworkMessageType::from_raw(0x90))
+            );
             assert_eq!(decoded.vendor_id, Some(999));
             assert_eq!(decoded.payload.as_ref(), &[0xde, 0xad]);
         }
@@ -516,6 +526,7 @@ async fn unknown_local_control_is_explicitly_rejected() {
             npdu,
             mac,
             data_attributes,
+            ..
         } => {
             assert_eq!(mac.as_slice(), &[7]);
             let decoded = decode_npdu(npdu).unwrap();

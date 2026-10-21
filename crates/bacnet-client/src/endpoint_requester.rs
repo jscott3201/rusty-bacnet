@@ -3,7 +3,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bacnet_encoding::apdu::{
-    encode_apdu, validate_max_apdu_length, AbortPdu, Apdu, ConfirmedRequest as ConfirmedRequestPdu,
+    encode_apdu, max_apdu_header_at_or_below, AbortPdu, Apdu,
+    ConfirmedRequest as ConfirmedRequestPdu,
 };
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_endpoint_core::coordinator::{
@@ -11,12 +12,11 @@ use bacnet_endpoint_core::coordinator::{
 };
 use bacnet_endpoint_core::endpoint_ingress::{EndpointApduDestination, EndpointEgress};
 use bacnet_network::layer::ReceivedApdu;
+use bacnet_npdu::NetworkPriority;
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_services::read_range::{ReadRangeReply, ReadRangeRequest, ReadRangeValidation};
 use bacnet_transport::port::{DataAttribute, TransportProvenance};
-use bacnet_types::enums::{
-    AbortReason, ConfirmedServiceChoice, NetworkPriority, PropertyIdentifier,
-};
+use bacnet_types::enums::{AbortReason, ConfirmedServiceChoice, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::MacAddr;
@@ -164,7 +164,7 @@ impl EndpointRequester {
         coordinator: Arc<OutboundTransactionCoordinator>,
         config: ClientConfig,
     ) -> Result<Self, Error> {
-        validate_max_apdu_length(config.max_apdu_length)?;
+        max_apdu_header_at_or_below(u32::from(config.max_apdu_length))?;
         pacing::validate_interval_ms(config.min_request_interval_ms)?;
         let pacer = Arc::new(RequestPacer::new(Duration::from_millis(
             config.min_request_interval_ms,
@@ -414,9 +414,7 @@ impl EndpointRequester {
         let mut service_data = BytesMut::new();
         request.encode(&mut service_data)?;
         if 4 + service_data.len() > usize::from(self.inner.max_apdu_length) {
-            return Err(Error::Segmentation(
-                "endpoint requester supports only unsegmented requests".into(),
-            ));
+            return Err(bacnet_types::error::SegmentationError::EndpointRequestTooLong.into());
         }
         Ok(service_data)
     }
@@ -484,10 +482,10 @@ impl EndpointRequester {
                     },
                     Apdu::Error(error) => TsmResponse::from_error_pdu(error),
                     Apdu::Reject(reject) => TsmResponse::Reject {
-                        reason: reject.reject_reason.to_raw(),
+                        reason: reject.reject_reason,
                     },
                     Apdu::Abort(abort) => TsmResponse::Abort {
-                        reason: abort.abort_reason.to_raw(),
+                        reason: abort.abort_reason,
                     },
                     Apdu::SegmentAck(_)
                     | Apdu::ConfirmedRequest(_)
@@ -536,7 +534,7 @@ impl EndpointRequester {
                         encoded.to_vec(),
                         destination,
                         false,
-                        NetworkPriority::NORMAL,
+                        NetworkPriority::Normal,
                         attributes,
                     )
                     .await

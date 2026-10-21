@@ -64,8 +64,7 @@ fn alarm() -> EventNotificationRequest {
 /// Multiple 1, each with records.
 async fn server() -> BACnetServer<BipTransport> {
     let mut device = DeviceObject::new(DeviceConfig {
-        instance: 1,
-        name: "read-range".into(),
+        identity: bacnet_objects::DeviceIdentity::default().with_name("read-range"),
         ..DeviceConfig::default()
     })
     .unwrap();

@@ -2,6 +2,7 @@
 //! undelivered-notification counter once per transition (#1142).
 
 use super::*;
+use bacnet_types::enums::EngineeringUnits;
 
 fn no_bindings() -> Arc<RwLock<super::device_bindings::DeviceBindingTable>> {
     Arc::new(RwLock::new(
@@ -80,7 +81,7 @@ async fn delivered_and_dcc_held_transitions_move_no_counter() {
 /// accessor, and its totals stay readable after `stop()`.
 #[tokio::test]
 async fn running_server_counts_a_missing_class_from_a_local_write() {
-    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     for (property, value) in [
         (PropertyIdentifier::HIGH_LIMIT, 80.0f32),
         (PropertyIdentifier::LOW_LIMIT, 20.0),
@@ -104,8 +105,7 @@ async fn running_server_counts_a_missing_class_from_a_local_write() {
     db.add(Box::new(ai)).unwrap();
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
-            instance: 1,
-            name: "Dev".into(),
+            identity: bacnet_objects::DeviceIdentity::default().with_name("Dev"),
             ..DeviceConfig::default()
         })
         .unwrap(),

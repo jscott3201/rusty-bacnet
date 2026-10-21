@@ -2,22 +2,13 @@
 //! adapter would drive it, then the capacity paths.
 
 use bacnet_mstp_codec::{decode_frame, Frame, FrameType};
+use bacnet_mstp_core::npdu::NetworkPriority;
 use bacnet_mstp_core::{
-    Action, Duration, Instant, MasterCore, MstpCoreConfig, NetworkPriority, QueueRefusal,
-    ReplyDecision, RequestId, TransmitId,
+    Action, Duration, Instant, MasterCore, MstpCoreConfig, QueueRefusal, ReplyDecision, RequestId,
+    TransmitId,
 };
 
-use super::{Actions, Core, Queues, Summary, UNICAST_SLOTS, WHO_IS};
-
-/// What the core borrows for its lifetime.
-pub(crate) struct Storage<'m> {
-    /// Its receive storage.
-    pub(crate) rx: &'m mut [u8],
-    /// Its transmit queues.
-    pub(crate) queues: &'m mut Queues,
-    /// Its action buffers.
-    pub(crate) actions: &'m mut Actions,
-}
+use super::{Core, Storage, Summary, UNICAST_SLOTS, WHO_IS};
 
 /// This station.
 const STATION: u8 = 1;
@@ -62,17 +53,12 @@ impl Clock {
 
 /// Build the core over `storage`, run the token exchange, then the capacity
 /// paths, offering `oversize` as the NPDU too long for a standard frame.
-pub(crate) fn run(storage: Storage<'_>, wire: &mut [u8], oversize: &[u8], summary: &mut Summary) {
+pub(crate) fn run(storage: &mut Storage, wire: &mut [u8], oversize: &[u8], summary: &mut Summary) {
     let mut clock = Clock {
         now: Instant::ZERO,
         octet: CONFIG.octet_time(),
     };
-    let Storage {
-        rx,
-        queues,
-        actions,
-    } = storage;
-    let Ok(mut core) = MasterCore::new(CONFIG, queues, rx, actions, clock.now) else {
+    let Ok(mut core) = MasterCore::new(CONFIG, storage, clock.now) else {
         summary.error();
         return;
     };
@@ -152,6 +138,13 @@ fn record_counters(core: &mut Core<'_>, summary: &mut Summary) {
     summary.parser_errors = counters.parser_errors;
     summary.drops_full = counters.unicast.drops_full;
     summary.drops_oversize = counters.unicast.drops_oversize;
+    // Inputs the core ignored as broken: none in a good run.
+    let broken = counters
+        .adapter_errors
+        .saturating_add(counters.internal_errors);
+    summary.errors = summary
+        .errors
+        .saturating_add(u8::try_from(broken).unwrap_or(u8::MAX));
 }
 
 /// Feed `frame` to the core octet by octet, as the peer sends it, then
@@ -169,9 +162,7 @@ fn receive(
     };
     for &octet in wire.iter().take(length) {
         clock.pass(1);
-        if core.on_octet(octet, clock.now).is_err() {
-            summary.error();
-        }
+        core.on_octet(octet, clock.now);
     }
     drain(core, clock, summary);
 }
@@ -184,9 +175,7 @@ fn wait(core: &mut Core<'_>, clock: &mut Clock, summary: &mut Summary) {
         return;
     };
     clock.now = clock.now.max(deadline);
-    if core.on_deadline(clock.now).is_err() {
-        summary.error();
-    }
+    core.on_deadline(clock.now);
     drain(core, clock, summary);
 }
 
@@ -194,7 +183,7 @@ fn wait(core: &mut Core<'_>, clock: &mut Clock, summary: &mut Summary) {
 /// borrow of the core has ended.
 enum Then {
     Nothing,
-    Send { id: TransmitId, octets: usize },
+    Send { id: TransmitId },
     Answer(RequestId),
 }
 
@@ -209,13 +198,7 @@ fn drain(core: &mut Core<'_>, clock: &mut Clock, summary: &mut Summary) {
                 summary.direction_changes += 1;
                 Then::Nothing
             }
-            Action::Transmit { id, frame } => {
-                record_sent(frame, summary);
-                Then::Send {
-                    id,
-                    octets: frame.len(),
-                }
-            }
+            Action::Transmit { id, .. } => Then::Send { id },
             Action::DeliverNpdu { request_id, .. } => {
                 summary.npdus_delivered += 1;
                 match request_id {
@@ -230,14 +213,21 @@ fn drain(core: &mut Core<'_>, clock: &mut Clock, summary: &mut Summary) {
         };
         match then {
             Then::Nothing => {}
-            Then::Send { id, octets } => {
-                if core.on_transmit_started(id, clock.now).is_err() {
-                    summary.error();
-                }
+            Then::Send { id } => {
+                // The octets come with the confirmed start: send them from
+                // the core's frame buffer.
+                let octets = match core.on_transmit_started(id, clock.now) {
+                    Ok(frame) => {
+                        record_sent(frame, summary);
+                        frame.len()
+                    }
+                    Err(_) => {
+                        summary.error();
+                        0
+                    }
+                };
                 clock.pass(octets);
-                if core.on_transmit_complete(id, clock.now).is_err() {
-                    summary.error();
-                }
+                core.on_transmit_complete(id, clock.now);
             }
             Then::Answer(id) => {
                 summary.requests += 1;

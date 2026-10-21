@@ -1,9 +1,5 @@
 use super::*;
 
-fn words(line: &str) -> Vec<String> {
-    line.split_whitespace().map(str::to_string).collect()
-}
-
 #[test]
 fn reference_times_take_minutes_seconds_and_hundredths() {
     let (date, time) = parse_reference_time("2026-10-05T09:30").unwrap();
@@ -98,29 +94,4 @@ fn all_pages_forward_from_the_start_given() {
         ..RangeOptions::default()
     };
     assert!(backward.pages().is_err());
-}
-
-#[test]
-fn shell_words_carry_the_same_options() {
-    let (options, rest) =
-        RangeOptions::from_words(&words("dev:1 trend-log:1 --sequence 7 --count -3")).unwrap();
-    assert_eq!(rest, words("dev:1 trend-log:1"));
-    assert_eq!(options.sequence, Some(7));
-    assert_eq!(options.count, Some(-3));
-    let (options, _) =
-        RangeOptions::from_words(&words("d o --all --time 2026-10-05T09:00")).unwrap();
-    assert!(options.all);
-    assert!(options.time.is_some());
-    let (options, _) = RangeOptions::from_words(&words("d o --sequence 1 --strict")).unwrap();
-    assert!(options.strict);
-    for bad in [
-        "d o --position",
-        "d o --position x",
-        "d o --position 1 --sequence 2",
-        "d o --count 40000",
-        "d o --newest",
-        "d o --all --strict",
-    ] {
-        assert!(RangeOptions::from_words(&words(bad)).is_err(), "{bad}");
-    }
 }

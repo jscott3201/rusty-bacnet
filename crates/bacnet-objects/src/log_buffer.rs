@@ -36,8 +36,8 @@ pub(crate) const TOTAL_RECORD_COUNT_METADATA: PropertyMetadata =
 /// (Clause 15.5.1.3.1).
 pub(crate) fn log_buffer_read_denied() -> Error {
     Error::Protocol {
-        class: ErrorClass::PROPERTY.to_raw() as u32,
-        code: ErrorCode::READ_ACCESS_DENIED.to_raw() as u32,
+        class: ErrorClass::PROPERTY,
+        code: ErrorCode::READ_ACCESS_DENIED,
     }
 }
 

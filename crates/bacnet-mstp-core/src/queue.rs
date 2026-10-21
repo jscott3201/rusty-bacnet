@@ -13,6 +13,7 @@
 use core::fmt;
 
 use bacnet_mstp_codec::{BROADCAST_MAC, MAX_STANDARD_MPDU_DATA};
+use bacnet_npdu::NetworkPriority;
 use bacnet_time::Instant;
 
 use crate::counters::QueueCounters;
@@ -38,75 +39,6 @@ impl QueueKind {
         }
     }
 }
-
-/// BACnet network priorities, in increasing service order.
-///
-/// Clause 6.2.2 assigns the numeric values shown here.  Consequently
-/// [`LifeSafety`](Self::LifeSafety) is selected before
-/// [`CriticalEquipment`](Self::CriticalEquipment), then [`Urgent`](Self::Urgent),
-/// and finally [`Normal`](Self::Normal).
-///
-/// The field is two bits, so the set is closed: convert from the wire value
-/// with `try_from` and back with `u8::from`.
-///
-/// ```
-/// use bacnet_mstp_core::NetworkPriority;
-///
-/// assert_eq!(NetworkPriority::try_from(3), Ok(NetworkPriority::LifeSafety));
-/// assert_eq!(u8::from(NetworkPriority::Urgent), 1);
-/// assert!(NetworkPriority::try_from(4).is_err());
-/// ```
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Hash)]
-pub enum NetworkPriority {
-    /// Normal traffic (`0`).
-    Normal = 0,
-    /// Urgent traffic (`1`).
-    Urgent = 1,
-    /// Critical-equipment traffic (`2`).
-    CriticalEquipment = 2,
-    /// Life-safety traffic (`3`).
-    LifeSafety = 3,
-}
-
-/// The wire priority value, 0 to 3; anything else is refused.
-impl TryFrom<u8> for NetworkPriority {
-    type Error = PriorityError;
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(Self::Normal),
-            1 => Ok(Self::Urgent),
-            2 => Ok(Self::CriticalEquipment),
-            3 => Ok(Self::LifeSafety),
-            _ => Err(PriorityError { value }),
-        }
-    }
-}
-
-/// The Clause 6.2.2 numeric value.
-impl From<NetworkPriority> for u8 {
-    fn from(priority: NetworkPriority) -> Self {
-        priority as u8
-    }
-}
-
-/// A value [`NetworkPriority::try_from`] refuses: a network priority is two
-/// bits, 0 to 3.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-#[non_exhaustive]
-pub struct PriorityError {
-    /// The value offered.
-    pub value: u8,
-}
-
-impl fmt::Display for PriorityError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "network priority {} is not 0 to 3", self.value)
-    }
-}
-
-impl core::error::Error for PriorityError {}
 
 /// Why a queue, or [`MasterCore::enqueue_npdu`](crate::MasterCore::enqueue_npdu),
 /// refused an NPDU.
@@ -238,7 +170,7 @@ impl QueueItemInfo {
 
 /// A bounded storage backend for queued NPDUs: the core's transmit queues.
 ///
-/// [`HeaplessQueues`] implements it, and `AllocQueues` with the `alloc`
+/// [`FixedQueues`] implements it, and `AllocQueues` with the `alloc`
 /// feature; so may storage of your own, such as queues another task fills
 /// too (the Tokio MS/TP transport keeps `AllocQueues` behind a lock that
 /// way). It carries the queue policy as well as the items: which item goes
@@ -409,9 +341,9 @@ impl<T: QueueStorage + ?Sized> QueueStorage for &mut T {
 // The slots and selection policy that the two queue backends share.
 mod slots;
 
-mod heapless;
+mod fixed;
 
-pub use heapless::HeaplessQueues;
+pub use fixed::FixedQueues;
 
 #[cfg(feature = "alloc")]
 mod alloc;

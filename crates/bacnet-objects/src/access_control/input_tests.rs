@@ -6,7 +6,7 @@
 
 use bacnet_types::constructed::{BACnetAuthenticationFactor, BACnetAuthenticationFactorFormat};
 use bacnet_types::enums::{
-    AuthenticationFactorType, ErrorClass, ErrorCode, PropertyIdentifier as P,
+    AuthenticationFactorType, EngineeringUnits, ErrorClass, ErrorCode, PropertyIdentifier as P,
 };
 
 use super::*;
@@ -15,7 +15,7 @@ use crate::analog::AnalogValueObject;
 fn assert_error(result: Result<(), Error>, class: ErrorClass, code: ErrorCode) {
     assert!(
         matches!(result, Err(Error::Protocol { class: c, code: e })
-            if c == class.to_raw() as u32 && e == code.to_raw() as u32),
+            if c == class && e == code),
         "expected {class:?} / {code:?}, got {result:?}"
     );
 }
@@ -462,7 +462,7 @@ fn access_door_takes_the_values_a_report_gives() {
 
 #[test]
 fn other_objects_fail_closed() {
-    let mut value = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let mut value = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     assert_error(
         value.report_access_input_internal(AccessControlInput::DoorState(
             DoorStateReport::default(),

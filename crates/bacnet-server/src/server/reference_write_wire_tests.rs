@@ -19,7 +19,7 @@ use bacnet_objects::averaging::AveragingObject;
 use bacnet_objects::loop_obj::LoopObject;
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
-use bacnet_types::enums::ObjectType;
+use bacnet_types::enums::{EngineeringUnits, ObjectType};
 
 type P = PropertyIdentifier;
 
@@ -82,10 +82,14 @@ fn followed_by(user: &User, trailing: &[u8]) -> Vec<u8> {
 
 async fn start() -> Harness {
     Harness::start_with(ServerConfig::default(), |db| {
-        db.add(Box::new(LoopObject::new(1, "LOOP-1", 62).unwrap()))
-            .unwrap();
-        db.add(Box::new(PulseConverterObject::new(1, "PC-1", 62).unwrap()))
-            .unwrap();
+        db.add(Box::new(
+            LoopObject::new(1, "LOOP-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+        ))
+        .unwrap();
+        db.add(Box::new(
+            PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+        ))
+        .unwrap();
         db.add(Box::new(AveragingObject::new(1, "AVG-1").unwrap()))
             .unwrap();
     })

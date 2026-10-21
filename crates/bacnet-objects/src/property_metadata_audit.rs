@@ -41,7 +41,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use bacnet_types::constructed::{BACnetDeviceObjectReference, BACnetStageLimitValue};
-use bacnet_types::enums::{EventType, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{EngineeringUnits, EventType, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
@@ -105,7 +105,7 @@ fn staging_config() -> StagingConfig {
     StagingConfig {
         present_value: 5.0,
         min_present_value: -1.0,
-        units: 62,
+        units: EngineeringUnits::DEGREES_CELSIUS,
         priority_for_writing: 8,
         stages: vec![
             BACnetStageLimitValue {
@@ -144,9 +144,9 @@ fn staging_config() -> StagingConfig {
 fn supported_representatives() -> Vec<Box<dyn BACnetObject>> {
     let alert_source = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
     vec![
-        Box::new(AnalogInputObject::new(1, "AI-1", 62).unwrap()),
-        Box::new(AnalogOutputObject::new(1, "AO-1", 62).unwrap()),
-        Box::new(AnalogValueObject::new(1, "AV-1", 62).unwrap()),
+        Box::new(AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap()),
+        Box::new(AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap()),
+        Box::new(AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap()),
         Box::new(BinaryInputObject::new(1, "BI-1").unwrap()),
         Box::new(BinaryOutputObject::new(1, "BO-1").unwrap()),
         Box::new(BinaryValueObject::new(1, "BV-1").unwrap()),
@@ -156,7 +156,7 @@ fn supported_representatives() -> Vec<Box<dyn BACnetObject>> {
         Box::new(EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap()),
         Box::new(FileObject::new(1, "FILE-1", "raw").unwrap()),
         Box::new(GroupObject::new(1, "GRP-1").unwrap()),
-        Box::new(LoopObject::new(1, "LOOP-1", 62).unwrap()),
+        Box::new(LoopObject::new(1, "LOOP-1", EngineeringUnits::DEGREES_CELSIUS).unwrap()),
         Box::new(MultiStateInputObject::new(1, "MSI-1", 3).unwrap()),
         Box::new(MultiStateOutputObject::new(1, "MSO-1", 3).unwrap()),
         Box::new(NotificationClass::new(1, "NC-1").unwrap()),
@@ -167,8 +167,8 @@ fn supported_representatives() -> Vec<Box<dyn BACnetObject>> {
         Box::new(TrendLogObject::new(1, "TL-1", 3).unwrap()),
         Box::new(LifeSafetyPointObject::new(1, "LSP-1").unwrap()),
         Box::new(LifeSafetyZoneObject::new(1, "LSZ-1").unwrap()),
-        Box::new(AccumulatorObject::new(1, "ACC-1", 95).unwrap()),
-        Box::new(PulseConverterObject::new(1, "PC-1", 62).unwrap()),
+        Box::new(AccumulatorObject::new(1, "ACC-1", EngineeringUnits::NO_UNITS).unwrap()),
+        Box::new(PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap()),
         Box::new(EventLogObject::new(1, "EL-1", 3).unwrap()),
         Box::new(GlobalGroupObject::new(1, "GG-1").unwrap()),
         Box::new(TrendLogMultipleObject::new(1, "TLM-1", 3).unwrap()),

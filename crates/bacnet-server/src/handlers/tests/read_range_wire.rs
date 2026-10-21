@@ -28,8 +28,10 @@ async fn read_range_unsegmented_direct_and_routed_fit_actual_peer_local_envelope
                     let (db, oid) = list_db(PropertyIdentifier::LOG_BUFFER, items.clone(), None);
                     let mut server = BACnetServer::start(
                         ServerConfig {
-                            segmentation_supported: segmentation,
-                            max_apdu_length: local,
+                            device: bacnet_objects::DeviceIdentity::default()
+                                .with_max_apdu(u16::try_from(local).expect("Device APDU fits u16"))
+                                .expect("valid Device APDU")
+                                .with_segmentation(segmentation),
                             read_range_budget: ReadRangeBudget {
                                 max_service_ack_bytes: cap,
                                 ..Default::default()
@@ -137,7 +139,7 @@ async fn read_range_segmented_complete_page_keeps_config_cap_and_actual_identity
             .interface(Ipv4Addr::LOCALHOST)
             .port(0)
             .database(db)
-            .segmentation_supported(segmentation)
+            .device(bacnet_objects::DeviceIdentity::default().with_segmentation(segmentation))
             .read_range_budget(ReadRangeBudget {
                 max_returned_items: 60,
                 ..Default::default()

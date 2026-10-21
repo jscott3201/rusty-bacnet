@@ -1,13 +1,17 @@
 //! Configured Network Port snapshots and selected live state (135-2020 Clause 12.56).
 //!
-//! The B/IP constructor supplies the flat application-level IPV4 profile.
-//! Configuration is read-only over BACnet: this object has no pending
-//! activation owner, socket, or NIC discovery. Reconstruct it to change local
-//! configuration. An explicit B/IP owner may publish its actual bind and mode,
-//! and learn Network_Number/Quality, without changing configured provenance.
-//! In FOREIGN or BBMD mode the object serves that mode's properties, a
-//! BBMD's tables read live from the transport (see `bip_mode`).
-//! Non-B/IP snapshots expose only the common application rows;
+//! The B/IP and B/IPv6 constructors supply the flat application-level IPV4
+//! and IPV6 profiles (`ip_config`). Configuration is read-only over BACnet:
+//! this object has no socket or NIC discovery. Reconstruct it to change
+//! local configuration. An explicit B/IP or B/IPv6 owner may publish its
+//! actual bind and mode, and learn Network_Number/Quality, without changing
+//! configured provenance. In FOREIGN or BBMD mode the object serves that
+//! mode's properties, read live from the transport (see `bip_mode`), for
+//! either IP version. A BBMD's BDT and registration setting, and a foreign
+//! device's BBMD and time-to-live, are writable when the transport can
+//! change them, and wait for activation (`pending`), as is a B/IP port's
+//! multicast group (`multicast`).
+//! Other snapshots expose only the common application rows;
 //! they do not claim a complete transport-specific SC, Ethernet or MS/TP profile.
 
 use bacnet_types::enums::{NetworkType, ObjectType, PropertyIdentifier, Reliability};
@@ -19,12 +23,20 @@ use std::borrow::Cow;
 use crate::common::{self, read_common_properties};
 use crate::traits::BACnetObject;
 
+mod bip6_config;
 mod bip_config;
 mod bip_mode;
+mod ip_config;
 mod metadata;
+mod multicast;
+mod pending;
 mod registration;
 use bacnet_types::network_number::NetworkNumber;
+pub(crate) use bip6_config::Bip6Bind;
+pub use bip6_config::Bip6PortConfig;
 pub use bip_config::BipPortConfig;
+use ip_config::IpConfig;
+pub(crate) use ip_config::{PortAddress, PortBind};
 
 /// A declared application-port snapshot, optionally associated with an owned link.
 pub struct NetworkPortObject {
@@ -38,11 +50,19 @@ pub struct NetworkPortObject {
     network_number: NetworkNumber,
     mac_address: MacAddr,
     apdu_length: u32,
-    bip: Option<BipPortConfig>,
+    /// The B/IP or B/IPv6 profile; `None` for the other network types.
+    ip: Option<IpConfig>,
     /// The mode the last published owner reported; NORMAL until one
     /// publishes. Like the bind, it stays after that owner stops, until a
     /// new registration reserves the port.
     mode: bip_mode::LiveMode,
+    /// Values written to the mode's properties, waiting for activation.
+    pending: pending::Pending,
+    /// Whether the owner activates written values on ReinitializeDevice;
+    /// without it the pending-activation rows refuse writes.
+    activation: bool,
+    /// The B/IP multicast group the owner lends, and a written one waiting.
+    multicast: multicast::Multicast,
     binding: std::sync::Weak<()>,
 }
 
@@ -55,30 +75,48 @@ impl NetworkPortObject {
         name: impl Into<String>,
         config: BipPortConfig,
     ) -> Result<Self, Error> {
+        Self::new_ip(instance, name.into(), IpConfig::V4(config))
+    }
+
+    /// Complete IPV6 (B/IPv6, Annex U) snapshot, in NORMAL mode until a
+    /// registered owner publishes another. The instance policy is B/IP's:
+    /// the declared local Port ID, 1..=255. MAC_Address is the configured
+    /// VMAC until an owner publishes the one it uses.
+    pub fn new_bip6(
+        instance: u32,
+        name: impl Into<String>,
+        config: Bip6PortConfig,
+    ) -> Result<Self, Error> {
+        Self::new_ip(instance, name.into(), IpConfig::V6(config))
+    }
+
+    fn new_ip(instance: u32, name: String, config: IpConfig) -> Result<Self, Error> {
         config.validate(instance)?;
-        let mut mac = MacAddr::from_slice(&config.ip_address);
-        mac.extend_from_slice(&config.udp_port.to_be_bytes());
         Ok(Self {
             oid: ObjectIdentifier::new(ObjectType::NETWORK_PORT, instance)?,
-            name: name.into(),
+            name,
             description: String::new(),
             status_flags: StatusFlags::empty(),
             out_of_service: false,
             reliability: Reliability::NO_FAULT_DETECTED,
-            network_type: NetworkType::IPV4,
-            network_number: NetworkNumber::configured(config.network_number)
+            network_type: config.network_type(),
+            network_number: NetworkNumber::configured(config.network_number())
                 .expect("validated Network Number"),
-            mac_address: mac,
-            apdu_length: config.apdu_length,
-            bip: Some(config),
+            mac_address: config.mac(),
+            apdu_length: config.apdu_length(),
+            ip: Some(config),
             mode: Default::default(),
+            pending: Default::default(),
+            activation: false,
+            multicast: Default::default(),
             binding: std::sync::Weak::new(),
         })
     }
 
     /// Common application rows for Ethernet or VIRTUAL configuration. This is not a
-    /// complete link-specific profile. In particular it exposes no IPv4 fields.
-    /// IPV4 must use `new_bip`; the flat B/IP instance policy does not apply here.
+    /// complete link-specific profile. In particular it exposes no IP fields.
+    /// IPV4 must use `new_bip` and IPV6 `new_bip6`; the flat B/IP instance
+    /// policy does not apply here.
     pub fn new_non_bip(
         instance: u32,
         name: impl Into<String>,
@@ -105,8 +143,11 @@ impl NetworkPortObject {
                 .expect("validated Network Number"),
             mac_address,
             apdu_length,
-            bip: None,
+            ip: None,
             mode: Default::default(),
+            pending: Default::default(),
+            activation: false,
+            multicast: Default::default(),
             binding: std::sync::Weak::new(),
         })
     }
@@ -148,44 +189,26 @@ impl BACnetObject for NetworkPortObject {
             P::APDU_LENGTH => Ok(PropertyValue::Unsigned(self.apdu_length.into())),
             // Optional unknown rate, not a measured NIC speed (errata item 23).
             P::LINK_SPEED => Ok(PropertyValue::Real(0.0)),
-            P::CHANGES_PENDING => Ok(PropertyValue::Boolean(false)),
+            P::CHANGES_PENDING => Ok(PropertyValue::Boolean(self.changes_pending())),
             _ => {
                 let config = self
-                    .bip
+                    .ip
                     .as_ref()
                     .ok_or_else(common::unknown_property_error)?;
-                match property {
-                    P::BACNET_IP_MODE => {
-                        Ok(PropertyValue::Enumerated(self.mode.ip_mode().to_raw()))
-                    }
-                    P::IP_ADDRESS => Ok(PropertyValue::OctetString(config.ip_address.to_vec())),
-                    P::IP_SUBNET_MASK => {
-                        Ok(PropertyValue::OctetString(config.subnet_mask.to_vec()))
-                    }
-                    P::IP_DEFAULT_GATEWAY => {
-                        Ok(PropertyValue::OctetString(config.default_gateway.to_vec()))
-                    }
-                    P::BACNET_IP_UDP_PORT => Ok(PropertyValue::Unsigned(config.udp_port.into())),
-                    P::IP_DNS_SERVER => match array_index {
-                        None => Ok(PropertyValue::List(
-                            config
-                                .dns_servers
-                                .iter()
-                                .map(|ip| PropertyValue::OctetString(ip.to_vec()))
-                                .collect(),
-                        )),
-                        Some(0) => Ok(PropertyValue::Unsigned(config.dns_servers.len() as u64)),
-                        Some(index) => config
-                            .dns_servers
-                            .get(index as usize - 1)
-                            .map(|ip| PropertyValue::OctetString(ip.to_vec()))
-                            .ok_or_else(common::invalid_array_index_error),
-                    },
-                    _ => self
-                        .mode
-                        .read(property)
-                        .unwrap_or_else(|| Err(common::unknown_property_error())),
+                if property == config.mode_property() {
+                    return Ok(PropertyValue::Enumerated(self.mode.ip_mode().to_raw()));
                 }
+                if pending::nat_row(property) && !self.serves_nat() {
+                    return Err(common::unknown_property_error());
+                }
+                if let Some(result) = self.read_multicast(property) {
+                    return result;
+                }
+                config
+                    .read(property, array_index)
+                    .or_else(|| self.pending_value(property))
+                    .or_else(|| self.mode.read(property))
+                    .unwrap_or_else(|| Err(common::unknown_property_error()))
             }
         }
     }
@@ -193,7 +216,7 @@ impl BACnetObject for NetworkPortObject {
     fn write_property(
         &mut self,
         property: PropertyIdentifier,
-        _array_index: Option<u32>,
+        array_index: Option<u32>,
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
@@ -208,8 +231,14 @@ impl BACnetObject for NetworkPortObject {
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
-        // Configuration writes require actual activation (12.56); this snapshot
-        // deliberately provides no apply/Command path or inert pending state.
+        if let Some(result) = self.write_pending(property, array_index, &value) {
+            return result;
+        }
+        if let Some(result) = self.write_multicast(property, array_index, &value) {
+            return result;
+        }
+        // Other configuration writes would need an activation owner (12.56)
+        // this snapshot doesn't have.
         if self
             .property_metadata()
             .iter()
@@ -236,6 +265,16 @@ impl BACnetObject for NetworkPortObject {
 }
 
 #[cfg(test)]
+mod bip6_tests;
+#[cfg(test)]
+mod foreign_pending_tests;
+#[cfg(test)]
 mod mode_tests;
+#[cfg(test)]
+mod multicast_tests;
+#[cfg(test)]
+mod nat_pending_tests;
+#[cfg(test)]
+mod pending_tests;
 #[cfg(test)]
 mod tests;

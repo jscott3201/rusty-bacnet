@@ -86,27 +86,26 @@ pub(super) fn extract_raw_context(
         let (tag, content_start) = tags::decode_tag(data, pos)?;
         if tag.is_opening {
             if depth == stack.len() {
-                return Err(Error::invalid_tag(
+                return Err(DecodeError::new(
+                    DecodingKind::InvalidTag,
                     pos,
-                    format!(
-                        "context tag nesting depth exceeds maximum ({})",
-                        tags::MAX_CONTEXT_NESTING_DEPTH
-                    ),
-                ));
+                    "context tag nesting depth exceeds maximum ({})",
+                )
+                .with_value(tags::MAX_CONTEXT_NESTING_DEPTH as u64)
+                .into());
             }
             stack[depth] = tag.number;
             depth += 1;
             pos = content_start;
         } else if tag.is_closing {
             if tag.number != stack[depth - 1] {
-                return Err(Error::invalid_tag(
+                return Err(DecodeError::new(
+                    DecodingKind::InvalidTag,
                     pos,
-                    format!(
-                        "closing tag {} does not match opening tag {}",
-                        tag.number,
-                        stack[depth - 1]
-                    ),
-                ));
+                    "closing tag {} does not match opening tag {}",
+                )
+                .with_values(tag.number.into(), stack[depth - 1].into())
+                .into());
             }
             depth -= 1;
             if depth == 0 {
@@ -125,10 +124,13 @@ pub(super) fn extract_raw_context(
         }
     }
 
-    Err(Error::missing(
+    Err(DecodeError::new(
+        DecodingKind::Missing,
         start,
-        format!("extract_raw_context: missing closing tag [{tag_number}]"),
-    ))
+        "extract_raw_context: missing closing tag [{}]",
+    )
+    .with_value(tag_number.into())
+    .into())
 }
 
 // ---------------------------------------------------------------------------

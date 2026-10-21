@@ -82,6 +82,13 @@ async def main():
         sc_client_cert="client-cert.pem",
         sc_client_key="client-key.pem",
     ) as client:
+        # Observe this accepted Hub connection; no additional handshake.
+        peer = await client.sc_peer_info()
+        if peer is not None:
+            print(f"Hub connection {peer.connection_id}: {peer.handshake_kind}")
+            print(f"Hub leaf SHA-256: {peer.leaf_sha256.hex()}")
+            # This certificate does not identify the server relayed by the Hub.
+
         # Address the server by its VMAC (hex-colon notation)
         server_vmac = "00:01:02:03:04:05"
 

@@ -3,8 +3,8 @@
 //!
 //! The transport registers at start and renews on its own. A one-shot
 //! command waits for the first registration to be answered before it runs,
-//! and fails when the BBMD refuses it or doesn't answer; the shell and the
-//! TUI report the outcome and carry on.
+//! and fails when the BBMD refuses it or doesn't answer; the TUI reports
+//! the outcome and carries on.
 
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::time::Duration;

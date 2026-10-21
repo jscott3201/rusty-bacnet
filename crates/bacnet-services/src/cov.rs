@@ -48,9 +48,7 @@ impl SubscribeCOVRequest {
     /// Lifetime requires an explicit notification mode; mode alone is indefinite.
     pub fn validate(&self) -> Result<(), Error> {
         if self.lifetime.is_some() && self.issue_confirmed_notifications.is_none() {
-            return Err(Error::Encoding(
-                "SubscribeCOV lifetime requires confirmed-notification mode".into(),
-            ));
+            return Err(Error::encode("SubscribeCOV lifetime requires confirmed-notification mode"));
         }
         Ok(())
     }
@@ -153,12 +151,8 @@ impl SubscribeCOVPropertyRequest {
         match (self.issue_confirmed_notifications, self.lifetime) {
             (None, None) => Ok(()),
             (Some(_), Some(lifetime)) if lifetime != 0 => Ok(()),
-            (Some(_), Some(0)) => Err(Error::Encoding(
-                "SubscribeCOVProperty requires a positive lifetime".into(),
-            )),
-            _ => Err(Error::Encoding(
-                "SubscribeCOVProperty confirmed mode and lifetime must appear together".into(),
-            )),
+            (Some(_), Some(0)) => Err(Error::encode("SubscribeCOVProperty requires a positive lifetime")),
+            _ => Err(Error::encode("SubscribeCOVProperty confirmed mode and lifetime must appear together")),
         }
     }
 

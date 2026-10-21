@@ -115,17 +115,18 @@ fn a_whole_array_or_list_is_a_list_at_every_length() {
 
 #[test]
 fn context_tagged_content_without_a_typed_form_keeps_every_octet() {
-    // A property with no typed form: a Load Control's Requested_Shed_Level,
-    // a context-tagged CHOICE (level [1]).
+    // A property with no typed form: a Lighting Output's Lighting_Command,
+    // a context-tagged SEQUENCE (operation [0]). Load Control's shed levels,
+    // the example here before, read typed since #1499.
     assert_eq!(
         decode(
-            ObjectType::LOAD_CONTROL,
-            PropertyIdentifier::REQUESTED_SHED_LEVEL,
+            ObjectType::LIGHTING_OUTPUT,
+            PropertyIdentifier::LIGHTING_COMMAND,
             None,
-            &[0x19, 0x02]
+            &[0x09, 0x02]
         )
         .unwrap(),
-        PropertyValue::ApplicationData(vec![0x19, 0x02])
+        PropertyValue::ApplicationData(vec![0x09, 0x02])
     );
     // Elements a typed read would split, read from a property on an object
     // type with no typed form for it: two BACnetPortPermission elements, a

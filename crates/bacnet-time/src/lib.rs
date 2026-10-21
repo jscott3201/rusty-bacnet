@@ -14,6 +14,13 @@
 //!   [`Duration::saturating_from_core`], which clamps it.
 //! - Firmware with a millisecond or microsecond tick builds its `now` with
 //!   [`Instant::from_millis`] or [`Instant::from_micros`].
+//! - With the `std` feature, `HostClock` does the mapping for a host: it
+//!   fixes one `std::time::Instant` to a point of the timeline and converts
+//!   both ways, exactly.
+//!
+//! A core with several timers hands back its next deadline as an
+//! `Option<Instant>`, `None` for none. [`earliest`] merges such deadlines;
+//! `Option::min` would not, since it orders `None` first.
 //!
 //! # Arithmetic
 //!
@@ -40,7 +47,11 @@
 //!
 //! # Features
 //!
-//! None, and no dependencies: the crate is `no_std` and needs no allocator.
+//! No dependencies, and no features by default: the crate is `no_std` and
+//! needs no allocator.
+//!
+//! - `std`: `HostClock`, which maps a host's `std::time::Instant` onto the
+//!   timeline and back.
 //!
 //! # Example
 //!
@@ -66,14 +77,23 @@
 #![forbid(unsafe_code)]
 #![warn(missing_debug_implementations, clippy::must_use_candidate)]
 
+#[cfg(feature = "std")]
+extern crate std;
+
 mod convert;
+mod deadline;
 mod divide;
 mod duration;
 mod format;
+#[cfg(feature = "std")]
+mod host;
 mod instant;
 
 pub use convert::DurationTooLong;
+pub use deadline::earliest;
 pub use duration::Duration;
+#[cfg(feature = "std")]
+pub use host::HostClock;
 pub use instant::Instant;
 
 /// Nanoseconds in a microsecond.

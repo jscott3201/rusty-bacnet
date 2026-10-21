@@ -30,7 +30,7 @@ fn registered_port_reservation_publication_and_final_release() {
     let (_, owner) = db
         .reserve_bip_port_internal(oid(2), [127, 0, 0, 1], 0)
         .unwrap();
-    assert_eq!(db.registered_bip_port_internal(), None);
+    assert_eq!(db.registered_port_internal(), None);
     assert!(db
         .reserve_bip_port_internal(oid(1), [127, 0, 0, 1], 0)
         .is_err());
@@ -60,10 +60,10 @@ fn registered_port_reservation_publication_and_final_release() {
     assert!(db
         .publish_bip_port_internal(oid(2), [127, 0, 0, 2], 1234, 1476, BipPortMode::Normal)
         .is_err());
-    assert_eq!(db.registered_bip_port_internal(), None);
+    assert_eq!(db.registered_port_internal(), None);
     db.publish_bip_port_internal(oid(2), [127, 0, 0, 1], 1234, 1476, BipPortMode::Normal)
         .unwrap();
-    assert_eq!(db.registered_bip_port_internal(), Some(oid(2)));
+    assert_eq!(db.registered_port_internal(), Some(oid(2)));
     let selected = db.get(&oid(2)).unwrap();
     for (property, expected) in [
         (P::BACNET_IP_UDP_PORT, PropertyValue::Unsigned(1234)),
@@ -79,7 +79,7 @@ fn registered_port_reservation_publication_and_final_release() {
         assert_eq!(selected.read_property(property, None).unwrap(), expected);
     }
     drop(owner);
-    assert_eq!(db.registered_bip_port_internal(), None);
+    assert_eq!(db.registered_port_internal(), None);
     db.get_mut(&oid(2))
         .unwrap()
         .write_property(P::OUT_OF_SERVICE, None, PropertyValue::Boolean(true), None)
@@ -165,7 +165,7 @@ fn registered_port_rejects_actual_identifier_different_from_selected_key() {
     assert!(db
         .reserve_bip_port_internal(oid(1), [127, 0, 0, 1], 0)
         .is_err());
-    assert_eq!(db.registered_bip_port_internal(), None);
+    assert_eq!(db.registered_port_internal(), None);
     assert_eq!(db.get(&oid(1)).unwrap().object_identifier(), oid(2));
     // Failed admission neither takes a lease nor changes the object's state.
     db.get_mut(&oid(1))

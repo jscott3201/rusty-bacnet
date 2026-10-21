@@ -160,7 +160,9 @@ async fn cov_recipient_wire_refusal_mode_lifetime_and_cross_router_cancel() {
         let allowed = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let gate = allowed.clone();
         let mut wire = Wire::start(ServerConfig {
-            mutation_authorizer: Some(Arc::new(move |_| gate.load(Ordering::SeqCst))),
+            policy: Some(Arc::new(
+                crate::FnPolicy::new().mutation(move |_| gate.load(Ordering::SeqCst)),
+            )),
             cov_policy: crate::cov::CovPolicy {
                 max_subscriptions_per_peer: 1,
                 ..Default::default()

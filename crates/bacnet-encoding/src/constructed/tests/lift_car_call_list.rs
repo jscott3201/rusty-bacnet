@@ -77,7 +77,7 @@ fn lift_car_call_list_rejects_malformed_values() {
     ] {
         let error = decode_lift_car_call_list(wire, 0).unwrap_err();
         assert!(
-            !matches!(error, Error::OutOfRange(_)),
+            !matches!(error, Error::Range(_)),
             "{context}: {wire:02X?} is malformed, not out of range: {error:?}"
         );
     }
@@ -99,16 +99,17 @@ fn lift_car_call_list_reports_oversized_floors_as_range_errors() {
         ),
     ] {
         match decode_lift_car_call_list(wire, 0) {
-            Err(Error::OutOfRange(message)) => {
+            Err(Error::Range(refused)) => {
+                let message = refused.label;
                 assert!(message.contains("floor number"), "{context}: {message}")
             }
-            other => panic!("{context}: expected OutOfRange, got {other:?}"),
+            other => panic!("{context}: expected a range error, got {other:?}"),
         }
     }
     // A malformed entry anywhere takes precedence over an oversized one.
     let error =
         decode_lift_car_call_list(&[0x0E, 0x22, 0x01, 0x00, 0x91, 0x01, 0x0F], 0).unwrap_err();
-    assert!(!matches!(error, Error::OutOfRange(_)), "{error:?}");
+    assert!(!matches!(error, Error::Range(_)), "{error:?}");
 }
 
 #[test]
@@ -120,7 +121,7 @@ fn lift_car_call_list_rejects_more_than_the_item_limit() {
     wire.push(0x0F);
     assert!(matches!(
         decode_lift_car_call_list(&wire, 0),
-        Err(Error::Decoding { .. })
+        Err(Error::Decoding(_))
     ));
 }
 

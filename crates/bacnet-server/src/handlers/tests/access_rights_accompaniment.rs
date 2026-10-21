@@ -95,8 +95,8 @@ fn write_multiple(
 fn assert_refused(result: Result<(), Error>, code: ErrorCode) {
     assert!(
         matches!(result, Err(Error::Protocol { class, code: actual })
-            if class == ErrorClass::PROPERTY.to_raw() as u32
-                && actual == code.to_raw() as u32),
+            if class == ErrorClass::PROPERTY
+                && actual == code),
         "expected PROPERTY / {code:?}, got {result:?}"
     );
 }

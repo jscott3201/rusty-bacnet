@@ -93,8 +93,8 @@ fn read_bytes(db: &ObjectDatabase, oid: ObjectIdentifier, property: PropertyIden
 fn assert_property_error(result: Result<(), Error>, expected: ErrorCode) {
     assert!(
         matches!(result, Err(Error::Protocol { class, code })
-            if class == ErrorClass::PROPERTY.to_raw() as u32
-                && code == expected.to_raw() as u32),
+            if class == ErrorClass::PROPERTY
+                && code == expected),
         "expected PROPERTY / {expected:?}, got {result:?}"
     );
 }

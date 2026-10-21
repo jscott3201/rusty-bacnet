@@ -123,20 +123,9 @@ mod tests {
             for error in [direct.err(), generic.err(), bip.err()] {
                 assert!(matches!(error, Some(Error::Encoding(m)) if m.contains("rpm_max_")));
             }
-            let config = ServerConfig {
-                max_apdu_length: 3,
-                read_property_multiple_budget: budget,
-                ..Default::default()
-            };
-            let error =
-                BACnetServer::start(config, ObjectDatabase::new(), TestTransport::never_start())
-                    .await
-                    .err()
-                    .unwrap();
-            assert!(
-                !error.to_string().contains("rpm_max_"),
-                "preserve existing APDU validation priority"
-            );
+            assert!(bacnet_objects::DeviceIdentity::default()
+                .with_max_apdu(3)
+                .is_err());
         }
     }
 }

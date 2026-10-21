@@ -18,10 +18,7 @@ fn provisioned_audit_recipient_mac_longer_than_the_bound_is_refused() {
     match dev.provision_audit_recipient(address(BACnetAddress::MAX_MAC_LEN + 1)) {
         Err(Error::Protocol { class, code }) => assert_eq!(
             (class, code),
-            (
-                ErrorClass::PROPERTY.to_raw() as u32,
-                ErrorCode::INVALID_DATA_ENCODING.to_raw() as u32
-            )
+            (ErrorClass::PROPERTY, ErrorCode::INVALID_DATA_ENCODING)
         ),
         other => panic!("expected PROPERTY/INVALID_DATA_ENCODING, got {other:?}"),
     }

@@ -95,6 +95,7 @@ mod tests {
     use super::*;
     use crate::property_metadata::PropertyWriteCapability;
     use crate::traits::BACnetObject;
+    use bacnet_types::enums::EngineeringUnits;
     use bacnet_types::enums::{ErrorClass, ErrorCode};
     use bacnet_types::error::Error;
     use bacnet_types::primitives::PropertyValue;
@@ -103,8 +104,8 @@ mod tests {
     fn assert_error(error: Error, expected: ErrorCode) {
         assert!(
             matches!(error, Error::Protocol { class, code }
-                if class == ErrorClass::PROPERTY.to_raw() as u32
-                    && code == expected.to_raw() as u32),
+                if class == ErrorClass::PROPERTY
+                    && code == expected),
             "expected {expected:?}, got {error:?}"
         );
     }
@@ -172,9 +173,10 @@ mod tests {
 
     #[test]
     fn property_metadata_accumulator_exact_sets_readable_rows_and_indexed_list() {
-        let mut object = AccumulatorObject::new(1, "ACC-1", 95).unwrap();
+        let mut object = AccumulatorObject::new(1, "ACC-1", EngineeringUnits::NO_UNITS).unwrap();
         // Prescale is served only once the application sets one.
-        let without_prescale = AccumulatorObject::new(2, "ACC-2", 95).unwrap();
+        let without_prescale =
+            AccumulatorObject::new(2, "ACC-2", EngineeringUnits::NO_UNITS).unwrap();
         object.set_prescale(bacnet_types::constructed::BACnetPrescale {
             multiplier: 1,
             modulo_divide: 100,
@@ -246,7 +248,8 @@ mod tests {
             P::LIMIT_MONITORING_INTERVAL,
         ];
         for out_of_service in [false, true] {
-            let mut object = AccumulatorObject::new(1, "ACC-1", 95).unwrap();
+            let mut object =
+                AccumulatorObject::new(1, "ACC-1", EngineeringUnits::NO_UNITS).unwrap();
             object
                 .write_property(
                     P::OUT_OF_SERVICE,
@@ -313,7 +316,8 @@ mod tests {
     #[test]
     fn property_metadata_accumulator_writes_store_verbatim_with_range_gates() {
         for out_of_service in [false, true] {
-            let mut object = AccumulatorObject::new(1, "ACC-1", 95).unwrap();
+            let mut object =
+                AccumulatorObject::new(1, "ACC-1", EngineeringUnits::NO_UNITS).unwrap();
             object.set_prescale(bacnet_types::constructed::BACnetPrescale {
                 multiplier: 1,
                 modulo_divide: 100,
@@ -430,7 +434,7 @@ mod tests {
         }
 
         // Table 12-79 O rows with no read arm (plus a Pulse Converter row).
-        let mut acc = AccumulatorObject::new(1, "ACC-1", 95).unwrap();
+        let mut acc = AccumulatorObject::new(1, "ACC-1", EngineeringUnits::NO_UNITS).unwrap();
         assert_unserved(&mut acc, P::DEVICE_TYPE);
         assert_unserved(&mut acc, P::VALUE_CHANGE_TIME);
         assert_unserved(&mut acc, P::COUNT);

@@ -152,7 +152,7 @@ async fn sc_max_apdu_length_reflects_negotiated_hub_npdu_limit() {
 /// Before start, the default.
 #[tokio::test]
 async fn sc_reports_its_hub_connections_npdu_limit() {
-    use crate::port::NpduLimits;
+    use bacnet_npdu::NpduLimits;
     for (bvlc, npdu, limit) in [(1200, 480, 480), (1476, 1476, 1466), (65535, 61327, 61327)] {
         let (ws_client, ws_hub) = LoopbackWebSocket::pair();
         let mut transport = ScTransport::new(ws_client, [0x01; 6]).with_device_uuid([1; 16]);
@@ -214,6 +214,68 @@ async fn sc_max_apdu_length_updates_after_failover_handshake() {
 
     transport.stop().await.unwrap();
     drop(failover_hub);
+}
+
+/// The NPDU limit a router follows (#1696): the receiver holds the first
+/// hub's limit once started, and a failover publishes the second hub's
+/// only when it differs.
+#[tokio::test]
+async fn sc_publishes_its_npdu_limit_when_a_failover_changes_it() {
+    use crate::sc::ScConnectionState;
+    use bacnet_npdu::NpduLimits;
+    for (bvlc, npdu, after) in [(300, 1476, 290), (1200, 480, 480)] {
+        let (primary_client, primary_hub) = LoopbackWebSocket::pair();
+        let (failover_client, failover_hub) = LoopbackWebSocket::pair();
+        let mut transport = ScTransport::new(primary_client, [0x01; 6])
+            .with_device_uuid([1; 16])
+            .with_connect_timeout_ms(5_000)
+            .with_heartbeat_interval_ms(5_000)
+            .with_reconnect(ScReconnectConfig {
+                initial_delay_ms: 25,
+                max_delay_ms: 25,
+                max_retries: 1,
+            })
+            .with_failover(failover_client);
+        let changes = transport.max_npdu_changes().expect("SC follows its hub");
+        let primary_task = tokio::spawn(async move {
+            accept_with_limits(&primary_hub, [0x10; 6], 1200, 480).await;
+            primary_hub
+        });
+        let _rx = transport.start().await.unwrap();
+        let primary_hub = primary_task.await.unwrap();
+        let mut changes = changes;
+        assert_eq!(*changes.borrow_and_update(), NpduLimits::both(480));
+        assert_eq!(transport.max_npdu(), NpduLimits::both(480));
+
+        let mut states = transport.connection_state_changes();
+        let failover_task = tokio::spawn(async move {
+            accept_with_limits(&failover_hub, [0x20; 6], bvlc, npdu).await;
+            failover_hub
+        });
+        drop(primary_hub);
+        let failover_hub = tokio::time::timeout(Duration::from_secs(5), failover_task)
+            .await
+            .expect("the failover hub is reached")
+            .unwrap();
+        // The limits are published before the state says Connected.
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            states.wait_for(|state| *state == ScConnectionState::Connected),
+        )
+        .await
+        .expect("connected to the failover hub")
+        .unwrap();
+        assert_eq!(transport.max_npdu(), NpduLimits::both(after));
+        assert_eq!(
+            changes.has_changed().unwrap(),
+            after != 480,
+            "{bvlc}/{npdu}"
+        );
+        assert_eq!(*changes.borrow_and_update(), NpduLimits::both(after));
+
+        transport.stop().await.unwrap();
+        drop(failover_hub);
+    }
 }
 
 #[tokio::test]

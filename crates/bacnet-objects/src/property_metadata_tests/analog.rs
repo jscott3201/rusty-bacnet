@@ -1,11 +1,12 @@
 use super::*;
 
 use crate::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
+use bacnet_types::enums::EngineeringUnits;
 
 fn analog_objects(configuration: u8) -> [Box<dyn BACnetObject>; 3] {
-    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
-    let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
-    let mut ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
+    let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
+    let mut av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
+    let mut ao = AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     if configuration & 1 != 0 {
         ai.configure_fault_out_of_range(-10.0, 100.0).unwrap();
         av.configure_fault_out_of_range(-10.0, 100.0).unwrap();
@@ -270,8 +271,8 @@ fn property_metadata_analog_write_capabilities_match_dispatch() {
                 );
                 if !expected {
                     assert!(matches!(result, Err(Error::Protocol { class, code })
-                    if class == bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
-                        && code == bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32));
+                    if class == bacnet_types::enums::ErrorClass::PROPERTY
+                        && code == bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED));
                 }
             }
             if commandable {
@@ -290,8 +291,8 @@ fn property_metadata_analog_write_capabilities_match_dispatch() {
                 assert!(
                     matches!(object.write_property(P::PRIORITY_ARRAY, None, PropertyValue::Null, None),
                 Err(Error::Protocol { class, code })
-                    if class == bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
-                        && code == bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32)
+                    if class == bacnet_types::enums::ErrorClass::PROPERTY
+                        && code == bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED)
                 );
             }
         }

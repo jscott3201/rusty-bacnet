@@ -7,7 +7,7 @@ use crate::binary::BinaryOutputObject;
 use crate::multistate::MultiStateOutputObject;
 use crate::property_metadata::{PropertyConformance, PropertyWriteCapability};
 use crate::traits::BACnetObject;
-use bacnet_types::enums::ObjectType;
+use bacnet_types::enums::{EngineeringUnits, ObjectType};
 use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Duration;
@@ -49,7 +49,7 @@ fn object(kind: ObjectType, store: Option<Arc<Memory>>) -> Result<Box<dyn Profil
         };
     }
     match kind {
-        ObjectType::ANALOG_OUTPUT => build!(AnalogOutputObject, 95),
+        ObjectType::ANALOG_OUTPUT => build!(AnalogOutputObject, EngineeringUnits::NO_UNITS),
         ObjectType::BINARY_OUTPUT => build!(BinaryOutputObject),
         ObjectType::MULTI_STATE_OUTPUT => build!(MultiStateOutputObject, 3),
         _ => unreachable!(),

@@ -3,7 +3,10 @@
 //!
 //! Every object table here that has intrinsic reporting lists the three as
 //! rows that only an intrinsic reporter may have (Table 12-2, footnote 5,
-//! and the like). Each family keeps them in its
+//! and the like). Event Enrollment's Table 12-14 lists them as plain
+//! optional rows, and its algorithm takes them the same way (#1507); Alert
+//! Enrollment's Table 12-61 does too (#1865). Each
+//! family keeps them in its
 //! [`EventHistory`](super::history::EventHistory), which serves and takes
 //! them, so every family reads, writes and acts on them the same way:
 //!
@@ -12,9 +15,11 @@
 //!   TO_NORMAL. A non-empty entry is the Message Text of that transition:
 //!   the shared commit kernel stores it in Event_Message_Texts in place of
 //!   the server's own text, and the notification carries it from there. An
-//!   empty entry, the starting value, leaves the server's text. The standard
-//!   lets a device give these strings substitution codes of its own; this
-//!   stack defines none and sends the text as written.
+//!   empty entry, the starting value, leaves the server's text (an Event
+//!   Enrollment has none, so it sends no text). The standard lets a device
+//!   give these strings substitution codes of its own (Clause 12.12.15 and
+//!   its counterparts); this stack defines none and sends the text exactly
+//!   as written, so a `{`, `%` or `$` in it goes out as is (#1507).
 //! - **Event_Algorithm_Inhibit_Ref** names the local Boolean or BinaryPV
 //!   property Event_Algorithm_Inhibit follows. The datatype has no device
 //!   member, so it can only name a property of this device. Unset, it reads
@@ -26,7 +31,13 @@
 //!   Event_Detection_Enable is TRUE; otherwise a write is
 //!   WRITE_ACCESS_DENIED. With a reference, the database refreshes it from
 //!   the referenced property each time the server evaluates the object
-//!   ([`ObjectDatabase::follow_event_algorithm_inhibit`]).
+//!   ([`ObjectDatabase::follow_event_algorithm_inhibit`]): on each write of
+//!   the object and on the one-second tick, and for an Event Enrollment at
+//!   the start of each of its evaluation passes as well. A read returns the
+//!   value as of that last refresh, so it can trail the referenced property
+//!   by up to about a second. Clause 12.2.31 and its counterparts set no
+//!   timing, and the read path deliberately doesn't follow the reference
+//!   itself (#1507).
 //!
 //! A TRUE inhibit stops the event algorithm, not fault detection (Clause
 //! 13.2.2.1): the detectors take it after fault precedence, propose no

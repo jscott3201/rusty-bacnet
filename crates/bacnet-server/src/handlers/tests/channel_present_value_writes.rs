@@ -9,7 +9,7 @@ use bacnet_objects::channel::ChannelObject;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::wpm::WriteAccessSpecification;
 use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
-use bacnet_types::enums::WriteStatus;
+use bacnet_types::enums::{EngineeringUnits, WriteStatus};
 
 fn ch(instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::CHANNEL, instance).unwrap()
@@ -21,8 +21,10 @@ fn ao1() -> ObjectIdentifier {
 
 fn database() -> ObjectDatabase {
     let mut db = ObjectDatabase::new();
-    db.add(Box::new(AnalogOutputObject::new(1, "AO-1", 62).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+    ))
+    .unwrap();
     let mut channel = ChannelObject::new(1, "CH-1", 7).unwrap();
     channel
         .set_members(vec![BACnetDeviceObjectPropertyReference::new_local(

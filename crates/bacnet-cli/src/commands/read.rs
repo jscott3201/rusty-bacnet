@@ -12,6 +12,7 @@ use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::primitives::PropertyValue;
 
+use crate::core::destination::Destination;
 use crate::output::{self, OutputFormat};
 use crate::parse;
 
@@ -52,7 +53,7 @@ pub(super) fn hex(data: &[u8]) -> String {
 /// Read a single property and print its value.
 pub async fn read_property_cmd<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
-    mac: &[u8],
+    to: &Destination,
     object_type: ObjectType,
     instance: u32,
     property: PropertyIdentifier,
@@ -63,10 +64,10 @@ pub async fn read_property_cmd<T: TransportPort + 'static>(
 
     // If the property is ALL, use RPM instead.
     if property == PropertyIdentifier::ALL {
-        return read_all_properties(client, mac, object_type, instance, format).await;
+        return read_all_properties(client, to, object_type, instance, format).await;
     }
 
-    let ack = client.read_property(mac, oid, property, index).await?;
+    let ack = to.read_property(client, oid, property, index).await?;
     let decoded = format_read_value(
         ack.property_identifier,
         ack.property_array_index,
@@ -90,7 +91,7 @@ pub async fn read_property_cmd<T: TransportPort + 'static>(
 /// Read all properties of an object using RPM with PropertyIdentifier::ALL.
 async fn read_all_properties<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
-    mac: &[u8],
+    to: &Destination,
     object_type: ObjectType,
     instance: u32,
     format: OutputFormat,
@@ -104,7 +105,7 @@ async fn read_all_properties<T: TransportPort + 'static>(
         }],
     }];
 
-    let ack = client.read_property_multiple(mac, specs).await?;
+    let ack = to.read_property_multiple(client, specs).await?;
     print_rpm_results(&ack.list_of_read_access_results, format);
     Ok(())
 }
@@ -115,7 +116,7 @@ async fn read_all_properties<T: TransportPort + 'static>(
 /// Example: `["ai:1", "pv,object-name", "ao:1", "pv"]`
 pub async fn read_multiple_cmd<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
-    mac: &[u8],
+    to: &Destination,
     specs: &[String],
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -156,7 +157,7 @@ pub async fn read_multiple_cmd<T: TransportPort + 'static>(
         i += 1;
     }
 
-    let ack = client.read_property_multiple(mac, access_specs).await?;
+    let ack = to.read_property_multiple(client, access_specs).await?;
     print_rpm_results(&ack.list_of_read_access_results, format);
     Ok(())
 }

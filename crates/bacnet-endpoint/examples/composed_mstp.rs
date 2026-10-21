@@ -14,6 +14,17 @@ use bacnet_endpoint::mstp::MstpEndpointBuilder;
 use bacnet_endpoint::session::SessionRole;
 use bacnet_transport::mstp::{LoopbackSerial, MstpExecutionMode, SerialPort};
 
+fn drain_peer(peer: LoopbackSerial) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut buf = vec![0u8; 512];
+        while let Ok(n) = peer.read(&mut buf).await {
+            if n == 0 {
+                break;
+            }
+        }
+    })
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Addressing validates without consuming the serial owner.
@@ -27,40 +38,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // One serial owner enters the session; a drain task keeps the bounded
     // loopback channel flowing while the MAC loop organizes.
     let (session_end, peer_end) = LoopbackSerial::pair();
+    let drain = drain_peer(peer_end);
     let identity = DeviceIdentity::new(2001, 42)?.with_max_apdu(480)?;
     let db = identity.build_database()?;
     let mut endpoint = MstpEndpointBuilder::new(session_end, 3)
         .execution_mode(MstpExecutionMode::Tokio)
         .role(SessionRole::Both)
         .database(db)
-        .identity(identity)
+        .device(identity)
         .build_session()?;
     endpoint.start().await?;
     assert!(endpoint.is_running());
 
-    // Drain peer-side MAC chatter so loopback writes never stall.
-    let drain = tokio::spawn(async move {
-        let mut buf = vec![0u8; 512];
-        // Read until the session end drops (channel close ends this).
-        loop {
-            match peer_end.read(&mut buf).await {
-                Ok(0) => break,
-                Ok(_) => continue,
-                Err(_) => break,
-            }
-        }
-    });
-    // Identity above the 480 transport bound is rejected at build time.
-    let oversize = DeviceIdentity::new(2002, 42)?.with_max_apdu(1476)?;
-    let (serial2, _peer2) = LoopbackSerial::pair();
-    assert!(MstpEndpointBuilder::new(serial2, 4)
-        .identity(oversize)
-        .build_session()
-        .is_err());
-
     endpoint.stop().await?;
     assert!(endpoint.stop().await.is_err(), "stop-once");
-    drain.abort();
+    drop(endpoint);
+    tokio::time::timeout(std::time::Duration::from_secs(2), drain).await??;
+
+    // An omitted database generates a Device after the requested ceiling
+    // resolves to the standard-frame transport's stable receive capacity.
+    let requested = DeviceIdentity::new(2002, 42)?.with_max_apdu(1476)?;
+    let (serial2, peer2) = LoopbackSerial::pair();
+    let drain2 = drain_peer(peer2);
+    let mut generated = MstpEndpointBuilder::new(serial2, 4)
+        .execution_mode(MstpExecutionMode::Tokio)
+        .device(requested)
+        .build_session()?;
+    generated.start().await?;
+    assert!(generated.is_running());
+    assert_eq!(generated.identity().unwrap().max_apdu_length(), 480);
+    generated.stop().await?;
+    drop(generated);
+    tokio::time::timeout(std::time::Duration::from_secs(2), drain2).await??;
     println!("done (simulator evidence only; timing is RB-26).");
     Ok(())
 }

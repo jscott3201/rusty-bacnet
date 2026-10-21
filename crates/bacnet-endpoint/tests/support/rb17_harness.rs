@@ -19,12 +19,13 @@ use bacnet_encoding::primitives::encode_property_value;
 use bacnet_endpoint::identity::{build_database_with_extra, DeviceIdentity};
 use bacnet_endpoint::mstp::MstpEndpointBuilder;
 use bacnet_endpoint::session::{EndpointSession, SessionRole};
+use bacnet_npdu::NetworkPriority;
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_transport::mstp::{LoopbackSerial, MstpExecutionMode, MstpTransport, SerialPort};
 use bacnet_types::enums::{
-    ConfirmedServiceChoice, NetworkPriority, ObjectType, PropertyIdentifier, Segmentation,
+    ConfirmedServiceChoice, EngineeringUnits, ObjectType, PropertyIdentifier, Segmentation,
     ServiceSupported,
 };
 use bacnet_types::error::Error;
@@ -90,7 +91,7 @@ pub fn db_with_named_analog(
     name: &str,
     value: f32,
 ) -> ObjectDatabase {
-    let mut o = AnalogInputObject::new(instance, name, 0).unwrap();
+    let mut o = AnalogInputObject::new(instance, name, EngineeringUnits::SQUARE_METERS).unwrap();
     o.set_present_value(value);
     build_database_with_extra(id, vec![Box::new(o)]).unwrap()
 }
@@ -157,7 +158,7 @@ impl Harness {
             .queue_capacity(32)
             .client_timers(2_000, 0)
             .database(db)
-            .identity(id)
+            .device(id)
             .build_session()
             .expect("mstp session must build");
         session.start().await.expect("mstp session must start");
@@ -306,9 +307,8 @@ pub fn local_npdu(apdu: Bytes, expecting_reply: bool) -> Bytes {
     encode_npdu(
         &mut npdu,
         &Npdu {
-            is_network_message: false,
             expecting_reply,
-            priority: NetworkPriority::NORMAL,
+            priority: NetworkPriority::Normal,
             destination: None,
             source: None,
             payload: apdu,

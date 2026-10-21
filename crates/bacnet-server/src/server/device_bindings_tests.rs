@@ -13,6 +13,9 @@ const ROUTER: &[u8] = &[0x30, 0x31];
 const FINAL_PEER: &[u8] = &[0x40, 0x41, 0x42];
 const BROADCAST: &[u8] = &[0xFF, 0xFF];
 
+#[path = "unconfirmed_warning_tests.rs"]
+mod unconfirmed_warnings;
+
 fn device(instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap()
 }
@@ -282,6 +285,7 @@ fn received(
     source_network: Option<NpduAddress>,
 ) -> bacnet_network::layer::ReceivedApdu {
     bacnet_network::layer::ReceivedApdu {
+        router_response: None,
         direct_response: None,
         apdu: Bytes::new(),
         source_mac: MacAddr::from_slice(source_mac),

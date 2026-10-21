@@ -45,7 +45,7 @@ fn assert_protocol(error: Error, class: ErrorClass, code: ErrorCode) {
         Error::Protocol {
             class: actual_class,
             code: actual_code,
-        } if actual_class == class.to_raw() as u32 && actual_code == code.to_raw() as u32
+        } if actual_class == class && actual_code == code
     ));
 }
 
@@ -161,8 +161,8 @@ fn life_safety_multiple_property_cov_rejection_keeps_the_earlier_reference() {
             matches!(
                 error,
                 Error::Structured { class, code: actual_code, detail }
-                    if *class == ErrorClass::PROPERTY.to_raw() as u32
-                        && *actual_code == code.to_raw() as u32
+                    if *class == ErrorClass::PROPERTY
+                        && *actual_code == code
                         && **detail == ErrorDetail::FirstFailedSubscription(
                             BACnetObjectPropertyReference::new(oid, property.to_raw())
                         )

@@ -102,8 +102,8 @@ fn scale_and_prescale_decode_at_an_offset_and_leave_what_follows() {
 /// The kind of a decode fault, or `None` for any other result.
 fn kind<T>(result: Result<T, Error>) -> Option<DecodingKind> {
     match result {
-        Err(Error::Decoding { kind, .. }) => Some(kind),
-        _ => None,
+        Err(error) => error.decode_fault().map(|(_, kind)| kind),
+        Ok(_) => None,
     }
 }
 

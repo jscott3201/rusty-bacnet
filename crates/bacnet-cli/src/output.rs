@@ -10,6 +10,8 @@ use bacnet_types::primitives::PropertyValue;
 use owo_colors::OwoColorize;
 use serde::Serialize;
 
+use crate::core::target::{routed_station, AddressStyle};
+
 /// Output format for CLI results.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputFormat {
@@ -35,15 +37,17 @@ pub struct DeviceInfo {
     /// Remote BACnet network number (if behind a router).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub network: Option<u16>,
-    /// Device MAC on the remote network (if behind a router).
+    /// The routed station (if behind a router), in the target syntax the
+    /// CLI reads back: `2:0x05`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub remote_mac: Option<String>,
+    pub station: Option<String>,
 }
 
 /// Format a MAC address as a target the CLI reads back: a BIP MAC (6 bytes:
 /// 4 IP + 2 port) as `ip:port`, and a B/IPv6 VMAC (3 bytes, the only
 /// 3-byte MAC the CLI's transports use) as `bip6:0x0004D2`. Falls back to
-/// hex display for other MACs.
+/// hex display for other MACs. A routed station is written with its network
+/// by [`crate::core::target::routed_station`] instead.
 pub fn format_mac(mac: &[u8]) -> String {
     if mac.len() == 6 {
         let ip = Ipv4Addr::new(mac[0], mac[1], mac[2], mac[3]);
@@ -59,17 +63,70 @@ pub fn format_mac(mac: &[u8]) -> String {
     }
 }
 
-/// Convert a `DiscoveredDevice` into a `DeviceInfo` for display.
-pub fn device_info(d: &DiscoveredDevice) -> DeviceInfo {
+/// Convert a `DiscoveredDevice` into a `DeviceInfo` for display, its
+/// address in `style` (a BACnet/SC VMAC as hex octets, not as `ip:port`).
+pub fn device_info(d: &DiscoveredDevice, style: AddressStyle) -> DeviceInfo {
     DeviceInfo {
         instance: d.object_identifier.instance_number(),
-        address: format_mac(d.mac_address.as_slice()),
+        address: style.format(d.mac_address.as_slice()),
         vendor_id: d.vendor_id,
         max_apdu: d.max_apdu_length,
         segmentation: format!("{}", d.segmentation_supported),
         network: d.source_network,
-        remote_mac: d.source_address.as_ref().map(|m| format_mac(m.as_slice())),
+        station: d
+            .source_network
+            .zip(d.source_address.as_ref())
+            .and_then(|(network, mac)| routed_station(network, mac)),
     }
+}
+
+/// The table `whois` prints. With any routed device, the link address is
+/// the router's, and the station column says where the device is.
+fn devices_table(devices: &[DeviceInfo]) -> comfy_table::Table {
+    let has_routing = devices.iter().any(|d| d.network.is_some());
+    let mut table = comfy_table::Table::new();
+    if has_routing {
+        table.set_header(vec![
+            "Instance",
+            "Router",
+            "DNET",
+            "Station",
+            "Vendor",
+            "Max APDU",
+            "Segmentation",
+        ]);
+        for d in devices {
+            table.add_row(vec![
+                d.instance.to_string(),
+                d.address.clone(),
+                d.network
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|| "-".into()),
+                d.station.clone().unwrap_or_else(|| "-".into()),
+                d.vendor_id.to_string(),
+                d.max_apdu.to_string(),
+                d.segmentation.clone(),
+            ]);
+        }
+    } else {
+        table.set_header(vec![
+            "Instance",
+            "Address",
+            "Vendor",
+            "Max APDU",
+            "Segmentation",
+        ]);
+        for d in devices {
+            table.add_row(vec![
+                d.instance.to_string(),
+                d.address.clone(),
+                d.vendor_id.to_string(),
+                d.max_apdu.to_string(),
+                d.segmentation.clone(),
+            ]);
+        }
+    }
+    table
 }
 
 /// Print a list of discovered devices.
@@ -80,50 +137,7 @@ pub fn print_devices(devices: &[DeviceInfo], format: OutputFormat) {
                 println!("{}", "No devices found.".yellow());
                 return;
             }
-            let has_routing = devices.iter().any(|d| d.network.is_some());
-            let mut table = comfy_table::Table::new();
-            if has_routing {
-                table.set_header(vec![
-                    "Instance",
-                    "Router",
-                    "DNET",
-                    "Remote MAC",
-                    "Vendor",
-                    "Max APDU",
-                    "Segmentation",
-                ]);
-                for d in devices {
-                    table.add_row(vec![
-                        d.instance.to_string(),
-                        d.address.clone(),
-                        d.network
-                            .map(|n| n.to_string())
-                            .unwrap_or_else(|| "-".into()),
-                        d.remote_mac.clone().unwrap_or_else(|| "-".into()),
-                        d.vendor_id.to_string(),
-                        d.max_apdu.to_string(),
-                        d.segmentation.clone(),
-                    ]);
-                }
-            } else {
-                table.set_header(vec![
-                    "Instance",
-                    "Address",
-                    "Vendor",
-                    "Max APDU",
-                    "Segmentation",
-                ]);
-                for d in devices {
-                    table.add_row(vec![
-                        d.instance.to_string(),
-                        d.address.clone(),
-                        d.vendor_id.to_string(),
-                        d.max_apdu.to_string(),
-                        d.segmentation.clone(),
-                    ]);
-                }
-            }
-            println!("{table}");
+            println!("{}", devices_table(devices));
             println!("{}", format!("Found {} device(s)", devices.len()).green());
         }
         OutputFormat::Json => {
@@ -417,8 +431,8 @@ mod tests {
         assert_eq!(format_mac(&[0x00, 0x04, 0xD2]), "bip6:0x0004D2");
         assert_eq!(format_mac(&[7]), "07");
         for mac in [vec![10, 0, 0, 1, 0xBA, 0xC0], vec![0x40, 0xAB, 0xCD]] {
-            match crate::resolve::parse_target(&format_mac(&mac)) {
-                Ok(crate::resolve::Target::Mac(parsed)) => assert_eq!(parsed, mac),
+            match crate::core::target::parse_target(&format_mac(&mac)) {
+                Ok(crate::core::target::Target::Mac(parsed)) => assert_eq!(parsed, mac),
                 _ => panic!("{} does not read back", format_mac(&mac)),
             }
         }
@@ -433,10 +447,70 @@ mod tests {
             max_apdu: 1476,
             segmentation: "both".to_string(),
             network: None,
-            remote_mac: None,
+            station: None,
         };
         let json = serde_json::to_string(&info).unwrap();
         assert!(json.contains("1234"));
         assert!(json.contains("192.168.1.10"));
+    }
+
+    /// A routed device found by `whois` prints its station in the target
+    /// syntax, in the table and in JSON, and that text parses back to the
+    /// same station (#1916).
+    #[test]
+    fn whois_prints_routed_stations_as_targets() {
+        use bacnet_types::enums::{ObjectType, Segmentation};
+        use bacnet_types::primitives::ObjectIdentifier;
+        use bacnet_types::MacAddr;
+
+        use crate::core::target::{parse_target, Target};
+
+        let found = |instance: u32, routed: Option<(u16, &[u8])>| DiscoveredDevice {
+            object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap(),
+            mac_address: MacAddr::from_slice(&[10, 0, 1, 1, 0xBA, 0xC0]),
+            max_apdu_length: 480,
+            segmentation_supported: Segmentation::NONE,
+            max_segments_accepted: None,
+            vendor_id: 24,
+            last_seen: std::time::Instant::now(),
+            source_network: routed.map(|(network, _)| network),
+            source_address: routed.map(|(_, mac)| MacAddr::from_slice(mac)),
+        };
+        let stations: [(u16, &[u8], &str); 2] = [
+            (2, &[5], "2:0x05"),
+            (3, &[10, 0, 2, 9, 0xBA, 0xC0], "3:0x0A000209BAC0"),
+        ];
+        let mut infos = Vec::new();
+        for (instance, (network, mac, text)) in (2001..).zip(stations) {
+            let info = device_info(&found(instance, Some((network, mac))), AddressStyle::Bip);
+            assert_eq!(info.address, "10.0.1.1:47808", "the router");
+            assert_eq!(info.station.as_deref(), Some(text));
+            let json = serde_json::to_value(&info).unwrap();
+            assert_eq!(json["station"], text);
+            assert_eq!(json["network"], network);
+            assert_eq!(
+                parse_target(text),
+                Ok(Target::RoutedMac {
+                    dnet: network,
+                    mac: mac.to_vec()
+                })
+            );
+            infos.push(info);
+        }
+        let local = device_info(&found(100, None), AddressStyle::Bip);
+        assert_eq!(local.station, None);
+        let json = serde_json::to_value(&local).unwrap();
+        assert!(json.get("station").is_none());
+        infos.push(local);
+
+        let table = devices_table(&infos).to_string();
+        assert!(table.contains("Station"), "{table}");
+        assert!(!table.contains("Remote MAC"), "{table}");
+        let station_cells: Vec<&str> = table
+            .lines()
+            .filter_map(|line| line.split('|').map(str::trim).nth(4))
+            .filter(|cell| cell.contains(":0x"))
+            .collect();
+        assert_eq!(station_cells, ["2:0x05", "3:0x0A000209BAC0"], "{table}");
     }
 }

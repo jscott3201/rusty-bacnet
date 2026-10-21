@@ -113,9 +113,7 @@ fn relinquishes_nothing(value: &PropertyValue, error: &Error) -> bool {
     let (Error::Protocol { class, code } | Error::Structured { class, code, .. }) = error else {
         return false;
     };
-    is_null(value)
-        && *class == ErrorClass::PROPERTY.to_raw() as u32
-        && *code == ErrorCode::INVALID_DATA_TYPE.to_raw() as u32
+    is_null(value) && *class == ErrorClass::PROPERTY && *code == ErrorCode::INVALID_DATA_TYPE
 }
 
 /// Whether `value` encodes as one application NULL: `Null` itself, the raw

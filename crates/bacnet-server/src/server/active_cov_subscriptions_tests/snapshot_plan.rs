@@ -105,7 +105,7 @@ async fn a_read_past_its_work_limit_aborts_before_sampling_the_cov_table() {
     }
     assert!(matches!(
         wire.server.read_local(&group(3), PV, None).await,
-        Err(Error::Abort { reason }) if reason == AbortReason::OUT_OF_RESOURCES.to_raw()
+        Err(Error::Abort { reason }) if reason == AbortReason::OUT_OF_RESOURCES
     ));
     assert_eq!(samples(&wire).await, before);
     // Within the limit the same lists take their one sample.

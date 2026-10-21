@@ -9,7 +9,14 @@ async fn sc_number_server_blocked_write_flood_ack_handler_and_canceled_stop() {
     let (transport, peer, observed) = fixture();
     let (server, ()) = bounded(async {
         tokio::join!(
-            BACnetServer::start(ServerConfig::default(), database(), transport),
+            BACnetServer::start(
+                ServerConfig {
+                    device: bacnet_objects::DeviceIdentity::new(7, 0).unwrap(),
+                    ..Default::default()
+                },
+                database(),
+                transport
+            ),
             peer.accept()
         )
     })
@@ -86,7 +93,14 @@ async fn sc_number_server_live_release_and_bare_drop_join() {
         let (transport, peer, observed) = fixture();
         let (server, ()) = bounded(async {
             tokio::join!(
-                BACnetServer::start(ServerConfig::default(), database(), transport),
+                BACnetServer::start(
+                    ServerConfig {
+                        device: bacnet_objects::DeviceIdentity::new(7, 0).unwrap(),
+                        ..Default::default()
+                    },
+                    database(),
+                    transport
+                ),
                 peer.accept()
             )
         })

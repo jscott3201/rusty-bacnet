@@ -18,7 +18,7 @@ A transport appearing in the codebase is not the same as every package, CLI bina
 | BACnet/IP | CLI, Python client, or Rust client | Direct reads, discovery, and routed traffic are distinct tests |
 | BACnet/IPv6 | CLI `--ipv6`, Python, or Rust feature path | Requires appropriate IPv6 addressing/interface and network validation; targets are VMACs (`bip6:<instance>`), which the CLI resolves from `[ip]:port` and Python from `resolve_vmac` |
 | BACnet/SC | SC-enabled CLI, Python, or Rust | Certificate trust, local identities, and hub behavior must be configured |
-| MS/TP | Rust serial path, or Python `transport="mstp"` and `MstpEndpoint` | No reviewed CLI transport flag; qualify the actual serial hardware |
+| MS/TP | Rust serial path, or Python `transport="mstp"` and `MstpEndpoint` | The CLI joins with `--mstp` in the Linux release executables, or a source build with the `serial` feature. Qualify the actual serial hardware |
 | Ethernet/802.3 | Advanced Rust transport path | Platform/privilege evidence is incomplete; not a general CLI tutorial |
 
 This is a guide to entry points, not a formal supported-platform or conformance matrix.
@@ -27,7 +27,7 @@ This is a guide to entry points, not a formal supported-platform or conformance 
 
 ## Features are package-specific
 
-The CLI manifest enables its IPv6 path and defines optional `sc-tls` and `pcap` features; the release executables enable `sc-tls` everywhere and `pcap` on Linux. The Python binding manifest enables underlying SC, IPv6, and serial transport features, but a Cargo feature selection alone is not proof of an installable or qualified wheel on a particular host.
+The CLI manifest enables its IPv6 path and defines optional `sc-tls` and `pcap` features; the release executables enable `sc-tls` everywhere and `pcap` and `serial` on Linux. The terminal UI (`tui`) is a default feature, and a `serial` feature adds MS/TP, which the Linux release executables include. The Python binding manifest enables underlying SC, IPv6, and serial transport features, but a Cargo feature selection alone is not proof of an installable or qualified wheel on a particular host.
 
 Inspect the selected binary or wheel and its release build configuration. Do not turn a code-level table into five identical “fully supported” badges.
 
@@ -35,7 +35,7 @@ Inspect the selected binary or wheel and its release build configuration. Do not
 
 There is no browser-based BACnet transport promised by this site. The unsupported WASM surfaces were withdrawn. A demo or a codec is not a complete browser network interface.
 
-The README does not claim Annex J NAT traversal or IPv4 BACnet/IP multicast. A BBMD setup guide must not accidentally imply either. One working MS/TP example is not a timing qualification, and the presence of segmentation code elsewhere does not automatically qualify end-to-end segmented MS/TP.
+A B/IP node can join an IPv4 multicast group (B/IP-M, Annex J.8) on an explicit interface, taking broadcasts only from the group. A BBMD can serve the group (J.8.3): it passes the group's broadcasts to its BDT peers and foreign devices and theirs to the group, and its own BDT row must have the all-ones mask. A network that mixes B/IP-M and plain B/IP devices needs exactly one BBMD for the group, and the two kinds of device must not share an IP subnet; the stack can't check either. The group of a BBMD is read-only on its Network Port. The multicast evidence is a loopback test on Linux and macOS (members, the group's BBMD, a plain peer BBMD and a foreign device); Windows multicast is untested. A BBMD behind a NAT router (Annex J.7.5) is supported at a global address you configure: nothing discovers it, the NAT router must port-forward the BACnet/IP port to the BBMD, and each site exposes that one router-BBMD. The automated evidence is a loopback NAT emulation; a real router topology is a manual check (`examples/docker/nat`). For linking sites across the internet, prefer BACnet/SC: an internet-facing BBMD has no authentication, only its access lists, quotas and rate limits. One working MS/TP example is not a timing qualification, and the presence of segmentation code elsewhere does not automatically qualify end-to-end segmented MS/TP.
 
 ## Understand the evidence labels
 

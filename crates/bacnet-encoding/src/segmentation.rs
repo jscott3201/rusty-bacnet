@@ -8,7 +8,7 @@
 use alloc::vec::Vec;
 
 use alloc::collections::BTreeMap;
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, SegmentationError};
 use bytes::Bytes;
 
 /// Return whether `sequence_number` is a duplicate in the current incomplete window.
@@ -59,9 +59,7 @@ pub fn max_segment_payload(max_apdu_length: u16, pdu_type: SegmentedPduType) -> 
 /// empty segment there produced a frame larger than the peer had advertised.
 pub fn split_payload(payload: &[u8], max_segment_size: usize) -> Result<Vec<Bytes>, Error> {
     if max_segment_size == 0 {
-        return Err(Error::Segmentation(
-            "payload cannot be segmented with max segment size 0".into(),
-        ));
+        return Err(SegmentationError::ZeroSegmentSize.into());
     }
     if payload.is_empty() {
         return Ok(vec![Bytes::new()]);
@@ -71,10 +69,10 @@ pub fn split_payload(payload: &[u8], max_segment_size: usize) -> Result<Vec<Byte
         .map(Bytes::copy_from_slice)
         .collect();
     if segments.len() > 256 {
-        return Err(Error::Segmentation(format!(
-            "payload requires {} segments, maximum is 256",
-            segments.len()
-        )));
+        return Err(SegmentationError::TooManySegments {
+            segments: segments.len(),
+        }
+        .into());
     }
     Ok(segments)
 }
@@ -109,11 +107,11 @@ impl SegmentReceiver {
     /// Returns an error if the segment exceeds `MAX_SEGMENT_SIZE`.
     pub fn receive(&mut self, sequence_number: u8, data: Bytes) -> Result<(), Error> {
         if data.len() > Self::MAX_SEGMENT_SIZE {
-            return Err(Error::Segmentation(format!(
-                "segment size {} exceeds maximum {}",
-                data.len(),
-                Self::MAX_SEGMENT_SIZE
-            )));
+            return Err(SegmentationError::SegmentTooLarge {
+                size: data.len(),
+                max: Self::MAX_SEGMENT_SIZE,
+            }
+            .into());
         }
         self.segments.insert(sequence_number, data);
         Ok(())
@@ -135,9 +133,10 @@ impl SegmentReceiver {
     /// the BACnet 8-bit sequence number limit (256).
     pub fn reassemble(&self, total_segments: usize) -> Result<Vec<u8>, Error> {
         if total_segments > 256 {
-            return Err(Error::Segmentation(format!(
-                "total_segments {total_segments} exceeds maximum BACnet value (256)"
-            )));
+            return Err(SegmentationError::TotalTooLarge {
+                total: total_segments,
+            }
+            .into());
         }
         let mut result = Vec::with_capacity(total_segments * 480);
         for i in 0..total_segments {
@@ -145,10 +144,11 @@ impl SegmentReceiver {
             match self.segments.get(&seq) {
                 Some(data) => result.extend_from_slice(data),
                 None => {
-                    return Err(Error::Segmentation(format!(
-                        "missing segment {} of {}",
-                        i, total_segments
-                    )));
+                    return Err(SegmentationError::MissingSegment {
+                        index: i,
+                        total: total_segments,
+                    }
+                    .into());
                 }
             }
         }

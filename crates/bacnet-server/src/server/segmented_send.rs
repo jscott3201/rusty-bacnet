@@ -32,13 +32,19 @@ pub(crate) type SegRecvKey = (MacAddr, Option<NpduAddress>, u8, TransportProvena
 
 /// Short, synchronous registry sections permit cleanup during future drop.
 #[derive(Default)]
-pub(super) struct SegmentedSendRegistry(Mutex<HashMap<SegKey, Arc<SegmentedSendHandle>>>);
+pub(super) struct SegmentedSendRegistry {
+    senders: Mutex<HashMap<SegKey, Arc<SegmentedSendHandle>>>,
+    /// The server's throttle on warnings about segmented sends a peer can
+    /// set off: sender caps reached, and SegmentAcks ignored or dropped
+    /// (#1950).
+    pub(super) warning: bacnet_transport::warn_throttle::WarnThrottle,
+}
 
 impl SegmentedSendRegistry {
     pub(super) fn lock(&self) -> MutexGuard<'_, HashMap<SegKey, Arc<SegmentedSendHandle>>> {
         // Map operations preserve their invariants if a caller unwinds. Cleanup
         // must not panic again while dropping an already-panicking worker.
-        self.0
+        self.senders
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -216,7 +222,7 @@ pub(crate) struct SegmentedRequestState {
     /// Provenance snapshot at session open (RB-07). Compared by value on
     /// every later segment; conflicting contexts fail closed.
     pub(crate) provenance: TransportProvenance,
-    pub(crate) direct_response: Option<bacnet_transport::port::DirectResponse>,
+    pub(crate) route: bacnet_network::response_route::ResponseRoute,
     pub(crate) last_activity: Instant,
     /// Last successfully saved new in-order segment, independent of SegmentTimer.
     pub(crate) last_progress: Instant,

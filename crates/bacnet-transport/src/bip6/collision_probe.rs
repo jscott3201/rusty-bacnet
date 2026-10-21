@@ -208,6 +208,7 @@ mod tests {
                         destination: IpAddr::V6(destination),
                         arrival_index: Some(1),
                         os_group_delivery: None,
+                        arrival_stamp: None,
                     }))
                 }
                 Some(Read::Error(kind)) => Err(io::Error::from(kind)),

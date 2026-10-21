@@ -78,24 +78,18 @@ impl GetEnrollmentSummaryRequest {
     /// Encode this request after validating representable filter invariants.
     pub fn try_encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
         if self.acknowledgment_filter.to_raw() > AcknowledgmentFilter::NOT_ACKED.to_raw() {
-            return Err(Error::Encoding(
-                "EnrollmentSummary acknowledgmentFilter is an undefined enumeration".into(),
-            ));
+            return Err(Error::encode("EnrollmentSummary acknowledgmentFilter is an undefined enumeration"));
         }
         if self.event_state_filter.is_some_and(|filter| {
             filter.to_raw() > EnrollmentSummaryEventStateFilter::ACTIVE.to_raw()
         }) {
-            return Err(Error::Encoding(
-                "EnrollmentSummary eventStateFilter is an undefined enumeration".into(),
-            ));
+            return Err(Error::encode("EnrollmentSummary eventStateFilter is an undefined enumeration"));
         }
         if self
             .priority_filter
             .is_some_and(|filter| filter.min_priority > filter.max_priority)
         {
-            return Err(Error::Encoding(
-                "EnrollmentSummary priorityFilter minimum exceeds maximum".into(),
-            ));
+            return Err(Error::encode("EnrollmentSummary priorityFilter minimum exceeds maximum"));
         }
         if let Some(RecipientProcess {
             recipient: BACnetRecipient::Address(address),
@@ -263,13 +257,13 @@ fn decode_closed_enumeration(data: &[u8], maximum: u32) -> Result<u32, Error> {
         }
         _ => {
             return Err(Error::Reject {
-                reason: bacnet_types::enums::RejectReason::UNDEFINED_ENUMERATION.to_raw(),
+                reason: bacnet_types::enums::RejectReason::UNDEFINED_ENUMERATION,
             })
         }
     };
     if value > maximum {
         return Err(Error::Reject {
-            reason: bacnet_types::enums::RejectReason::UNDEFINED_ENUMERATION.to_raw(),
+            reason: bacnet_types::enums::RejectReason::UNDEFINED_ENUMERATION,
         });
     }
     Ok(value)

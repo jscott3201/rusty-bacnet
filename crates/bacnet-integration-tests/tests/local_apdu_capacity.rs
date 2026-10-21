@@ -19,8 +19,10 @@ async fn raw_1474_device_and_server_declaration_emit_iam_1474() {
     let mut db = ObjectDatabase::new();
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
-            instance: 893,
-            max_apdu_length: 1474,
+            identity: bacnet_objects::DeviceIdentity::new(893, 0)
+                .expect("valid Device identity")
+                .with_max_apdu(1474)
+                .expect("valid Device APDU"),
             ..Default::default()
         })
         .unwrap(),
@@ -28,7 +30,10 @@ async fn raw_1474_device_and_server_declaration_emit_iam_1474() {
     .unwrap();
     let mut server = BACnetServer::start(
         ServerConfig {
-            max_apdu_length: 1474,
+            device: bacnet_objects::DeviceIdentity::new(893, 0)
+                .unwrap()
+                .with_max_apdu(1474)
+                .expect("valid Device APDU"),
             ..Default::default()
         },
         db,
@@ -103,8 +108,10 @@ impl TransportPort for CapacityPort {
 }
 fn device(raw: u32) -> DeviceObject {
     DeviceObject::new(DeviceConfig {
-        instance: 893,
-        max_apdu_length: raw,
+        identity: bacnet_objects::DeviceIdentity::new(893, 0)
+            .expect("valid Device identity")
+            .with_max_apdu(u16::try_from(raw).expect("Device APDU fits u16"))
+            .expect("valid Device APDU"),
         ..Default::default()
     })
     .unwrap()
@@ -146,7 +153,7 @@ async fn iam(incoming: &mut mpsc::Receiver<ReceivedNpdu>) -> IAmRequest {
 async fn local_capacity_clamps_ceiling_and_never_tracks_remote_egress() {
     for (local, ceiling, effective) in [
         (480, 1476, 480),
-        (1476, u32::MAX, 1476),
+        (1476, u32::from(u16::MAX), 1476),
         (1476, 50, 50),
         (1476, 127, 127),
     ] {
@@ -155,7 +162,10 @@ async fn local_capacity_clamps_ceiling_and_never_tracks_remote_egress() {
         let mut incoming = peer.start().await.unwrap();
         let mut server = BACnetServer::start(
             ServerConfig {
-                max_apdu_length: ceiling,
+                device: bacnet_objects::DeviceIdentity::new(893, 0)
+                    .unwrap()
+                    .with_max_apdu(u16::try_from(ceiling).expect("Device APDU fits u16"))
+                    .expect("valid Device APDU"),
                 ..Default::default()
             },
             database(Some(effective)),
@@ -174,17 +184,18 @@ async fn local_capacity_clamps_ceiling_and_never_tracks_remote_egress() {
 
 #[tokio::test]
 async fn invalid_raw_and_mismatched_device_fail_before_transport_start() {
-    for (local, ceiling, declared) in [
-        (1476, 49, 1476),
-        (49, 1476, 1476),
-        (480, 1476, 1476),
-        (1476, 1474, 1476),
-    ] {
+    assert!(bacnet_objects::DeviceIdentity::default()
+        .with_max_apdu(49)
+        .is_err());
+    for (local, ceiling, declared) in [(49, 1476, 1476), (480, 1476, 1476), (1476, 1474, 1476)] {
         let (transport, _peer) = port(local);
         let starts = Arc::clone(&transport.starts);
         assert!(BACnetServer::start(
             ServerConfig {
-                max_apdu_length: ceiling,
+                device: bacnet_objects::DeviceIdentity::new(893, 0)
+                    .unwrap()
+                    .with_max_apdu(u16::try_from(ceiling).expect("Device APDU fits u16"))
+                    .expect("valid Device APDU"),
                 ..Default::default()
             },
             database(Some(declared)),
@@ -197,12 +208,15 @@ async fn invalid_raw_and_mismatched_device_fail_before_transport_start() {
 }
 
 #[tokio::test]
-async fn queued_iam_rechecks_replacement_before_encoding_or_limiter_accounting() {
+async fn queued_iam_projects_replacement_and_checks_membership_before_accounting() {
     let (transport, mut peer) = port(1476);
     let mut incoming = peer.start().await.unwrap();
     let mut server = BACnetServer::start(
         ServerConfig {
-            max_apdu_length: 1474,
+            device: bacnet_objects::DeviceIdentity::new(893, 0)
+                .unwrap()
+                .with_max_apdu(1474)
+                .expect("valid Device APDU"),
             ..Default::default()
         },
         database(Some(1474)),
@@ -221,10 +235,21 @@ async fn queued_iam_rechecks_replacement_before_encoding_or_limiter_accounting()
     guard.remove(&oid).unwrap();
     guard.add(Box::new(device(1476))).unwrap();
     drop(guard);
-    assert!(send.await.is_err());
-    assert!(incoming.try_recv().is_err());
-    assert_eq!(server.discovery_counters().i_am_sent, 0);
-    assert_eq!(server.discovery_counters().response_bytes_sent, 0);
+    send.await.unwrap();
+    assert_eq!(iam(&mut incoming).await.max_apdu_length, 1474);
+    assert_eq!(server.discovery_counters().i_am_sent, 1);
+    assert!(server.discovery_counters().response_bytes_sent > 0);
+    assert_eq!(
+        server
+            .read_local(
+                &oid,
+                bacnet_types::enums::PropertyIdentifier::MAX_APDU_LENGTH_ACCEPTED,
+                None
+            )
+            .await
+            .unwrap(),
+        bacnet_types::primitives::PropertyValue::Unsigned(1474)
+    );
     {
         let mut db = db.write().await;
         db.remove(&oid).unwrap();
@@ -232,10 +257,13 @@ async fn queued_iam_rechecks_replacement_before_encoding_or_limiter_accounting()
     }
     server.broadcast_i_am().await.unwrap();
     assert_eq!(iam(&mut incoming).await.max_apdu_length, 1474);
-    assert_eq!(server.discovery_counters().i_am_sent, 1);
+    assert_eq!(server.discovery_counters().i_am_sent, 2);
+    let before = server.discovery_counters().response_bytes_sent;
     db.write().await.remove(&oid).unwrap();
     assert!(server.broadcast_i_am().await.is_err());
     assert!(incoming.try_recv().is_err());
+    assert_eq!(server.discovery_counters().i_am_sent, 2);
+    assert_eq!(server.discovery_counters().response_bytes_sent, before);
     server.stop().await.unwrap();
 }
 
@@ -243,9 +271,16 @@ async fn queued_iam_rechecks_replacement_before_encoding_or_limiter_accounting()
 async fn no_device_starts_without_iam_and_matching_later_device_recovers() {
     let (transport, mut peer) = port(1476);
     let mut incoming = peer.start().await.unwrap();
-    let mut server = BACnetServer::start(ServerConfig::default(), database(None), transport)
-        .await
-        .unwrap();
+    let mut server = BACnetServer::start(
+        ServerConfig {
+            device: bacnet_objects::DeviceIdentity::new(893, 0).unwrap(),
+            ..Default::default()
+        },
+        database(None),
+        transport,
+    )
+    .await
+    .unwrap();
     assert!(server.broadcast_i_am().await.is_err());
     assert!(incoming.try_recv().is_err());
     server

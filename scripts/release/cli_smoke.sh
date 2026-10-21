@@ -4,12 +4,16 @@
 #   scripts/release/cli_smoke.sh [--no-capture] [--expect-version V] <bacnet-binary> <python>
 #
 # - --version and --help run, and with --expect-version, --version names V;
+# - plain `bacnet` without a terminal prints the usage and exits 2, and says
+#   why the terminal UI didn't open, which shows the build has one (#974);
 # - the README quickstart on loopback: a Python server with one analog input,
 #   then `read` and `--json readm` from the CLI;
 # - capture --read decodes a one-packet pcap file, which exercises the
 #   statically linked libpcap, including its filter compiler, without needing
 #   capture privileges (skipped with --no-capture, for the macOS and Windows
-#   builds, which have no packet capture).
+#   builds, which have no packet capture);
+# - in the same Linux-only part, `mstp-ports --json` prints a JSON array: the
+#   Linux CLI is the one built with MS/TP (`serial`, #969).
 #
 # Bash on Windows is Git Bash, as GitHub's `shell: bash` gives it (#951).
 set -euo pipefail
@@ -41,6 +45,12 @@ if [ -n "$expect_version" ] && [ "$version" != "bacnet $expect_version" ]; then
   exit 1
 fi
 bacnet --help >/dev/null
+status=0
+plain=$(bacnet </dev/null 2>&1 >/dev/null) || status=$?
+if [ "$status" != 2 ] || ! grep -q 'must both be a terminal' <<<"$plain"; then
+  echo "plain bacnet exited $status, expected 2 and the TUI's terminal check: $plain"
+  exit 1
+fi
 
 # The README quickstart server, unchanged.
 cat >"$tmp/local_server.py" <<'EOF'
@@ -115,4 +125,8 @@ EOF
 cap=$(bacnet --json capture --read "$tmp/whois.pcap" --decode)
 echo "$cap"
 grep -q '"service":"WHO_IS"' <<<"$cap" || { echo "capture did not decode the Who-Is"; exit 1; }
+ports=$(bacnet --json mstp-ports)
+echo "$ports"
+"$python" -c 'import json, sys; assert isinstance(json.loads(sys.argv[1]), list)' "$ports" \
+  || { echo "mstp-ports did not print a JSON array"; exit 1; }
 echo "CLI smoke test passed"

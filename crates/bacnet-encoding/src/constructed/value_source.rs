@@ -1,6 +1,6 @@
 //! BACnetValueSource CHOICE framing (ASHRAE 135-2020 Clause 21).
 use bacnet_types::constructed::{BACnetAddress, BACnetValueSource};
-use bacnet_types::error::Error;
+use bacnet_types::error::{DecodeError, DecodingKind, Error};
 use bytes::BytesMut;
 
 use super::recipient::{check_encoded_mac_len, decode_app_mac_address};
@@ -62,7 +62,12 @@ pub fn decode_value_source(
     if tag.is_opening_tag(2) {
         let (network, pos) = decode_app_unsigned::<u64>(data, pos, WHAT)?;
         let network_number = u16::try_from(network).map_err(|_| {
-            Error::out_of_range(pos, format!("{WHAT}: network number exceeds Unsigned16"))
+            DecodeError::new(
+                DecodingKind::OutOfRange,
+                pos,
+                "network number exceeds Unsigned16",
+            )
+            .within(WHAT)
         })?;
         let (mac_address, pos) = decode_app_mac_address(data, pos, WHAT)?;
         let end = expect_closing(data, pos, 2, WHAT)?;
@@ -74,8 +79,11 @@ pub fn decode_value_source(
             end,
         ));
     }
-    Err(Error::decoding(
+    Err(DecodeError::new(
+        DecodingKind::InvalidEncoding,
         offset,
-        format!("{WHAT}: expected NULL [0], object [1], or address [2]"),
-    ))
+        "expected NULL [0], object [1], or address [2]",
+    )
+    .within(WHAT)
+    .into())
 }

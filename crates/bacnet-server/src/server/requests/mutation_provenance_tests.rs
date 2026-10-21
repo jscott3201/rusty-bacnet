@@ -15,9 +15,10 @@
 //! `mutation_*` suites; LifeSafety keeps its own authorizer without
 //! provenance (noted gap, out of scope).
 
+use super::mutation_tests::MutationAuthorizer;
 use super::mutation_tests::{apdu, assert_denied, cases, oid, route, Fixture, SOURCE};
 use super::*;
-use crate::mutation::{MutationAuthorizationContext, MutationAuthorizer, MutationTrust};
+use crate::mutation::{MutationAuthorizationContext, MutationTrust};
 use crate::server::test_transport::TestTransport;
 use bacnet_services::file::{AtomicWriteFileRequest, FileWriteAccessMethod};
 use bacnet_transport::port::TransportProvenance;
@@ -51,14 +52,14 @@ async fn dispatch_admitted(
 ) -> Option<Bytes> {
     let (tx, rx) = oneshot::channel();
     BACnetServer::<TestTransport>::handle_admitted_confirmed_request(
-        &RequestServices {
+        &Arc::new(RequestServices {
             db: Arc::clone(&fixture.db),
             cov_table: Arc::clone(&fixture.table),
             comm_state: Arc::clone(&fixture.state),
             dcc_timer: Arc::new(Mutex::new(Default::default())),
             mutation_decisions: Arc::clone(decisions),
             ..RequestServices::for_test(Arc::clone(&fixture.network), fixture.config.clone())
-        },
+        }),
         &Arc::new(crate::server::request_tasks::RequestTasks::default()).spawner(),
         RequestOrigin {
             mac: SOURCE,

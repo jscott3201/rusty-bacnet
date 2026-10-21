@@ -3,13 +3,13 @@ use bacnet_encoding::{primitives, tags};
 use bacnet_types::bitstring::AuditOperationFlags;
 use bacnet_types::constructed::BACnetAddress;
 use bacnet_types::enums::{BACnetSuccessFilter, PropertyIdentifier, RejectReason};
-use bacnet_types::error::Error;
+use bacnet_types::error::{DecodeError, DecodingKind, EncodeError, Error};
 use bacnet_types::MacAddr;
 use bytes::BytesMut;
 
 use bacnet_encoding::constructed::tagged::{
     decode_app_primitive, decode_canonical_unsigned, decode_ctx_canonical_unsigned,
-    decode_ctx_object_id, decode_ctx_primitive, expect_end, misplaced_tag, next_is_context,
+    decode_ctx_object_id, decode_ctx_primitive, expect_end, misplaced, misplaced_tag, next_is_context,
     next_is_opening,
 };
 
@@ -20,10 +20,9 @@ fn validate_filter(filter: BACnetSuccessFilter) -> Result<(), Error> {
         && filter != BACnetSuccessFilter::SUCCESSES_ONLY
         && filter != BACnetSuccessFilter::FAILURES_ONLY
     {
-        return Err(Error::Encoding(format!(
-            "AuditLogQuery success-filter {} is outside 0..=2",
-            filter.to_raw()
-        )));
+        return Err(EncodeError::new("AuditLogQuery success-filter {} is outside 0..=2")
+            .with_value(filter.to_raw())
+            .into());
     }
     Ok(())
 }
@@ -35,9 +34,7 @@ fn validate(request: &AuditLogQueryRequest) -> Result<(), Error> {
     } = &request.query_parameters
     {
         if !(1..=16).contains(priority) {
-            return Err(Error::Encoding(
-                "AuditLogQuery target-priority must be in 1..=16".into(),
-            ));
+            return Err(Error::encode("AuditLogQuery target-priority must be in 1..=16"));
         }
     }
     let (address, filter) = match &request.query_parameters {
@@ -392,21 +389,30 @@ fn decode_address(
     let field = labels.field;
     let (opening, content_start) = tags::decode_tag(data, offset)?;
     if !opening.is_opening_tag(expected_tag) {
-        return Err(misplaced_tag(
+        return Err(misplaced(
             data,
             &opening,
             Some(expected_tag),
             offset,
-            format!("{field} expected opening tag {expected_tag}"),
-        ));
+            "expected opening tag {}",
+        )
+        .within(field)
+        .with_value(expected_tag.into())
+        .into());
     }
     let (content, end) = tags::extract_context_value(data, content_start, expected_tag)?;
 
     let (network_bytes, inner_offset) =
         decode_app_primitive(content, 0, tags::app_tag::UNSIGNED, labels.network_number)?;
     let network_number = decode_canonical_unsigned(network_bytes, offset, field)?;
-    let network_number = u16::try_from(network_number)
-        .map_err(|_| Error::out_of_range(offset, format!("{field} network-number exceeds u16")))?;
+    let network_number = u16::try_from(network_number).map_err(|_| {
+        DecodeError::new(
+            DecodingKind::OutOfRange,
+            offset,
+            "network-number exceeds u16",
+        )
+        .within(field)
+    })?;
 
     let mac_offset = inner_offset;
     let (mac_address, inner_offset) = decode_app_primitive(
@@ -431,7 +437,7 @@ fn decode_operation_flags(
     data: &[u8],
     offset: usize,
     expected_tag: u8,
-    field: &str,
+    field: &'static str,
 ) -> Result<(AuditOperationFlags, usize), Error> {
     let (content, end) = decode_ctx_primitive(data, offset, expected_tag, field)?;
     let (unused_bits, bits) = primitives::decode_bit_string(content)?;
@@ -443,7 +449,7 @@ fn decode_success_filter(
     data: &[u8],
     offset: usize,
     expected_tag: u8,
-    field: &str,
+    field: &'static str,
 ) -> Result<(BACnetSuccessFilter, usize), Error> {
     // Strict corrected-baseline enumerated form (Errata 2024-04-29 item 7):
     // only 0 (all), 1 (successes-only), and 2 (failures-only) are accepted,
@@ -462,7 +468,7 @@ fn decode_success_filter(
         // answers its own filters.
         _ => {
             return Err(Error::Reject {
-                reason: RejectReason::UNDEFINED_ENUMERATION.to_raw(),
+                reason: RejectReason::UNDEFINED_ENUMERATION,
             });
         }
     };

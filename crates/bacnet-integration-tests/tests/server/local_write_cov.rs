@@ -14,23 +14,26 @@ use super::*;
 #[tokio::test]
 async fn local_write_fires_cov_notification() {
     use bacnet_objects::analog::AnalogOutputObject;
+    use bacnet_types::enums::EngineeringUnits;
     use bacnet_types::primitives::PropertyValue;
     use tokio::time::Duration;
 
     // Server with a writable AnalogOutput + Device.
     let mut db = ObjectDatabase::new();
-    let ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
+    let ao = AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let ao_oid = ao.object_identifier();
     db.add(Box::new(ao)).unwrap();
     let dev = DeviceObject::new(DeviceConfig {
-        instance: 1234,
-        name: "Local-COV-Dev".into(),
+        identity: bacnet_objects::DeviceIdentity::new(1234, 0)
+            .expect("valid Device identity")
+            .with_name("Local-COV-Dev"),
         ..DeviceConfig::default()
     })
     .unwrap();
     db.add(Box::new(dev)).unwrap();
 
     let mut server = BACnetServer::bip_builder()
+        .device(bacnet_objects::DeviceIdentity::new(1234, 0).unwrap())
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
         .database(db)
@@ -110,22 +113,25 @@ async fn local_write_fires_cov_notification() {
 async fn local_object_name_write_refreshes_name_index() {
     use bacnet_objects::analog::AnalogOutputObject;
     use bacnet_objects::database::ObjectDatabase;
+    use bacnet_types::enums::EngineeringUnits;
     use bacnet_types::primitives::PropertyValue;
     use tokio::time::Duration;
 
     let mut db = ObjectDatabase::new();
-    let ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
+    let ao = AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let ao_oid = ao.object_identifier();
     db.add(Box::new(ao)).unwrap();
     let dev = DeviceObject::new(DeviceConfig {
-        instance: 1234,
-        name: "Local-Name-Dev".into(),
+        identity: bacnet_objects::DeviceIdentity::new(1234, 0)
+            .expect("valid Device identity")
+            .with_name("Local-Name-Dev"),
         ..DeviceConfig::default()
     })
     .unwrap();
     db.add(Box::new(dev)).unwrap();
 
     let mut server = BACnetServer::bip_builder()
+        .device(bacnet_objects::DeviceIdentity::new(1234, 0).unwrap())
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
         .database(db)
@@ -173,8 +179,8 @@ async fn local_object_name_write_refreshes_name_index() {
         matches!(
             dup,
             Err(bacnet_types::error::Error::Protocol { class, code })
-                if class == bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
-                    && code == bacnet_types::enums::ErrorCode::DUPLICATE_NAME.to_raw() as u32
+                if class == bacnet_types::enums::ErrorClass::PROPERTY
+                    && code == bacnet_types::enums::ErrorCode::DUPLICATE_NAME
         ),
         "a duplicate object name is PROPERTY / DUPLICATE_NAME, got {dup:?}"
     );

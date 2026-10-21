@@ -152,13 +152,15 @@ impl Fixture {
         let mut db = ObjectDatabase::new();
         db.add(Box::new(
             DeviceObject::new(DeviceConfig {
-                instance: 123,
+                identity: bacnet_objects::DeviceIdentity::new(123, 0)
+                    .expect("valid Device identity"),
                 ..Default::default()
             })
             .unwrap(),
         ))
         .unwrap();
         let builder = builder
+            .device(bacnet_objects::DeviceIdentity::new(123, 0).unwrap())
             .hub_url(&self.url)
             .tls_config(certs.clients[0].clone())
             .vmac(SERVER)
@@ -355,7 +357,9 @@ impl Fixture {
         assert_eq!(self.server().dcc_outcome_counters(), after);
     }
 
-    async fn stop(&mut self) -> bool {
+    /// Stops every owner, and says whether each stop finished, and what
+    /// rebinding the hub's freed port gave.
+    async fn stop(&mut self) -> (bool, std::io::Result<()>) {
         // Attempt every owner's joined stop even when another cleanup fails.
         let mut clean = true;
         for peer in &mut self.peers {
@@ -370,16 +374,16 @@ impl Fixture {
                 Ok(Ok(()))
             );
         }
+        let mut released = Ok(());
         if let Some(hub) = &mut self.hub {
+            let address = hub.local_addr().unwrap();
             clean &= tokio::time::timeout(Duration::from_secs(5), boxed(|| hub.stop()))
                 .await
                 .is_ok();
-            // Successful stop releases the listener before returning.
-            clean &= tokio::net::TcpListener::bind(hub.local_addr().unwrap())
-                .await
-                .is_ok();
+            // A successful stop releases the listener before returning.
+            released = tokio::net::TcpListener::bind(address).await.map(drop);
         }
-        clean
+        (clean, released)
     }
 }
 
@@ -390,15 +394,23 @@ pub(super) enum Outcome {
     Deprecated,
 }
 
-pub(super) async fn run(test: impl AsyncFnOnce(&mut Fixture)) {
-    let mut fixture = Fixture::default();
-    let body = &mut fixture;
-    let result = AssertUnwindSafe(boxed(move || test(body)))
-        .catch_unwind()
-        .await;
-    let clean = boxed(|| fixture.stop()).await;
-    assert!(clean, "SC fixture failed joined cleanup");
-    if let Err(panic) = result {
-        std::panic::resume_unwind(panic);
-    }
+/// Runs `test` on a fresh fixture, then stops it and rebinds the hub's
+/// freed port. Another process can take that port first, so a lost port runs
+/// the test again, and one the hub kept fails on the last run (#1419).
+pub(super) async fn run(test: impl AsyncFn(&mut Fixture)) {
+    let test = &test;
+    crate::server::port_retry::rerun_on_lost_port(async || {
+        let mut fixture = Fixture::default();
+        let body = &mut fixture;
+        let result = AssertUnwindSafe(boxed(move || test(body)))
+            .catch_unwind()
+            .await;
+        let (clean, released) = boxed(|| fixture.stop()).await;
+        assert!(clean, "SC fixture failed joined cleanup");
+        if let Err(panic) = result {
+            std::panic::resume_unwind(panic);
+        }
+        released
+    })
+    .await;
 }

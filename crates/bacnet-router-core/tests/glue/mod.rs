@@ -70,11 +70,10 @@ where
 mod bip {
     use core::net::{Ipv4Addr, SocketAddrV4};
 
-    use bacnet_bip_codec::{address_to_octets, BvlcFunction, Bvll, BvllFrame};
-    use bacnet_bip_core::node::{Addressed, Datagram, Foreign, Link, Mode, Node};
+    use bacnet_bip_core::codec::{address_to_octets, BvlcFunction, Bvll, BvllFrame};
+    use bacnet_bip_core::node::{Addressed, Datagram, Foreign, Link, Mode, Node, SendRefusal};
+    use bacnet_bip_core::port::Datagrams;
     use bacnet_bip_core::LocalSubnet;
-    use bacnet_router_core::bip::Datagrams;
-    use bacnet_router_core::router::SendRefusal;
     use bacnet_router_core::Instant;
 
     /// The B/IP port of the network's devices.
@@ -156,7 +155,7 @@ mod bip {
         pub sent: Vec<(SocketAddrV4, Vec<u8>)>,
         /// Every call, refused ones included.
         pub calls: usize,
-        /// Refuse every send with this.
+        /// Refuse every send with this: `SocketFull` or `SocketError`.
         pub refuse: Option<SendRefusal>,
     }
 

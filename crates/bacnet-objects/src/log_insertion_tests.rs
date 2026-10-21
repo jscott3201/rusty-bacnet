@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_types::enums::EngineeringUnits;
 
 #[test]
 fn fallible_trend_hook_preserves_state_on_clock_error_and_retries() {
@@ -67,7 +68,8 @@ fn fallible_insertion_keeps_count_only_success_and_rejects_unsupported_objects()
             assert_eq!(object.total(), 2);
         }
     }
-    let mut unsupported = crate::analog::AnalogInputObject::new(1, "AI", 62).unwrap();
+    let mut unsupported =
+        crate::analog::AnalogInputObject::new(1, "AI", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     assert_protocol(
         unsupported.add_trend_record(ordinary(1, 10)).unwrap_err(),
         ErrorClass::OBJECT,

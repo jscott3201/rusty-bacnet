@@ -5,9 +5,10 @@
 mod support;
 
 use bacnet_mstp_codec::{FrameType, BROADCAST_MAC};
+use bacnet_mstp_core::npdu::NetworkPriority;
 use bacnet_mstp_core::{
-    Action, ActionBuffers, CoreError, Direction, Duration, Instant, MasterCore, MasterState,
-    NetworkPriority, QueueKind, QueueStorage,
+    Action, ActionBuffers, Direction, Duration, Instant, MasterCore, MasterState, QueueKind,
+    QueueStorage, TransmitError,
 };
 
 use support::*;
@@ -31,11 +32,11 @@ fn an_adapter_that_falls_behind_never_costs_a_dequeued_npdu() {
         enqueue(&mut core, false, now);
         validated(&mut core, FrameType::TOKEN, STATION, PEER, &[], now);
         let handed = core.next_deadline().unwrap();
-        core.on_deadline(handed).unwrap();
+        core.on_deadline(handed);
         assert!(core.snapshot().transmit_id.is_some());
         let watchdog = core.next_deadline().unwrap();
         assert_eq!(watchdog, handed + core.config().transmit_watchdog);
-        core.on_deadline(watchdog).unwrap();
+        core.on_deadline(watchdog);
         assert_eq!(core.state(), MasterState::Idle);
         now = watchdog + Duration::from_millis(1);
     }
@@ -65,11 +66,11 @@ fn a_start_before_the_frame_is_polled_is_refused() {
     let mut core = new_core(&mut rx, &mut actions);
     poll_waiting(&mut core);
     let due = core.next_deadline().unwrap();
-    core.on_deadline(due).unwrap();
+    core.on_deadline(due);
     let id = core.snapshot().transmit_id.unwrap();
     assert_eq!(
         core.on_transmit_started(id, due),
-        Err(CoreError::TransmitNotPolled)
+        Err(TransmitError::NotPolled)
     );
     assert_eq!(
         core.poll_action(),
@@ -77,13 +78,12 @@ fn a_start_before_the_frame_is_polled_is_refused() {
     );
     assert_eq!(
         core.on_transmit_started(id, due),
-        Err(CoreError::TransmitNotPolled)
+        Err(TransmitError::NotPolled)
     );
     assert_eq!(core.counters().adapter_errors, 2);
     assert!(matches!(core.poll_action(), Action::Transmit { id: polled, .. } if polled == id));
     core.on_transmit_started(id, due).unwrap();
-    core.on_transmit_complete(id, due + Duration::from_millis(1))
-        .unwrap();
+    core.on_transmit_complete(id, due + Duration::from_millis(1));
     assert_eq!(core.counters().frames_transmitted, 1);
 }
 
@@ -101,7 +101,7 @@ fn full_delivery_slots_drop_data_but_never_controls() {
     assert_eq!(core.counters().delivery_drops, 1);
     validated(&mut core, FrameType::TOKEN, STATION, PEER, &[], ms(20));
     let due = core.next_deadline().unwrap();
-    core.on_deadline(due).unwrap();
+    core.on_deadline(due);
     let (_, header) = handed_over(&mut core);
     assert!(is(header, FrameType::POLL_FOR_MASTER, PEER));
     assert!(matches!(
@@ -141,7 +141,8 @@ fn the_core_can_borrow_its_queues() {
     let mut queues = Queues::new();
     {
         let mut core =
-            MasterCore::new(config(), &mut queues, &mut rx, &mut actions, Instant::ZERO).unwrap();
+            MasterCore::from_parts(config(), &mut queues, &mut rx, &mut actions, Instant::ZERO)
+                .unwrap();
         for (at, npdu) in [(ms(1), [1, 0]), (ms(2), [1, 4])] {
             core.enqueue_npdu(PEER, &npdu, NetworkPriority::Normal, at)
                 .unwrap();

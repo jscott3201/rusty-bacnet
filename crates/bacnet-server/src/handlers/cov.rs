@@ -4,8 +4,8 @@ use crate::runtime_clock;
 
 fn cov_property_error(code: ErrorCode) -> Error {
     Error::Protocol {
-        class: ErrorClass::PROPERTY.to_raw() as u32,
-        code: code.to_raw() as u32,
+        class: ErrorClass::PROPERTY,
+        code,
     }
 }
 
@@ -83,7 +83,7 @@ pub(crate) fn handle_subscribe_cov_with_initial_endpoint(
     // lookup, expiry purge or subscription replacement/initial notification.
     if request.lifetime.is_some() && request.issue_confirmed_notifications.is_none() {
         return Err(Error::Reject {
-            reason: RejectReason::INCONSISTENT_PARAMETERS.to_raw(),
+            reason: RejectReason::INCONSISTENT_PARAMETERS,
         });
     }
 
@@ -99,14 +99,14 @@ pub(crate) fn handle_subscribe_cov_with_initial_endpoint(
     match db.get(&request.monitored_object_identifier) {
         None => {
             return Err(Error::Protocol {
-                class: ErrorClass::OBJECT.to_raw() as u32,
-                code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
+                class: ErrorClass::OBJECT,
+                code: ErrorCode::UNKNOWN_OBJECT,
             });
         }
         Some(obj) if !obj.supports_cov() => {
             return Err(Error::Protocol {
-                class: ErrorClass::OBJECT.to_raw() as u32,
-                code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+                class: ErrorClass::OBJECT,
+                code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
             });
         }
         _ => {}
@@ -176,14 +176,14 @@ pub(crate) fn handle_subscribe_cov_property_with_initial_endpoint(
         (None, None) => None,
         (Some(_), Some(0)) => {
             return Err(Error::Protocol {
-                class: ErrorClass::SERVICES.to_raw() as u32,
-                code: ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32,
+                class: ErrorClass::SERVICES,
+                code: ErrorCode::VALUE_OUT_OF_RANGE,
             })
         }
         (Some(_), Some(lifetime)) => Some(lifetime),
         _ => {
             return Err(Error::Reject {
-                reason: RejectReason::INCONSISTENT_PARAMETERS.to_raw(),
+                reason: RejectReason::INCONSISTENT_PARAMETERS,
             })
         }
     };
@@ -202,16 +202,16 @@ pub(crate) fn handle_subscribe_cov_property_with_initial_endpoint(
     let object = db
         .get(&request.monitored_object_identifier)
         .ok_or(Error::Protocol {
-            class: ErrorClass::OBJECT.to_raw() as u32,
-            code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
+            class: ErrorClass::OBJECT,
+            code: ErrorCode::UNKNOWN_OBJECT,
         })?;
 
     // An object can take property subscriptions without supporting
     // SubscribeCOV (Averaging, which Table 13-1 doesn't list).
     if !object.supports_subscribe_cov_property() {
         return Err(Error::Protocol {
-            class: ErrorClass::OBJECT.to_raw() as u32,
-            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+            class: ErrorClass::OBJECT,
+            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
         });
     }
 
@@ -323,7 +323,7 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
         (Some(_), Some(_)) => false,
         _ => {
             return Err(Error::Reject {
-                reason: RejectReason::INCONSISTENT_PARAMETERS.to_raw(),
+                reason: RejectReason::INCONSISTENT_PARAMETERS,
             }
             .into());
         }
@@ -368,8 +368,8 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
         || u64::from(max_notification_delay) >= u64::from(lifetime)
     {
         return Err(Error::Protocol {
-            class: ErrorClass::SERVICES.to_raw() as u32,
-            code: ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32,
+            class: ErrorClass::SERVICES,
+            code: ErrorCode::VALUE_OUT_OF_RANGE,
         }
         .into());
     }
@@ -391,8 +391,8 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
                     Some(_) => ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
                 };
                 let error = Error::Protocol {
-                    class: ErrorClass::OBJECT.to_raw() as u32,
-                    code: code.to_raw() as u32,
+                    class: ErrorClass::OBJECT,
+                    code,
                 };
                 // A refusal of the object is a refusal of its first COV
                 // reference, the first one that could not be processed.
@@ -419,8 +419,8 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
                 .and_then(|()| {
                     if cov_ref.timestamped && admission_clock.is_none() {
                         Err(Error::Protocol {
-                            class: ErrorClass::SERVICES.to_raw() as u32,
-                            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+                            class: ErrorClass::SERVICES,
+                            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
                         })
                     } else {
                         Ok(())

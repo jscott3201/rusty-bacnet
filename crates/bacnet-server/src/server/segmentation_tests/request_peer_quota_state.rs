@@ -26,7 +26,7 @@ fn saved_state(invoke_id: u8, now: Instant) -> SegmentedRequestState {
     SegmentedRequestState {
         source_mac: MacAddr::new(),
         source_network: None,
-        direct_response: None,
+        route: bacnet_network::response_route::ResponseRoute::unverified(),
         payload,
         provenance: TransportProvenance::unverified(),
         last_activity: now,

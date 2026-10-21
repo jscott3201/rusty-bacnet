@@ -60,7 +60,7 @@ fn management_payloads_are_read_only_on_request() {
     assert_eq!(message.function, BvlcFunction::REGISTER_FOREIGN_DEVICE);
     assert!(matches!(
         message.message(),
-        Err(Error::Decoding { offset: 4, .. })
+        Err(Error::Decoding(DecodeError { offset: 4, .. }))
     ));
     assert_eq!(message.npdu(), None);
 }
@@ -72,8 +72,9 @@ fn datagram_with_octets_past_its_length_is_refused() {
     // shorter message; now the datagram is refused.
     let err = decode_bvll(&[0x81, 0x0A, 0x00, 0x06, 0x01, 0x00, 0xDE, 0xAD]).unwrap_err();
     assert!(
-        matches!(&err, Error::Decoding { offset: 2, message, .. }
-            if message.contains("length 6") && message.contains("8-octet")),
+        matches!(&err, Error::Decoding(refused @ DecodeError { offset: 2, .. })
+            if refused.message().to_string().contains("length 6")
+                && refused.message().to_string().contains("8-octet")),
         "{err}"
     );
 }
@@ -87,7 +88,7 @@ fn header_errors_map_to_decoding_errors() {
         (&[0x81, 0x0A, 0x00, 0x03][..], 2),
     ] {
         match decode_bvll(wire) {
-            Err(Error::Decoding { offset: at, .. }) => assert_eq!(at, offset, "{wire:02X?}"),
+            Err(Error::Decoding(refused)) => assert_eq!(refused.offset, offset, "{wire:02X?}"),
             other => panic!("{wire:02X?}: {other:?}"),
         }
     }
@@ -125,17 +126,29 @@ fn error_mapping_covers_every_codec_error() {
         ),
         (BvllError::AddressLength { length: 3 }, 0),
     ];
-    for (error, offset) in decoding {
+    let texts = [
+        "BVLL datagram too short: 2 octets, header needs 4",
+        "BVLC type 0x82 is not B/IP (0x81)",
+        "unknown BVLC function 0x0C",
+        "BVLC length 6 does not match the 8-octet datagram",
+        "BVLC_RESULT cannot carry a 3-octet payload",
+        "table of 9 octets is not a whole number of 10-octet entries",
+        "B/IP address must be 6 octets, got 3",
+    ];
+    for ((error, offset), text) in decoding.into_iter().zip(texts) {
         match bvll_error(error) {
-            Error::Decoding {
-                offset: at,
-                message,
-                ..
-            } => {
-                assert_eq!(at, offset, "{error:?}");
-                assert_eq!(message, error.to_string());
+            Error::Decoding(refused) => {
+                assert_eq!(refused.offset, offset, "{error:?}");
+                assert_eq!(refused.message().to_string(), text, "{error:?}");
             }
             other => panic!("{error:?} mapped to {other:?}"),
+        }
+        // The hex octets read as the codec's own text does (#1803).
+        if matches!(
+            error,
+            BvllError::NotBip { .. } | BvllError::UnknownFunction { .. }
+        ) {
+            assert_eq!(text, error.to_string());
         }
     }
     let encoding = [
@@ -203,8 +216,8 @@ fn bip_mac_invalid_length() {
     for mac in [&[1, 2, 3][..], &[], &[0; 7]] {
         let err = decode_bip_mac(mac).unwrap_err();
         assert!(
-            matches!(&err, Error::Decoding { offset: 0, message, .. }
-                if message.contains("must be 6 octets")),
+            matches!(&err, Error::Decoding(refused @ DecodeError { offset: 0, .. })
+                if refused.message().to_string().contains("must be 6 octets")),
             "{err}"
         );
     }

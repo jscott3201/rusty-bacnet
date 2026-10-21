@@ -25,8 +25,8 @@ fn a_range_holds_both_limits_in_order() {
 fn a_low_limit_above_the_high_one_is_refused() {
     let error = DeviceInstanceRange::new(20, 10).unwrap_err();
     assert!(
-        matches!(&error, Error::OutOfRange(message)
-            if message.contains("low limit 20 is above its high limit 10")),
+        matches!(&error, Error::Range(refused)
+            if refused.message().to_string().contains("low limit 20 is above its high limit 10")),
         "{error:?}"
     );
     assert!(DeviceInstanceRange::from_limits(Some(20), Some(10)).is_err());
@@ -45,9 +45,9 @@ fn separate_limits_make_a_range_only_in_pairs() {
     ] {
         let error = DeviceInstanceRange::from_limits(low, high).unwrap_err();
         assert!(
-            matches!(&error, Error::OutOfRange(message)
-                if message.contains("needs both limits or neither")
-                    && message.contains(named)),
+            matches!(&error, Error::Range(refused)
+                if refused.message().to_string().contains("needs both limits or neither")
+                    && refused.message().to_string().contains(named)),
             "{error:?}"
         );
     }
@@ -97,7 +97,7 @@ fn a_who_has_with_one_limit_or_an_empty_range_is_refused() {
     ] {
         let error = WhoHasRequest::decode(&[limits, av_1].concat()).unwrap_err();
         assert!(
-            matches!(&error, Error::Decoding { .. }) && error.to_string().contains(fault),
+            matches!(&error, Error::Decoding(_)) && error.to_string().contains(fault),
             "{limits:02X?}: {error:?}"
         );
     }
@@ -129,7 +129,8 @@ fn a_limit_past_the_highest_instance_is_refused_when_sending_only() {
     ] {
         let expected = format!("high limit {high} is above the highest instance, 4194303");
         assert!(
-            matches!(&refused, Err(Error::OutOfRange(message)) if message.contains(&expected)),
+            matches!(&refused, Err(Error::Range(error))
+                if error.message().to_string().contains(&expected)),
             "{refused:?}"
         );
     }

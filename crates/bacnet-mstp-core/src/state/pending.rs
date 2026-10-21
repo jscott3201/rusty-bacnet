@@ -11,7 +11,7 @@
 //! Line activity in either phase (an octet, a receive error, host-reported
 //! octets, or a frame a host assembler found valid or invalid) moves the
 //! frame's earliest start to T_turnaround after it, and a start reported
-//! sooner is refused with [`CoreError::TransmitDeferred`]: the frame waits
+//! sooner is refused with [`TransmitError::Deferred`]: the frame waits
 //! again and comes back as a new transmit. The state the frame was made for
 //! takes none of its own transitions meanwhile, because the transition that
 //! made the frame has not finished. Two exceptions end the wait early:
@@ -61,7 +61,7 @@
 //! resetting the receive state machine.
 //!
 //! An answer's limit applies to its start as well: one the adapter starts at
-//! or after it is refused with [`CoreError::RequestExpired`], since the asker
+//! or after it is refused with [`TransmitError::Expired`], since the asker
 //! may be transmitting by then. Other frames' limits bound only waits caused
 //! by line activity.
 
@@ -108,6 +108,25 @@ impl PendingSend {
     }
 }
 
+/// Encode a frame of this station's into the action buffers' frame buffer,
+/// and return whether it fits. Every frame the core builds does: its data
+/// is checked against what this station sends, and
+/// [`MasterCore::from_parts`] checked the buffer. A failure is a broken
+/// invariant, asserted in debug builds and otherwise counted in
+/// [`MstpCounters::internal_errors`]; the frame is not sent.
+pub(super) fn encode<const NPDU: usize>(
+    actions: &mut ActionQueue<'_, NPDU>,
+    counters: &mut MstpCounters,
+    frame: Frame<'_>,
+) -> bool {
+    let encoded = actions.encode_frame(frame);
+    debug_assert!(encoded.is_ok(), "a frame the core built: {encoded:?}");
+    if encoded.is_err() {
+        counters.record_internal_error();
+    }
+    encoded.is_ok()
+}
+
 impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
     /// Encode a frame and send it once the line has been quiet for
     /// T_turnaround: at once if it already has, otherwise from the deadline.
@@ -123,25 +142,17 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
         post: PostTransmit,
         origin: Origin,
         now: Instant,
-    ) -> Result<(), CoreError> {
-        self.actions.encode_frame(Frame::new(
-            frame_type,
-            destination,
-            self.config.station,
-            data,
-        ))?;
-        self.send_encoded(post, origin, now)
+    ) {
+        let frame = Frame::new(frame_type, destination, self.config.station, data);
+        if encode(&mut self.actions, &mut self.counters, frame) {
+            self.send_encoded(post, origin, now);
+        }
     }
 
     /// Send the frame just encoded into the action buffers' frame buffer, as
     /// [`Self::queue_frame`] does. A queued NPDU is encoded where the queue
     /// lends it, so its frame comes here directly.
-    pub(super) fn send_encoded(
-        &mut self,
-        post: PostTransmit,
-        origin: Origin,
-        now: Instant,
-    ) -> Result<(), CoreError> {
+    pub(super) fn send_encoded(&mut self, post: PostTransmit, origin: Origin, now: Instant) {
         debug_assert!(
             self.pending_send.is_none() && self.active_transmit.is_none(),
             "a second frame of this station's"
@@ -162,9 +173,9 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
 
     /// Hand the waiting frame to the adapter if its turnaround has passed.
     /// It stays here until the adapter confirms the start.
-    pub(super) fn dispatch_pending_send(&mut self, now: Instant) -> Result<(), CoreError> {
+    pub(super) fn dispatch_pending_send(&mut self, now: Instant) {
         let Some(pending) = self.pending_send else {
-            return Ok(());
+            return;
         };
         // The limit first: under steady line activity the turnaround keeps
         // moving, and the wait must still end.
@@ -173,18 +184,17 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
         }
         if now < pending.earliest {
             self.protocol_deadline = Some(pending.deadline());
-            return Ok(());
+            return;
         }
         self.dispatch_frame(pending.post, now);
-        Ok(())
     }
 
     /// Line activity while a frame waits, before or after it went to the
     /// adapter: drop it at its limit or on its state's evidence, otherwise
     /// wait T_turnaround from this activity.
-    pub(super) fn pending_activity(&mut self, now: Instant) -> Result<(), CoreError> {
+    pub(super) fn pending_activity(&mut self, now: Instant) {
         let Some(pending) = self.pending_send else {
-            return Ok(());
+            return;
         };
         let evidence = matches!(pending.origin, Origin::PassToken | Origin::NoToken)
             && self.event_count > u32::from(N_MIN_OCTETS);
@@ -198,19 +208,14 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
                 self.protocol_deadline = Some(pending.deadline());
             }
         }
-        Ok(())
     }
 
     /// A valid frame completed while a frame of this station's waits. Return
     /// whether the frame was handled here; when not, the core has gone to
     /// IDLE, which takes it up.
-    pub(super) fn frame_while_pending(
-        &mut self,
-        frame: Frame<'_>,
-        now: Instant,
-    ) -> Result<bool, CoreError> {
+    pub(super) fn frame_while_pending(&mut self, frame: Frame<'_>, now: Instant) -> bool {
         let Some(pending) = self.pending_send else {
-            return Ok(false);
+            return false;
         };
         let header = frame.header;
         let late_poll_reply = header.frame_type == FrameType::REPLY_TO_POLL_FOR_MASTER
@@ -223,21 +228,21 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
             // 9.5.6.8), it becomes the successor, and this poll is moot.
             Origin::NextPoll if late_poll_reply => {
                 self.discard_pending();
-                self.take_successor(header.source, now)?;
+                self.take_successor(header.source, now);
             }
             Origin::Holder | Origin::NextPoll => self.frame_while_busy(frame, false),
             // A whole frame is more than Nmin_octets: the successor took the
             // token (SawTokenUser) or another station is active (SawFrame).
             Origin::PassToken | Origin::NoToken => {
-                self.drop_pending(now)?;
-                return Ok(false);
+                self.drop_pending(now);
+                return false;
             }
         }
-        Ok(true)
+        true
     }
 
     /// Give up the waiting frame and count it, then go to IDLE.
-    pub(super) fn drop_pending(&mut self, now: Instant) -> Result<(), CoreError> {
+    pub(super) fn drop_pending(&mut self, now: Instant) {
         self.discard_pending();
         self.enter_idle(now)
     }

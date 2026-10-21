@@ -1,5 +1,6 @@
 [package]
 name = "bacnet-types"
+readme = "README.md"
 description = "BACnet protocol types, enums, and primitives per ASHRAE 135-2020"
 version.workspace = true
 edition.workspace = true
@@ -9,26 +10,36 @@ repository.workspace = true
 keywords = ["bacnet", "building-automation", "ashrae", "protocol", "types"]
 categories = ["network-programming", "no-std"]
 
-# One of `std` or `alloc` is required; with neither the crate refuses to build.
-# Leaving both off is reserved for a future allocation-free subset.
+# Without `std` or `alloc` the crate builds allocation-free (#1614): the
+# enums, identifiers, dates and times, and the error type's static variants.
+# The owned values (PropertyValue, the constructed types, MacAddr) and the
+# error variants holding a String or a Box need `alloc`.
 [features]
 default = ["std"]
 # Hosted builds: adds what needs std, the transport I/O error and the B/IP
 # port contract (`bip_port`). thiserror needs no std for either: its derive
 # implements core::error::Error.
 std = ["alloc"]
-# no_std with a global allocator.
-alloc = []
+# no_std with a global allocator: the owned types, and smallvec for MacAddr.
+alloc = ["dep:smallvec"]
 serde = ["alloc", "dep:serde", "serde/alloc"]
 
 [dependencies]
+bacnet-npdu = { workspace = true }
 bitflags = { workspace = true }
-smallvec = { workspace = true }
+smallvec = { workspace = true, optional = true }
 thiserror = { workspace = true }
 serde = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+
+[package.metadata.docs.rs]
+no-default-features = true
+features = ["std", "serde"]
+default-target = "x86_64-unknown-linux-gnu"
+targets = []
+rustdoc-args = ["--cfg", "docsrs"]
 
 [lints]
 workspace = true

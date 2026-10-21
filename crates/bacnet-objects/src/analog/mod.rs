@@ -3,7 +3,8 @@
 //! Per ASHRAE 135-2020 Clauses 12.2 (AI), 12.3 (AO), and 12.4 (AV).
 
 use bacnet_types::enums::{
-    ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier, Reliability,
+    EngineeringUnits, ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier,
+    Reliability,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue, StatusFlags};
@@ -120,7 +121,7 @@ const CREATION_ONLY: &[PropertyIdentifier] = &[PropertyIdentifier::UNITS];
 /// outside BACnetEngineeringUnits (Clause 21) and is VALUE_OUT_OF_RANGE;
 /// any other property is WRITE_ACCESS_DENIED, as the trait default answers.
 fn initialize_units(
-    units: &mut u32,
+    units: &mut EngineeringUnits,
     property: PropertyIdentifier,
     value: PropertyValue,
 ) -> Result<(), Error> {
@@ -133,7 +134,7 @@ fn initialize_units(
     if raw > 65_535 {
         return Err(common::value_out_of_range_error());
     }
-    *units = raw;
+    *units = EngineeringUnits::from_raw(raw);
     Ok(())
 }
 

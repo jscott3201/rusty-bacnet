@@ -11,6 +11,8 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::engine::Engine;
+use super::persistence::{ColorOutputPersistence, ColorOutputValue};
+use super::saving::{impl_color_durable, ColorOutputSaveCounters, OutputStorage};
 use super::{
     command, metadata, milliseconds, noncommandable_audit_policy, written_transition,
     written_unsigned, written_xy, xy_value,
@@ -75,6 +77,12 @@ pub struct ColorObject {
     value_source: SingleValueSource,
     /// Tags, Profile_Location and Profile_Name, once provisioned (#1553).
     profile: ProfileState,
+    /// Present_Value storage, once taken (#1526).
+    output: OutputStorage,
+    /// Whether Present_Value came back from that storage.
+    restored: bool,
+    /// The colour storage brought back, until a start takes it.
+    to_restore: Option<BACnetXyColor>,
     engine: Engine<BACnetXyColor>,
 }
 
@@ -98,8 +106,122 @@ impl ColorObject {
             audit_policy: ObjectAuditPolicy::default(),
             value_source: SingleValueSource::default(),
             profile: ProfileState::default(),
+            output: OutputStorage::default(),
+            restored: false,
+            to_restore: None,
             engine: Engine::new(XY_SAMPLE_STEP),
         })
+    }
+
+    /// Keep Present_Value in `persistence` (#1526), and take the colour it
+    /// saved for this object, if any, as Present_Value. Call it right after
+    /// building the object, before anything writes Present_Value.
+    ///
+    /// The object then saves each new Present_Value on its own writer
+    /// thread; a change doesn't wait for its save, and a save that fails is
+    /// logged and tried again (see [`ColorOutputPersistence`]). With
+    /// Default_Color (0, 0), the device's start keeps the saved colour
+    /// (Clause 12.X.8).
+    ///
+    /// Fails with storage's error when what it holds can't be loaded, and
+    /// when it holds a colour temperature or a coordinate outside 0.0 to
+    /// 1.0.
+    pub fn with_output_persistence(
+        mut self,
+        persistence: Arc<dyn ColorOutputPersistence>,
+    ) -> Result<Self, Error> {
+        let current = ColorOutputValue::Xy(self.present_value);
+        match self.output.open(self.oid, current, persistence)? {
+            Some(ColorOutputValue::Xy(color)) if command::xy_in_range(color) => {
+                self.present_value = color;
+                self.restored = true;
+                self.to_restore = Some(color);
+            }
+            Some(_) => {
+                return Err(Error::Encoding(
+                    "saved Color output is not a colour the object can hold".into(),
+                ))
+            }
+            None => {}
+        }
+        Ok(self)
+    }
+
+    /// Whether Present_Value came back from storage
+    /// ([`with_output_persistence`](Self::with_output_persistence)).
+    pub fn output_restored(&self) -> bool {
+        self.restored
+    }
+
+    /// The Present_Value save counters, shared with the object, or `None`
+    /// without storage. Take them before the object joins a database.
+    pub fn output_save_counters(&self) -> Option<ColorOutputSaveCounters> {
+        self.output.counters()
+    }
+
+    /// Block until the Present_Value saves queued so far have run. Dropping
+    /// the object waits for them too.
+    pub fn wait_for_output_saves(&self) {
+        self.output.wait_for_saves();
+    }
+
+    /// Default_Color: the colour the device's start drives the output to,
+    /// or (0, 0) to keep the colour from before the restart.
+    pub fn default_color(&self) -> BACnetXyColor {
+        self.default_color
+    }
+
+    /// Set Default_Color, as a WriteProperty of it would. (0, 0) is taken
+    /// like any other colour and keeps the saved colour at the device's
+    /// start (Clause 12.X.8). A coordinate outside 0.0 to 1.0, or NaN, is
+    /// refused with VALUE_OUT_OF_RANGE.
+    pub fn set_default_color(&mut self, color: BACnetXyColor) -> Result<(), Error> {
+        if !command::xy_in_range(color) {
+            return Err(common::value_out_of_range_error());
+        }
+        self.default_color = color;
+        Ok(())
+    }
+
+    /// Drive the output as the device's start does (#1526); the server
+    /// calls this for every Color object in the database as it starts. An
+    /// application running the object without a server, or adding it to a
+    /// server already running, calls it itself.
+    ///
+    /// A non-zero Default_Color becomes Present_Value at once, whatever was
+    /// set before the start, with no fade, since the addendum gives the
+    /// start no transition. With Default_Color (0, 0) the output keeps, in
+    /// order: the colour restored from storage; else a colour set before the
+    /// start; else nothing, and In_Progress reads NOT_CONTROLLED until a
+    /// Present_Value or Color_Command write drives it (Clauses 12.X.4 and
+    /// 12.X.8). Values set before the start are configuration, since no
+    /// peer can write until then, so a first boot and later ones agree.
+    ///
+    /// It is safe to call again, as an in-process restart would: the second
+    /// call keeps the current colour for a zero default, since the restored
+    /// one was taken by the first.
+    pub fn start_output(&mut self) {
+        let restored = self.to_restore.take();
+        let target = if self.default_color != BACnetXyColor::new(0.0, 0.0) {
+            Some(self.default_color)
+        } else {
+            restored
+        };
+        // Without a target, a colour set before the start stays, and with
+        // none the output stays undriven.
+        if let Some(color) = target {
+            if color != self.present_value {
+                self.value_source.forget();
+            }
+            self.present_value = color;
+            self.engine.start(None);
+            self.output_changed();
+        }
+    }
+
+    /// Present_Value may have changed: save it, if the object keeps it.
+    fn output_changed(&mut self) {
+        self.output.note(ColorOutputValue::Xy(self.present_value));
     }
 
     /// Track Value_Source (Clause 19.5, #1552), provisioned before
@@ -209,6 +331,15 @@ impl ColorObject {
     /// FADE_TO_COLOR or a STOP halts the fade in progress (Clause 12.X.6.1).
     /// Whether it set Present_Value: a STOP with no fade running doesn't.
     fn take_color_command(&mut self, command: BACnetColorCommand) -> bool {
+        let set = self.carry_out(command);
+        if set {
+            self.output_changed();
+        }
+        set
+    }
+
+    /// [`take_color_command`](Self::take_color_command) without the save.
+    fn carry_out(&mut self, command: BACnetColorCommand) -> bool {
         self.color_command = command;
         let now = self.engine.now();
         match command.operation {
@@ -262,6 +393,7 @@ impl ColorObject {
         let fade = (self.transition == ColorTransition::FADE)
             .then(|| Transition::fade(tracking, color, now, milliseconds(self.default_fade_time)));
         self.engine.start(fade.flatten());
+        self.output_changed();
     }
 }
 
@@ -394,7 +526,14 @@ impl BACnetObject for ColorObject {
     }
 
     fn durable_writes_internal(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
+        if self.output.is_some() {
+            return Some(self);
+        }
         self.profile.capability()
+    }
+
+    fn start_output_internal(&mut self) {
+        self.start_output();
     }
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
@@ -444,3 +583,5 @@ impl BACnetObject for ColorObject {
         }))
     }
 }
+
+impl_color_durable!(ColorObject);

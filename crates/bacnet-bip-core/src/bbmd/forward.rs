@@ -8,8 +8,9 @@ use bacnet_time::Instant;
 
 use core::fmt;
 
-use super::bdt::{distribution_address, Bdt, TWO_HOP_MASK};
+use super::bdt::{distribution_address, Bdt, BdtError, TWO_HOP_MASK};
 use super::fdt::Fdt;
+use super::nat::Nat;
 use crate::{Arrival, LocalSubnet};
 
 /// What kind of destination a [`Target`] is.
@@ -187,14 +188,16 @@ impl core::error::Error for DistributeRefusal {}
 
 /// A BBMD's two tables, and its forwarding decisions over them.
 ///
-/// The fields are public so a caller can update one table while reading the
-/// other.
+/// The tables are public fields so a caller can update one while reading
+/// the other.
 #[derive(Debug, Clone)]
 pub struct Tables<const B: usize, const F: usize> {
     /// The broadcast distribution table, which holds this BBMD's own address.
     pub bdt: Bdt<B>,
     /// The foreign device table.
     pub fdt: Fdt<F>,
+    /// How the BBMD is reached through a NAT router, if it is.
+    nat: Option<Nat>,
 }
 
 impl<const B: usize, const F: usize> Tables<B, F> {
@@ -208,6 +211,83 @@ impl<const B: usize, const F: usize> Tables<B, F> {
         Self {
             bdt: Bdt::new(own),
             fdt: Fdt::new(),
+            nat: None,
+        }
+    }
+
+    /// How the BBMD is reached through a NAT router, if it is.
+    #[must_use]
+    pub const fn nat(&self) -> Option<&Nat> {
+        self.nat.as_ref()
+    }
+
+    /// Run behind a NAT router as `nat` says, or, with `None`, not, under
+    /// `local`, the BBMD's own address on its subnet (Annex J.7.5).
+    ///
+    /// Behind NAT the BBMD's own address becomes [`Nat::global`], and the
+    /// BDT's NAT rules apply ([`Bdt::set`]): the configured rows are checked
+    /// against them now, so a table that has rows but lacks the global
+    /// address, or has a one-hop row, refuses the change. Without NAT the
+    /// own address is `local`, and an own row is added as usual. Turning NAT
+    /// off drops the row of the old global address, which no longer names
+    /// this BBMD. On error nothing changes. The global address must pass
+    /// [`validate_entry`](super::validate_entry) as a two-hop row.
+    pub fn set_nat(&mut self, nat: Option<Nat>, local: SocketAddrV4) -> Result<(), BdtError> {
+        let own = Self::own_address_for(nat.as_ref(), local)?;
+        let drop = self.leaving_nat(nat.as_ref());
+        self.bdt.reconfigure(own, nat.is_some(), drop)?;
+        self.nat = nat;
+        Ok(())
+    }
+
+    /// The old global address when `nat` turns NAT off.
+    fn leaving_nat(&self, nat: Option<&Nat>) -> Option<SocketAddrV4> {
+        match (&self.nat, nat) {
+            (Some(old), None) => Some(old.global),
+            _ => None,
+        }
+    }
+
+    /// [`set_nat`](Self::set_nat) and [`Bdt::set`] in one step: run behind
+    /// a NAT router as `nat` says, or not, with the BDT `table`, checked
+    /// under the rules that setting brings. A change of global address and
+    /// the table that lists it go in together this way. Turning NAT off
+    /// drops the old global address's row from `table`, as
+    /// [`set_nat`](Self::set_nat) does. On error nothing changes.
+    pub fn set_nat_and_bdt(
+        &mut self,
+        nat: Option<Nat>,
+        local: SocketAddrV4,
+        table: bacnet_bip_codec::BdtEntries<'_>,
+    ) -> Result<(), BdtError> {
+        let own = Self::own_address_for(nat.as_ref(), local)?;
+        let mut bdt = self.bdt.with_nat(own, nat.is_some());
+        bdt.set_without(table, self.leaving_nat(nat.as_ref()))?;
+        self.bdt = bdt;
+        self.nat = nat;
+        Ok(())
+    }
+
+    /// The own address behind `nat`, checked, or `local` without it.
+    fn own_address_for(nat: Option<&Nat>, local: SocketAddrV4) -> Result<SocketAddrV4, BdtError> {
+        match nat {
+            Some(nat) => {
+                let entry = bacnet_bip_codec::BdtEntry::new(nat.global, TWO_HOP_MASK);
+                super::validate_entry(entry)
+                    .map_err(|reason| BdtError::Invalid { entry, reason })?;
+                Ok(nat.global)
+            }
+            None => Ok(local),
+        }
+    }
+
+    /// The originating address of a Forwarded-NPDU this BBMD builds for a
+    /// broadcast from `source`: behind a NAT router, its global address
+    /// when `private` says other sites can't reach `source` (Annex J.7.5).
+    fn origin_for(&self, source: SocketAddrV4, private: impl FnOnce(&Nat) -> bool) -> SocketAddrV4 {
+        match &self.nat {
+            Some(nat) if private(nat) => nat.global,
+            _ => source,
         }
     }
 
@@ -245,6 +325,8 @@ impl<const B: usize, const F: usize> Tables<B, F> {
     /// J.4.5): a Forwarded-NPDU with `source` as its origin to the
     /// [`broadcast_targets`](Self::broadcast_targets) excluding `source`.
     /// The subnet already has it, so the local broadcast address isn't one.
+    /// Behind a NAT router the origin is the global address instead, the
+    /// one address of this site that the others can answer (Annex J.7.5).
     pub fn original_broadcast<'n, 'o>(
         &self,
         cx: &Context,
@@ -253,7 +335,7 @@ impl<const B: usize, const F: usize> Tables<B, F> {
         out: &'o mut [Target],
     ) -> Distribution<'n, 'o> {
         Distribution {
-            origin: source,
+            origin: self.origin_for(source, |_| true),
             npdu,
             fanout: self.broadcast_targets(cx, source, out),
         }
@@ -278,8 +360,20 @@ impl<const B: usize, const F: usize> Tables<B, F> {
     /// to its own network layer and sends it on unchanged, origin and all,
     /// to the destinations returned: the live foreign devices but `origin`
     /// and, when [`rebroadcasts_forwarded`](Self::rebroadcasts_forwarded)
-    /// says so, the subnet's broadcast address first. The peers don't get
-    /// it again.
+    /// says so and the BBMD isn't [`alone`](LocalSubnet::alone) on its
+    /// subnet, the subnet's broadcast address first. The peers don't get
+    /// it again. Behind a NAT router too the origin stays as it came
+    /// (Annex J.7.5).
+    ///
+    /// For a BBMD that serves a B/IP-M group ([`LocalSubnet::is_group`])
+    /// the subnet's broadcast address is the group, and the subnet's mask
+    /// isn't used, so every peer's forward goes to the group (Annex J.8.3).
+    /// A plain peer BBMD on the group BBMD's own IP subnet is outside the
+    /// standard, since B/IP-M and plain devices don't share a subnet (Annex
+    /// J.8.1), and is tolerated in one direction only: its forwards still
+    /// reach the group, but it takes this BBMD's forwards as already heard
+    /// on its subnet (J.4.5) and doesn't rebroadcast them there. The hosted
+    /// transport warns about such a peer at start.
     pub fn forwarded_npdu<'o>(
         &self,
         cx: &Context,
@@ -296,7 +390,8 @@ impl<const B: usize, const F: usize> Tables<B, F> {
             return Err(ForwardRefusal::NotFromPeer);
         }
         let mut writer = Writer::new(out);
-        if self.rebroadcasts_forwarded(subnet.mask, sender, arrival) {
+        let mask = subnet.mask.filter(|_| !subnet.is_group());
+        if !subnet.alone && self.rebroadcasts_forwarded(mask, sender, arrival) {
             writer.push_local(subnet.broadcast);
         }
         self.foreign_device_targets_into(&mut writer, cx, origin);
@@ -316,8 +411,10 @@ impl<const B: usize, const F: usize> Tables<B, F> {
     /// subnet (by `subnet_mask`, when known) at this BBMD's own UDP port:
     /// that peer's own broadcasts reach this network's devices. A peer on
     /// the subnet at another port serves another B/IP network there (Annex
-    /// J.1.2), so its forward is still broadcast. This doesn't check that
-    /// `sender` is a peer; [`forwarded_npdu`](Self::forwarded_npdu) does.
+    /// J.1.2), so its forward is still broadcast. Behind a NAT router the
+    /// own address is the global one, on no local subnet, so `subnet_mask`
+    /// isn't used. This doesn't check that `sender` is a peer;
+    /// [`forwarded_npdu`](Self::forwarded_npdu) does.
     #[must_use]
     pub fn rebroadcasts_forwarded(
         &self,
@@ -327,7 +424,8 @@ impl<const B: usize, const F: usize> Tables<B, F> {
     ) -> bool {
         let own = self.bdt.own_address();
         let peers_send_here = self.bdt.row(own).is_none_or(|row| row.mask == TWO_HOP_MASK);
-        let sender_on_subnet = sender.port() == own.port()
+        let sender_on_subnet = self.nat.is_none()
+            && sender.port() == own.port()
             && subnet_mask.is_some_and(|mask| {
                 (sender.ip().to_bits() ^ own.ip().to_bits()) & mask.to_bits() == 0
             });
@@ -342,8 +440,18 @@ impl<const B: usize, const F: usize> Tables<B, F> {
     /// send. The caller delivers
     /// an accepted one to its own network layer. It goes out as a
     /// Forwarded-NPDU with `sender` as its origin: first to the subnet's
-    /// broadcast address, then to the
+    /// broadcast address, unless the BBMD is [`alone`](LocalSubnet::alone)
+    /// there, then to the
     /// [`broadcast_targets`](Self::broadcast_targets) excluding `sender`.
+    ///
+    /// Behind a NAT router the origin is the global address when `sender`
+    /// registered from a private address ([`Nat::is_private`]), which other
+    /// sites couldn't answer, and `sender` otherwise. Read literally, Annex
+    /// J.7.5 would put the global address on every Forwarded-NPDU the BBMD
+    /// builds, this one included; keeping a public device's own address is
+    /// a deliberate departure (maintainer decision, 2026-10-20, #940), so
+    /// replies to a device that registered from the public side reach it
+    /// directly.
     pub fn distribute_broadcast<'n, 'o>(
         &self,
         cx: &Context,
@@ -356,11 +464,13 @@ impl<const B: usize, const F: usize> Tables<B, F> {
             return Err(DistributeRefusal::NotRegistered);
         }
         let mut writer = Writer::new(out);
-        writer.push_local(subnet.broadcast);
+        if !subnet.alone {
+            writer.push_local(subnet.broadcast);
+        }
         self.peer_targets(&mut writer, sender);
         self.foreign_device_targets_into(&mut writer, cx, sender);
         Ok(Distribution {
-            origin: sender,
+            origin: self.origin_for(sender, |nat| nat.is_private(*sender.ip())),
             npdu,
             fanout: writer.finish(),
         })

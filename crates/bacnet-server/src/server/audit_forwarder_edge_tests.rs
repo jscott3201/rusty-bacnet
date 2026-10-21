@@ -152,19 +152,23 @@ async fn audit_forwarding_observed_binding_and_local_alias_do_not_send() {
 #[tokio::test(start_paused = true)]
 async fn audit_forwarding_denial_disabled_and_malformed_batches_are_silent() {
     let mut f = ready().await;
-    f.server.config_mut().audit_notification_authorizer = Some(Arc::new(|_| false));
-    f.server
-        .config_mut()
-        .unconfirmed_audit_notification_authorizer = Some(Arc::new(|_| false));
+    f.server.config_mut().policy = Some(Arc::new(
+        crate::FnPolicy::new().audit_notification(|_| false),
+    ));
+    f.server.config_mut().policy = Some(Arc::new(
+        crate::FnPolicy::new().unconfirmed_audit_notification(|_| false),
+    ));
     assert!(matches!(
         f.confirmed(1, &[3], payload(false)).await,
         Some(Apdu::Error(_))
     ));
     f.unconfirmed(payload(false)).await;
-    f.server.config_mut().audit_notification_authorizer = Some(Arc::new(|_| true));
-    f.server
-        .config_mut()
-        .unconfirmed_audit_notification_authorizer = Some(Arc::new(|_| true));
+    f.server.config_mut().policy = Some(Arc::new(
+        crate::FnPolicy::new().audit_notification(|_| true),
+    ));
+    f.server.config_mut().policy = Some(Arc::new(
+        crate::FnPolicy::new().unconfirmed_audit_notification(|_| true),
+    ));
     let mut malformed = payload(false).to_vec();
     malformed.pop();
     assert!(matches!(
@@ -267,7 +271,13 @@ async fn audit_forwarding_goes_out_under_disable_initiation() {
 #[tokio::test(start_paused = true)]
 async fn audit_forwarding_oversize_and_send_errors_leave_local_success() {
     let mut f = ready().await;
-    f.server.config_mut().max_apdu_length = 50;
+    f.server.config_mut().device = f
+        .server
+        .config_mut()
+        .device
+        .clone()
+        .with_max_apdu(50)
+        .unwrap();
     assert!(matches!(
         f.confirmed(2, &[3], payload(false)).await,
         Some(Apdu::SimpleAck(_))
@@ -277,7 +287,13 @@ async fn audit_forwarding_oversize_and_send_errors_leave_local_success() {
         f.requests().is_empty(),
         "oversized forward is not segmented"
     );
-    f.server.config_mut().max_apdu_length = 1476;
+    f.server.config_mut().device = f
+        .server
+        .config_mut()
+        .device
+        .clone()
+        .with_max_apdu(1476)
+        .unwrap();
     f.wire.fail.store(true, Ordering::Release);
     assert!(matches!(
         f.confirmed(3, &[3], payload(false)).await,

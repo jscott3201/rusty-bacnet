@@ -13,7 +13,7 @@ MS/TP is a token-passing serial transport. Fast protocol code is useful, but it 
 
 ## Choose the supported surface
 
-The Python package supports `transport="mstp"` on `BACnetClient` and `BACnetServer`, and `MstpEndpoint` for one device that both requests and responds; every release wheel includes it. Rust has the serial transport itself. The `bacnet` CLI does not expose MS/TP transport flags; do not substitute an invented `--mstp` or `--serial` option into CLI instructions.
+The Python package supports `transport="mstp"` on `BACnetClient` and `BACnetServer`, and `MstpEndpoint` for one device that both requests and responds; every release wheel includes it. Rust has the serial transport itself. The `bacnet` CLI joins a trunk as a master station with `--mstp PORT` and `--mstp-mac` (in the Linux release executables, or a source build with the `serial` feature), and `bacnet mstp-ports` lists the ports; the <a href={`${repository}/blob/v${release}/docs/CLI.md#mstp`}>CLI reference</a> has the flags, the Linux `dialout` group and the FTDI latency timer.
 
 Treat Linux as the initial documentation/qualification lane. Serial path examples for macOS or Windows are not evidence that those platform/adapter combinations are qualified.
 
@@ -52,6 +52,8 @@ On-wire timing measurements are more informative than an average Rust function d
 ## Is a real-time kernel required?
 
 Do not make a blanket claim either way. Determine the result on the target hardware under representative load. The project's timing-qualification issue tracks the evidence needed to decide whether ordinary Linux is sufficient or whether a different adapter, native UART, a dedicated execution mode, PREEMPT_RT, or a separate serial front-end is justified.
+
+On Linux, the Rust transport's dedicated thread and the CLI (`--mstp-rt-priority`, `--mstp-cpus`) can run the MS/TP loop under `SCHED_FIFO` and pin it to CPUs; the Python bindings don't expose these settings. The Rust API guide covers privileges and deployment.
 
 ## Stop and investigate
 

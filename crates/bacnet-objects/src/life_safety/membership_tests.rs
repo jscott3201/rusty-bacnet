@@ -17,8 +17,8 @@ fn remote(object_type: ObjectType, instance: u32) -> BACnetDeviceObjectReference
 fn assert_out_of_range(result: Result<(), Error>) {
     assert!(
         matches!(result, Err(Error::Protocol { class, code })
-            if class == ErrorClass::PROPERTY.to_raw() as u32
-                && code == ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32),
+            if class == ErrorClass::PROPERTY
+                && code == ErrorCode::VALUE_OUT_OF_RANGE),
         "expected PROPERTY / VALUE_OUT_OF_RANGE, got {result:?}"
     );
 }
@@ -105,7 +105,7 @@ fn member_lists_stay_read_only_over_the_network() {
         assert!(matches!(
             object.write_property(property, None, served.clone(), None),
             Err(Error::Protocol { code, .. })
-                if code == ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32
+                if code == ErrorCode::WRITE_ACCESS_DENIED
         ));
     }
 }

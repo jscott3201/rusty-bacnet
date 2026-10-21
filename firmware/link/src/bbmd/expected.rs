@@ -5,40 +5,28 @@
 use core::net::{Ipv4Addr, SocketAddrV4};
 
 use bacnet_bip_codec::{BdtEntry, BvlcResultCode, FdtEntry};
-use bacnet_bip_core::bbmd::{ForwardRefusal, Registered, Via, TWO_HOP_MASK};
+use bacnet_bip_core::bbmd::{DeleteRefusal, ForwardRefusal, Registered, TWO_HOP_MASK};
 
 use super::{
-    Expected, ExpectedFan, Summary, FOREIGN, LOCAL, MAX_TARGETS, OWN, PEERS, REMOTE, TTL,
-    TWO_HOP_PEER,
+    Fan, Summary, FOREIGN, LOCAL, MAX_TARGETS, OWN, PEERS, REMOTE, STRANGER, TTL, TWO_HOP_PEER,
 };
 use crate::tally::Sent;
 
 /// The hash over every datagram the BBMD sends and where it goes. It was
-/// worked out apart from the codec, from the 12 datagrams written out by
-/// hand from the Annex J.2 layouts (204 octets): two BVLC-Results, eight
-/// Forwarded-NPDUs and the two table ACKs.
-const SENT_FNV: u32 = 0xC89E_516A;
-
-/// A destination as an [`ExpectedFan`] lists it.
-type Destination = (SocketAddrV4, Via);
+/// worked out apart from the codec, from the 14 datagrams written out by
+/// hand from the Annex J.2 layouts (216 octets): four BVLC-Results, eight
+/// Forwarded-NPDUs and the two table ACKs. The first 12, all but the two
+/// Delete-FDT-Entry answers, hash to 0xC89E_516A, as they did before the
+/// port answered management requests itself (#1766).
+const SENT_FNV: u32 = 0xA309_6E02;
 
 /// The subnet's broadcast address.
-const LOCAL_BROADCAST: Destination = (
-    SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 255), 0xBAC0),
-    Via::LocalBroadcast,
-);
+const LOCAL_BROADCAST: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 255), 0xBAC0);
 /// The one-hop peer's subnet, at its directed broadcast address.
-const ONE_HOP: Destination = (
-    SocketAddrV4::new(Ipv4Addr::new(10, 0, 2, 255), 0xBAC0),
-    Via::Peer,
-);
-/// The two-hop peer, at its own address.
-const TWO_HOP: Destination = (TWO_HOP_PEER, Via::Peer);
-/// The foreign device.
-const DEVICE: Destination = (FOREIGN, Via::ForeignDevice);
+const ONE_HOP: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::new(10, 0, 2, 255), 0xBAC0);
 
 /// A fan of these destinations, the rest unused.
-const fn fan<const N: usize>(destinations: [Destination; N]) -> ExpectedFan {
+const fn fan<const N: usize>(destinations: [SocketAddrV4; N]) -> Fan {
     let mut fan = [None; MAX_TARGETS];
     let mut index = 0;
     while index < N {
@@ -48,48 +36,58 @@ const fn fan<const N: usize>(destinations: [Destination; N]) -> ExpectedFan {
     fan
 }
 
+const SUCCESS: BvlcResultCode = BvlcResultCode::SUCCESSFUL_COMPLETION;
+
 /// The summary [`run`](super::run) returns in a good run.
-pub const EXPECTED: Expected = Expected {
-    summary: Summary {
-        registration: Some(Ok(Registered::New)),
-        // Read a second after it registered: its time-to-live plus the 30 s
-        // grace period, less that second.
-        fdt: [Some(FdtEntry::new(FOREIGN, TTL, 89)), None, None, None],
-        // In `Expected::original`, `forwarded` and `distributed`.
-        original: [None; MAX_TARGETS],
-        forwarded: [None; MAX_TARGETS],
-        not_from_peer: Some(ForwardRefusal::NotFromPeer),
-        distributed: [None; MAX_TARGETS],
-        not_registered: Some(BvlcResultCode::DISTRIBUTE_BROADCAST_TO_NETWORK_NAK),
-        // The configured peers, then the BBMD's own row, which the table
-        // appended with the two-hop mask.
-        bdt: [
-            Some(PEERS[0]),
-            Some(PEERS[1]),
-            Some(BdtEntry::new(OWN, TWO_HOP_MASK)),
-            None,
-        ],
-        // The Original-Broadcast from its sender, the Forwarded-NPDU from
-        // where it started, and the Distribute-Broadcast-To-Network from the
-        // foreign device.
-        delivered: [Some(LOCAL), Some(REMOTE), Some(FOREIGN), None],
-        // The two results of 6 octets, eight Forwarded-NPDUs of 18, the
-        // Read-FDT-Ack of one row (14) and the Read-BDT-Ack of three (34).
-        sent: Sent {
-            count: 12,
-            octets: 204,
-            fnv: SENT_FNV,
-        },
-        errors: 0,
-    },
+pub const EXPECTED: Summary = Summary {
+    registration: Some(Ok(Registered::New)),
+    // Read a second after it registered: its time-to-live plus the 30 s
+    // grace period, less that second.
+    fdt: [Some(FdtEntry::new(FOREIGN, TTL, 89)), None, None, None],
     // To both peers' subnets and the foreign device; the BBMD's own subnet
     // has it already.
-    original: fan([ONE_HOP, TWO_HOP, DEVICE]),
+    original: fan([ONE_HOP, TWO_HOP_PEER, FOREIGN]),
     // The two-hop peer sent it to this BBMD alone, so it goes on to the
     // subnet's broadcast address, and to the foreign device, but not back
     // to any peer.
-    forwarded: fan([LOCAL_BROADCAST, DEVICE]),
+    forwarded: fan([LOCAL_BROADCAST, FOREIGN]),
+    not_from_peer: Some(ForwardRefusal::NotFromPeer),
     // To the subnet and both peers' subnets; the foreign device that sent
     // it is left out.
-    distributed: fan([LOCAL_BROADCAST, ONE_HOP, TWO_HOP]),
+    distributed: fan([LOCAL_BROADCAST, ONE_HOP, TWO_HOP_PEER]),
+    // The configured peers, then the BBMD's own row, which the table
+    // appended with the two-hop mask.
+    bdt: [
+        Some(PEERS[0]),
+        Some(PEERS[1]),
+        Some(BdtEntry::new(OWN, TWO_HOP_MASK)),
+        None,
+    ],
+    // The registration is deleted; the second request finds none.
+    deleted: [Some(Ok(())), Some(Err(DeleteRefusal::NotRegistered))],
+    // The registration's success, the unregistered sender's
+    // Distribute-Broadcast-To-Network NAK, then the two Delete-FDT-Entry
+    // answers: success, and the Delete NAK.
+    results: [
+        Some((FOREIGN, SUCCESS)),
+        Some((
+            STRANGER,
+            BvlcResultCode::DISTRIBUTE_BROADCAST_TO_NETWORK_NAK,
+        )),
+        Some((LOCAL, SUCCESS)),
+        Some((LOCAL, BvlcResultCode::DELETE_FOREIGN_DEVICE_TABLE_ENTRY_NAK)),
+    ],
+    // The Original-Broadcast from its sender, the Forwarded-NPDU from
+    // where it started, and the Distribute-Broadcast-To-Network from the
+    // foreign device.
+    delivered: [Some(LOCAL), Some(REMOTE), Some(FOREIGN), None],
+    // The four results of 6 octets, eight Forwarded-NPDUs of 18, the
+    // Read-FDT-Ack of one row (14) and the Read-BDT-Ack of three (34).
+    sent: Sent {
+        count: 14,
+        octets: 216,
+        fnv: SENT_FNV,
+    },
+    refused: 0,
+    errors: 0,
 };

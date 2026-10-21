@@ -33,10 +33,15 @@
 //!   [`decode_ctx_fixed`]), the application-tagged ones read with
 //!   [`decode_app_fixed`] or [`decode_app_object_id`], and the REAL, Double,
 //!   Date, Time and object identifier that
-//!   [`primitives::decode_application_value`] reads.
+//!   `primitives::decode_application_value` reads.
 //! - Every other refusal is [`Error::Decoding`], including a tag header cut
 //!   short, which [`tags::decode_tag`] refuses, and a frame whose closing tag
 //!   never comes.
+//!
+//! Every label is a `&'static str`, and each refusal is a [`DecodeError`]
+//! that builds its text only when displayed (#1646). The readers that return
+//! only borrowed octets and numbers need no allocator; those returning a
+//! copy, a `String` or a `PropertyValue` need `alloc`.
 //!
 //! An [`Error::Decoding`] carries the [`DecodingKind`] of the fault, which a
 //! responder turns into a Reject reason (#1446):
@@ -84,16 +89,18 @@
 //! # Ok::<(), Error>(())
 //! ```
 
-#[cfg(not(feature = "std"))]
+#[cfg(all(feature = "alloc", not(feature = "std")))]
 use alloc::{string::String, vec::Vec};
-use core::fmt;
 
-use bacnet_types::error::{DecodingKind, Error};
-use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+use bacnet_types::error::{DecodeError, DecodingKind, Error};
+use bacnet_types::primitives::ObjectIdentifier;
+#[cfg(feature = "alloc")]
+use bacnet_types::primitives::PropertyValue;
 
+#[cfg(feature = "alloc")]
 use super::MAX_FRAMED_ITEMS;
 use crate::primitives;
-use crate::tags::{self, Tag, TagClass};
+use crate::tags::{self, Tag, TagClass, MAX_CONTEXT_NESTING_DEPTH};
 
 // ---------------------------------------------------------------------------
 // Peeking at the next tag
@@ -133,6 +140,7 @@ pub fn next_is_application(data: &[u8], offset: usize, number: u8) -> Result<boo
 /// Whether a closing context tag `tag` starts at `offset`, for walking the
 /// items inside a frame. Unlike [`next_is_context`], running out of data is
 /// an error: the frame never closed.
+#[cfg(feature = "alloc")]
 pub(crate) fn next_is_closing(data: &[u8], offset: usize, tag: u8) -> Result<bool, Error> {
     Ok(tags::decode_tag(data, offset)?.0.is_closing_tag(tag))
 }
@@ -165,21 +173,33 @@ pub fn misplaced_kind(data: &[u8], at: usize, found: &Tag, expected: Option<u8>)
 
 /// Whether a closing tag `number` at `at` closes the innermost frame open
 /// there, found by walking the tags of `data` from its start. A walk that
-/// doesn't land on `at` (contents that aren't tags) says no.
+/// doesn't land on `at` (contents that aren't tags) says no, and so does one
+/// that finds more than [`MAX_CONTEXT_NESTING_DEPTH`] frames open at once.
+/// The depth counts from the start of `data`, the frames around the member's
+/// production included, so well-formed input nested less than that deep in
+/// its own production can still reach past it. Saying no is the safe
+/// answer: the tag is then [`DecodingKind::InvalidTag`] rather than
+/// [`DecodingKind::Missing`], and the input is refused either way.
 fn closes_open_frame(data: &[u8], at: usize, number: u8) -> bool {
-    let mut open = Vec::new();
+    let mut open = [0u8; MAX_CONTEXT_NESTING_DEPTH];
+    let mut depth = 0;
     let mut pos = 0;
     while pos < at {
         let Ok((tag, next)) = tags::decode_tag(data, pos) else {
             return false;
         };
         pos = if tag.is_opening {
-            open.push(tag.number);
+            let Some(slot) = open.get_mut(depth) else {
+                return false;
+            };
+            *slot = tag.number;
+            depth += 1;
             next
         } else if tag.is_closing {
-            if open.pop() != Some(tag.number) {
+            if depth == 0 || open[depth - 1] != tag.number {
                 return false;
             }
+            depth -= 1;
             next
         } else if tag.class == TagClass::Application && tag.number == tags::app_tag::BOOLEAN {
             next
@@ -187,23 +207,52 @@ fn closes_open_frame(data: &[u8], at: usize, number: u8) -> bool {
             next.saturating_add(tag.length as usize)
         };
     }
-    pos == at && open.last() == Some(&number)
+    pos == at && depth > 0 && open[depth - 1] == number
 }
 
 /// The error for the tag `found`, at `offset` in `data`, where a required
-/// member is due, of the kind [`misplaced_kind`] gives.
+/// member is due, of the kind [`misplaced_kind`] gives, described by
+/// `label`. [`misplaced`] gives the same fault as a [`DecodeError`], to
+/// name a context or fill the label's placeholders.
 pub fn misplaced_tag(
     data: &[u8],
     found: &Tag,
     expected: Option<u8>,
     offset: usize,
-    message: impl Into<String>,
+    label: &'static str,
 ) -> Error {
-    Error::decoding_kind(
-        misplaced_kind(data, offset, found, expected),
-        offset,
-        message,
-    )
+    misplaced(data, found, expected, offset, label).into()
+}
+
+/// [`misplaced_tag`]'s fault as a [`DecodeError`], for a caller that adds a
+/// context or values before returning it.
+pub fn misplaced(
+    data: &[u8],
+    found: &Tag,
+    expected: Option<u8>,
+    offset: usize,
+    label: &'static str,
+) -> DecodeError {
+    DecodeError::new(misplaced_kind(data, offset, found, expected), offset, label)
+}
+
+/// The refusal of the tag `found` at `offset` where `what`'s member is due:
+/// context tag `expected`, or for `None` an application-tagged one. `label`
+/// names the member through its one placeholder, which `named` fills: the
+/// context tag's number, or the application tag's.
+#[cold]
+fn misplaced_member(
+    data: &[u8],
+    found: &Tag,
+    expected: Option<u8>,
+    offset: usize,
+    what: &'static str,
+    (label, named): (&'static str, u8),
+) -> Error {
+    DecodeError::new(misplaced_kind(data, offset, found, expected), offset, label)
+        .within(what)
+        .with_value(named.into())
+        .into()
 }
 
 /// The kind of fault the tag `found` is where a frame's closing tag is due:
@@ -219,15 +268,21 @@ pub fn unclosed_kind(found: &Tag) -> DecodingKind {
 
 /// Require an opening context tag `tag` at `offset`; return the offset of its
 /// content.
-pub fn expect_opening(data: &[u8], offset: usize, tag: u8, what: &str) -> Result<usize, Error> {
+pub fn expect_opening(
+    data: &[u8],
+    offset: usize,
+    tag: u8,
+    what: &'static str,
+) -> Result<usize, Error> {
     let (t, pos) = tags::decode_tag(data, offset)?;
     if !t.is_opening_tag(tag) {
-        return Err(misplaced_tag(
+        return Err(misplaced_member(
             data,
             &t,
             Some(tag),
             offset,
-            format!("{what}: expected opening tag [{tag}]"),
+            what,
+            ("expected opening tag [{}]", tag),
         ));
     }
     Ok(pos)
@@ -235,14 +290,20 @@ pub fn expect_opening(data: &[u8], offset: usize, tag: u8, what: &str) -> Result
 
 /// Require a closing context tag `tag` at `offset`; return the offset past it.
 /// Any other tag there is of the kind [`unclosed_kind`] gives.
-pub fn expect_closing(data: &[u8], offset: usize, tag: u8, what: &str) -> Result<usize, Error> {
+pub fn expect_closing(
+    data: &[u8],
+    offset: usize,
+    tag: u8,
+    what: &'static str,
+) -> Result<usize, Error> {
     let (t, pos) = tags::decode_tag(data, offset)?;
     if !t.is_closing_tag(tag) {
-        return Err(Error::decoding_kind(
-            unclosed_kind(&t),
-            offset,
-            format!("{what}: expected closing tag [{tag}]"),
-        ));
+        return Err(
+            DecodeError::new(unclosed_kind(&t), offset, "expected closing tag [{}]")
+                .within(what)
+                .with_value(tag.into())
+                .into(),
+        );
     }
     Ok(pos)
 }
@@ -259,7 +320,7 @@ pub fn decode_ctx_constructed<'a>(
     data: &'a [u8],
     offset: usize,
     tag: u8,
-    what: &str,
+    what: &'static str,
 ) -> Result<(&'a [u8], usize), Error> {
     let content = expect_opening(data, offset, tag, what)?;
     tags::extract_context_value(data, content, tag)
@@ -272,12 +333,13 @@ pub fn decode_ctx_constructed<'a>(
 /// One application element decodes as itself and any other count, none
 /// included, as a [`PropertyValue::List`] (an array written or read whole). A
 /// context-tagged element decodes to [`PropertyValue::ApplicationData`], so
-/// the value re-encodes to the same octets.
+/// the value re-encodes to the same octets. Only with `alloc`.
+#[cfg(feature = "alloc")]
 pub(crate) fn decode_framed_value(
     data: &[u8],
     content: usize,
     tag: u8,
-    what: &str,
+    what: &'static str,
 ) -> Result<(PropertyValue, usize), Error> {
     let (inner, end) = tags::extract_context_value(data, content, tag)?;
     let body = &data[..content + inner.len()];
@@ -285,10 +347,13 @@ pub(crate) fn decode_framed_value(
     let mut offset = content;
     while offset < body.len() {
         if values.len() >= MAX_FRAMED_ITEMS {
-            return Err(Error::overflow(
+            return Err(DecodeError::new(
+                DecodingKind::Overflow,
                 offset,
-                format!("{what}: value exceeds item limit"),
-            ));
+                "value exceeds item limit",
+            )
+            .within(what)
+            .into());
         }
         let (value, next) = primitives::decode_application_value(body, offset)?;
         values.push(value);
@@ -311,7 +376,7 @@ pub(crate) fn decode_framed_value(
 /// `at` is the offset the error reports: `end` itself when `data` is the
 /// whole input, or the frame's own offset in the larger input when `data` is
 /// a frame body sliced out of it (offsets into the slice would mislead).
-pub fn expect_end(data: &[u8], end: usize, at: usize, what: &str) -> Result<(), Error> {
+pub fn expect_end(data: &[u8], end: usize, at: usize, what: &'static str) -> Result<(), Error> {
     if end == data.len() {
         return Ok(());
     }
@@ -319,14 +384,10 @@ pub fn expect_end(data: &[u8], end: usize, at: usize, what: &str) -> Result<(), 
         Ok((tag, _)) if !tag.is_closing => DecodingKind::Trailing,
         _ => DecodingKind::InvalidTag,
     };
-    Err(Error::decoding_kind(
-        kind,
-        at,
-        format!(
-            "{what}: {} trailing byte(s)",
-            data.len().saturating_sub(end)
-        ),
-    ))
+    Err(DecodeError::new(kind, at, "{} trailing byte(s)")
+        .within(what)
+        .with_value(data.len().saturating_sub(end) as u64)
+        .into())
 }
 
 // ---------------------------------------------------------------------------
@@ -340,6 +401,7 @@ pub fn expect_end(data: &[u8], end: usize, at: usize, what: &str) -> Result<(), 
 /// [`tags::decode_tag`] caps a length at 1 MiB and puts `start` inside
 /// `data`, so the end can't overflow; saturating keeps that true for any
 /// caller.
+#[inline]
 pub(crate) fn contents(data: &[u8], start: usize, length: u32) -> Result<(&[u8], usize), Error> {
     let end = usize::try_from(length).map_or(usize::MAX, |length| start.saturating_add(length));
     if end > data.len() {
@@ -349,24 +411,25 @@ pub(crate) fn contents(data: &[u8], start: usize, length: u32) -> Result<(&[u8],
 }
 
 /// Require a primitive context tag `tag` at `offset`; return its header and
-/// the offset of its contents. `kind`, unless empty, names the expected type
-/// in the error.
+/// the offset of its contents. `misplaced` is the refusal's label, its `{}`
+/// the tag number.
+#[inline]
 fn ctx_header(
     data: &[u8],
     offset: usize,
     tag: u8,
-    kind: &str,
-    what: &str,
+    misplaced: &'static str,
+    what: &'static str,
 ) -> Result<(Tag, usize), Error> {
     let (t, start) = tags::decode_tag(data, offset)?;
     if !t.is_context(tag) {
-        let space = if kind.is_empty() { "" } else { " " };
-        return Err(misplaced_tag(
+        return Err(misplaced_member(
             data,
             &t,
             Some(tag),
             offset,
-            format!("{what}: expected context tag [{tag}]{space}{kind}"),
+            what,
+            (misplaced, tag),
         ));
     }
     Ok((t, start))
@@ -374,39 +437,112 @@ fn ctx_header(
 
 /// Require a primitive context tag `tag` at `offset`; return its contents and
 /// the offset past them.
+#[inline]
 pub fn decode_ctx_primitive<'a>(
     data: &'a [u8],
     offset: usize,
     tag: u8,
-    what: &str,
+    what: &'static str,
 ) -> Result<(&'a [u8], usize), Error> {
-    let (t, start) = ctx_header(data, offset, tag, "", what)?;
+    let (t, start) = ctx_header(data, offset, tag, "expected context tag [{}]", what)?;
     contents(data, start, t.length)
 }
 
-/// Require a primitive context tag `tag` at `offset` holding exactly `octets`
-/// contents octets of the type `kind` names (`"Time"`, say, for the error);
-/// return those contents and the offset past them. A header announcing any
-/// other length is [`Error::Decoding`] even when the data also stops early.
+/// A fixed-size primitive type [`decode_ctx_fixed`] reads: how many contents
+/// octets it has, and the labels of its two refusals.
+///
+/// The consts cover the types the shared readers take. A codec with another
+/// one builds its own, its labels in the same form:
+///
+/// ```
+/// use bacnet_encoding::constructed::tagged::{decode_ctx_fixed, Fixed};
+///
+/// const MASK: Fixed = Fixed {
+///     octets: 4,
+///     misplaced: "expected context tag [{}] broadcast mask",
+///     wrong_length: "[{}] broadcast mask has {} contents octets, expected 4",
+/// };
+/// let refused = decode_ctx_fixed(&[0x1B, 255, 255, 0], 0, 1, MASK, "BDT entry").unwrap_err();
+/// assert_eq!(
+///     refused.to_string(),
+///     "decoding error at offset 0: BDT entry: [1] broadcast mask has 3 contents octets, expected 4"
+/// );
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Fixed {
+    /// The contents octets every value of the type has.
+    pub octets: u32,
+    /// The label when another tag stands where the member's is due; its `{}`
+    /// is the member's tag number.
+    pub misplaced: &'static str,
+    /// The label when the member's header announces another length; its two
+    /// `{}` are the tag number and the length announced.
+    pub wrong_length: &'static str,
+}
+
+/// [`Fixed`] for the type `$name` of `$octets` octets.
+macro_rules! fixed {
+    ($name:literal, $octets:literal) => {
+        Fixed {
+            octets: $octets,
+            misplaced: concat!("expected context tag [{}] ", $name),
+            wrong_length: concat!(
+                "[{}] ",
+                $name,
+                " has {} contents octets, expected ",
+                $octets
+            ),
+        }
+    };
+}
+
+impl Fixed {
+    /// A REAL: four octets.
+    pub const REAL: Self = fixed!("REAL", 4);
+    /// A Double: eight octets.
+    pub const DOUBLE: Self = fixed!("Double", 8);
+    /// A BOOLEAN: one octet.
+    pub const BOOLEAN: Self = fixed!("BOOLEAN", 1);
+    /// A Date: four octets.
+    pub const DATE: Self = fixed!("Date", 4);
+    /// A Time: four octets.
+    pub const TIME: Self = fixed!("Time", 4);
+    /// An object identifier: four octets.
+    pub const OBJECT_IDENTIFIER: Self = fixed!("object identifier", 4);
+}
+
+/// Require a primitive context tag `tag` at `offset` holding exactly
+/// `fixed.octets` contents octets of that type; return those contents and the
+/// offset past them. A header announcing any other length is
+/// [`Error::Decoding`] even when the data also stops early.
+#[inline]
 pub fn decode_ctx_fixed<'a>(
     data: &'a [u8],
     offset: usize,
     tag: u8,
-    octets: u32,
-    kind: &str,
-    what: &str,
+    fixed: Fixed,
+    what: &'static str,
 ) -> Result<(&'a [u8], usize), Error> {
-    let (t, start) = ctx_header(data, offset, tag, kind, what)?;
-    if t.length != octets {
-        return Err(Error::decoding(
-            offset,
-            format!(
-                "{what}: [{tag}] {kind} has {} contents octets, expected {octets}",
-                t.length
-            ),
-        ));
+    let (t, start) = ctx_header(data, offset, tag, fixed.misplaced, what)?;
+    if t.length != fixed.octets {
+        return Err(ctx_length_error(offset, tag, fixed, what, t.length));
     }
-    contents(data, start, octets)
+    contents(data, start, fixed.octets)
+}
+
+/// Report a wrong fixed length before attempting to read its contents.
+#[cold]
+fn ctx_length_error(
+    offset: usize,
+    tag: u8,
+    fixed: Fixed,
+    what: &'static str,
+    length: u32,
+) -> Error {
+    DecodeError::new(DecodingKind::InvalidEncoding, offset, fixed.wrong_length)
+        .within(what)
+        .with_values(tag.into(), length.into())
+        .into()
 }
 
 /// Require a primitive context tag `tag` at `offset` holding a REAL.
@@ -414,9 +550,9 @@ pub fn decode_ctx_real(
     data: &[u8],
     offset: usize,
     tag: u8,
-    what: &str,
+    what: &'static str,
 ) -> Result<(f32, usize), Error> {
-    let (octets, end) = decode_ctx_fixed(data, offset, tag, 4, "REAL", what)?;
+    let (octets, end) = decode_ctx_fixed(data, offset, tag, Fixed::REAL, what)?;
     Ok((primitives::decode_real(octets)?, end))
 }
 
@@ -426,67 +562,126 @@ pub fn decode_ctx_boolean(
     data: &[u8],
     offset: usize,
     tag: u8,
-    what: &str,
+    what: &'static str,
 ) -> Result<(bool, usize), Error> {
-    let (octets, end) = decode_ctx_fixed(data, offset, tag, 1, "BOOLEAN", what)?;
+    let (octets, end) = decode_ctx_fixed(data, offset, tag, Fixed::BOOLEAN, what)?;
     match octets[0] {
         0 => Ok((false, end)),
         1 => Ok((true, end)),
-        _ => Err(Error::decoding(
+        _ => Err(DecodeError::new(
+            DecodingKind::InvalidEncoding,
             end - 1,
-            format!("{what}: [{tag}] BOOLEAN contents must be 0 or 1"),
-        )),
+            "[{}] BOOLEAN contents must be 0 or 1",
+        )
+        .within(what)
+        .with_value(tag.into())
+        .into()),
     }
 }
 
 /// Require a primitive context tag `tag` at `offset` holding an object
 /// identifier, which is always four octets.
+#[inline]
 pub fn decode_ctx_object_id(
     data: &[u8],
     offset: usize,
     tag: u8,
-    what: &str,
+    what: &'static str,
 ) -> Result<(ObjectIdentifier, usize), Error> {
-    let (octets, end) = decode_ctx_fixed(data, offset, tag, 4, "object identifier", what)?;
+    let (octets, end) = decode_ctx_fixed(data, offset, tag, Fixed::OBJECT_IDENTIFIER, what)?;
     Ok((ObjectIdentifier::decode(octets)?, end))
 }
 
 /// Require a primitive context tag `tag` at `offset` holding a BIT STRING;
-/// returns its unused-bit count and data octets.
+/// returns its unused-bit count and a copy of its data octets. Only with
+/// `alloc`; [`decode_ctx_bit_string_ref`] borrows the octets.
+#[cfg(feature = "alloc")]
 pub fn decode_ctx_bit_string(
     data: &[u8],
     offset: usize,
     tag: u8,
-    what: &str,
+    what: &'static str,
 ) -> Result<((u8, Vec<u8>), usize), Error> {
-    let (t, start) = ctx_header(data, offset, tag, "BIT STRING", what)?;
+    let ((unused, bits), end) = decode_ctx_bit_string_ref(data, offset, tag, what)?;
+    Ok(((unused, bits.to_vec()), end))
+}
+
+/// Require a primitive context tag `tag` at `offset` holding a BIT STRING;
+/// returns its unused-bit count and data octets, borrowed from `data`.
+pub fn decode_ctx_bit_string_ref<'a>(
+    data: &'a [u8],
+    offset: usize,
+    tag: u8,
+    what: &'static str,
+) -> Result<((u8, &'a [u8]), usize), Error> {
+    let (t, start) = ctx_header(
+        data,
+        offset,
+        tag,
+        "expected context tag [{}] BIT STRING",
+        what,
+    )?;
     let (octets, end) = contents(data, start, t.length)?;
-    Ok((primitives::decode_bit_string(octets)?, end))
+    Ok((primitives::decode_bit_string_ref(octets)?, end))
 }
 
 /// Require a primitive context tag `tag` at `offset` holding an OCTET STRING;
-/// returns a copy of its octets.
+/// returns a copy of its octets. Only with `alloc`;
+/// [`decode_ctx_octet_string_ref`] borrows them.
+#[cfg(feature = "alloc")]
 pub fn decode_ctx_octet_string(
     data: &[u8],
     offset: usize,
     tag: u8,
-    what: &str,
+    what: &'static str,
 ) -> Result<(Vec<u8>, usize), Error> {
-    let (t, start) = ctx_header(data, offset, tag, "OCTET STRING", what)?;
-    let (octets, end) = contents(data, start, t.length)?;
+    let (octets, end) = decode_ctx_octet_string_ref(data, offset, tag, what)?;
     Ok((octets.to_vec(), end))
 }
 
+/// Require a primitive context tag `tag` at `offset` holding an OCTET STRING;
+/// returns its octets, borrowed from `data`.
+pub fn decode_ctx_octet_string_ref<'a>(
+    data: &'a [u8],
+    offset: usize,
+    tag: u8,
+    what: &'static str,
+) -> Result<(&'a [u8], usize), Error> {
+    let (t, start) = ctx_header(
+        data,
+        offset,
+        tag,
+        "expected context tag [{}] OCTET STRING",
+        what,
+    )?;
+    contents(data, start, t.length)
+}
+
 /// Require a primitive context tag `tag` at `offset` holding a
-/// CharacterString.
+/// CharacterString. Only with `alloc`; [`decode_ctx_character_string_ref`]
+/// reads it without converting it.
+#[cfg(feature = "alloc")]
 pub fn decode_ctx_character_string(
     data: &[u8],
     offset: usize,
     tag: u8,
-    what: &str,
+    what: &'static str,
 ) -> Result<(String, usize), Error> {
     let (octets, end) = decode_ctx_primitive(data, offset, tag, what)?;
     Ok((primitives::decode_character_string(octets)?, end))
+}
+
+/// Require a primitive context tag `tag` at `offset` holding a
+/// CharacterString; returns it borrowed from `data`, its character set
+/// checked (see [`primitives::CharacterStringRef::decode`]).
+pub fn decode_ctx_character_string_ref<'a>(
+    data: &'a [u8],
+    offset: usize,
+    tag: u8,
+    what: &'static str,
+) -> Result<(primitives::CharacterStringRef<'a>, usize), Error> {
+    let (octets, end) = decode_ctx_primitive(data, offset, tag, what)?;
+    Ok((primitives::CharacterStringRef::decode(octets)?, end))
 }
 
 /// Read the optional member under primitive context tag `tag` with `decode`
@@ -497,8 +692,8 @@ pub fn decode_optional_ctx<'a, T>(
     data: &'a [u8],
     offset: usize,
     tag: u8,
-    what: &str,
-    decode: impl FnOnce(&'a [u8], usize, u8, &str) -> Result<(T, usize), Error>,
+    what: &'static str,
+    decode: impl FnOnce(&'a [u8], usize, u8, &'static str) -> Result<(T, usize), Error>,
 ) -> Result<(Option<T>, usize), Error> {
     if !next_is_context(data, offset, tag)? {
         return Ok((None, offset));
@@ -516,6 +711,27 @@ pub fn decode_optional_ctx<'a, T>(
 pub trait UnsignedWidth: sealed::Sealed + TryFrom<u64> {
     /// The type's name, for the error when a value doesn't fit it.
     const NAME: &'static str;
+    /// The label when a context-tagged value doesn't fit: its two `{}` are
+    /// the tag number and the value.
+    const CONTEXT_EXCEEDS: &'static str;
+    /// The label when an application-tagged Unsigned doesn't fit.
+    const UNSIGNED_EXCEEDS: &'static str;
+    /// The label when an application-tagged ENUMERATED doesn't fit.
+    const ENUMERATED_EXCEEDS: &'static str;
+}
+
+/// [`UnsignedWidth`] for `$ty`.
+macro_rules! width {
+    ($ty:ident) => {
+        impl UnsignedWidth for $ty {
+            const NAME: &'static str = stringify!($ty);
+            const CONTEXT_EXCEEDS: &'static str =
+                concat!("[{}] value {} exceeds ", stringify!($ty));
+            const UNSIGNED_EXCEEDS: &'static str = concat!("Unsigned exceeds ", stringify!($ty));
+            const ENUMERATED_EXCEEDS: &'static str =
+                concat!("ENUMERATED exceeds ", stringify!($ty));
+        }
+    };
 }
 
 mod sealed {
@@ -529,29 +745,23 @@ mod sealed {
     impl Sealed for u64 {}
 }
 
-impl UnsignedWidth for u8 {
-    const NAME: &'static str = "u8";
-}
-
-impl UnsignedWidth for u16 {
-    const NAME: &'static str = "u16";
-}
-
-impl UnsignedWidth for u32 {
-    const NAME: &'static str = "u32";
-}
-
-impl UnsignedWidth for u64 {
-    const NAME: &'static str = "u64";
-}
+width!(u8);
+width!(u16);
+width!(u32);
+width!(u64);
 
 /// Narrow `value`, read from context tag `tag` at `offset`, to `T`.
-fn narrow<T: UnsignedWidth>(value: u64, offset: usize, tag: u8, what: &str) -> Result<T, Error> {
+fn narrow<T: UnsignedWidth>(
+    value: u64,
+    offset: usize,
+    tag: u8,
+    what: &'static str,
+) -> Result<T, Error> {
     T::try_from(value).map_err(|_| {
-        Error::out_of_range(
-            offset,
-            format!("{what}: [{tag}] value {value} exceeds {}", T::NAME),
-        )
+        DecodeError::new(DecodingKind::OutOfRange, offset, T::CONTEXT_EXCEEDS)
+            .within(what)
+            .with_values(tag.into(), value)
+            .into()
     })
 }
 
@@ -559,11 +769,12 @@ fn narrow<T: UnsignedWidth>(value: u64, offset: usize, tag: u8, what: &str) -> R
 /// that fits `T`. An ENUMERATED's contents are encoded the same way, so this
 /// reads those too. Leading zero octets are accepted, as
 /// [`primitives::decode_unsigned`] accepts them.
+#[inline]
 pub fn decode_ctx_unsigned<T: UnsignedWidth>(
     data: &[u8],
     offset: usize,
     tag: u8,
-    what: &str,
+    what: &'static str,
 ) -> Result<(T, usize), Error> {
     let (octets, end) = decode_ctx_primitive(data, offset, tag, what)?;
     let value = primitives::decode_unsigned(octets)?;
@@ -577,7 +788,7 @@ pub fn decode_ctx_canonical_unsigned<T: UnsignedWidth>(
     data: &[u8],
     offset: usize,
     tag: u8,
-    what: &str,
+    what: &'static str,
 ) -> Result<(T, usize), Error> {
     let (octets, end) = decode_ctx_primitive(data, offset, tag, what)?;
     let value = decode_canonical_unsigned(octets, offset, what)?;
@@ -587,21 +798,29 @@ pub fn decode_ctx_canonical_unsigned<T: UnsignedWidth>(
 /// The value of Unsigned or ENUMERATED contents in their shortest encoding:
 /// one to eight octets, and no leading zero octet unless it is the only one.
 /// Errors report `offset`, the field's tag.
-pub fn decode_canonical_unsigned(octets: &[u8], offset: usize, what: &str) -> Result<u64, Error> {
+pub fn decode_canonical_unsigned(
+    octets: &[u8],
+    offset: usize,
+    what: &'static str,
+) -> Result<u64, Error> {
     if octets.is_empty() || octets.len() > 8 {
-        return Err(Error::decoding(
+        return Err(DecodeError::new(
+            DecodingKind::InvalidEncoding,
             offset,
-            format!(
-                "{what}: has {} contents octets, expected one to eight",
-                octets.len()
-            ),
-        ));
+            "has {} contents octets, expected one to eight",
+        )
+        .within(what)
+        .with_value(octets.len() as u64)
+        .into());
     }
     if octets.len() > 1 && octets[0] == 0 {
-        return Err(Error::decoding(
+        return Err(DecodeError::new(
+            DecodingKind::InvalidEncoding,
             offset,
-            format!("{what}: must use the shortest Unsigned/Enumerated encoding"),
-        ));
+            "must use the shortest Unsigned/Enumerated encoding",
+        )
+        .within(what)
+        .into());
     }
     primitives::decode_unsigned(octets)
 }
@@ -610,26 +829,6 @@ pub fn decode_canonical_unsigned(octets: &[u8], offset: usize, what: &str) -> Re
 // Application-tagged items
 // ---------------------------------------------------------------------------
 
-/// The name an error gives the type of application tag `number`.
-fn app_kind(number: u8) -> &'static str {
-    match number {
-        tags::app_tag::NULL => "NULL",
-        tags::app_tag::BOOLEAN => "BOOLEAN",
-        tags::app_tag::UNSIGNED => "Unsigned",
-        tags::app_tag::SIGNED => "INTEGER",
-        tags::app_tag::REAL => "REAL",
-        tags::app_tag::DOUBLE => "Double",
-        tags::app_tag::OCTET_STRING => "OCTET STRING",
-        tags::app_tag::CHARACTER_STRING => "CharacterString",
-        tags::app_tag::BIT_STRING => "BIT STRING",
-        tags::app_tag::ENUMERATED => "ENUMERATED",
-        tags::app_tag::DATE => "Date",
-        tags::app_tag::TIME => "Time",
-        tags::app_tag::OBJECT_IDENTIFIER => "BACnetObjectIdentifier",
-        _ => "value of a reserved type",
-    }
-}
-
 /// Require an application tag `number` (one of [`tags::app_tag`]) at
 /// `offset`; return its contents and the offset past them.
 ///
@@ -637,36 +836,26 @@ fn app_kind(number: u8) -> &'static str {
 /// value is the tag's length field, so it has no contents to return (see
 /// [`Tag::is_boolean_true`]).
 ///
-/// `what` may be any [`Display`](fmt::Display), not only a `&str`, for a
-/// label that carries a value, such as a list element's index: pass
-/// [`format_args!`], and the label is formatted only if an error names it,
-/// so a read that succeeds builds none (#1645).
+/// The label is static, so a read that succeeds builds none (#1645), and a
+/// refusal builds its text only when displayed (#1646).
 ///
 /// ```
 /// use bacnet_encoding::constructed::tagged::decode_app_primitive;
 /// use bacnet_encoding::tags::app_tag;
 ///
-/// // Two records, the second an Unsigned rather than an OCTET STRING.
-/// let data = [0x61, 0xAB, 0x21, 0x01];
-/// let mut offset = 0;
-/// let mut error = None;
-/// for i in 0..2 {
-///     match decode_app_primitive(&data, offset, app_tag::OCTET_STRING, format_args!("record {i}")) {
-///         Ok((_, end)) => offset = end,
-///         Err(e) => error = Some(e.to_string()),
-///     }
-/// }
+/// // A record that is an Unsigned rather than an OCTET STRING.
+/// let error = decode_app_primitive(&[0x21, 0x01], 0, app_tag::OCTET_STRING, "record").unwrap_err();
 /// assert_eq!(
-///     error.as_deref(),
-///     Some("decoding error at offset 2: record 1: expected application-tagged OCTET STRING"),
+///     error.to_string(),
+///     "decoding error at offset 0: record: expected application-tagged OCTET STRING",
 /// );
 /// ```
-pub fn decode_app_primitive(
-    data: &[u8],
+pub fn decode_app_primitive<'a>(
+    data: &'a [u8],
     offset: usize,
     number: u8,
-    what: impl fmt::Display,
-) -> Result<(&[u8], usize), Error> {
+    what: &'static str,
+) -> Result<(&'a [u8], usize), Error> {
     let (t, start) = app_header(data, offset, number, what)?;
     contents(data, start, t.length)
 }
@@ -678,22 +867,26 @@ fn app_header(
     data: &[u8],
     offset: usize,
     number: u8,
-    what: impl fmt::Display,
+    what: &'static str,
 ) -> Result<(Tag, usize), Error> {
     if number == tags::app_tag::BOOLEAN {
-        return Err(Error::decoding(
+        return Err(DecodeError::new(
+            DecodingKind::InvalidEncoding,
             offset,
-            format!("{what}: an application-tagged BOOLEAN has no contents to read"),
-        ));
+            "an application-tagged BOOLEAN has no contents to read",
+        )
+        .within(what)
+        .into());
     }
     let (t, start) = tags::decode_tag(data, offset)?;
     if t.class != TagClass::Application || t.number != number {
-        return Err(misplaced_tag(
+        return Err(misplaced_member(
             data,
             &t,
             None,
             offset,
-            format!("{what}: expected application-tagged {}", app_kind(number)),
+            what,
+            ("expected application-tagged {t}", number),
         ));
     }
     Ok((t, start))
@@ -708,18 +901,21 @@ pub fn decode_app_fixed<'a>(
     offset: usize,
     number: u8,
     octets: u32,
-    what: &str,
+    what: &'static str,
 ) -> Result<(&'a [u8], usize), Error> {
     let (t, start) = app_header(data, offset, number, what)?;
     if t.length != octets {
-        return Err(Error::decoding(
-            offset,
-            format!(
-                "{what}: {} has {} contents octets, expected {octets}",
-                app_kind(number),
-                t.length
-            ),
-        ));
+        let refused = match primitives::fixed_length_label(number) {
+            Some((label, _)) => DecodeError::new(DecodingKind::InvalidEncoding, offset, label)
+                .with_value(t.length.into()),
+            None => DecodeError::new(
+                DecodingKind::InvalidEncoding,
+                offset,
+                "application value has {} contents octets, expected {}",
+            )
+            .with_values(t.length.into(), octets.into()),
+        };
+        return Err(refused.within(what).into());
     }
     contents(data, start, octets)
 }
@@ -729,7 +925,7 @@ pub fn decode_app_fixed<'a>(
 pub fn decode_app_object_id(
     data: &[u8],
     offset: usize,
-    what: &str,
+    what: &'static str,
 ) -> Result<(ObjectIdentifier, usize), Error> {
     let (octets, end) = decode_app_fixed(data, offset, tags::app_tag::OBJECT_IDENTIFIER, 4, what)?;
     Ok((ObjectIdentifier::decode(octets)?, end))
@@ -740,21 +936,23 @@ pub fn decode_app_object_id(
 pub fn decode_app_unsigned<T: UnsignedWidth>(
     data: &[u8],
     offset: usize,
-    what: &str,
+    what: &'static str,
 ) -> Result<(T, usize), Error> {
     let (octets, end) = decode_app_primitive(data, offset, tags::app_tag::UNSIGNED, what)?;
     let value = primitives::decode_unsigned(octets)?;
     Ok((
-        narrow_app(value, end - octets.len(), "Unsigned", what)?,
+        narrow_app(value, end - octets.len(), T::UNSIGNED_EXCEEDS, what)?,
         end,
     ))
 }
 
 /// Decode one application-tagged BIT STRING (`SEQUENCE OF BIT STRING` item).
+/// Only with `alloc`: it copies the data octets.
+#[cfg(feature = "alloc")]
 pub fn decode_app_bit_string(
     data: &[u8],
     offset: usize,
-    what: &str,
+    what: &'static str,
 ) -> Result<((u8, Vec<u8>), usize), Error> {
     let (octets, end) = decode_app_primitive(data, offset, tags::app_tag::BIT_STRING, what)?;
     Ok((primitives::decode_bit_string(octets)?, end))
@@ -765,12 +963,12 @@ pub fn decode_app_bit_string(
 pub fn decode_app_enumerated<T: UnsignedWidth>(
     data: &[u8],
     offset: usize,
-    what: &str,
+    what: &'static str,
 ) -> Result<(T, usize), Error> {
     let (octets, end) = decode_app_primitive(data, offset, tags::app_tag::ENUMERATED, what)?;
     let value = primitives::decode_unsigned(octets)?;
     Ok((
-        narrow_app(value, end - octets.len(), "ENUMERATED", what)?,
+        narrow_app(value, end - octets.len(), T::ENUMERATED_EXCEEDS, what)?,
         end,
     ))
 }
@@ -778,41 +976,58 @@ pub fn decode_app_enumerated<T: UnsignedWidth>(
 /// [`decode_app_enumerated`] for a codec that must re-encode what it read
 /// octet for octet: the contents must also be the shortest encoding (see
 /// [`decode_canonical_unsigned`]).
+#[cfg(feature = "alloc")]
 pub(crate) fn decode_app_canonical_enumerated<T: UnsignedWidth>(
     data: &[u8],
     offset: usize,
-    what: &str,
+    what: &'static str,
 ) -> Result<(T, usize), Error> {
     let (octets, end) = decode_app_primitive(data, offset, tags::app_tag::ENUMERATED, what)?;
     let value = decode_canonical_unsigned(octets, offset, what)?;
     Ok((
-        narrow_app(value, end - octets.len(), "ENUMERATED", what)?,
+        narrow_app(value, end - octets.len(), T::ENUMERATED_EXCEEDS, what)?,
         end,
     ))
 }
 
-/// Narrow an application-tagged `kind` value whose contents start at
-/// `contents` to `T`.
+/// Narrow an application-tagged value whose contents start at `contents` to
+/// `T`, `label` naming the refusal.
 fn narrow_app<T: UnsignedWidth>(
     value: u64,
     contents: usize,
-    kind: &str,
-    what: &str,
+    label: &'static str,
+    what: &'static str,
 ) -> Result<T, Error> {
-    T::try_from(value)
-        .map_err(|_| Error::out_of_range(contents, format!("{what}: {kind} exceeds {}", T::NAME)))
+    T::try_from(value).map_err(|_| {
+        DecodeError::new(DecodingKind::OutOfRange, contents, label)
+            .within(what)
+            .into()
+    })
 }
 
-/// Decode one application-tagged CharacterString.
+/// Decode one application-tagged CharacterString. Only with `alloc`;
+/// [`decode_app_character_string_ref`] reads it without converting it.
+#[cfg(feature = "alloc")]
 pub fn decode_app_character_string(
     data: &[u8],
     offset: usize,
-    what: &str,
+    what: &'static str,
 ) -> Result<(String, usize), Error> {
     let (octets, end) = decode_app_primitive(data, offset, tags::app_tag::CHARACTER_STRING, what)?;
     Ok((primitives::decode_character_string(octets)?, end))
 }
 
-#[cfg(test)]
+/// Decode one application-tagged CharacterString, borrowed from `data`, its
+/// character set checked (see [`primitives::CharacterStringRef::decode`]).
+pub fn decode_app_character_string_ref<'a>(
+    data: &'a [u8],
+    offset: usize,
+    what: &'static str,
+) -> Result<(primitives::CharacterStringRef<'a>, usize), Error> {
+    let (octets, end) = decode_app_primitive(data, offset, tags::app_tag::CHARACTER_STRING, what)?;
+    Ok((primitives::CharacterStringRef::decode(octets)?, end))
+}
+
+#[cfg(all(test, feature = "alloc"))]
 #[path = "tagged_frame_tests.rs"]
 mod frame_tests;

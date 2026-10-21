@@ -126,8 +126,8 @@ impl BACnetObject for ObservedObject {
             p if p == PropertyIdentifier::PRESENT_VALUE => Ok(self.value.clone()),
             p if p == PropertyIdentifier::RELIABILITY => {
                 self.reliability.clone().ok_or(Error::Protocol {
-                    class: ErrorClass::PROPERTY.to_raw() as u32,
-                    code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+                    class: ErrorClass::PROPERTY,
+                    code: ErrorCode::UNKNOWN_PROPERTY,
                 })
             }
             p if p == PropertyIdentifier::STATUS_FLAGS => self
@@ -137,12 +137,12 @@ impl BACnetObject for ObservedObject {
                     data: vec![status_flags],
                 })
                 .ok_or(Error::Protocol {
-                    class: ErrorClass::PROPERTY.to_raw() as u32,
-                    code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+                    class: ErrorClass::PROPERTY,
+                    code: ErrorCode::UNKNOWN_PROPERTY,
                 }),
             _ => Err(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+                class: ErrorClass::PROPERTY,
+                code: ErrorCode::UNKNOWN_PROPERTY,
             }),
         }
     }
@@ -164,8 +164,8 @@ impl BACnetObject for ObservedObject {
             }
             _ => {
                 return Err(Error::Protocol {
-                    class: ErrorClass::PROPERTY.to_raw() as u32,
-                    code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
+                    class: ErrorClass::PROPERTY,
+                    code: ErrorCode::WRITE_ACCESS_DENIED,
                 });
             }
         }
@@ -217,8 +217,8 @@ pub(super) fn out_of_range_parameters(time_delay: u32) -> BACnetEventParameter {
 pub(super) fn add_server_context(db: &mut ObjectDatabase, recipients: bool) {
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
-            instance: 1,
-            name: "Event Enrollment Device".into(),
+            identity: bacnet_objects::DeviceIdentity::default()
+                .with_name("Event Enrollment Device"),
             ..DeviceConfig::default()
         })
         .unwrap(),

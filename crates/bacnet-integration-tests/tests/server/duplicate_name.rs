@@ -38,11 +38,7 @@ fn refusal<T: std::fmt::Debug>(
         }) => (class, code, Some(*detail)),
         other => panic!("expected an error PDU, got {other:?}"),
     };
-    (
-        ErrorClass::from_raw(class as u16),
-        ErrorCode::from_raw(code as u16),
-        detail,
-    )
+    (class, code, detail)
 }
 
 /// WriteProperty, WritePropertyMultiple and a CreateObject initial value each

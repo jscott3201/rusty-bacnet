@@ -89,6 +89,7 @@ async fn receive_on(
         destination: IpAddr::V4(destination),
         arrival_index: None,
         os_group_delivery,
+        arrival_stamp: None,
     };
     handle_datagram(&data, &received, arrival, local, ctx).await;
     rx.try_recv().ok()
@@ -259,6 +260,7 @@ async fn a_listener_keeps_only_broadcasts_from_its_own_interface() {
             destination: IpAddr::V4(SUBNET_BROADCAST),
             arrival_index: index,
             os_group_delivery: None,
+            arrival_stamp: None,
         };
         handle_datagram(&data, &received, arrival, &local, &ctx).await;
         handed_up.push(rx.try_recv().is_ok());

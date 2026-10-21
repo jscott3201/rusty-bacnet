@@ -1,6 +1,6 @@
 [package]
 name = "firmware-link"
-description = "Firmware link test and size budget for the MS/TP, B/IP, router and APDU stacks"
+description = "Firmware link test and size budget for the MS/TP, B/IP, router, device and APDU stacks"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -50,6 +50,12 @@ path = "src/bin/router.rs"
 test = false
 bench = false
 
+[[bin]]
+name = "device"
+path = "src/bin/device.rs"
+test = false
+bench = false
+
 # Named for its scenario, not its feature: a crate named `alloc` would share
 # the sysroot crate's name in the size check's per-crate list.
 [[bin]]
@@ -65,7 +71,8 @@ path = "tests/apdu.rs"
 required-features = ["alloc"]
 
 # `alloc`: the apdu image and its scenario, which link bacnet-encoding and
-# bacnet-services with `alloc`, and on bare-metal targets
+# bacnet-services with `alloc` (the device image links them without it),
+# and on bare-metal targets
 # the image's allocator and critical section, and the atomics backend where
 # the target has no compare-and-swap. On by default, so host builds, clippy,
 # rustdoc and tests cover it. The other images build without it
@@ -74,9 +81,9 @@ required-features = ["alloc"]
 [features]
 default = ["alloc"]
 alloc = [
-    "dep:bacnet-types",
-    "dep:bacnet-encoding",
-    "dep:bacnet-services",
+    "bacnet-types/alloc",
+    "bacnet-encoding/alloc",
+    "bacnet-services/alloc",
     "dep:bytes",
     "dep:embedded-alloc",
     "dep:portable-atomic",
@@ -107,9 +114,11 @@ board-sifive-e = ["emulate"]
 
 # Default features, so no allocator, plus the BVLL codec's heapless sink
 # and the router core's B/IP and MS/TP glue, which need neither std nor an
-# allocator. The MS/TP core's HeaplessQueues need no feature, and
-# bacnet-bip-core has none. The alloc stack is `no_std` with `alloc`, as
-# the libraries document.
+# allocator. The MS/TP core's FixedQueues need no feature, and
+# bacnet-bip-core has none. bacnet-types, bacnet-encoding and
+# bacnet-services without default features are their allocation-free
+# profile (#1614), which the device image links; the `alloc` feature turns
+# on their `alloc` profile for the apdu image.
 [dependencies]
 bacnet-mstp-codec = { workspace = true }
 bacnet-mstp-core = { workspace = true }
@@ -117,9 +126,10 @@ bacnet-bip-codec = { workspace = true, features = ["heapless"] }
 bacnet-bip-core = { workspace = true }
 bacnet-router-core = { workspace = true, features = ["bip", "mstp"] }
 heapless = { workspace = true }
-bacnet-types = { workspace = true, features = ["alloc"], optional = true }
-bacnet-encoding = { workspace = true, features = ["alloc"], optional = true }
-bacnet-services = { workspace = true, features = ["alloc"], optional = true }
+bacnet-npdu = { workspace = true }
+bacnet-types = { workspace = true }
+bacnet-encoding = { workspace = true }
+bacnet-services = { workspace = true }
 bytes = { workspace = true, optional = true }
 
 # The host test runs the alloc scenario in the image's allocator, a

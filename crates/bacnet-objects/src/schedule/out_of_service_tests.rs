@@ -83,8 +83,8 @@ fn owed(value: PropertyValue) -> Option<ScheduleWrite> {
 fn assert_code(result: Result<(), Error>, code: ErrorCode, what: &str) {
     match result {
         Err(Error::Protocol { class, code: c }) => {
-            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32, "{what}");
-            assert_eq!(c, code.to_raw() as u32, "{what}: expected {code:?}");
+            assert_eq!(class, ErrorClass::PROPERTY, "{what}");
+            assert_eq!(c, code, "{what}: expected {code:?}");
         }
         other => panic!("{what}: expected {code:?}, got {other:?}"),
     }

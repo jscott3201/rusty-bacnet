@@ -113,18 +113,8 @@ macro_rules! assert_seeded_event_history {
             for index in [4, u32::MAX] {
                 match object.read_property(property, Some(index)).unwrap_err() {
                     Error::Protocol { class, code } => {
-                        assert_eq!(
-                            class,
-                            ErrorClass::PROPERTY.to_raw() as u32,
-                            "{} class",
-                            $label
-                        );
-                        assert_eq!(
-                            code,
-                            ErrorCode::INVALID_ARRAY_INDEX.to_raw() as u32,
-                            "{} code",
-                            $label
-                        );
+                        assert_eq!(class, ErrorClass::PROPERTY, "{} class", $label);
+                        assert_eq!(code, ErrorCode::INVALID_ARRAY_INDEX, "{} code", $label);
                     }
                     other => panic!("{} expected INVALID_ARRAY_INDEX, got {other:?}", $label),
                 }
@@ -136,15 +126,15 @@ macro_rules! assert_seeded_event_history {
 #[test]
 fn analog_objects_delegate_seeded_event_history_reads() {
     assert_seeded_event_history!(
-        AnalogInputObject::new(1, "AI-1", 62).unwrap(),
+        AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
         "Analog Input"
     );
     assert_seeded_event_history!(
-        AnalogOutputObject::new(1, "AO-1", 62).unwrap(),
+        AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
         "Analog Output"
     );
     assert_seeded_event_history!(
-        AnalogValueObject::new(1, "AV-1", 62).unwrap(),
+        AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
         "Analog Value"
     );
 }

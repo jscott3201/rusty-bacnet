@@ -62,8 +62,7 @@ fn active_cov_subscriptions_low_level_handlers_read_standalone_empty_list() {
     let mut db = ObjectDatabase::new();
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
-            instance: 1,
-            name: "COV Device".into(),
+            identity: bacnet_objects::DeviceIdentity::default().with_name("COV Device"),
             ..Default::default()
         })
         .unwrap(),
@@ -141,8 +140,8 @@ fn read_property_handler_rejects_multistate_event_time_stamps_out_of_bounds_inde
     let mut ack_buf = BytesMut::new();
     match handle_read_property(&db, &buf, &mut ack_buf).unwrap_err() {
         Error::Protocol { class, code } => {
-            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
-            assert_eq!(code, ErrorCode::INVALID_ARRAY_INDEX.to_raw() as u32);
+            assert_eq!(class, ErrorClass::PROPERTY);
+            assert_eq!(code, ErrorCode::INVALID_ARRAY_INDEX);
         }
         other => panic!("expected Protocol error, got: {other:?}"),
     }

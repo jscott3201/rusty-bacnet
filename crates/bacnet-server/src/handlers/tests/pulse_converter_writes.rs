@@ -2,10 +2,11 @@ use super::*;
 use bacnet_objects::accumulator::PulseConverterObject;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleRequest};
+use bacnet_types::enums::EngineeringUnits;
 
 fn pulse_converter_db() -> (ObjectDatabase, ObjectIdentifier) {
     let mut db = ObjectDatabase::new();
-    let object = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+    let object = PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let oid = object.object_identifier();
     db.add(Box::new(object)).unwrap();
     (db, oid)
@@ -62,8 +63,8 @@ fn write_multiple_wire(
 fn assert_write_access_denied<T>(result: Result<T, Error>) {
     match result {
         Err(Error::Protocol { class, code }) => {
-            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
-            assert_eq!(code, ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32);
+            assert_eq!(class, ErrorClass::PROPERTY);
+            assert_eq!(code, ErrorCode::WRITE_ACCESS_DENIED);
         }
         Err(other) => panic!("expected PROPERTY/WRITE_ACCESS_DENIED, got {other:?}"),
         Ok(_) => panic!("expected PROPERTY/WRITE_ACCESS_DENIED, got success"),
@@ -184,7 +185,8 @@ fn write_property_multiple_later_failure_keeps_present_value_and_oos_prefix() {
 /// A Pulse Converter holding `pulses`, in a database with a Device clock.
 fn clocked_pulse_converter_db(pulses: u64) -> (ObjectDatabase, ObjectIdentifier) {
     let mut db = crate::server::clocked_test_database();
-    let mut object = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+    let mut object =
+        PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     object.add_pulses(pulses).unwrap();
     let oid = object.object_identifier();
     db.add(Box::new(object)).unwrap();
@@ -275,8 +277,8 @@ fn write_property_adjust_value_past_zero_is_value_out_of_range_and_atomic() {
             PropertyValue::Real(adjust),
         ) {
             Err(Error::Protocol { class, code }) => {
-                assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
-                assert_eq!(code, ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32);
+                assert_eq!(class, ErrorClass::PROPERTY);
+                assert_eq!(code, ErrorCode::VALUE_OUT_OF_RANGE);
             }
             other => panic!("{adjust}: expected VALUE_OUT_OF_RANGE, got {other:?}"),
         }

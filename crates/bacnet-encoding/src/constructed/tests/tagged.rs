@@ -11,9 +11,7 @@ const W: &str = "Thing";
 /// The offset and message of a decode error, failing on any other result.
 fn decoding<T: std::fmt::Debug>(result: Result<T, Error>) -> (usize, String) {
     match result {
-        Err(Error::Decoding {
-            offset, message, ..
-        }) => (offset, message),
+        Err(Error::Decoding(error)) => (error.offset, error.message().to_string()),
         other => panic!("expected a decoding error, got {other:?}"),
     }
 }
@@ -350,7 +348,7 @@ fn an_application_peek_matches_only_its_own_type() {
     // A reserved application length is a malformed tag, not a mismatch.
     assert!(matches!(
         next_is_application(&[0x26, 0x01], 0, 2),
-        Err(Error::Decoding { .. })
+        Err(Error::Decoding(_))
     ));
 }
 
@@ -500,7 +498,7 @@ fn an_application_boolean_has_no_contents_to_read() {
 fn fixed_size_contents_check_their_length_first() {
     // A `[3]` Time with its four octets.
     assert_eq!(
-        decode_ctx_fixed(&[0x3C, 0x0C, 0x00, 0x00, 0x00], 0, 3, 4, "Time", W).unwrap(),
+        decode_ctx_fixed(&[0x3C, 0x0C, 0x00, 0x00, 0x00], 0, 3, Fixed::TIME, W).unwrap(),
         (&[0x0C, 0x00, 0x00, 0x00][..], 5)
     );
     // A header announcing five octets is the wrong length, even with three
@@ -510,8 +508,7 @@ fn fixed_size_contents_check_their_length_first() {
             &[0x3D, 0x05, 0x0C, 0x00, 0x00],
             0,
             3,
-            4,
-            "Time",
+            Fixed::TIME,
             W
         )),
         (
@@ -524,14 +521,13 @@ fn fixed_size_contents_check_their_length_first() {
             &[0x3C, 0x0C, 0x00, 0x00],
             0,
             3,
-            4,
-            "Time",
+            Fixed::TIME,
             W
         )),
         (5, 4)
     );
     assert_eq!(
-        decoding(decode_ctx_fixed(&[0x2C, 0, 0, 0, 0], 0, 3, 4, "Time", W)),
+        decoding(decode_ctx_fixed(&[0x2C, 0, 0, 0, 0], 0, 3, Fixed::TIME, W)),
         (0, "Thing: expected context tag [3] Time".into())
     );
     // A REAL is read the same way.
@@ -639,14 +635,14 @@ fn fixed_size_application_items_check_their_length_first() {
         decoding(decode_app_object_id(&[0xC3, 0x02, 0x00, 0x00], 0, W)),
         (
             0,
-            "Thing: BACnetObjectIdentifier has 3 contents octets, expected 4".into()
+            "Thing: application BACnetObjectIdentifier has 3 contents octets, expected 4".into()
         )
     );
     assert_eq!(
         decoding(decode_app_object_id(&[0xC5, 0x05, 0x02, 0x00], 0, W)),
         (
             0,
-            "Thing: BACnetObjectIdentifier has 5 contents octets, expected 4".into()
+            "Thing: application BACnetObjectIdentifier has 5 contents octets, expected 4".into()
         )
     );
     // Four announced and fewer present is a short buffer.
@@ -674,7 +670,10 @@ fn fixed_size_application_items_check_their_length_first() {
     );
     assert_eq!(
         decoding(decode_app_fixed(&[0xA3, 0x7E, 0x0A, 0x03], 0, 10, 4, W)),
-        (0, "Thing: Date has 3 contents octets, expected 4".into())
+        (
+            0,
+            "Thing: application Date has 3 contents octets, expected 4".into()
+        )
     );
     assert_eq!(
         decoding(decode_app_fixed(&[0x11], 0, 1, 1, W)),
@@ -683,4 +682,26 @@ fn fixed_size_application_items_check_their_length_first() {
             "Thing: an application-tagged BOOLEAN has no contents to read".into()
         )
     );
+}
+
+/// A closing `[0]` after `depth` opening `[0]`s: whether it closes an open
+/// frame, as `misplaced_kind` judges it. The walk keeps 32 frames; past that
+/// it says no, so the tag is an invalid one rather than a missing member,
+/// which still refuses the input, and nothing panics.
+#[test]
+fn a_frame_walk_past_its_depth_answers_safely() {
+    use crate::tags::{decode_tag, MAX_CONTEXT_NESTING_DEPTH};
+    use bacnet_types::error::DecodingKind;
+
+    let kind_at = |depth: usize| {
+        let mut data = std::vec![0x0E; depth];
+        data.push(0x0F);
+        let (closing, _) = decode_tag(&data, depth).unwrap();
+        misplaced_kind(&data, depth, &closing, Some(0))
+    };
+    assert_eq!(MAX_CONTEXT_NESTING_DEPTH, 32);
+    assert_eq!(kind_at(1), DecodingKind::Missing);
+    assert_eq!(kind_at(32), DecodingKind::Missing);
+    assert_eq!(kind_at(33), DecodingKind::InvalidTag);
+    assert_eq!(kind_at(300), DecodingKind::InvalidTag);
 }

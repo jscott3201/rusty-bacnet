@@ -11,7 +11,7 @@
 
 use bacnet_encoding::{primitives, tags};
 use bacnet_types::enums::{EventState, NotifyType};
-use bacnet_types::error::Error;
+use bacnet_types::error::{DecodeError, DecodingKind, Error};
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier};
 use bytes::BytesMut;
 

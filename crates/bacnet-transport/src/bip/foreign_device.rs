@@ -8,7 +8,8 @@ use bacnet_types::error::Error;
 use super::BipTransport;
 
 /// How many broadcasts a foreign device holds while the first registration
-/// attempt after each start is outstanding (#1622): enough for what a device
+/// attempt after each start, or after a move to another BBMD (#1825), is
+/// outstanding (#1622): enough for what a device
 /// or router announces at start, such as I-Am and I-Am-Router-To-Network.
 /// They go, in order, once that attempt succeeds or goes unanswered, and are
 /// dropped if the BBMD refuses it; one more is refused with an error.
@@ -16,7 +17,7 @@ pub(super) const HELD_BROADCASTS: u16 = 16;
 
 /// Configuration for automatic foreign-device registration. Its positive TTL
 /// is sent unchanged; the independent renewal interval controls local attempts.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForeignDeviceConfig {
     /// BBMD IP address to register with.
     pub bbmd_ip: Ipv4Addr,

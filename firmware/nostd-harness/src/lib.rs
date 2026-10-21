@@ -8,3 +8,4 @@
 //! `portable-atomic`'s `critical-section` backend, and cargo unifies both into
 //! the linted crate's build. The crate has no code of its own.
 #![no_std]
+#![forbid(unsafe_code)]

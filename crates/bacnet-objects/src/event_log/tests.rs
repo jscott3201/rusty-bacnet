@@ -98,8 +98,8 @@ fn served(el: &EventLogObject) -> Vec<Vec<u8>> {
 fn assert_read_access_denied(result: Result<PropertyValue, Error>) {
     match result {
         Err(Error::Protocol { class, code }) => {
-            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
-            assert_eq!(code, ErrorCode::READ_ACCESS_DENIED.to_raw() as u32);
+            assert_eq!(class, ErrorClass::PROPERTY);
+            assert_eq!(code, ErrorCode::READ_ACCESS_DENIED);
         }
         other => panic!("expected PROPERTY / READ_ACCESS_DENIED, got {other:?}"),
     }
@@ -379,8 +379,8 @@ fn event_log_has_no_out_of_service_or_log_interval() {
         for result in [read, write] {
             match result {
                 Err(Error::Protocol { class, code }) => {
-                    assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
-                    assert_eq!(code, ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32);
+                    assert_eq!(class, ErrorClass::PROPERTY);
+                    assert_eq!(code, ErrorCode::UNKNOWN_PROPERTY);
                 }
                 other => panic!("{property:?}: expected UNKNOWN_PROPERTY, got {other:?}"),
             }
@@ -406,7 +406,7 @@ fn write_absent_property_is_unknown() {
         None,
     );
     assert!(
-        matches!(result, Err(Error::Protocol { class, code }) if class == ErrorClass::PROPERTY.to_raw() as u32 && code == ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32)
+        matches!(result, Err(Error::Protocol { class, code }) if class == ErrorClass::PROPERTY && code == ErrorCode::UNKNOWN_PROPERTY)
     );
 }
 

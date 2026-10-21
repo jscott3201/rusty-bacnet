@@ -7,7 +7,7 @@ use bacnet_objects::command::{CommandObject, RunPlan};
 use bacnet_types::constructed::{
     BACnetActionCommand, BACnetActionList, BACnetDeviceObjectPropertyReference,
 };
-use bacnet_types::enums::{ObjectType, PropertyIdentifier, WriteStatus};
+use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier, WriteStatus};
 use bacnet_types::primitives::PropertyValue;
 use std::time::Duration;
 
@@ -172,7 +172,12 @@ async fn unattached_channel_member_in_another_device_fails_unsent() {
     objects.add(Box::new(channel)).unwrap();
     objects
         .add(Box::new(
-            bacnet_objects::analog::AnalogValueObject::new(1, "AV-1", 62).unwrap(),
+            bacnet_objects::analog::AnalogValueObject::new(
+                1,
+                "AV-1",
+                EngineeringUnits::DEGREES_CELSIUS,
+            )
+            .unwrap(),
         ))
         .unwrap();
     write_pv(&mut objects, ch1, PropertyValue::Real(4.0));

@@ -189,8 +189,8 @@ fn structured_view_add_subordinates() {
             let error = sv.read_property(property, Some(index)).unwrap_err();
             assert!(
                 matches!(error, Error::Protocol { class, code }
-                    if class == ErrorClass::PROPERTY.to_raw() as u32
-                        && code == ErrorCode::INVALID_ARRAY_INDEX.to_raw() as u32),
+                    if class == ErrorClass::PROPERTY
+                        && code == ErrorCode::INVALID_ARRAY_INDEX),
                 "{property:?}[{index}]: {error:?}"
             );
         }
@@ -201,8 +201,8 @@ fn structured_view_add_subordinates() {
                 .unwrap_err();
             assert!(
                 matches!(error, Error::Protocol { class, code }
-                    if class == ErrorClass::PROPERTY.to_raw() as u32
-                        && code == ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32),
+                    if class == ErrorClass::PROPERTY
+                        && code == ErrorCode::WRITE_ACCESS_DENIED),
                 "{property:?}[{index:?}] write: {error:?}"
             );
         }
@@ -230,8 +230,8 @@ fn structured_view_add_subordinate_refuses_a_non_device_device_identifier() {
         );
         assert!(
             matches!(result, Err(Error::Protocol { class, code })
-                if class == ErrorClass::PROPERTY.to_raw() as u32
-                    && code == ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32),
+                if class == ErrorClass::PROPERTY
+                    && code == ErrorCode::VALUE_OUT_OF_RANGE),
             "{object_type:?}: {result:?}"
         );
         for property in [
@@ -298,8 +298,8 @@ fn structured_view_set_subordinates_replaces_both_arrays_or_nothing() {
     ]);
     assert!(
         matches!(result, Err(Error::Protocol { class, code })
-            if class == ErrorClass::PROPERTY.to_raw() as u32
-                && code == ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32),
+            if class == ErrorClass::PROPERTY
+                && code == ErrorCode::VALUE_OUT_OF_RANGE),
         "{result:?}"
     );
     assert_eq!(sv.subordinates().count(), 2);

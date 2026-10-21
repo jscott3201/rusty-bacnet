@@ -26,6 +26,7 @@ use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetEventParameter, BACnetPropertyStates,
     ChangeOfValueCriteria,
 };
+use bacnet_types::enums::EngineeringUnits;
 
 /// EE (instance 1) monitoring `AI-1.NOTIFICATION_CLASS` (an Unsigned), with
 /// the given event type + parameters.
@@ -36,7 +37,7 @@ fn setup_on_notification_class(
 ) -> (ObjectDatabase, ObjectIdentifier) {
     let mut db = ObjectDatabase::new();
 
-    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ai.write_property(
         PropertyIdentifier::NOTIFICATION_CLASS,
         None,
@@ -134,10 +135,9 @@ fn foreign_high_limit_recovers_under_cos_params() {
     assert_eq!(transitions.len(), 1);
     assert_eq!(transitions[0].change.from, EventState::HIGH_LIMIT);
     assert_eq!(transitions[0].change.to, EventState::NORMAL);
-    // The transition is labeled by the enrollment's own EVENT_TYPE
-    // (constructor-configured, OUT_OF_RANGE here) — the evaluator dispatches
-    // on the params tag but reports the enrollment's declared identity.
-    assert_eq!(transitions[0].event_type, EventType::OUT_OF_RANGE);
+    // Event_Type follows the rewritten parameters (Clause 12.12.5, #1868),
+    // so the recovery is labeled CHANGE_OF_STATE.
+    assert_eq!(transitions[0].event_type, EventType::CHANGE_OF_STATE);
     assert_eq!(event_state(&db, &ee_oid), EventState::NORMAL);
 
     // And the arm is alive afterwards from inside its own state space.
@@ -180,9 +180,8 @@ fn foreign_offnormal_recovers_under_oor_params() {
         EventState::NORMAL,
         "in-band value under the new OOR params settles NORMAL"
     );
-    // Labeled by the enrollment's configured EVENT_TYPE (CHANGE_OF_STATE) —
-    // the params tag drives dispatch, the property drives identity.
-    assert_eq!(transitions[0].event_type, EventType::CHANGE_OF_STATE);
+    // Event_Type follows the rewritten parameters (Clause 12.12.5, #1868).
+    assert_eq!(transitions[0].event_type, EventType::OUT_OF_RANGE);
     assert_eq!(event_state(&db, &ee_oid), EventState::NORMAL);
 }
 
@@ -449,4 +448,43 @@ fn foreign_high_limit_with_matching_alarm_indicates_offnormal() {
         EventState::OFFNORMAL,
         "the SPECIFIC indicated state is stored (13.2.2.1.4), not left at the ghost"
     );
+}
+
+/// HIGH_LIMIT left by OUT_OF_RANGE under rewritten `none` parameters: the
+/// NONE algorithm has no offnormal states, so the enrollment returns to
+/// NORMAL at once with a distributed TO_NORMAL (#1868).
+#[test]
+fn offnormal_returns_to_normal_under_none_params() {
+    let (mut db, ee_oid) = setup_on_notification_class(
+        EventType::OUT_OF_RANGE,
+        BACnetEventParameter::OutOfRange {
+            time_delay: 0,
+            low_limit: 20.0,
+            high_limit: 80.0,
+            deadband: 2.0,
+        },
+        90,
+    );
+    assert_eq!(
+        evaluate_event_enrollments(&mut db, 1)[0].change.to,
+        EventState::HIGH_LIMIT
+    );
+    db.get_mut(&ee_oid)
+        .unwrap()
+        .write_property(
+            PropertyIdentifier::EVENT_PARAMETERS,
+            None,
+            PropertyValue::ApplicationData(vec![0xF8, 0x14]),
+            None,
+        )
+        .unwrap();
+    let transitions = evaluate_event_enrollments(&mut db, 1);
+    assert_eq!(transitions.len(), 1);
+    assert_eq!(transitions[0].change.from, EventState::HIGH_LIMIT);
+    assert_eq!(transitions[0].change.to, EventState::NORMAL);
+    assert_eq!(transitions[0].event_type, EventType::NONE);
+    assert!(transitions[0].distribute, "TO_NORMAL is enabled");
+    assert_eq!(event_state(&db, &ee_oid), EventState::NORMAL);
+    // NORMAL stays put under `none`.
+    assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
 }

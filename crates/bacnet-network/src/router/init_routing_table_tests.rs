@@ -7,7 +7,7 @@
 //! octets by hand, never reusing the implementation's parser.
 
 use bacnet_encoding::npdu::decode_npdu;
-use bacnet_types::enums::NetworkMessageType;
+use bacnet_npdu::NetworkMessageType;
 use bacnet_types::MacAddr;
 use bytes::Bytes;
 
@@ -68,7 +68,7 @@ async fn zero_entry_query_leaves_table_untouched() {
     let decoded = decode_npdu(replies[0].clone()).unwrap();
     assert_eq!(
         decoded.message_type,
-        Some(NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK.to_raw())
+        Some(NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK)
     );
     assert_eq!(peer_entries(&decoded.payload), vec![(1000, 1), (2000, 2)]);
     let after: Vec<(u16, usize, bool)> = {
@@ -115,7 +115,7 @@ async fn update_installs_learned_route_on_mapped_port() {
     let decoded = decode_npdu(replies[0].clone()).unwrap();
     assert_eq!(
         decoded.message_type,
-        Some(NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK.to_raw())
+        Some(NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK)
     );
     assert!(decoded.payload.is_empty());
     let table = h.table();
@@ -325,7 +325,7 @@ async fn large_table_query_splits_into_bounded_acks() {
         let decoded = decode_npdu(raw.clone()).unwrap();
         assert_eq!(
             decoded.message_type,
-            Some(NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK.to_raw())
+            Some(NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK)
         );
         assert!(!decoded.payload.is_empty());
         assert!(decoded.payload[0] as usize <= 255);
@@ -356,10 +356,15 @@ async fn full_queue_drops_acks_without_mutation_or_panic() {
     let mut h = Harness::two_port();
     for _ in 0..16 {
         h.txs[0]
-            .try_send(SendRequest::Broadcast {
-                npdu: Bytes::new(),
-                data_attributes: Vec::new(),
-            })
+            .try_send(
+                bacnet_npdu::NetworkPriority::Normal,
+                SendRequest::Broadcast {
+                    npdu: Bytes::new(),
+                    data_attributes: Vec::new(),
+
+                    reject_origin: None,
+                },
+            )
             .unwrap();
     }
     h.handle(h.ctx(
@@ -382,10 +387,15 @@ async fn full_queue_drops_acks_without_mutation_or_panic() {
     let mut h = Harness::two_port();
     for _ in 0..16 {
         h.txs[0]
-            .try_send(SendRequest::Broadcast {
-                npdu: Bytes::new(),
-                data_attributes: Vec::new(),
-            })
+            .try_send(
+                bacnet_npdu::NetworkPriority::Normal,
+                SendRequest::Broadcast {
+                    npdu: Bytes::new(),
+                    data_attributes: Vec::new(),
+
+                    reject_origin: None,
+                },
+            )
             .unwrap();
     }
     h.handle(h.ctx(
@@ -413,10 +423,15 @@ async fn a_full_queue_ends_a_chunked_answer_at_its_first_refused_ack() {
     let mut h = Harness::with_table(table);
     for _ in 0..15 {
         h.txs[0]
-            .try_send(SendRequest::Broadcast {
-                npdu: Bytes::new(),
-                data_attributes: Vec::new(),
-            })
+            .try_send(
+                bacnet_npdu::NetworkPriority::Normal,
+                SendRequest::Broadcast {
+                    npdu: Bytes::new(),
+                    data_attributes: Vec::new(),
+
+                    reject_origin: None,
+                },
+            )
             .unwrap();
     }
     h.handle(h.ctx(
@@ -432,6 +447,26 @@ async fn a_full_queue_ends_a_chunked_answer_at_its_first_refused_ack() {
         124
     );
     assert_eq!(h.counters().refused, 1);
+}
+
+#[tokio::test]
+async fn a_closed_queue_ends_a_chunked_answer_at_its_first_refused_ack() {
+    let mut table = TableSeed::new();
+    for net in 10..266u16 {
+        table.add_learned(net, 1, MacAddr::from_slice(&[5]));
+    }
+    let mut h = Harness::with_table(table);
+    // The dispatch tasks still own senders for both ports. Closing the
+    // answer's egress must synchronously refuse its first chunk only.
+    h.rxs.remove(0);
+    h.handle(h.ctx(
+        0,
+        &[7],
+        control_npdu(NetworkMessageType::INITIALIZE_ROUTING_TABLE, &[0]),
+    ))
+    .await;
+    assert_eq!(h.counters().refused, 1);
+    assert!(h.rxs[0].try_recv().is_err(), "no send on the other port");
 }
 
 #[tokio::test]

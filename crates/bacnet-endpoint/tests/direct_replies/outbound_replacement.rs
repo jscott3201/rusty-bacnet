@@ -40,12 +40,14 @@ async fn outbound_admitted_write_keeps_identity_after_replacement_without_reply_
     let authorized = Arc::new(Mutex::new(Vec::new()));
     let seen = authorized.clone();
     let config = bacnet_server::server::ServerConfig {
-        mutation_authorizer: Some(Arc::new(move |context| {
-            seen.lock()
-                .unwrap()
-                .push(context.direct_sc_identity().unwrap());
-            true
-        })),
+        policy: Some(Arc::new(bacnet_server::FnPolicy::new().mutation(
+            move |context| {
+                seen.lock()
+                    .unwrap()
+                    .push(context.direct_sc_identity().unwrap());
+                true
+            },
+        ))),
         ..Default::default()
     };
     let mut server = bacnet_server::server::BACnetServer::start_clockless(

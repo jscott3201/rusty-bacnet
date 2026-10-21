@@ -9,15 +9,15 @@ use bacnet_types::primitives::ObjectIdentifier;
 
 fn unknown_object() -> Error {
     Error::Protocol {
-        class: ErrorClass::OBJECT.to_raw() as u32,
-        code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
+        class: ErrorClass::OBJECT,
+        code: ErrorCode::UNKNOWN_OBJECT,
     }
 }
 
 fn optional_functionality_not_supported() -> Error {
     Error::Protocol {
-        class: ErrorClass::SERVICES.to_raw() as u32,
-        code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+        class: ErrorClass::SERVICES,
+        code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
     }
 }
 

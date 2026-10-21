@@ -15,8 +15,8 @@ use crate::staging::{StagingConfig, StagingObject};
 use crate::traits::BACnetObject;
 use bacnet_types::constructed::{BACnetDeviceObjectReference, BACnetStageLimitValue};
 use bacnet_types::enums::{
-    ErrorClass, ErrorCode, LifeSafetyMode, LifeSafetyOperation, LifeSafetyState, ObjectType,
-    PropertyIdentifier, Reliability, SilencedState,
+    EngineeringUnits, ErrorClass, ErrorCode, LifeSafetyMode, LifeSafetyOperation, LifeSafetyState,
+    ObjectType, PropertyIdentifier, Reliability, SilencedState,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
@@ -45,8 +45,8 @@ fn assert_protocol_error(result: Result<(), Error>, class: ErrorClass, code: Err
             class: actual_class,
             code: actual_code,
         }) => {
-            assert_eq!(actual_class, class.to_raw() as u32);
-            assert_eq!(actual_code, code.to_raw() as u32);
+            assert_eq!(actual_class, class);
+            assert_eq!(actual_code, code);
         }
         other => panic!("expected {class:?} / {code:?}, got {other:?}"),
     }
@@ -219,7 +219,7 @@ fn staging() -> StagingObject {
         StagingConfig {
             present_value: 5.0,
             min_present_value: 0.0,
-            units: 62,
+            units: EngineeringUnits::DEGREES_CELSIUS,
             priority_for_writing: 8,
             stages: vec![stage(10.0), stage(20.0)],
             target_references: vec![BACnetDeviceObjectReference {
@@ -236,11 +236,11 @@ fn staging() -> StagingObject {
 fn reliability_vendor_values_round_trip_on_every_write_route() {
     // One carrier per distinct write arm: the shared inhibit route, Loop's,
     // Schedule's and Staging's own arms.
-    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     assert_internal_reliability_round_trip(&mut ai);
     assert_client_reliability_round_trip(&mut ai);
 
-    let mut lp = LoopObject::new(1, "LOOP-1", 62).unwrap();
+    let mut lp = LoopObject::new(1, "LOOP-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     assert_internal_reliability_round_trip(&mut lp);
     assert_client_reliability_round_trip(&mut lp);
 
@@ -256,10 +256,10 @@ fn vendor_reliability_is_saved_and_restored_across_out_of_service() {
     // The shared inhibit route, and the common save/restore helper that Loop
     // and Schedule use.
     assert_vendor_reliability_survives_out_of_service(
-        &mut AnalogInputObject::new(1, "AI-1", 62).unwrap(),
+        &mut AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
     );
     assert_vendor_reliability_survives_out_of_service(
-        &mut LoopObject::new(1, "LOOP-1", 62).unwrap(),
+        &mut LoopObject::new(1, "LOOP-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
     );
     assert_vendor_reliability_survives_out_of_service(
         &mut ScheduleObject::new(1, "SCHED-1", PropertyValue::Real(0.0)).unwrap(),
@@ -319,11 +319,8 @@ fn silence_operation_refuses_a_reserved_or_proprietary_silenced_state_and_keeps_
         point.set_operation_expected(LifeSafetyOperation::SILENCE_AUDIBLE);
         match point.apply_life_safety_operation(LifeSafetyOperation::SILENCE_AUDIBLE) {
             Err(Error::Protocol { class, code }) => {
-                assert_eq!(class, ErrorClass::OBJECT.to_raw() as u32);
-                assert_eq!(
-                    code,
-                    ErrorCode::INVALID_OPERATION_IN_THIS_STATE.to_raw() as u32
-                );
+                assert_eq!(class, ErrorClass::OBJECT);
+                assert_eq!(code, ErrorCode::INVALID_OPERATION_IN_THIS_STATE);
             }
             other => panic!("expected OBJECT / INVALID_OPERATION_IN_THIS_STATE, got {other:?}"),
         }

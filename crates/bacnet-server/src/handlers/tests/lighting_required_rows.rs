@@ -32,7 +32,7 @@ pub(super) fn write_wire(
     }
     .encode(&mut request)
     .unwrap();
-    handle_write_property(db, &request).map(|_| ())
+    sourced_wp(db, &request).map(|_| ())
 }
 
 pub(super) fn read_wire(
@@ -55,8 +55,8 @@ pub(super) fn read_wire(
 pub(super) fn assert_refused(result: Result<(), Error>, expected: ErrorCode) {
     match result {
         Err(Error::Protocol { class, code }) => {
-            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
-            assert_eq!(code, expected.to_raw() as u32, "expected {expected:?}");
+            assert_eq!(class, ErrorClass::PROPERTY);
+            assert_eq!(code, expected, "expected {expected:?}");
         }
         other => panic!("expected PROPERTY/{expected:?}, got {other:?}"),
     }

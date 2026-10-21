@@ -3,17 +3,18 @@ use bacnet_objects::{
     accumulator::{AccumulatorObject, PulseConverterObject},
     traits::BACnetObject,
 };
+use bacnet_types::enums::EngineeringUnits;
 use bacnet_types::primitives::PropertyValue;
 use PropertyIdentifier as P;
 
 fn accumulator_objects(configured: bool) -> [Box<dyn BACnetObject>; 2] {
-    let mut acc = AccumulatorObject::new(7, "ACC-7", 95).unwrap();
+    let mut acc = AccumulatorObject::new(7, "ACC-7", EngineeringUnits::NO_UNITS).unwrap();
     // Prescale is served only once set, so set it to have the row to select.
     acc.set_prescale(bacnet_types::constructed::BACnetPrescale {
         multiplier: 1,
         modulo_divide: 100,
     });
-    let mut pc = PulseConverterObject::new(7, "PC-7", 62).unwrap();
+    let mut pc = PulseConverterObject::new(7, "PC-7", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     if configured {
         acc.write_property(P::MAX_PRES_VALUE, None, PropertyValue::Unsigned(1000), None)
             .unwrap();
@@ -192,8 +193,8 @@ fn rpm_accumulator_metadata_does_not_enable_create_object() {
             let mut response = BytesMut::new();
             let result = handle_create_object(&mut db, &request, &mut response);
             assert!(matches!(result, Err(Error::Protocol { class, code })
-                if class == ErrorClass::OBJECT.to_raw() as u32
-                    && code == ErrorCode::UNSUPPORTED_OBJECT_TYPE.to_raw() as u32));
+                if class == ErrorClass::OBJECT
+                    && code == ErrorCode::UNSUPPORTED_OBJECT_TYPE));
             assert!(response.is_empty());
             assert!(db.is_empty());
         }
@@ -225,7 +226,7 @@ fn rpm_accumulator_metadata_corrects_historical_pics_writability() {
     // them, and hid the routed Max_Pres_Value, Pulse_Rate, and
     // Limit_Monitoring_Interval arms. The canonical rows correct both
     // directions; dispatch itself is unchanged.
-    let object = AccumulatorObject::new(1, "ACC-1", 95).unwrap();
+    let object = AccumulatorObject::new(1, "ACC-1", EngineeringUnits::NO_UNITS).unwrap();
     for p in [P::OBJECT_NAME, P::PRESENT_VALUE] {
         assert!(!object.is_writable_property(p));
     }
@@ -238,7 +239,7 @@ fn rpm_accumulator_metadata_corrects_historical_pics_writability() {
     }
     // The Pulse Converter override translated exactly: the same seven
     // properties stay advertised, including gated Present_Value.
-    let pc = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+    let pc = PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     for p in [
         P::PRESENT_VALUE,
         P::SCALE_FACTOR,

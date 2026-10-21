@@ -270,6 +270,18 @@ class TypedConstructedReadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(one.tag, "timestamp")
         self.assertEqual(one.value, stamps.value[1])
 
+    async def test_the_inhibit_reference_reads_as_an_object_property_reference(self) -> None:
+        # Unset, it names Binary Value 4194303's Present_Value (#1888).
+        unset = await self.assert_single(AI_1, P.EVENT_ALGORITHM_INHIBIT_REF, {
+            "object_identifier": ObjectIdentifier(ObjectType.BINARY_VALUE, 4194303),
+            "property_identifier": P.PRESENT_VALUE,
+            "property_array_index": None,
+        }, "object_property_reference")
+        await self.client.write_property(self.address, AI_1, P.EVENT_ALGORITHM_INHIBIT_REF,
+                                         unset)
+        self.assertEqual(await self.server.read_property(AI_1, P.EVENT_ALGORITHM_INHIBIT_REF),
+                         unset)
+
     async def test_accumulator_scale_and_prescale_read_as_configured(self) -> None:
         scale = await self.assert_single(ACC_1, P.SCALE, 2.5, "scale")
         self.assertIsInstance(scale.value, float)

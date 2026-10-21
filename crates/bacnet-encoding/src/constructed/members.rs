@@ -6,10 +6,10 @@
 //! apart, so a property writer can answer with the matching Clause 15.9.1.3
 //! error: a malformed member fails at once, while a well-formed member whose
 //! value doesn't fit its type is only recorded, and the codec reports it as
-//! [`Error::OutOfRange`] once the rest of the value has been checked. The
+//! [`Error::Range`] once the rest of the value has been checked. The
 //! codecs read each member's contents with [`super::tagged`].
 
-use bacnet_types::error::Error;
+use bacnet_types::error::{DecodeError, DecodingKind, Error};
 
 use super::tagged::decode_ctx_primitive;
 
@@ -65,19 +65,20 @@ pub(super) fn unsigned_field<T: TryFrom<u64> + Default>(
     data: &[u8],
     offset: usize,
     tag: u8,
-    what: &str,
+    what: &'static str,
     too_wide: &'static str,
     oversized: &mut Option<&'static str>,
 ) -> Result<(T, usize), Error> {
     let (content, end) = decode_ctx_primitive(data, offset, tag, what)?;
     if content.len() > MAX_PADDED_OCTETS && content[0] == 0 {
-        return Err(Error::decoding(
+        return Err(DecodeError::new(
+            DecodingKind::InvalidEncoding,
             offset,
-            format!(
-                "{what}: [{tag}] has {} contents octets and a leading zero",
-                content.len()
-            ),
-        ));
+            "[{}] has {} contents octets and a leading zero",
+        )
+        .within(what)
+        .with_values(tag.into(), content.len() as u64)
+        .into());
     }
     let value = unsigned_member(content, end - content.len())?;
     Ok((narrow(value, too_wide, oversized), end))

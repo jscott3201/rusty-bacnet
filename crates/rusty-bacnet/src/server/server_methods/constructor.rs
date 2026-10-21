@@ -67,7 +67,11 @@ impl BACnetServer {
         segmentation_supported=crate::types::PySegmentation { inner: bacnet_types::enums::Segmentation::NONE },
         apdu_segment_timeout_ms=5000,
         bbmd=None,
-        foreign_device=None
+        foreign_device=None,
+        multicast=None,
+        sc_npdu_per_origin_limit=None,
+        on_reinitialize=None,
+        after_reinitialize=None
     ))]
     fn new(
         device_instance: u32,
@@ -133,13 +137,27 @@ impl BACnetServer {
         apdu_segment_timeout_ms: u64,
         bbmd: Option<PyRef<'_, crate::bip_options::PyBbmd>>,
         foreign_device: Option<PyRef<'_, crate::bip_options::PyForeignDevice>>,
+        multicast: Option<PyRef<'_, crate::bip_options::PyMulticast>>,
+        sc_npdu_per_origin_limit: Option<usize>,
+        on_reinitialize: Option<&Bound<'_, PyAny>>,
+        after_reinitialize: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
+        let reinitialize = crate::reinitialize::parse(on_reinitialize, after_reinitialize)?;
+        let sc_npdu_admission_policy = crate::sc_npdu::policy(transport, sc_npdu_per_origin_limit)?;
         let segmentation_supported = super::constructor_budgets::segmentation(
             segmentation_supported,
             apdu_segment_timeout_ms,
         )?;
         crate::bip_options::only_on_bip(share_port_by_address, transport)?;
         let bip_mode = crate::bip_options::bip_mode(transport, bbmd, foreign_device)?;
+        let multicast = crate::bip_options::bip_multicast(
+            transport,
+            interface,
+            port,
+            share_port_by_address,
+            &bip_mode,
+            multicast,
+        )?;
         super::constructor_budgets::registered_network_port(registered_network_port, transport)?;
         let mutation_policy = super::constructor_budgets::mutation_policy(mutation_policy)?;
         let super::constructor_budgets::DccConfiguration {
@@ -209,10 +227,12 @@ impl BACnetServer {
             broadcast_address: broadcast_address.to_string(),
             share_port_by_address,
             bip_mode,
+            multicast,
             registered_network_port,
             sc_hub,
             sc_vmac,
             sc_device_uuid,
+            sc_npdu_admission_policy,
             sc_ca_cert,
             sc_client_cert,
             sc_client_key,
@@ -240,6 +260,7 @@ impl BACnetServer {
             dcc_source_restriction,
             dcc_disable_rate_limit,
             reinit_password,
+            reinitialize,
             request_admission_policy,
             read_property_multiple_budget,
             get_alarm_summary_budget,

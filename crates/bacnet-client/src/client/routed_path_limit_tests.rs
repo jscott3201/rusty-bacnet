@@ -2,8 +2,9 @@ use std::sync::Arc;
 
 use bacnet_encoding::apdu::{self, encode_apdu, Apdu, SegmentAck, SimpleAck};
 use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress};
+use bacnet_npdu::{NetworkMessageType, RejectMessageReason};
 use bacnet_transport::port::{ReceivedNpdu, TransportPort, TransportProvenance};
-use bacnet_types::enums::{ConfirmedServiceChoice, NetworkMessageType, RejectMessageReason};
+use bacnet_types::enums::ConfirmedServiceChoice;
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 use bytes::{Bytes, BytesMut};
@@ -13,14 +14,14 @@ use tokio::time::{sleep, timeout, Duration};
 
 use super::{routed_path_limits::MAX_ROUTED_PATH_ENTRIES, BACnetClient, ClientConfig};
 
-const DNET: u16 = 100;
+pub(super) const DNET: u16 = 100;
 
-struct SentFrame {
+pub(super) struct SentFrame {
     npdu: Bytes,
     destination: MacAddr,
 }
 
-struct CaptureTransport {
+pub(super) struct CaptureTransport {
     local_mac: MacAddr,
     inbound_rx: Option<mpsc::Receiver<ReceivedNpdu>>,
     outbound_tx: mpsc::UnboundedSender<SentFrame>,
@@ -64,7 +65,7 @@ impl TransportPort for CaptureTransport {
     }
 }
 
-fn harness(
+pub(super) fn harness(
     local_mac: &[u8],
     max_apdu: u16,
 ) -> (
@@ -86,7 +87,7 @@ fn harness(
     )
 }
 
-fn routed_request(
+pub(super) fn routed_request(
     client: Arc<BACnetClient<CaptureTransport>>,
     router: Vec<u8>,
     dnet: u16,
@@ -106,7 +107,10 @@ fn routed_request(
     })
 }
 
-fn confirmed_request(frame: SentFrame, expected_router: &[u8]) -> apdu::ConfirmedRequest {
+pub(super) fn confirmed_request(
+    frame: SentFrame,
+    expected_router: &[u8],
+) -> apdu::ConfirmedRequest {
     assert_eq!(frame.destination.as_slice(), expected_router);
     let npdu = decode_npdu(frame.npdu).unwrap();
     let Apdu::ConfirmedRequest(request) = apdu::decode_apdu(npdu.payload).unwrap() else {
@@ -153,14 +157,13 @@ async fn inject_apdu(
 async fn inject_control(
     inbound: &mpsc::Sender<ReceivedNpdu>,
     immediate_source: &[u8],
-    message_type: u8,
+    message_type: NetworkMessageType,
     payload: &[u8],
 ) {
     let mut npdu_buf = BytesMut::new();
     encode_npdu(
         &mut npdu_buf,
         &Npdu {
-            is_network_message: true,
             message_type: Some(message_type),
             payload: Bytes::copy_from_slice(payload),
             ..Npdu::default()
@@ -181,11 +184,15 @@ async fn inject_control(
         .unwrap();
 }
 
-async fn inject_reason_4(inbound: &mpsc::Sender<ReceivedNpdu>, immediate_source: &[u8], dnet: u16) {
+pub(super) async fn inject_reason_4(
+    inbound: &mpsc::Sender<ReceivedNpdu>,
+    immediate_source: &[u8],
+    dnet: u16,
+) {
     inject_control(
         inbound,
         immediate_source,
-        NetworkMessageType::REJECT_MESSAGE_TO_NETWORK.to_raw(),
+        NetworkMessageType::REJECT_MESSAGE_TO_NETWORK,
         &[
             RejectMessageReason::MESSAGE_TOO_LONG.to_raw(),
             (dnet >> 8) as u8,
@@ -487,21 +494,21 @@ async fn unmatched_controls_and_direct_requests_do_not_change_path_policy() {
     inject_control(
         &inbound,
         &router,
-        NetworkMessageType::REJECT_MESSAGE_TO_NETWORK.to_raw(),
+        NetworkMessageType::REJECT_MESSAGE_TO_NETWORK,
         &[RejectMessageReason::ROUTER_BUSY.to_raw(), 0, DNET as u8],
     )
     .await;
     inject_control(
         &inbound,
         &router,
-        NetworkMessageType::REJECT_MESSAGE_TO_NETWORK.to_raw(),
+        NetworkMessageType::REJECT_MESSAGE_TO_NETWORK,
         &[RejectMessageReason::MESSAGE_TOO_LONG.to_raw(), 0],
     )
     .await;
     inject_control(
         &inbound,
         &router,
-        NetworkMessageType::ROUTER_BUSY_TO_NETWORK.to_raw(),
+        NetworkMessageType::ROUTER_BUSY_TO_NETWORK,
         &[
             RejectMessageReason::MESSAGE_TOO_LONG.to_raw(),
             0,

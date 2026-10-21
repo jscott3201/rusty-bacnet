@@ -26,6 +26,7 @@ use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress};
 use bacnet_endpoint::session::SessionRole;
 use bacnet_endpoint_core::endpoint_ingress::{EndpointApduDestination, EndpointIngress};
 use bacnet_network::layer::{NetworkLayer, ReceivedApdu};
+use bacnet_npdu::NetworkPriority;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_server::server::__endpoint_EndpointResponder as EndpointResponder;
 use bacnet_transport::loopback::LoopbackTransport;
@@ -33,7 +34,7 @@ use bacnet_transport::mstp::{
     LoopbackSerial, MstpConfig, MstpExecutionMode, MstpTransport, SerialPort,
 };
 use bacnet_transport::port::{DataAttribute, ReceivedNpdu, TransportPort, TransportProvenance};
-use bacnet_types::enums::{NetworkPriority, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::{error::Error, MacAddr};
 use bytes::{Bytes, BytesMut};
 use mstp_wire::{pfm_frame, token_frame, FrameType, MstpFrame};
@@ -87,7 +88,7 @@ async fn mstp_dropped_sender_releases_tokio() {
 
 #[tokio::test]
 async fn mstp_dropped_sender_releases_dedicated() {
-    dropped_sender_impl(MstpExecutionMode::DedicatedThread, Frames::Standard).await;
+    dropped_sender_impl(MstpExecutionMode::dedicated_thread(), Frames::Standard).await;
 }
 
 #[tokio::test]
@@ -97,7 +98,7 @@ async fn mstp_dropped_sender_releases_extended_tokio() {
 
 #[tokio::test]
 async fn mstp_dropped_sender_releases_extended_dedicated() {
-    dropped_sender_impl(MstpExecutionMode::DedicatedThread, Frames::Extended).await;
+    dropped_sender_impl(MstpExecutionMode::dedicated_thread(), Frames::Extended).await;
 }
 
 async fn token_during_work_impl(mode: MstpExecutionMode, frames: Frames) {
@@ -158,7 +159,7 @@ async fn mstp_token_pfm_during_work_tokio() {
 
 #[tokio::test]
 async fn mstp_token_pfm_during_work_dedicated() {
-    token_during_work_impl(MstpExecutionMode::DedicatedThread, Frames::Standard).await;
+    token_during_work_impl(MstpExecutionMode::dedicated_thread(), Frames::Standard).await;
 }
 
 #[tokio::test]
@@ -168,7 +169,7 @@ async fn mstp_token_pfm_during_work_extended_tokio() {
 
 #[tokio::test]
 async fn mstp_token_pfm_during_work_extended_dedicated() {
-    token_during_work_impl(MstpExecutionMode::DedicatedThread, Frames::Extended).await;
+    token_during_work_impl(MstpExecutionMode::dedicated_thread(), Frames::Extended).await;
 }
 
 /// Serializes direction-blind sends: every send blocks forever, so the
@@ -287,7 +288,7 @@ async fn mstp_queue_and_admission_bounds_release() {
                     destination_mac: MacAddr::from_slice(&[0x09]),
                 },
                 false,
-                NetworkPriority::NORMAL,
+                NetworkPriority::Normal,
                 Vec::<DataAttribute>::new(),
             )
             .await
@@ -339,9 +340,10 @@ async fn mstp_queue_and_admission_bounds_release() {
         "one Full rejection + two fail-closed releases"
     );
 
-    // (c) Network-layer receive bound (256, raw receiver): 300 arrivals from
-    // one peer all send without blocking; exactly the bound is queued and the
-    // excess drops without a hang.
+    // (c) Network-layer receive bound (raw receiver): the raw receiver holds
+    // no queue of its own (#1713), so the transport's 256-NPDU queue is the
+    // bound. 300 arrivals from one peer all send without blocking; exactly
+    // the bound is received, and the transport counts the 44 it dropped.
     let (endpoint_side, mut peer_side) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
     let mut layer = NetworkLayer::new(endpoint_side);
     let mut apdus = layer.start().await.expect("layer must start");
@@ -350,9 +352,8 @@ async fn mstp_queue_and_admission_bounds_release() {
     encode_npdu(
         &mut buf,
         &Npdu {
-            is_network_message: false,
             expecting_reply: false,
-            priority: NetworkPriority::NORMAL,
+            priority: NetworkPriority::Normal,
             destination: None,
             source: None,
             payload: Bytes::from_static(&[0x10, 0x08]),
@@ -362,10 +363,10 @@ async fn mstp_queue_and_admission_bounds_release() {
     .unwrap();
     let bytes = buf.freeze();
     for _ in 0..300 {
-        peer_side
-            .send_unicast(&bytes, &[0x01])
+        tokio::time::timeout(WAIT, peer_side.send_unicast(&bytes, &[0x01]))
             .await
-            .expect("peer send must not block on a full layer queue");
+            .expect("peer send must not block on a full queue")
+            .expect("peer send");
     }
     for _ in 0..256 {
         tokio::time::timeout(WAIT, apdus.recv())
@@ -373,6 +374,8 @@ async fn mstp_queue_and_admission_bounds_release() {
             .expect("bound item missing")
             .expect("layer closed");
     }
+    assert!(apdus.try_recv().is_err(), "only the bound is queued");
+    assert_eq!(layer.transport().receive_drops(), 44);
     layer.stop().await.unwrap();
     peer_side.stop().await.unwrap();
 }
@@ -419,7 +422,7 @@ async fn mstp_cancel_releases_lease_tokio() {
 
 #[tokio::test]
 async fn mstp_cancel_releases_lease_dedicated() {
-    cancel_impl(MstpExecutionMode::DedicatedThread, Frames::Standard).await;
+    cancel_impl(MstpExecutionMode::dedicated_thread(), Frames::Standard).await;
 }
 
 #[tokio::test]
@@ -429,7 +432,7 @@ async fn mstp_cancel_releases_lease_extended_tokio() {
 
 #[tokio::test]
 async fn mstp_cancel_releases_lease_extended_dedicated() {
-    cancel_impl(MstpExecutionMode::DedicatedThread, Frames::Extended).await;
+    cancel_impl(MstpExecutionMode::dedicated_thread(), Frames::Extended).await;
 }
 
 async fn stop_outstanding_impl(mode: MstpExecutionMode, frames: Frames) {
@@ -478,7 +481,7 @@ async fn mstp_stop_with_outstanding_tokio() {
 
 #[tokio::test]
 async fn mstp_stop_with_outstanding_dedicated() {
-    stop_outstanding_impl(MstpExecutionMode::DedicatedThread, Frames::Standard).await;
+    stop_outstanding_impl(MstpExecutionMode::dedicated_thread(), Frames::Standard).await;
 }
 
 #[tokio::test]
@@ -488,7 +491,7 @@ async fn mstp_stop_with_outstanding_extended_tokio() {
 
 #[tokio::test]
 async fn mstp_stop_with_outstanding_extended_dedicated() {
-    stop_outstanding_impl(MstpExecutionMode::DedicatedThread, Frames::Extended).await;
+    stop_outstanding_impl(MstpExecutionMode::dedicated_thread(), Frames::Extended).await;
 }
 
 #[tokio::test]
@@ -507,6 +510,7 @@ async fn mstp_responder_denial_releases_reply() {
     let (reply_tx, reply_rx) = oneshot::channel();
     let err = responder
         .handle(ReceivedApdu {
+            router_response: None,
             direct_response: None,
             apdu: read_request_apdu(7, 1),
             source_mac: MacAddr::from_slice(&[0x02]),
@@ -540,9 +544,8 @@ async fn nonrouting_impl(mode: MstpExecutionMode, frames: Frames) {
     encode_npdu(
         &mut routed,
         &Npdu {
-            is_network_message: false,
             expecting_reply: true,
-            priority: NetworkPriority::NORMAL,
+            priority: NetworkPriority::Normal,
             destination: Some(NpduAddress {
                 network: 77,
                 mac_address: MacAddr::from_slice(&[0x44]),
@@ -598,7 +601,7 @@ async fn mstp_nonrouting_standard_only_tokio() {
 
 #[tokio::test]
 async fn mstp_nonrouting_standard_only_dedicated() {
-    nonrouting_impl(MstpExecutionMode::DedicatedThread, Frames::Standard).await;
+    nonrouting_impl(MstpExecutionMode::dedicated_thread(), Frames::Standard).await;
 }
 
 #[tokio::test]
@@ -608,5 +611,5 @@ async fn mstp_nonrouting_extended_tokio() {
 
 #[tokio::test]
 async fn mstp_nonrouting_extended_dedicated() {
-    nonrouting_impl(MstpExecutionMode::DedicatedThread, Frames::Extended).await;
+    nonrouting_impl(MstpExecutionMode::dedicated_thread(), Frames::Extended).await;
 }

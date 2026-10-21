@@ -14,7 +14,7 @@ use bacnet_objects::schedule::ScheduleObject;
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetObjectPropertyReference,
 };
-use bacnet_types::enums::WriteStatus;
+use bacnet_types::enums::{EngineeringUnits, WriteStatus};
 
 use super::tests::SettableClock;
 use super::*;
@@ -60,7 +60,12 @@ fn database(target: ObjectIdentifier, objects: Vec<ChannelObject>) -> Arc<RwLock
     .unwrap();
     for instance in [1, 2] {
         db.add(Box::new(
-            AnalogOutputObject::new(instance, format!("AO-{instance}"), 62).unwrap(),
+            AnalogOutputObject::new(
+                instance,
+                format!("AO-{instance}"),
+                EngineeringUnits::DEGREES_CELSIUS,
+            )
+            .unwrap(),
         ))
         .unwrap();
     }

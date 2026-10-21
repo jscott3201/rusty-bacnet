@@ -30,7 +30,8 @@ pub async fn run(_transport: &str, duration_secs: u64, steps: &[u64]) -> Vec<Deg
         let rss_before = current_rss_kb();
         let mut recorder = LatencyRecorder::new();
         let mut rng = rand::rng();
-        let deadline = Instant::now() + Duration::from_secs(duration_secs);
+        let started = Instant::now();
+        let deadline = started + Duration::from_secs(duration_secs);
 
         // Phase 1: Random ReadProperty
         while Instant::now() < deadline {
@@ -45,6 +46,8 @@ pub async fn run(_transport: &str, duration_secs: u64, steps: &[u64]) -> Vec<Deg
                 Err(_) => recorder.record_failure(),
             }
         }
+
+        let rp_elapsed = started.elapsed();
 
         // Phase 2: RPM batches of 10 random objects
         let rpm_count = 100u32.min(count as u32 / 10).max(1);
@@ -75,19 +78,13 @@ pub async fn run(_transport: &str, duration_secs: u64, steps: &[u64]) -> Vec<Deg
         }
 
         let rss_after = current_rss_kb();
-        let elapsed = duration_secs as f64;
-        let throughput = recorder.successful() as f64 / elapsed;
-        let stats = recorder.stats();
+        // The step's rate is the ReadProperty phase's; the ReadPropertyMultiple
+        // phase reports its latency only, and its failures count as errors.
+        let mut point = DegradationPoint::from_recorder(count, &recorder, rp_elapsed);
         let rpm_stats = rpm_recorder.stats();
 
-        eprintln!(
-            "  RP: ok={} err={} throughput={:.0}/s p50={}µs p99={}µs",
-            recorder.successful(),
-            recorder.failed(),
-            throughput,
-            stats.p50,
-            stats.p99,
-        );
+        eprint!("  RP:");
+        point.log();
         eprintln!(
             "  RPM: ok={} err={} p50={}µs p99={}µs",
             rpm_recorder.successful(),
@@ -97,13 +94,8 @@ pub async fn run(_transport: &str, duration_secs: u64, steps: &[u64]) -> Vec<Deg
         );
         eprintln!("  RSS: {}KB → {}KB", rss_before, rss_after);
 
-        curve.push(DegradationPoint {
-            parameter: count,
-            p50_us: stats.p50,
-            p99_us: stats.p99,
-            throughput,
-            errors: recorder.failed() + rpm_recorder.failed(),
-        });
+        point.errors += rpm_recorder.failed();
+        curve.push(point);
 
         let _ = client.stop().await;
         let _ = server.stop().await;

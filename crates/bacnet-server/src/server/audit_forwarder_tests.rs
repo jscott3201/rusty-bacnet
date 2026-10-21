@@ -134,9 +134,11 @@ async fn start_on(
     for &instance in devices {
         db.add(Box::new(
             DeviceObject::new(DeviceConfig {
-                instance,
-                name: format!("Device {instance}"),
-                max_apdu_length,
+                identity: bacnet_objects::DeviceIdentity::new(instance, 0)
+                    .expect("valid Device identity")
+                    .with_name(format!("Device {instance}"))
+                    .with_max_apdu(u16::try_from(max_apdu_length).expect("Device APDU fits u16"))
+                    .expect("valid Device APDU"),
                 ..Default::default()
             })
             .unwrap(),
@@ -147,10 +149,19 @@ async fn start_on(
     let wire = Capture::default();
     let server = BACnetServer::start_with_clock_mode_and_bindings(
         ServerConfig {
-            max_apdu_length,
+            device: bacnet_objects::DeviceIdentity::new(
+                devices.iter().copied().min().unwrap_or(1),
+                0,
+            )
+            .unwrap()
+            .with_max_apdu(u16::try_from(max_apdu_length).expect("Device APDU fits u16"))
+            .expect("valid Device APDU"),
             audit_notification_sink: Some(oid(ObjectType::AUDIT_LOG, 7)),
-            audit_notification_authorizer: Some(Arc::new(|_| true)),
-            unconfirmed_audit_notification_authorizer: Some(Arc::new(|_| true)),
+            policy: Some(Arc::new(
+                crate::FnPolicy::new()
+                    .audit_notification(|_| true)
+                    .unconfirmed_audit_notification(|_| true),
+            )),
             enable_event_enrollment: false,
             ..Default::default()
         },
@@ -211,6 +222,7 @@ impl Fixture {
                 service_request: data,
             },
             &bacnet_network::layer::ReceivedApdu {
+                router_response: None,
                 direct_response: None,
                 apdu: Bytes::new(),
                 source_mac: MacAddr::from_slice(&[3]),

@@ -3,12 +3,6 @@
 //!
 //! [`HostedHost`] answers for one arrival frame, or for the sweep:
 //!
-//! - **Groups** (#1504, #1677): a DADR is a group on a port when the port's
-//!   transport says so ([`TransportPort::group_destinations`]). It is one of
-//!   the port's own, which an Unconfirmed-Request may reach as the port's
-//!   local broadcast, when it is also among the groups that broadcast
-//!   stands for ([`TransportPort::local_broadcast_destinations`]); any other
-//!   group the router refuses.
 //! - **Authorization** (RB-09): each protected control goes to the
 //!   [`ControlGate`], with the arrival's provenance.
 //! - **Logs**: each event the engine reports is logged with the message and
@@ -20,41 +14,14 @@
 //! The hooks run under the engine's lock, so they never block and never
 //! call into the router.
 //!
-//! [`TransportPort::group_destinations`]: bacnet_transport::port::TransportPort::group_destinations
-//! [`TransportPort::local_broadcast_destinations`]: bacnet_transport::port::TransportPort::local_broadcast_destinations
-
-use bacnet_router_core::router::{Claim, ControlClass, Event, Group, Host};
-use bacnet_router_core::PortId;
-use bacnet_transport::port::{GroupDestinations, TransportProvenance};
+use bacnet_router_core::router::{Claim, ControlClass, Event, Host};
+use bacnet_transport::port::TransportProvenance;
 use bacnet_transport::warn_throttle::WarnThrottle;
 use bacnet_types::MacAddr;
 use tracing::{debug, info, warn};
 
 use super::control_policy::{ControlAuthContext, ControlGate, ControlTrust};
 use crate::router_table::ROUTE_CAP;
-
-/// One port's group destinations, and the part of them its local
-/// broadcast stands for.
-#[derive(Debug, Clone, Default)]
-pub(super) struct PortGroups {
-    /// Every group destination the port's transport knows.
-    pub(super) groups: GroupDestinations,
-    /// The groups a send may reach as the port's local broadcast.
-    pub(super) local_broadcasts: GroupDestinations,
-}
-
-impl PortGroups {
-    /// What `mac` is on this port.
-    fn group(&self, mac: &[u8]) -> Group {
-        if !self.groups.contains(mac) {
-            Group::No
-        } else if self.local_broadcasts.contains(mac) {
-            Group::Broadcast
-        } else {
-            Group::Refuse
-        }
-    }
-}
 
 /// The router's throttles for the engine's warnings that can come once
 /// per frame.
@@ -68,8 +35,6 @@ pub(super) struct EngineWarnings {
 
 /// The [`Host`] for one call into the engine.
 pub(super) struct HostedHost<'a> {
-    /// Each port's groups, by port index.
-    groups: &'a [PortGroups],
     /// The wire-control gate.
     gate: &'a ControlGate,
     /// The router's warning throttles.
@@ -82,13 +47,11 @@ pub(super) struct HostedHost<'a> {
 impl<'a> HostedHost<'a> {
     /// The host for a frame that arrived with `provenance`.
     pub(super) fn new(
-        groups: &'a [PortGroups],
         gate: &'a ControlGate,
         warnings: &'a EngineWarnings,
         provenance: TransportProvenance,
     ) -> Self {
         Self {
-            groups,
             gate,
             warnings,
             provenance,
@@ -97,12 +60,6 @@ impl<'a> HostedHost<'a> {
 }
 
 impl Host for HostedHost<'_> {
-    fn group(&self, port: PortId, mac: &[u8]) -> Group {
-        self.groups
-            .get(usize::from(port.0))
-            .map_or(Group::No, |groups| groups.group(mac))
-    }
-
     fn authorize(&mut self, claim: &Claim<'_>) -> bool {
         let ctx = ControlAuthContext {
             port_idx: usize::from(claim.port.0),
@@ -110,7 +67,7 @@ impl Host for HostedHost<'_> {
             source_mac: MacAddr::from_slice(claim.source),
             provenance: self.provenance,
             trust: ControlTrust::from_provenance(self.provenance),
-            message_type: claim.message_type.to_raw(),
+            message_type: claim.message_type,
             vendor_id: claim.vendor_id,
             source_net: claim.snet,
             dest_net: claim.dnet,

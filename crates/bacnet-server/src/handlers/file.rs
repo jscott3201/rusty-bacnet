@@ -15,8 +15,8 @@ use bacnet_types::enums::FileAccessMethod as ObjectFileAccessMethod;
 /// treated as a mismatch rather than defaulting to stream or record access.
 fn invalid_file_access_method() -> Error {
     Error::Protocol {
-        class: ErrorClass::SERVICES.to_raw() as u32,
-        code: ErrorCode::INVALID_FILE_ACCESS_METHOD.to_raw() as u32,
+        class: ErrorClass::SERVICES,
+        code: ErrorCode::INVALID_FILE_ACCESS_METHOD,
     }
 }
 
@@ -31,8 +31,8 @@ fn invalid_file_access_method() -> Error {
 /// identifier gets this error rather than OBJECT / UNKNOWN_OBJECT.
 fn inconsistent_object_type() -> Error {
     Error::Protocol {
-        class: ErrorClass::SERVICES.to_raw() as u32,
-        code: ErrorCode::INCONSISTENT_OBJECT_TYPE.to_raw() as u32,
+        class: ErrorClass::SERVICES,
+        code: ErrorCode::INCONSISTENT_OBJECT_TYPE,
     }
 }
 
@@ -60,8 +60,8 @@ fn validate_file_access_method(
 /// write start (append), so any other negative value gets the same error.
 fn invalid_file_start_position() -> Error {
     Error::Protocol {
-        class: ErrorClass::SERVICES.to_raw() as u32,
-        code: ErrorCode::INVALID_FILE_START_POSITION.to_raw() as u32,
+        class: ErrorClass::SERVICES,
+        code: ErrorCode::INVALID_FILE_START_POSITION,
     }
 }
 
@@ -76,15 +76,15 @@ fn invalid_file_start_position() -> Error {
 /// fails closed instead of assuming the file is writable.
 fn file_access_denied() -> Error {
     Error::Protocol {
-        class: ErrorClass::SERVICES.to_raw() as u32,
-        code: ErrorCode::FILE_ACCESS_DENIED.to_raw() as u32,
+        class: ErrorClass::SERVICES,
+        code: ErrorCode::FILE_ACCESS_DENIED,
     }
 }
 
 fn unknown_object() -> Error {
     Error::Protocol {
-        class: ErrorClass::OBJECT.to_raw() as u32,
-        code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
+        class: ErrorClass::OBJECT,
+        code: ErrorCode::UNKNOWN_OBJECT,
     }
 }
 
@@ -93,8 +93,8 @@ fn unknown_object() -> Error {
 /// does not fit is an implementation fault, not a client error.
 fn ack_position(actual: u64) -> Result<i32, Error> {
     i32::try_from(actual).map_err(|_| Error::Protocol {
-        class: ErrorClass::DEVICE.to_raw() as u32,
-        code: ErrorCode::INTERNAL_ERROR.to_raw() as u32,
+        class: ErrorClass::DEVICE,
+        code: ErrorCode::INTERNAL_ERROR,
     })
 }
 
@@ -366,7 +366,7 @@ fn write_file(
     {
         if *record_count as usize != file_record_data.len() {
             return Err(Error::Reject {
-                reason: RejectReason::MISSING_REQUIRED_PARAMETER.to_raw(),
+                reason: RejectReason::MISSING_REQUIRED_PARAMETER,
             }
             .into());
         }

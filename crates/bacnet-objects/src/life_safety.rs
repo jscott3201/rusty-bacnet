@@ -95,8 +95,8 @@ fn valid_life_safety_state(state: LifeSafetyState) -> bool {
 
 fn life_safety_error(code: ErrorCode) -> Error {
     Error::Protocol {
-        class: ErrorClass::OBJECT.to_raw() as u32,
-        code: code.to_raw() as u32,
+        class: ErrorClass::OBJECT,
+        code,
     }
 }
 

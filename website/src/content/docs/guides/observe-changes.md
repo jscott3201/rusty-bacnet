@@ -33,6 +33,6 @@ Define how your application represents missing data, detects stale values, handl
 
 ## Sources and release scope
 
-These instructions target **v0.13.0**. Source review is not a claim of hardware qualification.
+These instructions target **v0.14.0**. Source review is not a claim of hardware qualification.
 
-[CLI subscription command](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/docs/CLI.md) · [Python subscription lifecycle](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/docs/python-api.md) · [COV example](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/examples/python/cov_subscriptions.py).
+[CLI subscription command](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/CLI.md) · [Python subscription lifecycle](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/python-api.md) · [COV example](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/examples/python/cov_subscriptions.py).

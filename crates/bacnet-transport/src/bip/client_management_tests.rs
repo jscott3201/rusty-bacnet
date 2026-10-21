@@ -318,7 +318,10 @@ async fn bvlc_malformed_ack_returns_decode_error_without_counting_an_ack() {
             received = peer.recv_from(&mut packet) => received.unwrap(),
         };
         peer.send_to(&[0x81, 3, 0, 5, 0], source).await.unwrap();
-        assert!(matches!(request.await, Err(Error::Decoding { .. })));
+        assert!(matches!(
+            request.await,
+            Err(BvlcExchangeError::Transport(Error::Decoding(_)))
+        ));
     }
     let snapshot = transport.bvlc_client_snapshot();
     assert_eq!(snapshot.read_bdt.sent, 1);
@@ -360,7 +363,12 @@ async fn bvlc_busy_timeout_and_late_result_are_distinct_observations() {
         }
         tokio::time::pause();
         tokio::time::advance(Duration::from_secs(4)).await;
-        assert!(matches!(request.await, Err(Error::Timeout(_))));
+        assert!(matches!(
+            request.await,
+            Err(BvlcExchangeError::NoReply(
+                BipTransport::BVLC_RESPONSE_TIMEOUT
+            ))
+        ));
         tokio::time::resume();
     }
     let snapshot = transport.bvlc_client_snapshot();
@@ -413,7 +421,7 @@ async fn bvlc_encode_and_send_errors_release_slot_without_fabricated_timeouts() 
     ];
     assert!(matches!(
         transport.write_bdt(&target, &entries).await,
-        Err(Error::Encoding(_))
+        Err(BvlcExchangeError::Transport(Error::Encoding(_)))
     ));
     // A broadcast without socket permission fails locally; UDP port zero
     // does not provide the same send-error behavior on every platform.
@@ -428,7 +436,10 @@ async fn bvlc_encode_and_send_errors_release_slot_without_fabricated_timeouts() 
         peer.local_addr().unwrap().port(),
     );
     let error = transport.read_bdt(&denied_broadcast).await.unwrap_err();
-    assert!(matches!(error, Error::Transport(_)), "{error:?}");
+    assert!(
+        matches!(error, BvlcExchangeError::Transport(Error::Transport(_))),
+        "{error:?}"
+    );
     {
         let request = transport.read_bdt(&target);
         tokio::pin!(request);
@@ -537,10 +548,7 @@ async fn bvlc_manual_zero_ttl_is_a_one_shot_wire_request() {
         };
         assert_eq!(&packet[..len], &[0x81, 5, 0, 6, 0, 0]);
         peer.send_to(&[0x81, 0, 0, 6, 0, 0], source).await.unwrap();
-        assert_eq!(
-            request.await.unwrap(),
-            BvlcResultCode::SUCCESSFUL_COMPLETION
-        );
+        request.await.unwrap();
     }
     assert_eq!(
         transport
@@ -577,7 +585,7 @@ async fn a_malformed_or_oversized_ack_fails_the_request_it_answers() {
     let short = message(BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE_ACK, &[0]);
     answer(&ctx, &short, TARGET).await;
     let error = rx.await.unwrap().unwrap_err();
-    assert!(matches!(error, Error::Decoding { .. }), "{error:?}");
+    assert!(matches!(error, Error::Decoding(_)), "{error:?}");
 
     let (guard, rx) = ctx
         .node

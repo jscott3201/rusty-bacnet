@@ -10,7 +10,7 @@
 //! only finds where one value ends and which alternative it is, so callers
 //! can keep the octets as they arrived.
 
-use bacnet_types::error::Error;
+use bacnet_types::error::{DecodeError, DecodingKind, Error};
 
 use super::color_command::{self, decode_xy_color};
 use super::lighting_command;
@@ -90,13 +90,16 @@ pub fn channel_value_end(data: &[u8], offset: usize) -> Result<usize, Error> {
             let (command, end, oversized) = lighting_command::decode_fields(data, pos)?;
             let after = expect_closing(data, end, 0, "lighting command")?;
             if let Some(field) = oversized {
-                return Err(Error::decoding(offset, format!("lighting command {field}")));
+                return Err(Error::decoding(offset, field));
             }
             if let Some(priority) = command.priority.filter(|p| !(1..=16).contains(p)) {
-                return Err(Error::out_of_range(
+                return Err(DecodeError::new(
+                    DecodingKind::OutOfRange,
                     offset,
-                    format!("lighting command priority {priority} out of range 1-16"),
-                ));
+                    "lighting command priority {} out of range 1-16",
+                )
+                .with_value(priority.into())
+                .into());
             }
             Ok(after)
         }
@@ -108,7 +111,7 @@ pub fn channel_value_end(data: &[u8], offset: usize) -> Result<usize, Error> {
             let (_, end, oversized) = color_command::decode_fields(data, pos)?;
             let after = expect_closing(data, end, 2, "color command")?;
             if let Some(field) = oversized {
-                return Err(Error::decoding(offset, format!("color command {field}")));
+                return Err(Error::decoding(offset, field));
             }
             Ok(after)
         }

@@ -120,13 +120,15 @@ fn assert_property_error<T: std::fmt::Debug>(
 ) {
     match result.expect_err(context) {
         Error::Protocol { class, code } => {
-            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32, "{context}");
-            assert_eq!(code, expected.to_raw() as u32, "{context}");
+            assert_eq!(class, ErrorClass::PROPERTY, "{context}");
+            assert_eq!(code, expected, "{context}");
         }
         other => panic!("{context}: expected property error, got {other:?}"),
     }
 }
 
+/// Both enrollment types serve the optional Event_Message_Texts (Event
+/// Enrollment since #1507, Alert Enrollment since #1865).
 fn assert_history_surface(object: &mut dyn BACnetObject, label: &str) {
     let properties = object.property_list();
     assert!(
@@ -134,14 +136,17 @@ fn assert_history_surface(object: &mut dyn BACnetObject, label: &str) {
         "{label}: Event_Time_Stamps missing from Property_List"
     );
     assert!(
-        !properties.contains(&PropertyIdentifier::EVENT_MESSAGE_TEXTS),
-        "{label}: optional Event_Message_Texts must remain absent"
+        properties.contains(&PropertyIdentifier::EVENT_MESSAGE_TEXTS),
+        "{label}: Event_Message_Texts missing from Property_List"
     );
-    assert_property_error(
-        object.read_property(PropertyIdentifier::EVENT_MESSAGE_TEXTS, None),
-        ErrorCode::UNKNOWN_PROPERTY,
-        &format!("{label}: Event_Message_Texts read"),
+    assert_eq!(
+        object
+            .read_property(PropertyIdentifier::EVENT_MESSAGE_TEXTS, None)
+            .unwrap(),
+        PropertyValue::List(vec![PropertyValue::CharacterString(String::new()); 3]),
+        "{label}: Event_Message_Texts starts empty"
     );
+    assert!(!object.is_writable_property(PropertyIdentifier::EVENT_MESSAGE_TEXTS));
     assert_property_error(
         object.write_property(
             PropertyIdentifier::EVENT_TIME_STAMPS,
@@ -321,6 +326,10 @@ fn enrollment_property_metadata_is_complete_and_pins_timestamp_requirements() {
         PropertyIdentifier::EVENT_DETECTION_ENABLE,
         PropertyIdentifier::NOTIFICATION_CLASS,
         PropertyIdentifier::EVENT_TIME_STAMPS,
+        PropertyIdentifier::EVENT_MESSAGE_TEXTS,
+        PropertyIdentifier::EVENT_MESSAGE_TEXTS_CONFIG,
+        PropertyIdentifier::EVENT_ALGORITHM_INHIBIT_REF,
+        PropertyIdentifier::EVENT_ALGORITHM_INHIBIT,
         PropertyIdentifier::FAULT_TYPE,
         PropertyIdentifier::FAULT_PARAMETERS,
         PropertyIdentifier::TIME_DELAY_NORMAL,
@@ -344,6 +353,10 @@ fn enrollment_property_metadata_is_complete_and_pins_timestamp_requirements() {
         PropertyIdentifier::ACKED_TRANSITIONS,
         PropertyIdentifier::NOTIFY_TYPE,
         PropertyIdentifier::EVENT_TIME_STAMPS,
+        PropertyIdentifier::EVENT_MESSAGE_TEXTS,
+        PropertyIdentifier::EVENT_MESSAGE_TEXTS_CONFIG,
+        PropertyIdentifier::EVENT_ALGORITHM_INHIBIT_REF,
+        PropertyIdentifier::EVENT_ALGORITHM_INHIBIT,
         PropertyIdentifier::PROPERTY_LIST,
     ];
     assert_complete_metadata(&alert, &alert_ids, "Alert Enrollment");

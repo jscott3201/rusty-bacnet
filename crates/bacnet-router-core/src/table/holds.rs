@@ -3,7 +3,7 @@
 use core::fmt;
 
 use super::{Reachability, Table, Timing};
-use crate::message::RejectReason;
+use crate::npdu::RejectMessageReason;
 use crate::{swap_apart, Instant, PortId};
 
 /// What [`Table::apply_reject`] did.
@@ -24,6 +24,10 @@ pub enum RejectEffect {
     /// For a learned route, with a reason other than 1 or 2, which changes
     /// no route (Clause 6.6.3.5).
     Kept,
+    /// For a learned route through another router than the reject's
+    /// sender, under the router's next-hop policy (#1698): the router
+    /// didn't apply it. [`Table::apply_reject`] itself never returns this.
+    NotNextHop,
 }
 
 /// When a reject from one arrival port last changed one network's route.
@@ -146,14 +150,14 @@ impl<const R: usize, const H: usize> Table<R, H> {
         &mut self,
         network: u16,
         port: PortId,
-        reason: RejectReason,
+        reason: RejectMessageReason,
         now: Instant,
         timing: &Timing,
     ) -> RejectEffect {
         let learned = self.lookup(network).is_some_and(|route| !route.direct);
         let other = !matches!(
             reason,
-            RejectReason::NOT_DIRECTLY_CONNECTED | RejectReason::ROUTER_BUSY
+            RejectMessageReason::NOT_DIRECTLY_CONNECTED | RejectMessageReason::ROUTER_BUSY
         );
         if learned && other {
             let kept = &mut self.counters.reject_kept;
@@ -166,10 +170,10 @@ impl<const R: usize, const H: usize> Table<R, H> {
             let lapsed = route.busy_until.is_some_and(|deadline| now >= deadline);
             !route.direct
                 && match reason {
-                    RejectReason::NOT_DIRECTLY_CONNECTED => {
+                    RejectMessageReason::NOT_DIRECTLY_CONNECTED => {
                         route.reachability != Reachability::Unreachable
                     }
-                    RejectReason::ROUTER_BUSY => {
+                    RejectMessageReason::ROUTER_BUSY => {
                         route.reachability != Reachability::Unreachable
                             && (route.reachability != Reachability::Busy || lapsed)
                     }
@@ -194,7 +198,7 @@ impl<const R: usize, const H: usize> Table<R, H> {
             };
         }
         counters.reject_applied = counters.reject_applied.saturating_add(1);
-        if reason == RejectReason::NOT_DIRECTLY_CONNECTED {
+        if reason == RejectMessageReason::NOT_DIRECTLY_CONNECTED {
             self.mark_unreachable(network);
         } else {
             // Only reasons 1 and 2 change a route.

@@ -9,7 +9,7 @@ use crate::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetExtendedPropertyState, BACnetPropertyStates,
     BACnetProprietaryPropertyState,
 };
-use crate::error::Error;
+use crate::error::{DecodeError, DecodingKind, Error};
 use crate::primitives::PropertyValue;
 
 // ---------------------------------------------------------------------------

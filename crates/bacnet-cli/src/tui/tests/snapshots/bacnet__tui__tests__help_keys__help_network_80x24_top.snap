@@ -1,0 +1,28 @@
+---
+source: crates/bacnet-cli/src/tui/tests/help_keys.rs
+expression: top
+---
+" 1 2 3 [4 Network] 7 | BIP 10.0.0.1:47808 | up | READ-ONLY | drop 0      ? help "
+"┌ ┌ Help (? or Esc to close) ────────────────────────────────────────────────┐─┐"
+"│N│ Global                                                                   │ │"
+"│C│   ?                This help; the movement keys scroll it                │ │"
+"│B│   q                Quit (asks first while writes are in effect)          │ │"
+"│ │   Ctrl-C           Close a dialog or cancel the request; twice quits     │ │"
+"│ │   L                Show or hide the log pane                             │ │"
+"└─│   W u              Arm or disarm writes (read-only until then); the      │─┘"
+"┌ │                    ledger                                                │─┐"
+"│ │   :                The command bar, with the commands listed below       │ │"
+"│ │   p c              The profile dialog; connect again, or retry           │ │"
+"│ │   1 2              Devices; 2 is Browse, the open device's browser       │ │"
+"│ │   3 4 5 6 7        Watch, Network, SC, MS/TP, Capture; see the top line  │ │"
+"│ │ Network (4)                                                              │ │"
+"│ │   Tab Shift-Tab    Next or previous table: BDT, FDT, Matrix, Networks;   │ │"
+"│ │                    from 160 columns, the next pane                       │ │"
+"│ │   r                Read the BBMD's tables again; on Networks, ask the    │ │"
+"│ │                    routers                                               │ │"
+"│ │   m                Survey every BBMD the tables lead to, for the matrix  │ │"
+"│ │   x                Disconnect                                            │ │"
+"│ │   Esc              Back to the devices                                   │ │"
+"│ │ Commands (:)                                                             │ │"
+"└─└──────────────────────────────────── 1-20 of 34  Up Down PgUp PgDn scroll ┘─┘"
+"                                                                                "

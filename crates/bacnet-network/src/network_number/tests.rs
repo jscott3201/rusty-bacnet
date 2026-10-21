@@ -52,6 +52,27 @@ fn number_control_independent_wire_vectors_and_reply_flags() {
     );
 }
 
+/// A Network-Number-Is whose data isn't three octets is refused, through
+/// the router core's view (#1818): cut short, or padded past the flag.
+#[test]
+fn number_is_of_the_wrong_length_is_refused() {
+    let good = [1, 0x80, 0x13, 0x0B, 0xB8, 0];
+    assert_eq!(
+        parse(&good, true),
+        Some(NumberControl::NumberIs {
+            number: 3000,
+            flag: 0
+        })
+    );
+    for len in 3..good.len() {
+        assert_eq!(parse(&good[..len], true), None, "short: {len} octets");
+    }
+    for padding in [&[0u8][..], &[0, 0], &[1, 2, 3]] {
+        let padded = [&good[..], padding].concat();
+        assert_eq!(parse(&padded, true), None, "padded: {padded:?}");
+    }
+}
+
 #[test]
 fn local_network_number_shares_the_last_published_state() {
     let slot = LocalNetworkNumber::default();
@@ -81,9 +102,9 @@ fn local_network_number_shares_the_last_published_state() {
 async fn a_published_number_leaves_routed_sends_as_named() {
     use crate::layer::NetworkLayer;
     use bacnet_encoding::npdu::NpduAddress;
+    use bacnet_npdu::NetworkPriority;
     use bacnet_transport::loopback::LoopbackTransport;
     use bacnet_transport::port::TransportPort;
-    use bacnet_types::enums::NetworkPriority;
 
     let (mut link, mut peer) = LoopbackTransport::pair(vec![1], vec![2]);
     let mut destinations = link.record_unicast_destinations();
@@ -94,7 +115,7 @@ async fn a_published_number_leaves_routed_sends_as_named() {
         .local_network_number()
         .publish(NetworkNumber::configured(7).unwrap());
     let apdu = [0x10, 0x08];
-    let priority = NetworkPriority::NORMAL;
+    let priority = NetworkPriority::Normal;
 
     network
         .send_apdu_routed(&apdu, 7, &[3], &[9], false, priority)

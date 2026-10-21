@@ -1,5 +1,6 @@
 //! Network/server lifetime and router propagation over real TLS ingress.
 use super::*;
+use bacnet_encoding::apdu::decode_apdu;
 use bacnet_network::layer::IssuedApdu;
 use bacnet_network::response_route::ResponseRoute;
 
@@ -19,7 +20,7 @@ async fn issue(
             next_hop: &PEER_MAC,
             destination: None,
             expecting_reply: false,
-            priority: NetworkPriority::NORMAL,
+            priority: NetworkPriority::Normal,
         },
         route,
         || {},
@@ -106,19 +107,26 @@ async fn direct_response_router_local_delivery_preserves_matching_capability() {
         transport: queued_port(incoming, responses),
         network_number: 44,
     };
+    let (_tx_b, incoming_b) = mpsc::channel(1);
+    let (responses_b, mut generic_b) = mpsc::unbounded_channel();
+    let port_b = RouterPort {
+        transport: queued_port(incoming_b, responses_b),
+        network_number: 55,
+    };
     let StartedRouter {
         mut router,
         apdus: mut local,
         ..
-    } = BACnetRouter::start(vec![port], RouterOptions::new())
+    } = BACnetRouter::start(vec![port, port_b], RouterOptions::new())
         .await
         .unwrap();
+    let mut saved = None;
     for (invoke, destination) in [
         (1, None),
         (
             2,
             Some(NpduAddress {
-                network: 44,
+                network: 55,
                 mac_address: MacAddr::from_slice(&[0xaa; 6]),
             }),
         ),
@@ -126,7 +134,7 @@ async fn direct_response_router_local_delivery_preserves_matching_capability() {
         let mut envelope = f.capture(&mut a, &read_name(invoke)).await;
         let expected = envelope.provenance;
         let mut npdu = decode_npdu(envelope.npdu).unwrap();
-        npdu.destination = destination;
+        npdu.destination = destination.clone();
         let mut bytes = BytesMut::new();
         encode_npdu(&mut bytes, &npdu).unwrap();
         envelope.npdu = bytes.freeze();
@@ -137,16 +145,61 @@ async fn direct_response_router_local_delivery_preserves_matching_capability() {
             received.direct_response.as_ref().unwrap().identity(),
             expected.direct_sc_identity().unwrap()
         );
-        issue(
+        let route = received.response_route();
+        let header = if destination.is_some() { 16 } else { 7 };
+        let npdu_limit = received
+            .direct_response
+            .as_ref()
+            .unwrap()
+            .max_npdu_length()
+            .min(1497);
+        assert_eq!(
+            route.max_apdu_length(u16::MAX, None).unwrap() as usize,
+            npdu_limit - header
+        );
+        let mut missing = received.clone();
+        missing.direct_response = None;
+        assert!(issue(
             f.server.network.as_ref().unwrap(),
-            &received.response_route(),
-            invoke,
+            &missing.response_route(),
+            99
         )
         .await
-        .unwrap();
-        assert!(matches!(f.response().await, Apdu::SimpleAck(ack) if ack.invoke_id == invoke));
+        .is_err());
+        let retired_network = idle_network();
+        retired_network.seal_responses();
+        assert!(issue(&retired_network, &route, 98).await.is_err());
+        issue(f.server.network.as_ref().unwrap(), &route, invoke)
+            .await
+            .unwrap();
+        let wire = bounded(a.ws.recv()).await.unwrap();
+        let frame = decode_sc_message(&wire).unwrap();
+        let npdu = decode_npdu(frame.payload).unwrap();
+        assert_eq!(npdu.source, destination);
+        assert_eq!(
+            npdu.destination,
+            Some(NpduAddress {
+                network: 123,
+                mac_address: MacAddr::from_slice(&[3])
+            })
+        );
+        assert!(
+            matches!(decode_apdu(npdu.payload).unwrap(), Apdu::SimpleAck(ack) if ack.invoke_id == invoke)
+        );
+        saved = Some(route);
     }
     assert!(generic.try_recv().is_err());
+    assert!(generic_b.try_recv().is_err());
     router.stop().await;
+    assert!(
+        issue(f.server.network.as_ref().unwrap(), &saved.unwrap(), 97)
+            .await
+            .is_err()
+    );
+    f.listener.stop().await;
+    assert!(
+        a.ws.recv().await.is_err(),
+        "router retirement cannot leak a direct response"
+    );
     f.stop().await;
 }

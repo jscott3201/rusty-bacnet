@@ -4,14 +4,13 @@
 use core::fmt;
 use core::net::SocketAddrV4;
 
+use bacnet_npdu::MAX_NPDU;
 use bacnet_time::Duration;
 
 use crate::LocalSubnet;
 
-/// The largest NPDU a B/IP data link carries (Table 6-1).
-pub const MAX_NPDU: usize = 1497;
-
-/// The largest datagram B/IP sends a [`MAX_NPDU`]-octet NPDU in: a
+/// The largest datagram B/IP sends a [`MAX_NPDU`]-octet NPDU in, the
+/// largest a B/IP data link carries (Table 6-1): a
 /// Forwarded-NPDU, whose 4-octet header and 6-octet originating address
 /// come before the NPDU. It is the default send budget, and a node's
 /// receive buffer should hold at least this much.
@@ -29,7 +28,9 @@ pub const DEFAULT_RESPONSE_TIMEOUT: Duration = Duration::from_secs(3);
 pub const MIN_BUDGET: u16 = 64;
 
 /// How a B/IP node takes part in its network. It is fixed for the life of
-/// a [`Node`](super::Node); changing it means building a new one.
+/// a [`Node`](super::Node); changing it means building a new one. A foreign
+/// device can still move to another BBMD or time-to-live
+/// ([`Node::retarget`](super::Node::retarget)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     /// A device on one of the network's subnets: local broadcasts go to the
@@ -40,6 +41,9 @@ pub enum Mode {
     Foreign(Foreign),
     /// A BBMD: the receive decisions hand the BBMD's share of each message
     /// to the caller, which runs it through [`bbmd::Tables`](crate::bbmd::Tables).
+    /// With a multicast group as its subnet ([`LocalSubnet::is_group`]) it
+    /// serves that group (Annex J.8.3), and its BDT must say so
+    /// ([`Bdt::set_serves_group`](crate::bbmd::Bdt::set_serves_group)).
     Bbmd,
 }
 
@@ -191,10 +195,16 @@ impl Link {
     }
 
     /// Check the configuration: a nonzero own port, a usable foreign-device
-    /// registration, and a budget of at least [`MIN_BUDGET`] octets.
+    /// registration, a budget of at least [`MIN_BUDGET`] octets, and no
+    /// multicast group (a class D [`LocalSubnet::broadcast`]) in
+    /// [`Mode::Foreign`]. A normal node with a group is a B/IP-M member, and
+    /// a BBMD with one serves the group (Annex J.8.3).
     pub const fn validate(&self) -> Result<(), ConfigError> {
         if self.address.port() == 0 {
             return Err(ConfigError::OwnPort);
+        }
+        if self.subnet.is_group() && matches!(self.mode, Mode::Foreign(_)) {
+            return Err(ConfigError::MulticastMode);
         }
         if let Some(budget) = self.budget {
             if budget < MIN_BUDGET {
@@ -246,6 +256,13 @@ pub enum ConfigError {
     BbmdIsSelf,
     /// The datagram budget is below [`MIN_BUDGET`] octets.
     Budget,
+    /// [`Node::retarget`](super::Node::retarget) on a node that is not a
+    /// foreign device.
+    NotForeign,
+    /// A multicast group as the subnet's broadcast address (B/IP-M, Annex
+    /// J.8) in [`Mode::Foreign`]: a foreign device broadcasts through its
+    /// BBMD, never to a group.
+    MulticastMode,
 }
 
 impl fmt::Display for ConfigError {
@@ -260,6 +277,8 @@ impl fmt::Display for ConfigError {
             Self::BbmdAddress => "the BBMD's address is unspecified or a group address",
             Self::BbmdIsSelf => "the BBMD is this node's own address",
             Self::Budget => "the datagram budget is below 64 octets",
+            Self::NotForeign => "only a foreign device can change its BBMD",
+            Self::MulticastMode => "a foreign device can't use a multicast group",
         })
     }
 }

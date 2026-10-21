@@ -8,6 +8,7 @@ use alloc::vec::Vec;
 
 use super::EventNotificationRequest;
 use crate::bitstring::LogStatus;
+use crate::enums::{ErrorClass, ErrorCode};
 use crate::primitives::{Date, StatusFlags, Time};
 
 // ---------------------------------------------------------------------------
@@ -45,10 +46,10 @@ pub enum LogDatum {
     NullValue,
     /// The error that kept the value from being logged.
     Failure {
-        /// Raw BACnet error class value.
-        error_class: u32,
-        /// Raw BACnet error code value.
-        error_code: u32,
+        /// The error class.
+        error_class: ErrorClass,
+        /// The error code.
+        error_code: ErrorCode,
     },
     /// The device clock moved by this many seconds; zero when unknown.
     TimeChange(f32),
@@ -171,10 +172,10 @@ pub enum LogValue {
     NullValue,
     /// The error that kept this member from being logged.
     Failure {
-        /// Raw BACnet error class value.
-        error_class: u32,
-        /// Raw BACnet error code value.
-        error_code: u32,
+        /// The error class.
+        error_class: ErrorClass,
+        /// The error code.
+        error_code: ErrorCode,
     },
     /// A value of any other datatype, as the tagged encoding a property read
     /// carries for it: one or more complete values, context tags balanced.

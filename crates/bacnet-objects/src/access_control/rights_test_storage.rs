@@ -167,7 +167,7 @@ pub(super) fn assert_refused(result: Result<(), Error>, class: ErrorClass, code:
             code: got_code,
         }) => assert_eq!(
             (got_class, got_code),
-            (class.to_raw() as u32, code.to_raw() as u32),
+            (class, code),
             "expected {class:?} / {code:?}"
         ),
         other => panic!("expected {class:?} / {code:?}, got {other:?}"),

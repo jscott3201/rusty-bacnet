@@ -9,7 +9,9 @@ use crate::event_log::EventLogObject;
 use crate::traits::BACnetObject;
 use bacnet_types::bitstring::LogStatus;
 use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, NotificationParameters};
-use bacnet_types::enums::{EventState, EventType, NotifyType, PropertyIdentifier};
+use bacnet_types::enums::{
+    EngineeringUnits, EventState, EventType, NotifyType, PropertyIdentifier,
+};
 use bacnet_types::primitives::{BACnetTimeStamp, Date, ObjectIdentifier, PropertyValue, Time};
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -55,8 +57,10 @@ fn log_oid(instance: u32) -> ObjectIdentifier {
 fn database(logs: &[u32], buffer_size: u32) -> ObjectDatabase {
     let mut db = ObjectDatabase::new();
     db.set_clock_reader(Some(Arc::new(FixedClock(frame()))));
-    db.add(Box::new(AnalogValueObject::new(1, "AV-1", 62).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+    ))
+    .unwrap();
     for &instance in logs {
         db.add(Box::new(
             EventLogObject::new(instance, format!("EL-{instance}"), buffer_size).unwrap(),
@@ -220,8 +224,9 @@ fn an_enrollment_notification_about_any_local_event_log_goes_in_no_log() {
     let mut db = database(&[1, 2], 8);
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
-            instance: 7,
-            name: "Device-7".into(),
+            identity: crate::DeviceIdentity::new(7, 0)
+                .expect("valid Device identity")
+                .with_name("Device-7"),
             ..DeviceConfig::default()
         })
         .unwrap(),
@@ -350,8 +355,8 @@ impl BACnetObject for Refusing {
     fn add_event_log_record(&mut self, _: BACnetEventLogRecord) -> Result<(), Error> {
         self.0.fetch_add(1, Ordering::Relaxed);
         Err(Error::Protocol {
-            class: ErrorClass::DEVICE.to_raw() as u32,
-            code: ErrorCode::OPERATIONAL_PROBLEM.to_raw() as u32,
+            class: ErrorClass::DEVICE,
+            code: ErrorCode::OPERATIONAL_PROBLEM,
         })
     }
 }
@@ -419,8 +424,9 @@ fn received_reports_on_event_log_buffers_and_this_devices_own_go_in_no_log() {
     received_log(&mut db, 1, true);
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
-            instance: 7,
-            name: "Device-7".into(),
+            identity: crate::DeviceIdentity::new(7, 0)
+                .expect("valid Device identity")
+                .with_name("Device-7"),
             ..DeviceConfig::default()
         })
         .unwrap(),

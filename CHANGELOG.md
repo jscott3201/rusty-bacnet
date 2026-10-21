@@ -9,6 +9,1092 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Entries for the next release are fragment files in [`changelog.d/`](changelog.d/), assembled here when a version is released. Add one per change instead of editing this file: [`changelog.d/README.md`](changelog.d/README.md) has the format, and `python3 scripts/changelog.py preview` shows the section they make.
 
+## [0.14.0] - 2026-10-21
+
+### Release highlights
+
+This pre-1.0 release ships the terminal UI and a performance and security
+pass. It breaks Rust, Python and CLI APIs and changes some on-the-wire
+behaviour, most visibly what the CLI does with no command, which commands
+may write, and how a BACnet/SC node admits traffic. Before moving a v0.13.0
+integration, read the
+[upgrade guide](https://jscott3201.github.io/rusty-bacnet/project/upgrading/),
+which groups what changes by area; the migration notes below give the exact
+replacements. Conformance remains partial, and this release is not a
+full-conformance or BTL certification claim.
+
+- **The TUI is the CLI.** Plain `bacnet` on a terminal opens a full-screen
+  terminal UI with saved B/IP, BACnet/SC and MS/TP profiles, a device
+  browser, a watch list, guarded write sessions with a revert ledger, and
+  Network, SC, MS/TP and Capture diagnostics with pcap export. The shell is
+  gone, and one-shot commands that change a device need `--allow-write`
+  (and `--yes` for DCC and reinitialize).
+- **Faster requests.** A B/IP ReadProperty round trip costs less at every
+  step from transport to handler: the last cut alone took 13% of the
+  instructions (47,610 to 41,454) and half the bytes allocated, and one
+  client gets about 36% more requests a second than on 0.13.0, with a third
+  lower median latency, on the same machine.
+- **Security.** One `ServerPolicy` makes every server authorization
+  decision, and policies and a hardened router's control authorizer see the
+  verified certificate principal of a direct BACnet/SC peer (#518, #524). SC
+  nodes rate-limit network-layer messages per source, the CLI and TUI lint
+  their BACnet/SC credentials before dialing, and `bacnet sc-check` inspects
+  them offline.
+- **NAT and multicast.** A BBMD can run behind a NAT router at a configured
+  global address, and B/IP nodes and BBMDs can use an IPv4 multicast group,
+  from Rust, Python and the CLI, with the matching Network Port rows (#940,
+  #941).
+- **MS/TP real time.** On Linux the MS/TP transport's dedicated thread can
+  run under `SCHED_FIFO` pinned to chosen CPUs, timer lateness is kept in a
+  histogram, and a receive-only monitor maps a trunk without transmitting
+  (#501, #958, #1897).
+- **Quieter logs.** Warnings a peer can set off once per packet or
+  connection log at most once per 10 seconds with a count, and Python
+  applications receive the stack's logs through `logging` (#1724, #1950).
+- A new `no_std` crate, `bacnet-npdu`, holds the network-layer vocabulary
+  that every crate now shares, and the codec crates build without an
+  allocator, with errors that format no text until displayed.
+
+### Migration notes
+
+- **MS/TP execution mode (Rust API, #501):** `MstpExecutionMode::DedicatedThread`
+  now carries an `MstpThreadConfig`, and the enum is `Clone` but no longer
+  `Copy`. Write `MstpExecutionMode::dedicated_thread()` for the old behaviour,
+  and clone a mode you use more than once. ([7260f31](https://github.com/jscott3201/rusty-bacnet/commit/7260f313ea013749cdcb7be40062d8ef3c83dc24))
+
+- **SC admission (Rust API, #518):** `ScNpduAdmissionPolicy`, `ScNpduDropCounts`
+  and the new `ScControlRateLimit` are `#[non_exhaustive]`; construct them via
+  `Default` or the builders. An SC node now drops a source's network-layer
+  messages beyond 256 at once or 32 a second; a site with a router fronting many
+  networks raises it with `with_control_rate_limit()`. ([0476eb5](https://github.com/jscott3201/rusty-bacnet/commit/0476eb52a86d5b4e6e73618ce88c9b73cd605f23))
+
+- **Server policy (Rust API, #524):** the four `*_authorizer` fields and setters,
+  and the `LifeSafetyOperationAuthorizer`, `AuditNotificationAuthorizer` and
+  `UnconfirmedAuditNotificationAuthorizer` aliases, are gone: implement
+  `ServerPolicy` or chain `FnPolicy` closures. `.policy(..)` replaces any earlier
+  policy, so merge them into one. `MutationAuthorizer` is now
+  `mutation::DeviceWriteAuthorizer`. See
+  [Server authorization policy](docs/mutation-policy.md). ([546f017](https://github.com/jscott3201/rusty-bacnet/commit/546f017e703382e00f2e7ec1d7b7597d591d4503))
+
+- **Typed errors and units (Rust API, #915):** `Error::Protocol`,
+  `Error::Structured` and `TsmResponse::Error` hold `ErrorClass`/`ErrorCode`,
+  and `Error::protocol` takes them; `Reject`/`Abort` hold `RejectReason`/
+  `AbortReason`. Match on the constants, or use `from_raw`/`to_raw`. Pass
+  `EngineeringUnits` to the analog, accumulator, pulse converter and loop
+  constructors and to `StagingConfig::units`. ([f729a45](https://github.com/jscott3201/rusty-bacnet/commit/f729a457dc9afc433d2b857ee2d6dd1284fe0de4))
+
+- **BBMD options and NAT (Rust API, #940, #1668):** a `BbmdOptions` literal
+  naming every field adds `nat: None` and `alone_on_subnet: false`, or ends
+  with `..BbmdOptions::default()`; a `match` on `DataLinkSupport` adds a
+  wildcard arm; build `Tables` with `Tables::new`;
+  `BbmdState::local_address()` returns a `SocketAddrV4` (was
+  `([u8; 4], u16)`), and the new `own_address()` gives the BDT's own address. ([7b81a3f](https://github.com/jscott3201/rusty-bacnet/commit/7b81a3f167931793827f40a337c9abe7ccc605d9))
+
+- **B/IP multicast (Rust API, #941):** build a `BipPort` with
+  `BipPort::new(endpoint, mode)` in place of a struct literal, and add a
+  group view with `.with_multicast(...)`. ([305283f](https://github.com/jscott3201/rusty-bacnet/commit/305283f7b6a8aa7d896ef7243ba0ddb7c4f1c3e9))
+
+- **BACnet/SC CLI (#968):** an expired or not-yet-valid operational
+  certificate, or a key that does not match it, is now refused before the dial
+  with a "SC credential check refused the dial" error instead of failing at the
+  hub; renew or fix the files. In the TUI, a profile with check warnings
+  connects only after `y` accepts them. See
+  [Before a dial](docs/sc-check.md#before-a-dial). ([9f18cc3](https://github.com/jscott3201/rusty-bacnet/commit/9f18cc3b39cd5365183fa9f332ce2e6ad1e30061))
+
+- **CLI write guard (#972):** add `--allow-write` to scripts that run `write`,
+  `create-object`, `delete-object`, `file-write`, `ack-alarm`, `time-sync` or
+  `unregister`, and `--allow-write --yes` for `control` (`dcc`) or `reinit`.
+  A refusal exits with status 4. An indefinite `subscribe` needs
+  `--lifetime 0 --allow-write`. See [the write guard](docs/CLI.md#write-guard). ([f0b530d](https://github.com/jscott3201/rusty-bacnet/commit/f0b530d4f7a18008d3227c032ec8d6d499f68abe))
+
+- **CLI (#974):** `bacnet shell` is gone: open the TUI (`bacnet` or `bacnet
+  tui`) or use the one-shot commands, with `--json` for scripts and screen
+  readers. A script that piped commands into the shell calls one one-shot per
+  command instead (default targets become explicit). For `devices`, use
+  `discover` (or `discover --json`) or the TUI's device list.
+  `--no-default-features` builds the CLI without the TUI. ([b98aac9](https://github.com/jscott3201/rusty-bacnet/commit/b98aac93d39b1313ff5492a91f29f7335293be41))
+
+- **Typed single reads (Python API, #1499, #1888):** compare these reads by
+  `.tag` and `.value` (a shed level is `{"kind", "value"}`, a factor
+  `(format_type, format_class, value)`, Event_Algorithm_Inhibit_Ref an
+  `object_property_reference` mapping of `object_identifier`,
+  `property_identifier` and `property_array_index`); the new `.octets` gives
+  the octets. See [typed constructed values](docs/python-api.md#typed-constructed-values). ([09c332c](https://github.com/jscott3201/rusty-bacnet/commit/09c332ce7fe817c0cadf44148dfb10f06eb3118c))
+
+- **Decoding errors (Rust API, #1646, #1776):** match
+  `Error::Decoding(DecodeError)`, not the `{ offset, kind, message }`
+  variant; `Error::decode_fault()` reads its offset and kind. `decoding`,
+  `decoding_kind`, `invalid_tag`, `missing`, `trailing`, `out_of_range`,
+  `overflow` and `tagged::misplaced_tag` take a `&'static str`; for numbers
+  or context, build a `DecodeError`. `decode_ctx_fixed` takes a `Fixed`, and
+  the WPM cursor error holds `error: DecodeError`, not `message`. ([fca2389](https://github.com/jscott3201/rusty-bacnet/commit/fca238953b304bc79ffb0bec231939acd7eec465))
+
+- **Router port numbers (Rust API, #1698):** give every `RouterPort` and
+  core `PortConfig` a network number from 1 to 65534. For 0 or 0xFFFF,
+  `BACnetRouter::start` now fails before starting any transport, and
+  `Router::new` returns the new `ConfigError::ReservedNetwork`. ([71f238d](https://github.com/jscott3201/rusty-bacnet/commit/71f238da8f30878b07abdbaf36116c6c7564fcbd))
+
+- **Network layer replies (Rust API, #1699):** a `ReceivedApdu` built by hand
+  sets the new `router_response: None` (a router fills it in only for a
+  Confirmed-Request it delivers locally); keep `response_route()` for router
+  deliveries. The `*_on_issuance` callbacks must own their captures
+  (`Send + 'static`), since a router queue may hold them until the send. ([b24829e](https://github.com/jscott3201/rusty-bacnet/commit/b24829eeea1c014465279febb9a90d71f3286cab))
+
+- **NetworkLayer buffering (#1713):** the raw receiver has no 256-APDU queue
+  of its own, so the transport's queue is the only buffer: 256 NPDUs on most
+  links, 64 on MS/TP (before, 64 + 256). Read overload drops from the
+  transport's counters. ([ed71a48](https://github.com/jscott3201/rusty-bacnet/commit/ed71a48addbc185cf68c3a02ce10b3bd18848ea5))
+
+- **NetworkLayer (Rust API, #1713):** `NetworkLayer::start` returns
+  `bacnet_network::layer::ApduReceiver` (`recv`, `poll_recv`, `try_recv`,
+  `close`, `is_closed`) instead of `mpsc::Receiver<ReceivedApdu>`: `recv_many`,
+  `poll_recv_many`, `blocking_recv`, `len`, `is_empty`, `capacity` and
+  wrapping it in `ReceiverStream` are gone. Keep polling it while you need
+  network controls, or use `start_with_admission`; `stop` ends its stream. ([ed71a48](https://github.com/jscott3201/rusty-bacnet/commit/ed71a48addbc185cf68c3a02ce10b3bd18848ea5))
+
+- **Late send refusals (Rust API, #1716):** to return a length rejection for
+  a send refused after queueing, a router-core adapter keeps each send's
+  `reject_origin`, passes it to `Router::refused_later` and drains the
+  resulting actions. A custom transport returns the new `Error::SendTooLong`
+  for a length refusal only before it queues or writes any bytes. ([a47b0ae](https://github.com/jscott3201/rusty-bacnet/commit/a47b0aed2157e639d0083348e74ed427b8282f5b))
+
+- **Device identity (#1720):** Use `DeviceIdentity`, `ServerConfig.device`,
+  `DeviceConfig.identity` and `.device(...)` instead of separate identity fields
+  or endpoint `.identity(...)`/`.with_identity(...)`. Without a database, full
+  servers generate a Device from their configured/default identity; endpoints
+  require explicit `.device(...)`. Supplied Devices must match the resolved
+  identity. See [migration](docs/rust-api.md#local-receive-capacity-and-outgoing-limits). ([b146ed1](https://github.com/jscott3201/rusty-bacnet/commit/b146ed1e637e3975d891423547be2226e46713ac))
+
+- **Router groups (Rust API, #1721):** use glue port configurations or
+  `PortConfig::new(network, mac, limits, groups)` instead of struct literals.
+  Move `Host::group` implementations to a `GroupClassifier` and pass it as
+  the `G` parameter of `Storage` and `Router`, after `N`. The B/IP and MS/TP
+  group helper functions and methods are removed; call
+  `config.groups.classify(mac)`. ([5ce7592](https://github.com/jscott3201/rusty-bacnet/commit/5ce759270441155b6e784e2626419eb3503365bf))
+
+- **AnyTransport (Rust API, #1725):** Add a `_` arm to matches outside
+  `bacnet-transport`. Keep arms for the transports the caller supports and choose
+  an appropriate fallback for other transports. Existing variants remain
+  directly constructible. ([7e3450c](https://github.com/jscott3201/rusty-bacnet/commit/7e3450c9b04c2b9f70b5acbb836ca140c0ac2128))
+
+- **BBMD port (Rust API, #1766):** `BbmdPort` runs the BBMD's `Link`, not a
+  `Node`, so a BVLC-Result or table ACK reaching it is `Ingress::Handled`
+  and no longer counts in `NodeCounters::unmatched_responses`; a BBMD that
+  runs exchanges of its own drives a `Node` beside the port. ([d930e28](https://github.com/jscott3201/rusty-bacnet/commit/d930e28ee895bb5f7f98fa9e1a2e50004ad6fd98))
+
+- **B/IP port driver (Rust API, #1766):** use `bacnet_bip_core::port`:
+  `NodePort::new(node, held)`, `BbmdPort::new(link, tables, targets, rows)`,
+  with `HeldBroadcast`, `Datagrams` (refusing with `SendRefusal::SocketFull`
+  or `SocketError`), `Ingress` and `PortError` there; route through
+  `bacnet_router_core::bip::BipPort` (`config`, `arrived`, `send`).
+  `Ingress::Management` and `BbmdPort::on_deadline` are gone; management
+  requests are `ForBbmd::Management(Request)`. ([d930e28](https://github.com/jscott3201/rusty-bacnet/commit/d930e28ee895bb5f7f98fa9e1a2e50004ad6fd98))
+
+- **Router core (Rust API, #1767):** `router::Counters` fields are `u32`
+  counts since the last `Router::take_counters()`; add them to your own
+  totals. `Options::route_cap` is an `Option<u16>` (`None` fills the table),
+  and `Options::default()` is `STANDARD`. `bacnet_network::router::Counters`
+  is now its own `u64` type, not a re-export. ([d930e28](https://github.com/jscott3201/rusty-bacnet/commit/d930e28ee895bb5f7f98fa9e1a2e50004ad6fd98))
+
+- **bacnet-time versioning (#1768):** a direct dependency on `bacnet-time`
+  names that crate's own version, 0.13.1 in this release, not the release's:
+  later releases may leave it where it is. The other crates already name the
+  one they need. ([9a1ee25](https://github.com/jscott3201/rusty-bacnet/commit/9a1ee25c2be326718adb04da3d791adcc2e0fc4e))
+
+- **MS/TP core (Rust API, #1769):** build the core with
+  `MasterCore::new(config, &mut storage, now)` over a `StandardStorage` or
+  `ExtendedStorage` (`from_parts` keeps the old arguments); rename
+  `HeaplessQueues` to `FixedQueues`; the `on_*` line inputs,
+  `on_transmit_complete` and `on_transmit_aborted` return `()`, so drop
+  `?`/`unwrap` and watch `adapter_errors`; match `ConfigError`,
+  `TransmitError` or `RequestError` where you matched `CoreError`. ([561a5a4](https://github.com/jscott3201/rusty-bacnet/commit/561a5a46aaf5dcaafaaac1c94bc7b072b0073859))
+
+- **MS/TP transmit (Rust API, #1769):** match
+  `Action::Transmit { id, header, length }`; right before enabling the line
+  driver call `on_transmit_started(id, now)`, send the octets in its
+  `Ok(frame)`, and send nothing on `Err` (a deferred frame comes back as a
+  new `Transmit` action). Stop copying the frame at the poll. ([561a5a4](https://github.com/jscott3201/rusty-bacnet/commit/561a5a46aaf5dcaafaaac1c94bc7b072b0073859))
+
+- **Router MS/TP port (Rust API, #1769):** build it with
+  `MstpPort::new(port, core)`, take its `PortConfig` from its `port_config`
+  method (`MstpPort::config` is now the free `mstp::port_config`), poll
+  `poll_action()` (NPDUs arrive as `PortAction::Arrived`), call `release`
+  and `send` on the port, and reach the core through `core_mut()`. ([561a5a4](https://github.com/jscott3201/rusty-bacnet/commit/561a5a46aaf5dcaafaaac1c94bc7b072b0073859))
+
+- **NPDU decode errors (Rust API, #1770):** `NpduDecodeError` no longer
+  converts from `bacnet_types::Error` or reports a `source()`; its
+  `Malformed` case becomes `Error::Decoding`, and an empty or one-octet
+  buffer is `Decoding` with kind `Missing` where it was `BufferTooShort`. ([62a5baf](https://github.com/jscott3201/rusty-bacnet/commit/62a5baf1dbe0fa014b1bc9948d76a86b4a9d9807))
+
+- **More network-layer renames (Rust API, #1770):** `BACNET_PROTOCOL_VERSION`
+  is `bacnet_npdu::VERSION`, `NpduAddressField` is
+  `bacnet_npdu::AddressField`, router-core's `Limits::MIN` is
+  `router::MIN_PORT_LIMIT`, and `bacnet_mstp_core::{NetworkPriority,
+  PriorityError}` are under `bacnet_mstp_core::npdu`. bacnet-encoding
+  re-exports the crate as `bacnet_encoding::npdu::view`. ([62a5baf](https://github.com/jscott3201/rusty-bacnet/commit/62a5baf1dbe0fa014b1bc9948d76a86b4a9d9807))
+
+- **Network-layer types (Rust API, #1770):** import `NetworkMessageType`,
+  `RejectMessageReason`, `NetworkPriority` (now `Normal`, `Urgent`,
+  `CriticalEquipment`, `LifeSafety`), `NpduLimits` and `MAX_MAC_LEN` from
+  `bacnet_npdu`. Router core: `MessageType`, `RejectReason`, `Limits`,
+  `Npdu::parse` and `write` become `NetworkMessageType`,
+  `RejectMessageReason`, `NpduLimits`, `decode` and `encode_into`. ([62a5baf](https://github.com/jscott3201/rusty-bacnet/commit/62a5baf1dbe0fa014b1bc9948d76a86b4a9d9807))
+
+- **Owned NPDU (Rust API, #1770):** `bacnet_encoding::npdu::Npdu` drops
+  `is_network_message` (call `is_network_message()`), its `message_type` is
+  an `Option<NetworkMessageType>` and `NpduDecodeError::Malformed` carries a
+  `bacnet_npdu::Malformed`; `ControlAuthContext::message_type` is a
+  `NetworkMessageType`, and `router_table` no longer re-exports `Mac` or
+  `RejectReason`. ([62a5baf](https://github.com/jscott3201/rusty-bacnet/commit/62a5baf1dbe0fa014b1bc9948d76a86b4a9d9807))
+
+- **Reject payload (Rust API, #1794):** `RejectMessageToNetwork` and
+  `decode_reject_message_to_network` leave `bacnet_encoding::npdu`, and
+  router-core's `message::Reject` is gone: use
+  `bacnet_npdu::RejectMessageToNetwork`, whose `decode` (was `parse`) returns
+  a `RejectLengthError` and whose `dnet` field is now `network`. ([d89ce35](https://github.com/jscott3201/rusty-bacnet/commit/d89ce350037e2bae3ef3fd07add35a9135ec3748))
+
+- **Encoding and range errors (Rust API, #1646, #1776, #1777, #1802):** match
+  `Error::Encode(EncodeError)`, not `Error::Encoding`, for codec encoder
+  refusals, and `Error::Range`, not `Error::Encoding` or `Error::OutOfRange`,
+  for range checks: the APDU and NPDU encoders and validators,
+  `ObjectIdentifier::new`, `DeviceInstanceRange`, an over-long NPDU address
+  and oversized lighting, color and elevator command members.
+  `Error::Segmentation` holds a `SegmentationError` enum. ([28262cb](https://github.com/jscott3201/rusty-bacnet/commit/28262cb7745816848f9efa447eb61c63ce3f06fe))
+
+- **Log record failures (Rust API, #1814):** `LogDatum::Failure` and
+  `LogValue::Failure` hold `error_class: ErrorClass` and
+  `error_code: ErrorCode` instead of `u32`s. Build them from the constants
+  (`ErrorClass::PROPERTY`) or `from_raw`, and read the numbers with
+  `to_raw`. Decoding a record whose failure class or code is wider than 16
+  bits now fails instead of keeping the value. ([a25f68d](https://github.com/jscott3201/rusty-bacnet/commit/a25f68dc99e14845174cc87708c41832cfc0553c))
+
+- **BVLC management errors (Rust API, #1822):** `read_bdt`, `read_fdt`,
+  `write_bdt`, `delete_fdt_entry` and `register_foreign_device_bvlc` return
+  `Result<_, BvlcExchangeError>`. Match `Nak(code)` (or call `nak()`) instead
+  of the `"BVLC-Result: …"` encoding-error text, and `NoReply` instead of
+  `Error::Timeout`; other errors arrive as `Transport(Error)`. The last three
+  return `Ok(())` on success instead of a result code, and a NAK as `Err`. ([0af6ec6](https://github.com/jscott3201/rusty-bacnet/commit/0af6ec681d2d6fc5de8b34b4a644af08559be116))
+
+- **Network Port foreign mode (Rust API, #1825):** build
+  `BipPortMode::Foreign { bbmd, subscription_lifetime }` as
+  `BipPortMode::fixed_foreign(bbmd, subscription_lifetime)`, or lend your own
+  `ForeignRegistration`; read the values with `registration.bbmd()` and
+  `registration.subscription_lifetime()`. ([06a380c](https://github.com/jscott3201/rusty-bacnet/commit/06a380cdaf2faa524d4d4dd169c3715b2193df86))
+
+- **SC dial timeouts (Rust API, #1839):** a hub dial that times out is now
+  `Error::Transport` carrying `ScConnectError::DialTimeout { timeout, stage }`
+  (read it with `ScConnectError::from_io_error`), not `Error::Timeout`; a
+  missing Connect-Accept is still `Error::Timeout`. Python still raises
+  `BacnetTimeoutError` for both. ([2135122](https://github.com/jscott3201/rusty-bacnet/commit/21351229af03c18476ec4cc7435043e5bb3b0709))
+
+- **Lighting outputs (Rust API, #1866):** `write_property` refuses
+  Present_Value and Value_Source writes on Lighting Output and Binary
+  Lighting Output, and Lighting_Command writes on Lighting Output. Call
+  `write_property_from` with a `CommandOrigin`, as for the other commandable
+  objects; in a server, `BACnetServer::write_local` with a
+  `LocalCommandSource`. `LightingOutputObject::set_lighting_command` still
+  takes an application command, with source NONE. ([12a6109](https://github.com/jscott3201/rusty-bacnet/commit/12a610922ac914143630259eb61343e3e18c6d82))
+
+- **Event Enrollment Event_Type (#1868):** set Event_Parameters to choose the
+  algorithm; Event_Type follows them. The `event_type` argument of
+  `EventEnrollmentObject::new` and Python's `add_event_enrollment(event_type=)`
+  now only name the algorithm of legacy octet-string parameters. An
+  enrollment whose parameters are never set reads Event_Type NONE. ([12a6109](https://github.com/jscott3201/rusty-bacnet/commit/12a610922ac914143630259eb61343e3e18c6d82))
+
+- **MS/TP counters (Rust API, #1897):** read `MstpCounters::late_deadlines`
+  where you read `deadline_misses`, in `bacnet_mstp_core` and
+  `bacnet_transport::mstp`. `bacnet_mstp_core::LATE_DEADLINE` is gone: set
+  `MstpCoreConfig::late_deadline` instead (`DEFAULT_LATE_DEADLINE`, 1 ms). The
+  Tokio transport counts from 5 ms (`HOST_LATE_DEADLINE`). ([07ca68e](https://github.com/jscott3201/rusty-bacnet/commit/07ca68e8657471fbdb3b70103a6fa15d2e588fb3))
+
+- **CLI output (#1916):** a script reading `discover --json` takes the routed
+  station from `station` (was `remote_mac`), and one reading `subscribe --json`
+  takes it from `routed_source` (was `source_address`). Both hold `NET:0xHEX`,
+  network included. The `discover` (`whois`) table's `Remote MAC` column is
+  now `Station`. ([d6c84ee](https://github.com/jscott3201/rusty-bacnet/commit/d6c84ee6ed992eb4d7cd759612bbe507640fe517))
+
+- **DeviceConfig (Rust API):** `DeviceConfig` has two new fields, `backup_and_restore` and
+  `backup_failure_timeout`. Code that builds a `DeviceConfig` with a struct
+  literal adds `..DeviceConfig::default()`. ([488f7ec](https://github.com/jscott3201/rusty-bacnet/commit/488f7ecf41123bf8f1c30b24a368199d904c1dbc))
+
+### Security
+
+- **Dependencies:** `Cargo.lock` takes `rustls-webpki` 0.103.16, which fixes
+  RUSTSEC-2026-0382: certificate verification could accept a distrusted
+  intermediate. It affects BACnet/SC TLS in the release binaries and wheels.
+  Library users should run `cargo update -p rustls-webpki` (#1987).
+
+- **Breaking (Rust API):** A hardened router's control authorizer sees the
+  sending direct BACnet/SC peer's certificate principal for unicast controls (SC
+  broadcasts arrive hub-relayed, with none), and SC nodes rate-limit
+  network-layer messages per certificate or VMAC (#518). ([0476eb5](https://github.com/jscott3201/rusty-bacnet/commit/0476eb52a86d5b4e6e73618ce88c9b73cd605f23))
+
+- **Breaking (Rust API):** One `ServerPolicy` now makes the server's
+  authorization decisions, with documented defaults, and each context carries
+  the verified direct BACnet/SC certificate principal (`ScPrincipal`); hub-relayed
+  and non-SC requests carry none (#524). ([546f017](https://github.com/jscott3201/rusty-bacnet/commit/546f017e703382e00f2e7ec1d7b7597d591d4503))
+
+- Rust and Python BACnet/SC consumers now require Rustls 0.23.46 or later,
+  incorporating upstream security fixes while preserving the existing TLS
+  verification policy and session resumption (#1737). ([616196c](https://github.com/jscott3201/rusty-bacnet/commit/616196cba929df0356555b42d38c26d3482d5fb7))
+
+### Added
+
+- **Rust API:** On Linux the MS/TP transport's dedicated thread can
+  run under `SCHED_FIFO` and be pinned to CPUs (`MstpThreadConfig`, CLI
+  `--mstp-rt-priority` and `--mstp-cpus`); `start` fails if either can't be
+  applied, and `execution_status()` reports the outcome (#501). ([7260f31](https://github.com/jscott3201/rusty-bacnet/commit/7260f313ea013749cdcb7be40062d8ef3c83dc24))
+
+- **Python API:** `sc_npdu_drop_counts()` adds `control_rate_drops`, the
+  network-layer messages an SC node dropped over their source's rate limit (#518). ([0476eb5](https://github.com/jscott3201/rusty-bacnet/commit/0476eb52a86d5b4e6e73618ce88c9b73cd605f23))
+
+- The BACnet enumeration types have a `name()` method that returns a value's
+  constant name, or `None` for a value without one (#915). ([f729a45](https://github.com/jscott3201/rusty-bacnet/commit/f729a457dc9afc433d2b857ee2d6dd1284fe0de4))
+
+- A BBMD can run behind a NAT router that port-forwards its B/IP port, at a
+  configured global address (`BbmdOptions::nat`, `NatTraversal`; in
+  `bacnet-bip-core`, `Tables::set_nat` and `bbmd::Nat`), with two-hop BDT
+  rules and the global origin in the Forwarded-NPDUs it builds (#940). ([7b81a3f](https://github.com/jscott3201/rusty-bacnet/commit/7b81a3f167931793827f40a337c9abe7ccc605d9))
+
+- **Wire:** an IPv4 BBMD's Network Port serves BACnet_IP_NAT_Traversal and
+  BACnet_IP_Global_Address, writable in any order and activated together
+  with the BDT; an activated setting is saved with the persisted BDT (#940). ([7b81a3f](https://github.com/jscott3201/rusty-bacnet/commit/7b81a3f167931793827f40a337c9abe7ccc605d9))
+
+- The PICS draft can claim the B/IP NAT traversal data-link option
+  (`DataLinkSupport::BipV4NatTraversal`) (#940). ([7b81a3f](https://github.com/jscott3201/rusty-bacnet/commit/7b81a3f167931793827f40a337c9abe7ccc605d9))
+
+- **Python API:** `Bbmd(nat_global_address="ip:port",
+  nat_private_ranges=[...])` runs a BBMD behind a NAT router (#940). ([7b81a3f](https://github.com/jscott3201/rusty-bacnet/commit/7b81a3f167931793827f40a337c9abe7ccc605d9))
+
+- A B/IP BBMD can serve a multicast group (Annex J.8.3): with `.multicast(...)`
+  in BBMD mode it forwards the group's broadcasts to its BDT peers and
+  foreign devices and theirs to the group; its own BDT row must be two-hop,
+  and its Network Port lists the group read-only (#941). ([d7fa8bb](https://github.com/jscott3201/rusty-bacnet/commit/d7fa8bbdefc8b9ed54ab554b0e1f4cc283941ff8))
+
+- A B/IP node can join an IPv4 multicast group on an explicit interface
+  (Annex J.8): its broadcasts go to the group and it takes broadcasts only
+  from the group (`BipTransport::set_multicast`, `.multicast(...)` on the
+  client, server and endpoint builders, #941). ([305283f](https://github.com/jscott3201/rusty-bacnet/commit/305283f7b6a8aa7d896ef7243ba0ddb7c4f1c3e9))
+
+- The CLI takes `--bip-multicast GROUP`, `--bip-multicast-ttl` and
+  `--bip-multicast-port`; TUI profiles keep the group, TTL and port, and
+  the profile editor and summary show the group (#941). ([305283f](https://github.com/jscott3201/rusty-bacnet/commit/305283f7b6a8aa7d896ef7243ba0ddb7c4f1c3e9))
+
+- Every registered NORMAL B/IP Network Port on an explicit interface now
+  lists BACnet_IP_Multicast_Address (0.0.0.0 while off), writable with
+  ReinitializeDevice activation, which moves the running node to the new
+  group, and read-only without a handler (#941). ([305283f](https://github.com/jscott3201/rusty-bacnet/commit/305283f7b6a8aa7d896ef7243ba0ddb7c4f1c3e9))
+
+- **Python API:** `BACnetClient`, `BACnetServer` and `BipEndpoint` take
+  `multicast=Multicast(group, ttl=1, port=None)` to join a B/IP multicast
+  group, and with `bbmd=Bbmd(...)` serve it as its BBMD (#941). ([305283f](https://github.com/jscott3201/rusty-bacnet/commit/305283f7b6a8aa7d896ef7243ba0ddb7c4f1c3e9))
+
+- A manual Docker check of two BBMD sites and two foreign devices behind
+  iptables NAT routers, `examples/docker/nat/run.sh`, runnable from the
+  `NAT topology` workflow (#942). ([7b81a3f](https://github.com/jscott3201/rusty-bacnet/commit/7b81a3f167931793827f40a337c9abe7ccc605d9))
+
+- B/IP, B/IPv6, BACnet/SC and MS/TP transports have a bounded, lossy frame
+  tap, `frame_tap()`, that shows every link-layer frame sent and received,
+  control traffic included, with no copying while nobody subscribes
+  ([docs](docs/rust-api.md#frame-tap), #957). ([1f6fa88](https://github.com/jscott3201/rusty-bacnet/commit/1f6fa884c444e912a2f200f4bac30c9b765b3b38))
+
+- `EndpointSession::mstp_diagnostics` returns the MS/TP transport counters of
+  a session that `MstpEndpointBuilder` built (#958). ([1e41deb](https://github.com/jscott3201/rusty-bacnet/commit/1e41debefdfd945e3f7666c7f44089c97caa693f))
+
+- `mstp::monitor::MstpMonitor` listens to an MS/TP trunk without ever
+  transmitting and publishes per-station statistics (frame counts, CRC
+  errors, token rotation and hold times, lost tokens, inferred Max_Master)
+  and a lossy frame stream; `mstp_serial::ReceiveOnlyPort` opens its port
+  (#958, #970). ([1e41deb](https://github.com/jscott3201/rusty-bacnet/commit/1e41debefdfd945e3f7666c7f44089c97caa693f))
+
+- BACnet/SC hub-connector observability: `connection_events()` reports
+  connects, disconnect causes, reconnects, failover and primary restore
+  attempts, `connection_status()` gives the active hub, hub VMAC and
+  heartbeat timing, and `ScClientBuilder::failover_hub_url` sets a failover
+  hub (#959, #1828). ([a3479d4](https://github.com/jscott3201/rusty-bacnet/commit/a3479d4fca1423d87d3fc5c54936f1c0d07bd387))
+
+- **CLI:** `find` prints the objects that answer its Who-Has, and
+  `whois-router` (now with `--dnet` and `--wait`) lists the routers that
+  answer with the networks they reach; both print a JSON array with `--json`
+  (#960). ([603c082](https://github.com/jscott3201/rusty-bacnet/commit/603c082ceb6f2edb1075178503bea014a4bf329c))
+
+- `BACnetClient` hands received I-Haves to `i_have_events()` subscribers, and
+  `who_has_replies` sends a Who-Has and collects its answers over a wait (#960). ([603c082](https://github.com/jscott3201/rusty-bacnet/commit/603c082ceb6f2edb1075178503bea014a4bf329c))
+
+- `BACnetClient` sends Who-Is-Router-To-Network and What-Is-Network-Number,
+  lists routers with `discover_routers`, and reports I-Am-Router-To-Network,
+  Network-Number-Is and Reject-Message-To-Network through `network_reports()`
+  (#960). ([603c082](https://github.com/jscott3201/rusty-bacnet/commit/603c082ceb6f2edb1075178503bea014a4bf329c))
+
+- `NetworkLayer::send_network_message` sends Who-Is-Router-To-Network and
+  What-Is-Network-Number, and `ReceivedNetworkReport::parse` reads the reports
+  a non-routing node acts on; `bacnet_router_core::table::is_reserved` is
+  public (#960). ([603c082](https://github.com/jscott3201/rusty-bacnet/commit/603c082ceb6f2edb1075178503bea014a4bf329c))
+
+- **TUI:** `:find NAME` lists the devices whose I-Have answers a Who-Has
+  below the device table, and the Network screen's new Networks tab maps the
+  routers heard to the networks they reach, flagging a network number two
+  routers claim (#960). ([603c082](https://github.com/jscott3201/rusty-bacnet/commit/603c082ceb6f2edb1075178503bea014a4bf329c))
+
+- `bacnet tui` keeps named B/IP and BACnet/SC profiles (hub URLs, credential
+  paths but never their contents, a UUID made once), with saved
+  first-use authorization and connect, disconnect and retry; it refuses a
+  missing credential file before sending anything. Flags-only runs save
+  nothing (#962). ([fffd440](https://github.com/jscott3201/rusty-bacnet/commit/fffd440c430b089485ca45c4f9b0fdb9711eaa53))
+
+- `bacnet` read, readm, write and subscribe reach routed devices as
+  `dnet:instance` or `dnet:0xMAC`, and every target takes a BACnet/SC VMAC as
+  hex octets, which device tables now print on SC (#963). ([70fc320](https://github.com/jscott3201/rusty-bacnet/commit/70fc320b96b9713bb14108f526923fe17562d5da))
+
+- `bacnet tui` opens a read-only device browser on Enter: the device card,
+  the Object_List grouped by type, an object's properties with text status
+  badges, and its priority array with the slot in control marked, beside the
+  properties on wide terminals (#963, #1787). ([70fc320](https://github.com/jscott3201/rusty-bacnet/commit/70fc320b96b9713bb14108f526923fe17562d5da))
+
+- `bacnet tui` can write: time-boxed write sessions armed with `W` (profiles
+  default to `writes = "session"`), a preview of every write with
+  confirmation tiers, a ledger that reverts every change, array
+  elements too, and survives a crash, an exit guard, an audit log, and
+  `--passive` (#964, #1801). ([ab81faf](https://github.com/jscott3201/rusty-bacnet/commit/ab81fafb28d79484f410b15b6c39f86aba743d68))
+
+- `BACnetClient::manage_cov_property_subscription` renews a SubscribeCOVProperty
+  subscription before its lifetime ends, as `manage_cov_subscription` does for
+  SubscribeCOV (#965). ([4b8fe77](https://github.com/jscott3201/rusty-bacnet/commit/4b8fe7752281f8188d541b6de46c9f352d4fa6c7))
+
+- `bacnet tui` has a watch list: COV with finite, renewed lifetimes that are
+  cancelled on remove and exit, rate-capped polling when a device refuses
+  COV, routed devices as `NET:INSTANCE`, sparklines, a footprint counter and
+  an optional CSV log (#965, #1891). ([4b8fe77](https://github.com/jscott3201/rusty-bacnet/commit/4b8fe7752281f8188d541b6de46c9f352d4fa6c7))
+
+- `bacnet tui` has a Network screen for BACnet/IP: foreign-device status with
+  a renewal countdown and banners for a refusal, a silent BBMD or a lapsed
+  lease, the BBMD's BDT and FDT with our own entry marked, and a BDT
+  consistency matrix that surveys four BBMDs at once (#966, #1823, #1889). ([dd5f68c](https://github.com/jscott3201/rusty-bacnet/commit/dd5f68cd01d6eeeae393bcf4f7707cdf385b6b3d))
+
+- `bacnet tui` has an SC screen: hub-connector status with failover and
+  heartbeat, the hub's certificate chain, VMAC and UUID, an event timeline
+  from the first connect, and a connection doctor that names the failing
+  dial phase with a fix (#967, #1890). ([a6dcb23](https://github.com/jscott3201/rusty-bacnet/commit/a6dcb234d11afe96feca6ce14f92bac9e6050545))
+
+- `bacnet sc-check` inspects local SC credential files offline with complete
+  human/JSON reports, explicit local diagnostic severities and exit statuses,
+  reproducible inspection time, and fallible output. It requires `sc-tls` (#968). ([edeb409](https://github.com/jscott3201/rusty-bacnet/commit/edeb40922b9a727a5e3b225a8e94e29c169206e2))
+
+- Rust and Python can inspect bounded local SC PEM inputs offline, reporting
+  certificate fingerprints, dates, SAN/KU/EKU findings, key consistency and
+  advisory Unix key-file mode bits. Existing SC adapters share PEM decoding
+  while retaining TLS policy and startup error ordering (#968). ([1e2ca94](https://github.com/jscott3201/rusty-bacnet/commit/1e2ca949527a0e262981173cb9206f71a9b919d6))
+
+- BACnet/SC dials lint this node's certificate, key and CA file first: hard
+  failures stop the dial before any socket, and warnings (expiry within 30 days,
+  no direct issuer in the CA file) need `y` in the TUI. The SC screen gains a
+  My credentials view (#968). ([9f18cc3](https://github.com/jscott3201/rusty-bacnet/commit/9f18cc3b39cd5365183fa9f332ce2e6ad1e30061))
+
+- **CLI:** MS/TP: `--mstp PORT` and `--mstp-mac` join an RS-485 trunk as a
+  master station, `mstp:N` names a station, and `bacnet mstp-ports` lists the
+  ports. The TUI asks before joining and adds MS/TP profiles and a station
+  screen. In the Linux release binary; elsewhere build with `serial` (#969). ([366412a](https://github.com/jscott3201/rusty-bacnet/commit/366412a8aa757aa75fa77f38e4ef8b9236303ab4))
+
+- **Rust API:** `MstpDiagnostics::node_state` reports an MS/TP station's
+  master state, next station and sole-master flag (#969). ([366412a](https://github.com/jscott3201/rusty-bacnet/commit/366412a8aa757aa75fa77f38e4ef8b9236303ab4))
+
+- `bacnet tui --mstp-monitor PORT` listens to an MS/TP trunk without
+  transmitting: stations, the token ring, Max_Master findings and error
+  counters, and a wizard that proposes a free MAC and joins after the same
+  confirmation as `--mstp` (#970). ([23b6048](https://github.com/jscott3201/rusty-bacnet/commit/23b60488c8f870951a1408e80d6ffea46778e9d3))
+
+- The TUI has a Capture screen (`7`): live frames from the stack's own
+  traffic or the MS/TP monitor, a decode tree with a hex view, filters and
+  pause over a bounded ring with an exact dropped count, and pcap export
+  (`e`, `E`); `tui --capture-device` adds a libpcap capture (#971). ([89b4902](https://github.com/jscott3201/rusty-bacnet/commit/89b4902b0b061ea99584954a5e1997a6ecdc4652))
+
+- A Terminal UI section on the website: a guide to every `bacnet tui` screen,
+  from profiles and discovery to guarded writes and the B/IP, BACnet/SC and
+  MS/TP diagnostics, with a key reference and Terminal screenshots that a
+  script regenerates (#975). ([7e7a1e7](https://github.com/jscott3201/rusty-bacnet/commit/7e7a1e75e34b6356f19f3798127e25b43cb7d8c4))
+
+- Client builders can return one shared type for B/IP, B/IPv6 and BACnet/SC,
+  retaining their configured options and SC reconnect policy. Existing concrete
+  builds remain available; SC rejects invalid segment windows before dialing
+  (#1014). ([45f29c9](https://github.com/jscott3201/rusty-bacnet/commit/45f29c91fa7c690f5d8a5023216f24b63300d463))
+
+- **Python API:** `add_trend_log` takes keyword settings as
+  `add_trend_log_multiple` does, plus its reference, `"cov"` logging and the
+  two COV properties (#1480). ([a25f68d](https://github.com/jscott3201/rusty-bacnet/commit/a25f68dc99e14845174cc87708c41832cfc0553c))
+
+- **Wire:** A Trend Log logs by COV a property of its own device: Logging_Type
+  takes COV, Log_Interval switches between polled and COV logging, and it
+  serves Client_COV_Increment and COV_Resubscription_Interval (#1480). ([a25f68d](https://github.com/jscott3201/rusty-bacnet/commit/a25f68dc99e14845174cc87708c41832cfc0553c))
+
+- **Python API:** `add_global_group(members=)`, `add_schedule(weekly_schedule=,
+  exception_schedule=, effective_period=)` and `add_calendar(date_list=)` take
+  the forms their typed reads give, and `PropertyValue.octets` gives a value's
+  octets (#1499). ([09c332c](https://github.com/jscott3201/rusty-bacnet/commit/09c332ce7fe817c0cadf44148dfb10f06eb3118c))
+
+- **Wire:** Event Enrollment serves Event_Message_Texts, Event_Message_Texts_Config
+  and the Event_Algorithm_Inhibit pair. The inhibit pauses its event algorithm
+  but not fault detection, and a configured text goes out, as written, in the
+  enrollment's notifications (#1507). ([46d7ed0](https://github.com/jscott3201/rusty-bacnet/commit/46d7ed011c600c622263a7c2dabd6b95a1d397c3))
+
+- **Wire:** Color and Color Temperature outputs are driven to their default at
+  the server's start; a zero default keeps the stored Present_Value
+  (`with_output_persistence`). Objects run without a server now read
+  In_Progress NOT_CONTROLLED, not IDLE, until `start_output` or a write (#1526). ([d38cb02](https://github.com/jscott3201/rusty-bacnet/commit/d38cb02fd4fc0a2e1d7b6b377dd866ff0da2eef2))
+
+- **Python API:** `add_color` and `add_color_temperature` take
+  `default_color` or `default_color_temperature`, and a `storage_path` that
+  keeps Present_Value across restarts (#1526). ([d38cb02](https://github.com/jscott3201/rusty-bacnet/commit/d38cb02fd4fc0a2e1d7b6b377dd866ff0da2eef2))
+
+- Trend Log, Trend Log Multiple and Event Log can keep themselves in storage
+  (`with_persistence`, `FileLogPersistence`): they commit every 100 records or
+  a minute and at stop, and reopen with their records, numbering and
+  BUFFER_READY counts plus a LOG_INTERRUPTED record (#1541). ([6b354c5](https://github.com/jscott3201/rusty-bacnet/commit/6b354c518ebf2342a30cd4ff6161b6969fcb66d0))
+
+- **Python API:** `add_trend_log`, `add_trend_log_multiple` and
+  `add_event_log` take a `storage_path` keyword that keeps the log across
+  restarts, as `add_audit_log` does (#1541). ([6b354c5](https://github.com/jscott3201/rusty-bacnet/commit/6b354c518ebf2342a30cd4ff6161b6969fcb66d0))
+
+- **Python API:** lighting outputs take trims and colour links, `add_color`
+  and `add_color_temperature` add the colour objects, `lighting_color` reports
+  an output's colour, and the point builders take `tags`, profile keywords
+  and Value_Source tracking (#1554). ([09c332c](https://github.com/jscott3201/rusty-bacnet/commit/09c332ce7fe817c0cadf44148dfb10f06eb3118c))
+
+- An accepted ReinitializeDevice request writes a DEVICE_RESET,
+  DEVICE_BACKUP or DEVICE_RESTORE Audit record on the server and on endpoint
+  sessions, and `BACnetServer::report_device_reset_local` records a reset the
+  application makes for its own reasons (#1564). ([1e59e67](https://github.com/jscott3201/rusty-bacnet/commit/1e59e67db0afe5cef754f7fc51e86178ba8b544b))
+
+- A ReinitializeDevice handler can register its restart with
+  `ReinitializeContext::after_reply`, which the server and endpoint sessions
+  run once the SimpleACK has been handed to the transport, and never for a
+  request answered with an Error (#1565). ([1e59e67](https://github.com/jscott3201/rusty-bacnet/commit/1e59e67db0afe5cef754f7fc51e86178ba8b544b))
+
+- **Python API:** `BACnetServer` and the endpoints take `on_reinitialize`
+  and `after_reinitialize` to carry out ReinitializeDevice, which also makes a
+  BBMD port's rows writable; endpoints take `reinit_password`, and
+  `report_device_reset_local()` records an application reset (#1566). ([1e59e67](https://github.com/jscott3201/rusty-bacnet/commit/1e59e67db0afe5cef754f7fc51e86178ba8b544b))
+
+- `BbmdTables` gains `check_broadcast_distribution_table` and `activate`, with
+  `BbmdChanges`, for a transport to check and apply written BBMD settings;
+  both refuse by default (#1578). ([0e84c56](https://github.com/jscott3201/rusty-bacnet/commit/0e84c564dd4fc9b6ce9d63841db1005350bb0ce3))
+
+- **Wire:** A registered BBMD's Network Port takes writes to
+  BBMD_Broadcast_Distribution_Table and BBMD_Accept_FD_Registrations: checked
+  against the BDT policy, pending with Changes_Pending set, and put into effect
+  by ReinitializeDevice ACTIVATE_CHANGES or WARMSTART (#1578). ([0e84c56](https://github.com/jscott3201/rusty-bacnet/commit/0e84c564dd4fc9b6ce9d63841db1005350bb0ce3))
+
+- A B/IPv6 transport registers its Network Port as B/IP's does (`NetworkPortObject::new_bip6`, `TransportPort::bip6_port`): BACnet_IPv6_Mode and the IPv6 rows, writable foreign-device rows that move a running registration, and BBMD rows for a transport that lends them (#1579). ([9cc10a2](https://github.com/jscott3201/rusty-bacnet/commit/9cc10a2146d758faae84b213350a73bea8234e0c))
+
+- **Python API:** `BACnetServer.add_bip6_network_port` adds a B/IPv6 Network Port, and `registered_network_port` now works with `transport="ipv6"` (#1579). ([9cc10a2](https://github.com/jscott3201/rusty-bacnet/commit/9cc10a2146d758faae84b213350a73bea8234e0c))
+
+- `bacnet-types`, `bacnet-encoding` and `bacnet-services` build without an
+  allocator: Who-Is, I-Am and ReadProperty encode into caller storage and
+  decode in place, and tags, scalars, timestamps and references encode whole
+  or not at all into slices, `heapless`, `Vec` or `BytesMut` sinks (#1614). ([fca2389](https://github.com/jscott3201/rusty-bacnet/commit/fca238953b304bc79ffb0bec231939acd7eec465))
+
+- Test-only: the MS/TP bus simulator models buffered host adapters, delayed
+  self-echo, inter-octet gaps, driver hold after the stop bit, receiver
+  contention, each master's baud and clock error, and an application
+  callback that answers delivered NPDUs (#1628, #1772, #1796). ([02313b1](https://github.com/jscott3201/rusty-bacnet/commit/02313b14b1a641a865eacae371cfda53ea841026))
+
+- A BBMD alone on its subnet, as behind a NAT router, can skip the local
+  rebroadcast of forwarded and distributed broadcasts:
+  `BbmdOptions::alone_on_subnet`, `LocalSubnet::alone` in `bacnet-bip-core`,
+  and **Python API:** `Bbmd(alone_on_subnet=True)`. Off by default (#1668). ([0e84c56](https://github.com/jscott3201/rusty-bacnet/commit/0e84c564dd4fc9b6ce9d63841db1005350bb0ce3))
+
+- Routers can announce Router-Busy for a port whose egress queue stays full, reject what that queue then refuses with reason 2, and announce Router-Available once it drains: off by default, turned on with `RouterOptions::congestion` or the core's `Options::congestion` (#1697). ([72ab468](https://github.com/jscott3201/rusty-bacnet/commit/72ab46864f2846d09a5f3280a3148f3c24a7485d))
+
+- Two opt-in router hardening options: rejects that change a learned route only from its next router (`next_hop_rejects`), and suppression of a global broadcast repeated within 1 s (`duplicates`). Ignored flow control and dropped repeats are counted (#1698). ([72ab468](https://github.com/jscott3201/rusty-bacnet/commit/72ab46864f2846d09a5f3280a3148f3c24a7485d))
+
+- A router's own application can send requests to other networks through the routing engine, with an explicit source address: `BACnetRouter::originate`, and `Router::originate` in `bacnet-router-core` (#1699). ([72ab468](https://github.com/jscott3201/rusty-bacnet/commit/72ab46864f2846d09a5f3280a3148f3c24a7485d))
+
+- `bacnet_types::map_hash`: a cheap multiply-and-rotate hasher for maps
+  that remote input can't grow, which the client's TSM and the server's
+  request admission now use (#1713). ([4a098fc](https://github.com/jscott3201/rusty-bacnet/commit/4a098fccbc4da1fb4dbba05efe609dc1a108b044))
+
+- Python SC clients and servers can set the queued NPDU quota per origin and
+  read snapshots of the drop counters; the Rust SC client builder also takes
+  the quota (#1718). ([2e0e595](https://github.com/jscott3201/rusty-bacnet/commit/2e0e5955a484a9a12b81f080a97922e6456aa556))
+
+- Python SC clients accept frozen ScReconnect settings and reuse their TLS
+  policy and identity after connection loss. Client close drains active
+  operations and retains joined shutdown when its waiter is cancelled (#1722). ([80710a3](https://github.com/jscott3201/rusty-bacnet/commit/80710a384d828c0c478af7f51b99e646da54d1fc))
+
+- **Python API:** the stack's log events now reach Python's `logging` under
+  `rusty_bacnet.<crate>` loggers (with a `NullHandler`, so nothing prints
+  until the app configures logging); levels are read at import and at each
+  start, and `refresh_logging()` rereads them (#1724). ([d30ad68](https://github.com/jscott3201/rusty-bacnet/commit/d30ad682d6e2e92abd10da546457db3927fe0bb5))
+
+- Rust SC transports and Python clients expose owned active-Hub certificate
+  snapshots with exact leaf fingerprints, connection provenance and bounded
+  subject/issuer/validity metadata. Observation uses the existing connection
+  without changing TLS acceptance (#1735). ([2c0bc07](https://github.com/jscott3201/rusty-bacnet/commit/2c0bc079ed695b00a5544e5597d3e64efb41a34d))
+
+- Failed outbound SC TLS handshakes expose owned, explicitly untrusted peer
+  certificates through Rust connect errors and Python transport exceptions.
+  Capture uses the actual attempt and preserves normal certificate verification,
+  rejection details and TLS resumption (#1735). ([ada647c](https://github.com/jscott3201/rusty-bacnet/commit/ada647c8009b0e4ab532dc0129e56df2802fb99b))
+
+- `bacnet-time` 0.13.1 adds `earliest`, which merges optional deadlines
+  without letting an unset one win as `Option::min` does, and a `std`
+  feature with `HostClock`, which maps a host's `std::time::Instant` onto the
+  cores' timeline and back. The hosted transports and router use both (#1768). ([9a1ee25](https://github.com/jscott3201/rusty-bacnet/commit/9a1ee25c2be326718adb04da3d791adcc2e0fc4e))
+
+- The MS/TP core counts broken internal invariants in `internal_errors`,
+  which the Tokio transport totals (#1769). ([561a5a4](https://github.com/jscott3201/rusty-bacnet/commit/561a5a46aaf5dcaafaaac1c94bc7b072b0073859))
+
+- A new `no_std` crate, `bacnet-npdu`, holds the network-layer vocabulary
+  once: the borrowed NPDU view and encoder, network message types, reject
+  reasons, the network priority and NPDU limits (#1770). ([62a5baf](https://github.com/jscott3201/rusty-bacnet/commit/62a5baf1dbe0fa014b1bc9948d76a86b4a9d9807))
+
+- The allocation-free `ApduHeader` also reads and writes an Error's header
+  and a whole Reject or Abort, so firmware without a heap can refuse a
+  request it doesn't serve (#1771). ([4ff79e2](https://github.com/jscott3201/rusty-bacnet/commit/4ff79e25f3166efd1ec398bffff6d6b292d8d9b6))
+
+- Host-runnable examples for the portable cores: `bacnet-mstp-core`'s
+  `node` (two master nodes on a simulated line) and `bacnet-router-core`'s
+  `bip_mstp_router` (a B/IP-MS/TP router and BBMD in a firmware-style main
+  loop) (#1771). ([4ff79e2](https://github.com/jscott3201/rusty-bacnet/commit/4ff79e25f3166efd1ec398bffff6d6b292d8d9b6))
+
+- Test-only: CI links a `device` firmware image, an MS/TP device with no
+  allocator that answers Who-Is and ReadProperty, for Cortex-M0/M3/M4F and
+  RV32IMC within flash, RAM and stack budgets, and runs its scenario
+  natively; the other images' stack budgets were measured again (#1771,
+  #1774). ([4ff79e2](https://github.com/jscott3201/rusty-bacnet/commit/4ff79e25f3166efd1ec398bffff6d6b292d8d9b6))
+
+- A "Run on a microcontroller" page on the website: the crates each embedded
+  product needs, the shared clock, measured flash and RAM, adapter rules and
+  what still needs an allocator; and Rust API notes for `bacnet-time`,
+  `bacnet-npdu` and the two codecs (#1771). ([4ff79e2](https://github.com/jscott3201/rusty-bacnet/commit/4ff79e25f3166efd1ec398bffff6d6b292d8d9b6))
+
+- `bacnet-router-core` gains `node::Node`, a non-routing node's receive
+  rules, sharing the router engine's admission checks and adding
+  `Discard::NotRouted`; `NetworkLayer` runs on it, with drop totals in
+  `NetworkLayer::counters()`, `malformed` and `routed_drops` included (#1795). ([dbe342f](https://github.com/jscott3201/rusty-bacnet/commit/dbe342f949c1ff7840b80fe8c10967906cd42737))
+
+- **CLI:** the TUI command bar takes quotes and backslash escapes, and a
+  routed station as the device table shows it (`:watch 2:0x05 ai:1`); it
+  says when no device is at that station or when `:watch NET:N` names the
+  wrong network (#1800, #1914, #1917). ([d6c84ee](https://github.com/jscott3201/rusty-bacnet/commit/d6c84ee6ed992eb4d7cd759612bbe507640fe517))
+
+- bip-core's `Node::retarget` and `NodePort::retarget` move a running foreign
+  device to another BBMD or time-to-live, restarting its registration (#1825). ([06a380c](https://github.com/jscott3201/rusty-bacnet/commit/06a380cdaf2faa524d4d4dd169c3715b2193df86))
+
+- `BbmdTables` and `ForeignRegistration` gain `can_change`, false by default:
+  a Network Port lists its pending-activation rows writable, and takes writes
+  to them, only when its transport's view can apply them; override it together
+  with `activate` and the check (#1825). ([06a380c](https://github.com/jscott3201/rusty-bacnet/commit/06a380cdaf2faa524d4d4dd169c3715b2193df86))
+
+- **Wire:** A registered foreign device's Network Port takes writes to
+  FD_BBMD_Address and FD_Subscription_Lifetime, pending until ReinitializeDevice
+  ACTIVATE_CHANGES or WARMSTART, which moves its next registration to the new
+  BBMD and time-to-live (#1825). ([06a380c](https://github.com/jscott3201/rusty-bacnet/commit/06a380cdaf2faa524d4d4dd169c3715b2193df86))
+
+- A BDT activated through the Network Port object is saved to the BBMD's
+  persisted-BDT file, so a restart keeps it; a failed save is logged and
+  counted (`BipTransport::bdt_persist_failures`) and leaves the new BDT in use
+  (#1826). ([06a380c](https://github.com/jscott3201/rusty-bacnet/commit/06a380cdaf2faa524d4d4dd169c3715b2193df86))
+
+- **Python API:** An SC `BACnetClient` takes `sc_failover_hub` and
+  `sc_connect_timeout_ms`, and reports its hub link through
+  `connection_events()`, an async iterator whose first call starts with the
+  first `connected`, and `connection_status()` (#1829, #1839, #1908). ([b9364d2](https://github.com/jscott3201/rusty-bacnet/commit/b9364d28e9ffeb3a4a3c2c423930641b89edda17))
+
+- TUI SC profiles can set the reconnect backoff, the connect timeout or
+  `reconnect = false`; new `--sc-failover-url`, `--sc-reconnect` and
+  `--sc-connect-timeout` flags give flags-only runs the same (#1831). ([c9c9033](https://github.com/jscott3201/rusty-bacnet/commit/c9c9033855d05a54459e7b93e073c79356c6285c))
+
+- **Python API:** `BACnetClient` reads and writes a BBMD's tables, deletes an
+  FDT entry and registers once as a foreign device; a NAK raises
+  `BacnetBvlcNakError` with its result code, apart from `BacnetTimeoutError`
+  for no reply (#1841). ([b9364d2](https://github.com/jscott3201/rusty-bacnet/commit/b9364d28e9ffeb3a4a3c2c423930641b89edda17))
+
+- **Python API:** `ScPemInspection` reports `direct_issuer` and
+  `direct_issuer_index`: whether a peer-trust CA signed the identity leaf
+  directly, and which one (#1846). ([b9364d2](https://github.com/jscott3201/rusty-bacnet/commit/b9364d28e9ffeb3a4a3c2c423930641b89edda17))
+
+- **Python API:** `BACnetClient` collects Who-Has answers with
+  `who_has_replies()` and routers with `discover_routers()`, and follows
+  received I-Haves and network reports through `i_have_events()` and
+  `network_reports()`, async iterators that never hold up the client (#1850). ([b9364d2](https://github.com/jscott3201/rusty-bacnet/commit/b9364d28e9ffeb3a4a3c2c423930641b89edda17))
+
+- On a TUI profile session, each confirmed MS/TP trunk join is now written to
+  the profile's audit log with the port, station and baud rate (#1862). ([c9c9033](https://github.com/jscott3201/rusty-bacnet/commit/c9c9033855d05a54459e7b93e073c79356c6285c))
+
+- **Wire:** Alert Enrollment serves Event_Message_Texts,
+  Event_Message_Texts_Config, Event_Algorithm_Inhibit_Ref and
+  Event_Algorithm_Inhibit, the optional rows its property table lists, through
+  the same shared options as Event Enrollment (#1865). ([12a6109](https://github.com/jscott3201/rusty-bacnet/commit/12a610922ac914143630259eb61343e3e18c6d82))
+
+- **Wire:** Lighting Output and Binary Lighting Output serve Value_Source,
+  Value_Source_Array and Last_Command_Time, and a Value_Source COV
+  subscriber on either hears the commandable report (#1866). ([12a6109](https://github.com/jscott3201/rusty-bacnet/commit/12a610922ac914143630259eb61343e3e18c6d82))
+
+- **CLI:** `find` takes the object name as a plain word,
+  `bacnet find "Zone Temp"`, as well as with `--name`; giving both is a usage
+  error (#1872). ([d6c84ee](https://github.com/jscott3201/rusty-bacnet/commit/d6c84ee6ed992eb4d7cd759612bbe507640fe517))
+
+- **Rust API:** `bacnet_encoding::constructed::property_element` names the
+  constructed element each (object type, property) value is made of, and
+  `split_elements` splits a value into those elements (#1888). ([1233dc1](https://github.com/jscott3201/rusty-bacnet/commit/1233dc1eeadc00360ff935ff96cac5ae37a9ab52))
+
+- **CLI (TUI):** the browser, watch list and write previews decode
+  timestamps, schedules and references, name states, use kebab case with
+  unit symbols (`72.5 °F`) and show six-digit floats; previews and the watch
+  CSV keep exact values (#1888). ([1233dc1](https://github.com/jscott3201/rusty-bacnet/commit/1233dc1eeadc00360ff935ff96cac5ae37a9ab52))
+
+- **Rust API:** `ScClientBuilder::build_with_events` and
+  `build_any_with_events` build a BACnet/SC client, concrete or
+  transport-erased, with a hub-connector event receiver that already holds
+  the first `Connected` (#1890, #1909). ([37d6db1](https://github.com/jscott3201/rusty-bacnet/commit/37d6db1593d91792d5b44539a1c94eb2910f31f4))
+
+- `bacnet mstp-ports` and the TUI's join dialog list USB serial adapters
+  first, once each, by their `/dev/serial/by-id` name on Linux and as
+  call-out (`/dev/cu.*`) devices on macOS; `mstp_serial::available_port_infos`
+  reports each port's kind (#1893, #1928). ([07ca68e](https://github.com/jscott3201/rusty-bacnet/commit/07ca68e8657471fbdb3b70103a6fa15d2e588fb3))
+
+- The TUI's status bar numbers the screens that apply to the session, `1` and
+  `2` switch between the devices and a kept browser, help lists the global and
+  the screen's keys and scrolls, and the command bar shows the syntax being
+  typed (#1895). ([3f3ab65](https://github.com/jscott3201/rusty-bacnet/commit/3f3ab65d7797389d4011a34292d5673b5d6bc278))
+
+- `bacnet tui` shows device and object names, reading only the rows on
+  screen within `--max-rate` in batches sized to the device's Max_APDU, and
+  keeps up to 4,096 per device address; `/` matches names and `s` sorts the
+  device table by them (#1896, #1929, #1930, #1931). ([2df806d](https://github.com/jscott3201/rusty-bacnet/commit/2df806d3333cfe8f1a336a7aadbf7c17da533410))
+
+- `bacnet_transport::warn_throttled!` logs a warning through a `WarnThrottle`:
+  at most once per interval with the count since the last one, and at debug
+  level otherwise (#1950). ([53d4601](https://github.com/jscott3201/rusty-bacnet/commit/53d4601a5a17a75c9a02f7b2203ab7fae75cc46c))
+
+- **Breaking (Rust API):** The Device gains setters for Object_List (through
+  `DeviceAuthority`), System_Status and Database_Revision, and serves the
+  backup and restore properties when `DeviceConfig::backup_and_restore` is set. ([488f7ec](https://github.com/jscott3201/rusty-bacnet/commit/488f7ecf41123bf8f1c30b24a368199d904c1dbc))
+
+### Changed
+
+- **Breaking (Rust API):** Protocol errors, rejects and aborts carry the typed
+  error class, code and reason in `Error` and the client's `TsmResponse`, and
+  the analog, accumulator, pulse converter, loop and staging objects take
+  `EngineeringUnits`. The wire and the Python API are unchanged (#915). ([f729a45](https://github.com/jscott3201/rusty-bacnet/commit/f729a457dc9afc433d2b857ee2d6dd1284fe0de4))
+
+- **Breaking (Rust API):** `BbmdOptions` gains `nat` and `alone_on_subnet`,
+  `DataLinkSupport` is `#[non_exhaustive]` with `BipV4NatTraversal`,
+  `bip_core::bbmd::Tables` gains a private field, and
+  `BbmdState::local_address` returns the socket's `SocketAddrV4` even behind
+  NAT (#940, #1668). ([7b81a3f](https://github.com/jscott3201/rusty-bacnet/commit/7b81a3f167931793827f40a337c9abe7ccc605d9))
+
+- **Breaking (Rust API):** `bacnet_transport::port::BipPort` is
+  `#[non_exhaustive]` with `BipPort::new`, and gains a `multicast` field,
+  the group view a Network Port serves (#941). ([305283f](https://github.com/jscott3201/rusty-bacnet/commit/305283f7b6a8aa7d896ef7243ba0ddb7c4f1c3e9))
+
+- **Wire:** `BACnetClient::who_has` sends its Who-Has as a global broadcast,
+  as `who_is` does, so `find` and `:find` reach devices behind routers (#960). ([603c082](https://github.com/jscott3201/rusty-bacnet/commit/603c082ceb6f2edb1075178503bea014a4bf329c))
+
+- **Python API:** an SC hub host that does not resolve now reads "WebSocket
+  host lookup for HOST failed" rather than a TCP dial failure, in `--sc`
+  output and `BacnetTransportError`; a name with no addresses gets errno
+  ENOENT rather than EINVAL (#967). ([a6dcb23](https://github.com/jscott3201/rusty-bacnet/commit/a6dcb234d11afe96feca6ce14f92bac9e6050545))
+
+- **Rust API:** BACnet/SC connect errors carry the TLS library's reason
+  (`ScConnectError::tls_failure`), and a host that does not resolve reports
+  `ScWebSocketErrorKind::HostLookup` (#967). ([a6dcb23](https://github.com/jscott3201/rusty-bacnet/commit/a6dcb234d11afe96feca6ce14f92bac9e6050545))
+
+- **Breaking (CLI):** commands that change a device need `--allow-write`,
+  and DCC and reinitialize also `--yes` or a typed confirmation; a refusal
+  exits with status 4 and sends nothing. `subscribe` defaults to 300
+  seconds, renewed and cancelled on exit (#972). ([f0b530d](https://github.com/jscott3201/rusty-bacnet/commit/f0b530d4f7a18008d3227c032ec8d6d499f68abe))
+
+- The published `bacnet` CLIs and Python wheels are built with whole-program
+  LTO in a new `dist` profile, so they are about a third smaller (the macOS
+  arm64 CLI from 18.9 to 12.4 MB); panic backtraces keep their function names
+  (#973). ([d1ddddd](https://github.com/jscott3201/rusty-bacnet/commit/d1ddddd655e511ac29db0014fd22d2a363078c1e))
+
+- **Breaking (CLI):** Plain `bacnet` on a terminal opens the TUI, now a default
+  feature; elsewhere, or with `--no-tui` or `BACNET_NO_TUI`, it prints the
+  usage and exits 2 (#974). ([b98aac9](https://github.com/jscott3201/rusty-bacnet/commit/b98aac93d39b1313ff5492a91f29f7335293be41))
+
+- **CI:** A merge to `dev` that could have been a fast-forward to a PR head
+  whose runs passed `CI OK` and `Native OK` skips re-running the same jobs,
+  unless it changes a cache-key input (#1466). ([f9025d9](https://github.com/jscott3201/rusty-bacnet/commit/f9025d9b12b6ca2cf6974d94d240fd1f6b2d171d))
+
+- **Breaking (Python API):** shed levels, Event_Parameters, authentication
+  factors, Access_Event_Time, Last_Restore_Time, Subordinate_List and
+  Event_Algorithm_Inhibit_Ref read typed instead of as `application_data`
+  (#1499, #1888). ([09c332c](https://github.com/jscott3201/rusty-bacnet/commit/09c332ce7fe817c0cadf44148dfb10f06eb3118c))
+
+- A B/IP transport sharing its port by address hands up broadcasts and
+  unicast in the order the kernel received them on Linux, macOS and the BSDs,
+  so a unicast that depends on a broadcast just before it is handled after it
+  (#1546). ([3f2da73](https://github.com/jscott3201/rusty-bacnet/commit/3f2da73be27ca8a25e5202a2101946fd511b1e37))
+
+- Some codec error messages read differently (#1646, #1776, #1777, #1803):
+  a context is followed by a colon, nested faults name their label, encoder
+  range checks begin `value out of range:`, invalid UTF-8 says how many
+  octets were valid, and an unknown BACnet/SC BVLC-Result code prints in
+  upper case. ([fca2389](https://github.com/jscott3201/rusty-bacnet/commit/fca238953b304bc79ffb0bec231939acd7eec465))
+
+- **Breaking (Rust API):** Codec errors carry static labels, formatted
+  only on display: `Error::Decoding` holds a `DecodeError`, encoders refuse
+  with `Error::Encode` or `Error::Range`, and `Error::Segmentation` holds a
+  `SegmentationError`, so firmware links no formatting (#1646, #1776,
+  #1777, #1802). ([fca2389](https://github.com/jscott3201/rusty-bacnet/commit/fca238953b304bc79ffb0bec231939acd7eec465))
+
+- **Breaking (Rust API):** `BACnetRouter::start` and the router core's
+  `Router::new` refuse a port on network 0 or 0xFFFF, which they used to run
+  with no direct route; number each port from 1 to 65534 (#1698). ([71f238d](https://github.com/jscott3201/rusty-bacnet/commit/71f238da8f30878b07abdbaf36116c6c7564fcbd))
+
+- `bacnet-router-core`'s `Storage`, `Router` and `RouterIn` take a trailing const parameter `B`, defaulting to 32: the global broadcasts kept for duplicate suppression, 0 for none (#1698). ([72ab468](https://github.com/jscott3201/rusty-bacnet/commit/72ab46864f2846d09a5f3280a3148f3c24a7485d))
+
+- A BACnet/SC node queues up to 256 received NPDUs, 32 from any one peer
+  (was 64 and 4), so concurrent requests to one device no longer stall until
+  the APDU timeout, and dropped NPDUs log a throttled warning (#1712). For
+  the old guard, call `with_npdu_per_origin_limit(4)`. ([b786e07](https://github.com/jscott3201/rusty-bacnet/commit/b786e071e67c72bed0098f4b6086884d9b7a139d))
+
+- **Breaking (Rust API):** `NetworkLayer::start` returns an `ApduReceiver`
+  that decodes the transport's NPDUs as it is polled, with no dispatch task
+  or second queue in between; network controls flow only while it is
+  polled, and the transport's queue bounds overload (#1713). ([ed71a48](https://github.com/jscott3201/rusty-bacnet/commit/ed71a48addbc185cf68c3a02ce10b3bd18848ea5))
+
+- `LoopbackTransport` drops a frame that finds the peer's queue full, as a
+  real data link does, and counts it in the peer's `receive_drops()`, instead
+  of making the sender wait (#1713). ([ed71a48](https://github.com/jscott3201/rusty-bacnet/commit/ed71a48addbc185cf68c3a02ce10b3bd18848ea5))
+
+- Requests cost less (#1713, #1727, #1728, #1729): the server runs and reaps
+  request handlers more cheaply and encodes each reply once, and no task sits
+  between transport and application. One B/IP ReadProperty client gets about
+  36% more requests a second than on 0.13.0 ([Benchmarks](Benchmarks.md)). ([ed71a48](https://github.com/jscott3201/rusty-bacnet/commit/ed71a48addbc185cf68c3a02ce10b3bd18848ea5))
+
+- The benchmark harness measures what its scenarios name: `stress-test`
+  summarises every step, connects every client before the clock starts, adds
+  B/IPv6 and SC clients and COV and BBMD capacity, and renames
+  `whois` to `device-scan`; Docker gains Who-Is and a working foreign
+  device (#1714, #1817). ([59d2089](https://github.com/jscott3201/rusty-bacnet/commit/59d2089cfd001ae82c45acc2bef2f503b72d78da))
+
+- **Breaking (Rust API):** Servers and endpoints share one Device identity
+  (#1720). Startup resolves receive capacity before generating a Device, so a
+  default MS/TP server declares 480. Runtime announcements and served identity
+  fields remain coherent after database replacement. ([b146ed1](https://github.com/jscott3201/rusty-bacnet/commit/b146ed1e637e3975d891423547be2226e46713ac))
+
+- The types, encoding, services, transport, network and endpoint crates'
+  docs.rs pages open with their READMEs, each with a runnable quickstart,
+  its feature profiles and its allocator or host needs, and crate guides
+  cover object set-up, a client's Who-Is and a server's ReadProperty (#1723). ([8c14ff5](https://github.com/jscott3201/rusty-bacnet/commit/8c14ff56c0f731b45cc5eac0ed78b19a977cc316))
+
+- **Breaking (Rust API):** `AnyTransport` now requires a fallback in downstream
+  matches, allowing callers to handle additional transport variants enabled by
+  dependency features (#1725). ([7e3450c](https://github.com/jscott3201/rusty-bacnet/commit/7e3450c9b04c2b9f70b5acbb836ca140c0ac2128))
+
+- **Breaking (Rust API):** The B/IP port driver moves from
+  `bacnet_router_core::bip` into `bacnet_bip_core::port` (`NodePort`,
+  `BbmdPort`), and `Tables::serve` answers BBMD management requests, so a
+  BBMD port answers them itself, Delete-FDT-Entry included (#1766). ([d930e28](https://github.com/jscott3201/rusty-bacnet/commit/d930e28ee895bb5f7f98fa9e1a2e50004ad6fd98))
+
+- **Breaking (Rust API):** `bacnet-router-core` drains its counters like the
+  link cores (`take_counters()` of `u32`s, `counters()` to look), re-exports
+  `bip_core`/`mstp_core`, and adds `RouterIn` and `Options::STANDARD`;
+  `BACnetRouter` keeps its `u64` totals (#1767). ([d930e28](https://github.com/jscott3201/rusty-bacnet/commit/d930e28ee895bb5f7f98fa9e1a2e50004ad6fd98))
+
+- `bacnet-time` versions on its own from this release: it takes a new
+  version only when its own API changes, so its number can differ from the
+  other crates' (#1768). ([9a1ee25](https://github.com/jscott3201/rusty-bacnet/commit/9a1ee25c2be326718adb04da3d791adcc2e0fc4e))
+
+- **Breaking (Rust API):** `bacnet-mstp-core` takes its buffers as one
+  `Storage` bundle (`StandardStorage`, `ExtendedStorage`), `HeaplessQueues`
+  is now `FixedQueues`, line inputs return nothing, and `CoreError` splits
+  into per-call errors (#1769). ([561a5a4](https://github.com/jscott3201/rusty-bacnet/commit/561a5a46aaf5dcaafaaac1c94bc7b072b0073859))
+
+- **Breaking (Rust API):** an MS/TP core's frame octets now come only from a
+  confirmed `on_transmit_started`, so a refused start has nothing to send;
+  `Action::Transmit` names the frame by header and length (#1769). ([561a5a4](https://github.com/jscott3201/rusty-bacnet/commit/561a5a46aaf5dcaafaaac1c94bc7b072b0073859))
+
+- **Breaking (Rust API):** `bacnet-router-core`'s `MstpPort` owns its master
+  core, as the B/IP `NodePort` owns its node, and refuses one without
+  extended frames (#1769). ([561a5a4](https://github.com/jscott3201/rusty-bacnet/commit/561a5a46aaf5dcaafaaac1c94bc7b072b0073859))
+
+- **Breaking (Rust API):** every crate speaks `bacnet-npdu`'s types, with
+  the duplicates gone, and `bacnet-encoding`'s owned `Npdu` decodes and
+  encodes through its view; `NetworkPriority` is a closed enum and the
+  router's control authorizer sees a typed message type (#1770, #915). ([62a5baf](https://github.com/jscott3201/rusty-bacnet/commit/62a5baf1dbe0fa014b1bc9948d76a86b4a9d9807))
+
+- **Wire:** The hosted BBMD answers Register-Foreign-Device, Read-BDT,
+  Read-FDT and Delete-FDT-Entry through `bacnet-bip-core`'s `Tables::serve`.
+  A Delete-FDT-Entry naming a registration past its time-to-live and grace
+  period now gets the NAK, since that entry no longer exists (#1773). ([0e84c56](https://github.com/jscott3201/rusty-bacnet/commit/0e84c564dd4fc9b6ce9d63841db1005350bb0ce3))
+
+- `FdtCounters::registrations_expired` now also counts the lapsed
+  registrations purged before a refused no-policy registration, a Read-FDT
+  or a Delete-FDT-Entry (#1773). ([0e84c56](https://github.com/jscott3201/rusty-bacnet/commit/0e84c564dd4fc9b6ce9d63841db1005350bb0ce3))
+
+- Two refusals keep the inner fault's kind (#1776): the weekly and exception
+  schedule decoders no longer report every entry fault as `InvalidEncoding`,
+  and a ReadRange log record's range error converts to `OutOfRange`. ([28e6316](https://github.com/jscott3201/rusty-bacnet/commit/28e63162c202a81740d051b5908df8f827652153))
+
+- `CharacterStringRef::decode` refuses what the owned path refuses: a DBCS
+  string without its code page and malformed UCS-2 or UCS-4. Both run one
+  shared check, and the owned validator now reports its faults at offsets
+  in the data with the view's wording (#1778). ([28e6316](https://github.com/jscott3201/rusty-bacnet/commit/28e63162c202a81740d051b5908df8f827652153))
+
+- **Breaking (Rust API):** a Reject-Message-To-Network's reason and network
+  are read and written in one place, `bacnet_npdu::RejectMessageToNetwork`,
+  which the router core, network layer and client share (#1794). ([d89ce35](https://github.com/jscott3201/rusty-bacnet/commit/d89ce350037e2bae3ef3fd07add35a9135ec3748))
+
+- **Breaking (Rust API):** A log record's failure holds `ErrorClass` and
+  `ErrorCode`, and a decoded failure wider than 16 bits is refused, as an
+  Error PDU's is (#1814). ([a25f68d](https://github.com/jscott3201/rusty-bacnet/commit/a25f68dc99e14845174cc87708c41832cfc0553c))
+
+- The non-router network layer reads a Network-Number-Is through the router
+  core's `message::NetworkNumberIs` view, the one parser of that payload;
+  data of any length but three octets is still refused (#1818). ([dbe342f](https://github.com/jscott3201/rusty-bacnet/commit/dbe342f949c1ff7840b80fe8c10967906cd42737))
+
+- **CLI:** `register` and `unregister` print "… accepted" on success, without
+  the result code, in JSON mode too; a NAK fails the command with exit 1
+  (#1822). ([0af6ec6](https://github.com/jscott3201/rusty-bacnet/commit/0af6ec681d2d6fc5de8b34b4a644af08559be116))
+
+- **Breaking (Rust API):** The B/IP BBMD helpers on `BipTransport` and
+  `BACnetClient` fail with a typed `BvlcExchangeError` that names a NAK, no
+  reply and a local failure apart, and a refused registration, FDT delete
+  or BDT write is now an error rather than an `Ok` code (#1822). ([0af6ec6](https://github.com/jscott3201/rusty-bacnet/commit/0af6ec681d2d6fc5de8b34b4a644af08559be116))
+
+- **Breaking (Rust API):** `BipPortMode::Foreign` lends a live
+  `ForeignRegistration` view instead of a fixed BBMD and lifetime, and
+  `ConfigError` gains `NotForeign` (#1825). ([06a380c](https://github.com/jscott3201/rusty-bacnet/commit/06a380cdaf2faa524d4d4dd169c3715b2193df86))
+
+- **Python API:** With `on_reinitialize` set, a Python foreign device's
+  FD_BBMD_Address and FD_Subscription_Lifetime accept writes, applied by
+  ACTIVATE_CHANGES or WARMSTART, where they answered WRITE_ACCESS_DENIED
+  (#1825). ([06a380c](https://github.com/jscott3201/rusty-bacnet/commit/06a380cdaf2faa524d4d4dd169c3715b2193df86))
+
+- **Breaking (Rust API):** A BACnet/SC dial that runs out of time fails with
+  `ScConnectError::DialTimeout`, naming the stalled step, inside
+  `Error::Transport` rather than `Error::Timeout`, and a refused WebSocket
+  upgrade keeps its HTTP status (#1839). ([2135122](https://github.com/jscott3201/rusty-bacnet/commit/21351229af03c18476ec4cc7435043e5bb3b0709))
+
+- **Python API:** `CovNotificationIterator` counts notifications lost to lag
+  in a new `missed` instead of printing to stderr, and ends with "COV
+  notifications ended: the client stopped" instead of "channel closed"
+  (#1858). ([2135122](https://github.com/jscott3201/rusty-bacnet/commit/21351229af03c18476ec4cc7435043e5bb3b0709))
+
+- **Python API:** event iterators complete concurrent reads one at a time.
+  A read held up behind an item whose event loop stopped raises one
+  `RuntimeWarning` after 5 seconds, and `missed` also counts items dropped on
+  their way to a read, as when that loop is closed (#1858). ([2135122](https://github.com/jscott3201/rusty-bacnet/commit/21351229af03c18476ec4cc7435043e5bb3b0709))
+
+- **Breaking (Rust API):** Lighting Output and Binary Lighting Output take
+  Present_Value and Lighting_Command writes only through `write_property_from`,
+  which names the writer their Value_Source records (#1866). ([12a6109](https://github.com/jscott3201/rusty-bacnet/commit/12a610922ac914143630259eb61343e3e18c6d82))
+
+- **Breaking (wire):** Event Enrollment's Event_Type follows Event_Parameters;
+  the type given to `EventEnrollmentObject::new` (and Python's
+  `add_event_enrollment`) now applies only to legacy octet-string parameters
+  (#1868). ([12a6109](https://github.com/jscott3201/rusty-bacnet/commit/12a610922ac914143630259eb61343e3e18c6d82))
+
+- Every crate without unsafe code forbids it, bacnet-encoding's tests too;
+  each remaining unsafe block needs a safety comment, and
+  `bacnet-transport`'s OS calls sit in one private `sys` module behind safe
+  wrappers. The Windows UDP control-message parser can no longer wrap
+  (#1880, #1881, #1923). ([98fe664](https://github.com/jscott3201/rusty-bacnet/commit/98fe66455bd83ba2e7f3fc0863aea9786a0d142c))
+
+- B/IP and B/IPv6 packet info, receive stamps and the B/IPv6 send go through
+  nix's safe socket API on Linux, macOS and the BSDs; other Unix targets keep
+  libc. nix trusts the kernel's message lengths (#1882). ([1e7f97a](https://github.com/jscott3201/rusty-bacnet/commit/1e7f97a27a7b0fc36026141eaa66888d12c8afc5))
+
+- The Linux Ethernet transport's AF_PACKET socket goes through socket2 and
+  nix with no unsafe code, is close-on-exec, and drops frames queued before
+  its bind. A missing interface, or one without a 6-octet MAC (tun,
+  WireGuard), fails start with a clear error (#1883). ([88ff4f2](https://github.com/jscott3201/rusty-bacnet/commit/88ff4f2c61ede647878c792be2252a319bdd5f32))
+
+- The TUI's device table shows a routed device as its station in target
+  syntax (`2:0x05`), with the router in a Via column when it fits, and sizes
+  its columns to their content; the Who-Has panel names the object and sits
+  beside the table from 160 columns (#1892, #1915). ([bada8d3](https://github.com/jscott3201/rusty-bacnet/commit/bada8d30a8a4d2273c0c481c961e42e96bb80300))
+
+- The TUI's footer and status bar fit 80 columns by priority and always keep
+  `? help` and `q quit`; from 160 columns a long notice shows in full. Help
+  reads each screen's key table, so it always matches what the keys do
+  (#1894, #1926, #1927). ([3f3ab65](https://github.com/jscott3201/rusty-bacnet/commit/3f3ab65d7797389d4011a34292d5673b5d6bc278))
+
+- **Breaking (Rust API):** MS/TP sorts timer lateness into a fixed histogram
+  with its maximum, and `deadline_misses` becomes `late_deadlines`, counted
+  from the new `MstpCoreConfig::late_deadline` (1 ms by default, 5 ms in the
+  Tokio transport). The TUI shows both (#1897). ([07ca68e](https://github.com/jscott3201/rusty-bacnet/commit/07ca68e8657471fbdb3b70103a6fa15d2e588fb3))
+
+- **Breaking (CLI):** `discover` and `subscribe` print a routed device's
+  station in the target syntax, `2:0x05`, so it can be pasted back as a
+  target; the JSON keys are now `station` and `routed_source`, and the
+  `Remote MAC` table column is now `Station` (#1916). ([d6c84ee](https://github.com/jscott3201/rusty-bacnet/commit/d6c84ee6ed992eb4d7cd759612bbe507640fe517))
+
+- Warnings a peer can set off once per packet or connection (dropped inbound
+  NPDUs, undecodable or refused requests and segments, bad SC direct and hub
+  connections, a full Ethernet NPDU channel) warn at most once per 10
+  seconds with a count; the rest log at debug (#1724, #1950). ([53d4601](https://github.com/jscott3201/rusty-bacnet/commit/53d4601a5a17a75c9a02f7b2203ab7fae75cc46c))
+
+### Removed
+
+- **Breaking (CLI):** `bacnet shell`, its rustyline editor and the
+  `devices` command, whose device table only the shell filled, are removed.
+  The shell's `writem` is a one-shot command (#974). ([b98aac9](https://github.com/jscott3201/rusty-bacnet/commit/b98aac93d39b1313ff5492a91f29f7335293be41))
+
+### Fixed
+
+- `bacnet capture` filters on the `-p` port rather than always 47808 (#971). ([390f18f](https://github.com/jscott3201/rusty-bacnet/commit/390f18fc5f251f2b7d617848ffe3695808cc406a))
+
+- **Wire:** A Value_Source COV subscription on a Color or Color Temperature
+  object that tracks its source now reports Present_Value changes too, and
+  each notification carries Present_Value with Value_Source (#1582). ([46d7ed0](https://github.com/jscott3201/rusty-bacnet/commit/46d7ed011c600c622263a7c2dabd6b95a1d397c3))
+
+- `BACnetRouter` follows a BACnet/SC port's NPDU limit through failover and
+  reconnect, published by the new `TransportPort::max_npdu_changes()`, and
+  counts a send the transport later refuses as too long in
+  `egress_too_long` (#1696). ([71f238d](https://github.com/jscott3201/rusty-bacnet/commit/71f238da8f30878b07abdbaf36116c6c7564fcbd))
+
+- Routers send queued traffic in network-priority order, keeping arrival order within each priority while retaining each port's existing queue bound (#1697). ([875aad9](https://github.com/jscott3201/rusty-bacnet/commit/875aad955fd9315787cec2a4d27ecb8a9e9f914f))
+
+- At the 256-route cap, an Initialize-Routing-Table-Ack refreshes the
+  networks the router's table holds, as an I-Am-Router-To-Network does; a
+  network it doesn't hold is still refused and counted (#1698). ([71f238d](https://github.com/jscott3201/rusty-bacnet/commit/71f238da8f30878b07abdbaf36116c6c7564fcbd))
+
+- Router-local replies now identify the addressed endpoint while returning through the captured ingress port and peer. Segmented responses, cached APDU replay, MS/TP handoff and direct BACnet/SC replies preserve that context and its owner lifetimes (#1699). ([b24829e](https://github.com/jscott3201/rusty-bacnet/commit/b24829eeea1c014465279febb9a90d71f3286cab))
+
+- Routers return a length rejection to an eligible sender when BACnet/SC
+  reports a definite length refusal for a queued transmission, including
+  frame attributes and direct-peer limits. Rejected replies never trigger
+  another reply (#1716). ([a47b0ae](https://github.com/jscott3201/rusty-bacnet/commit/a47b0aed2157e639d0083348e74ed427b8282f5b))
+
+- **Breaking (Rust API):** portable router ports now supply their group-address
+  rules, so B/IP and MS/TP group forwarding works with the default host.
+  Custom links keep their own classification rules (#1721). ([5ce7592](https://github.com/jscott3201/rusty-bacnet/commit/5ce759270441155b6e784e2626419eb3503365bf))
+
+- The Rust examples in `examples/rust` compile and run again, as Cargo
+  examples that CI builds, and the Rust and Python API guides' database-lock
+  and engineering-units snippets are corrected (#1723). ([a74e40a](https://github.com/jscott3201/rusty-bacnet/commit/a74e40a91c353d8620f85be92323196ff5c94622))
+
+- **Wire:** the non-router `NetworkLayer` drops a network message whose DNET
+  names one network instead of handing it to its control receiver, as it
+  already did for APDUs (Clause 6.5.2.2, #1795). ([dbe342f](https://github.com/jscott3201/rusty-bacnet/commit/dbe342f949c1ff7840b80fe8c10967906cd42737))
+
+- A B/IP foreign device whose broadcast address is its own address, as in
+  loopback tests, now takes the Forwarded-NPDUs its BBMD sends it instead of
+  dropping them as untrusted broadcasts (#1851). ([a9a0cb3](https://github.com/jscott3201/rusty-bacnet/commit/a9a0cb3038be6ac04e91a1be1861512d986ff501))
+
+- **Python API:** SC event, COV, I-Have and network-report iterators no longer
+  lose an item when a read is cancelled mid-delivery, as a timed-out
+  `wait_for` does: it comes back on the next read, ahead of later items and
+  of the end of the iteration (#1858). ([2135122](https://github.com/jscott3201/rusty-bacnet/commit/21351229af03c18476ec4cc7435043e5bb3b0709))
+
+- **Wire:** An Event Enrollment whose Event_Parameters were never set serves
+  the `none` alternative, which Python reads as `{"kind": "none"}`. Any
+  enrollment with a monitored reference lists and acknowledges its faults,
+  and `none` returns an offnormal one to NORMAL (#1868). ([12a6109](https://github.com/jscott3201/rusty-bacnet/commit/12a610922ac914143630259eb61343e3e18c6d82))
+
+- The B/IP local-address lookup and the B/IPv6 interface lookup share one
+  `getifaddrs` walk, which reads illumos's 64-bit interface flags, so
+  `bacnet-transport` builds for illumos (#1884). ([9f8f41d](https://github.com/jscott3201/rusty-bacnet/commit/9f8f41dc87c6b50a72faf7e81f9a40d8f4ed1fc7))
+
+- The Ethernet transport counts and logs XID and TEST replies that fail to
+  go out, exposed as `EthernetTransport::reply_send_failures`, and a send
+  that puts only part of a frame on the wire is now an error (#1918). ([5c07f8e](https://github.com/jscott3201/rusty-bacnet/commit/5c07f8ea376b99ae4c8fbf38de5b7b55fc025bc1))
+
 ## [0.13.0] - 2026-10-13
 
 ### Release highlights

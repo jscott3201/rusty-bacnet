@@ -12,8 +12,8 @@ fn encode_to_vec(apdu: &Apdu) -> Vec<u8> {
 fn formal_body(class: ErrorClass, code: ErrorCode, indexed: bool) -> Bytes {
     let mut body = BytesMut::new();
     tags::encode_opening_tag(&mut body, 0);
-    primitives::encode_app_enumerated(&mut body, class.to_raw() as u32);
-    primitives::encode_app_enumerated(&mut body, code.to_raw() as u32);
+    primitives::encode_app_enumerated(&mut body, u32::from(class.to_raw()));
+    primitives::encode_app_enumerated(&mut body, u32::from(code.to_raw()));
     tags::encode_closing_tag(&mut body, 0);
     tags::encode_opening_tag(&mut body, 1);
     crate::constructed::encode_object_property_reference(

@@ -6,7 +6,7 @@ use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::event::EventStateChange;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
-use bacnet_types::enums::{EventState, EventType};
+use bacnet_types::enums::{EngineeringUnits, EventState, EventType};
 use bytes::Bytes;
 
 #[path = "event_notifications_commit_tests.rs"]
@@ -49,12 +49,13 @@ async fn dcc_suppresses_periodic_event_send() {
     let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
 
     let mut db = clocked_test_database();
-    db.add(Box::new(AnalogInputObject::new(1, "AI-1", 0).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AnalogInputObject::new(1, "AI-1", EngineeringUnits::SQUARE_METERS).unwrap(),
+    ))
+    .unwrap();
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
-            instance: 1,
-            name: "Dev".into(),
+            identity: bacnet_objects::DeviceIdentity::default().with_name("Dev"),
             ..DeviceConfig::default()
         })
         .unwrap(),
@@ -205,8 +206,7 @@ async fn fixture_with_commanded_nc(
 
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
-            instance: 1,
-            name: "Dev".into(),
+            identity: bacnet_objects::DeviceIdentity::default().with_name("Dev"),
             ..DeviceConfig::default()
         })
         .unwrap(),
@@ -214,7 +214,7 @@ async fn fixture_with_commanded_nc(
     .unwrap();
 
     // AnalogInput pointing at the NotificationClass, ALARM notify type.
-    let mut ai = AnalogInputObject::new(1, "AI-1", 0).unwrap();
+    let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::SQUARE_METERS).unwrap();
     ai.write_property(
         PropertyIdentifier::NOTIFICATION_CLASS,
         None,
@@ -259,15 +259,14 @@ async fn event_notification_missing_class_distributes_nothing() {
     let mut db = clocked_test_database();
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
-            instance: 1,
-            name: "Dev".into(),
+            identity: bacnet_objects::DeviceIdentity::default().with_name("Dev"),
             ..DeviceConfig::default()
         })
         .unwrap(),
     ))
     .unwrap();
     // AI points at NotificationClass 999, which does not exist.
-    let mut ai = AnalogInputObject::new(1, "AI-1", 0).unwrap();
+    let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::SQUARE_METERS).unwrap();
     ai.write_property(
         PropertyIdentifier::NOTIFICATION_CLASS,
         None,
@@ -383,7 +382,7 @@ async fn event_notification_event_notify_type_honors_class_ack_required() {
 pub(super) fn db_with_high_limit_transition(
     event_enable_byte: u8,
 ) -> Arc<tokio::sync::RwLock<ObjectDatabase>> {
-    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     for (p, v) in [
         (PropertyIdentifier::HIGH_LIMIT, 80.0f32),
         (PropertyIdentifier::LOW_LIMIT, 20.0),
@@ -418,8 +417,7 @@ pub(super) fn db_with_high_limit_transition(
     db.add(Box::new(ai)).unwrap();
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
-            instance: 1,
-            name: "Dev".into(),
+            identity: bacnet_objects::DeviceIdentity::default().with_name("Dev"),
             ..DeviceConfig::default()
         })
         .unwrap(),
@@ -510,7 +508,7 @@ async fn event_enable_cleared_suppresses_per_write_send() {
 async fn event_enable_cleared_suppresses_periodic_time_delay_send() {
     let (transport, sent) = recording_transport();
 
-    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     for (p, v) in [
         (PropertyIdentifier::HIGH_LIMIT, 80.0f32),
         (PropertyIdentifier::LOW_LIMIT, 20.0),
@@ -554,8 +552,7 @@ async fn event_enable_cleared_suppresses_periodic_time_delay_send() {
     db.add(Box::new(ai)).unwrap();
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
-            instance: 1,
-            name: "Dev".into(),
+            identity: bacnet_objects::DeviceIdentity::default().with_name("Dev"),
             ..DeviceConfig::default()
         })
         .unwrap(),
@@ -613,7 +610,7 @@ async fn event_enable_cleared_suppresses_periodic_time_delay_send() {
 #[tokio::test(start_paused = true)]
 async fn periodic_time_delay_carries_detector_event_type_to_wire() {
     let (transport, sent) = recording_transport();
-    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     for (property, value) in [
         (PropertyIdentifier::HIGH_LIMIT, 80.0),
         (PropertyIdentifier::LOW_LIMIT, 20.0),
@@ -656,8 +653,7 @@ async fn periodic_time_delay_carries_detector_event_type_to_wire() {
     db.add(Box::new(ai)).unwrap();
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
-            instance: 1,
-            name: "Dev".into(),
+            identity: bacnet_objects::DeviceIdentity::default().with_name("Dev"),
             ..DeviceConfig::default()
         })
         .unwrap(),

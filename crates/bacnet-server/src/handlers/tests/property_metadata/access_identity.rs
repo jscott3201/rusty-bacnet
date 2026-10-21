@@ -204,8 +204,8 @@ fn rpm_access_identity_metadata_does_not_enable_create_object() {
             let mut response = BytesMut::new();
             let result = handle_create_object(&mut db, &request, &mut response);
             assert!(matches!(result, Err(Error::Protocol { class, code })
-                if class == ErrorClass::OBJECT.to_raw() as u32
-                    && code == ErrorCode::UNSUPPORTED_OBJECT_TYPE.to_raw() as u32));
+                if class == ErrorClass::OBJECT
+                    && code == ErrorCode::UNSUPPORTED_OBJECT_TYPE));
             assert!(response.is_empty());
             assert!(db.is_empty());
         }

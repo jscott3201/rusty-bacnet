@@ -9,8 +9,8 @@
 //! `tests/discovery.rs` in #1688; these run the router on its engine.
 
 use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress};
+use bacnet_npdu::{NetworkMessageType, RejectMessageReason};
 use bacnet_transport::port::{DataAttribute, ReceivedNpdu, TransportProvenance};
-use bacnet_types::enums::{NetworkMessageType, RejectMessageReason};
 use bacnet_types::MacAddr;
 use bytes::{Bytes, BytesMut};
 use tokio::sync::mpsc;
@@ -38,7 +38,7 @@ async fn directed_unknown_solicits_once_then_rejects_twice_coalesced() {
     let who_is = decode_npdu(solicited[0].clone()).unwrap();
     assert_eq!(
         who_is.message_type,
-        Some(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK.to_raw())
+        Some(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK)
     );
     assert_eq!(who_is.payload.as_ref(), &[0x27, 0x0f]);
     let rejects = h.drain(0);
@@ -50,7 +50,7 @@ async fn directed_unknown_solicits_once_then_rejects_twice_coalesced() {
                 let decoded = decode_npdu(npdu).unwrap();
                 assert_eq!(
                     decoded.message_type,
-                    Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK.to_raw())
+                    Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK)
                 );
                 assert_eq!(
                     decoded.payload.as_ref(),
@@ -93,7 +93,7 @@ async fn directed_unknown_discovered_via_answer_routes_next_packet() {
                 SendRequest::Broadcast { npdu, .. } => {
                     assert_eq!(
                         decode_npdu(npdu).unwrap().message_type,
-                        Some(NetworkMessageType::I_AM_ROUTER_TO_NETWORK.to_raw())
+                        Some(NetworkMessageType::I_AM_ROUTER_TO_NETWORK)
                     );
                 }
                 SendRequest::Unicast { .. } => panic!("expected only I-Am rebroadcast"),
@@ -155,6 +155,9 @@ impl bacnet_transport::port::TransportPort for MemTransport {
                 npdu: Bytes::copy_from_slice(npdu),
                 mac: MacAddr::from_slice(mac),
                 data_attributes: data_attributes.to_vec(),
+
+                response: None,
+                reject_origin: None,
             })
             .map_err(|_| bacnet_types::error::Error::Encoding("wire full".into()))
     }
@@ -167,6 +170,8 @@ impl bacnet_transport::port::TransportPort for MemTransport {
             .try_send(SendRequest::Broadcast {
                 npdu: Bytes::copy_from_slice(npdu),
                 data_attributes: data_attributes.to_vec(),
+
+                reject_origin: None,
             })
             .map_err(|_| bacnet_types::error::Error::Encoding("wire full".into()))
     }
@@ -247,8 +252,7 @@ async fn apdu_unknown_solicits_rejects_then_forwards_after_answer() {
         while let Ok(req) = wire1.try_recv() {
             if let SendRequest::Broadcast { npdu, .. } = req {
                 let decoded = decode_npdu(npdu).unwrap();
-                if decoded.message_type
-                    == Some(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK.to_raw())
+                if decoded.message_type == Some(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK)
                     && decoded.payload.as_ref() == [0x0b, 0xb8]
                 {
                     saw_who_is = true;
@@ -258,8 +262,7 @@ async fn apdu_unknown_solicits_rejects_then_forwards_after_answer() {
         while let Ok(req) = wire0.try_recv() {
             if let SendRequest::Unicast { npdu, mac, .. } = req {
                 let decoded = decode_npdu(npdu).unwrap();
-                if decoded.message_type
-                    == Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK.to_raw())
+                if decoded.message_type == Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK)
                     && decoded.payload.as_ref()
                         == [
                             RejectMessageReason::NOT_DIRECTLY_CONNECTED.to_raw(),
@@ -281,7 +284,7 @@ async fn apdu_unknown_solicits_rejects_then_forwards_after_answer() {
     // Answer installs the route; the retry forwards without a reject.
     {
         let now = router.now();
-        let mac = crate::router_table::Mac::from_array([2]);
+        let mac = bacnet_npdu::Mac::from_array([2]);
         let port = crate::router_table::PortId(1);
         let _ = router.table().learn(3000, port, mac, now);
     }
@@ -300,7 +303,7 @@ async fn apdu_unknown_solicits_rejects_then_forwards_after_answer() {
         while let Ok(req) = wire0.try_recv() {
             if let SendRequest::Unicast { npdu, .. } = req {
                 if decode_npdu(npdu).unwrap().message_type
-                    == Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK.to_raw())
+                    == Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK)
                 {
                     rejected = true;
                 }

@@ -3,8 +3,9 @@
 use std::io;
 use std::net::Ipv6Addr;
 
-#[cfg(unix)]
-mod unix;
+with_getifaddrs! {
+    mod getifaddrs;
+}
 #[cfg(windows)]
 mod windows;
 
@@ -84,9 +85,10 @@ fn select(requested: Ipv6Addr, candidates: &[Candidate]) -> io::Result<SelectedL
     }
 }
 
-#[cfg(unix)]
-fn enumerate() -> io::Result<Vec<Candidate>> {
-    unix::enumerate()
+with_getifaddrs! {
+    fn enumerate() -> io::Result<Vec<Candidate>> {
+        getifaddrs::enumerate()
+    }
 }
 
 #[cfg(windows)]
@@ -94,12 +96,13 @@ fn enumerate() -> io::Result<Vec<Candidate>> {
     windows::enumerate()
 }
 
-#[cfg(not(any(unix, windows)))]
-fn enumerate() -> io::Result<Vec<Candidate>> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "selected IPv6 interfaces are unsupported",
-    ))
+without_interface_list! {
+    fn enumerate() -> io::Result<Vec<Candidate>> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "selected IPv6 interfaces are unsupported",
+        ))
+    }
 }
 
 #[cfg(test)]

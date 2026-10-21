@@ -119,7 +119,7 @@ fn landing_door_status_rejects_malformed_values() {
     ] {
         let error = decode_landing_door_status(wire, 0).unwrap_err();
         assert!(
-            !matches!(error, Error::OutOfRange(_)),
+            !matches!(error, Error::Range(_)),
             "{context}: {wire:02X?} is malformed, not out of range: {error:?}"
         );
     }
@@ -160,10 +160,11 @@ fn landing_door_status_reports_oversized_members_as_range_errors() {
     ];
     for &(context, wire, member) in cases {
         match decode_landing_door_status(wire, 0) {
-            Err(Error::OutOfRange(message)) => {
+            Err(Error::Range(refused)) => {
+                let message = refused.label;
                 assert!(message.contains(member), "{context}: {message}")
             }
-            other => panic!("{context}: expected OutOfRange, got {other:?}"),
+            other => panic!("{context}: expected a range error, got {other:?}"),
         }
     }
     // A malformed member anywhere takes precedence over an oversized one.
@@ -179,7 +180,7 @@ fn landing_door_status_reports_oversized_members_as_range_errors() {
     ] {
         let error = decode_landing_door_status(wire, 0).unwrap_err();
         assert!(
-            !matches!(error, Error::OutOfRange(_)),
+            !matches!(error, Error::Range(_)),
             "{context}: expected a malformed-value error, got {error:?}"
         );
     }

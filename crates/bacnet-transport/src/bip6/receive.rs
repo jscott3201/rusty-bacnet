@@ -60,8 +60,9 @@ pub(super) struct Receiver {
     pub(super) unicast_ips: Vec<Ipv6Addr>,
     /// Whether the socket is bound to the wildcard address.
     pub(super) wildcard_bind: bool,
-    /// The BBMD this node is registered with as a foreign device, if any.
-    pub(super) foreign_bbmd: Option<(Ipv6Addr, u16)>,
+    /// The registration of a foreign device, whose BBMD can move while the
+    /// loop runs; `None` for any other node.
+    pub(super) foreign_bbmd: Option<Arc<super::foreign_target::ForeignTarget>>,
     /// The neighbour table, which learns from what arrives, and the
     /// resolutions an arrival can complete.
     pub(super) neighbours: Arc<Resolver>,
@@ -104,6 +105,12 @@ pub(super) fn receive_failed(error: &io::Error, drops: &ReceiveDrops) -> bool {
 }
 
 impl Receiver {
+    /// The BBMD this node is registered with as a foreign device, read at
+    /// the moment of the check, so a moved registration applies at once.
+    fn foreign_bbmd(&self) -> Option<(Ipv6Addr, u16)> {
+        self.foreign_bbmd.as_ref().map(|target| target.bbmd())
+    }
+
     /// Receive until the socket fails.
     pub(super) async fn run(self) {
         let mut recv_buf = vec![0u8; 2048];
@@ -211,7 +218,7 @@ impl Receiver {
                 self.local_ip,
                 &self.unicast_ips,
                 self.wildcard_bind,
-                self.foreign_bbmd,
+                self.foreign_bbmd(),
             )
         {
             self.drops.count(DropReason::UntrustedForwardedNpdu);
@@ -230,7 +237,7 @@ impl Receiver {
                 received.destination,
                 received.os_group_delivery,
                 &self.binding(),
-                self.foreign_bbmd,
+                self.foreign_bbmd(),
             )
         {
             self.drops.count(DropReason::UntrustedForwardedResolution);
@@ -617,7 +624,7 @@ impl Receiver {
                 // Address-Resolutions on (U.4.4), as when it holds no
                 // registration for it; a peer refused its VAR.
                 if code == Bvlc6ResultCode::ADDRESS_RESOLUTION_NAK
-                    && is_configured_bbmd(peer.into(), self.foreign_bbmd)
+                    && is_configured_bbmd(peer.into(), self.foreign_bbmd())
                 {
                     self.neighbours.refuse_resolutions();
                 } else if code == Bvlc6ResultCode::VIRTUAL_ADDRESS_RESOLUTION_NAK {

@@ -116,8 +116,8 @@ fn rpm_network_port_metadata_does_not_enable_create_object() {
         let mut response = BytesMut::new();
         let result = handle_create_object(&mut db, &request, &mut response);
         assert!(matches!(result, Err(Error::Protocol { class, code })
-            if class == ErrorClass::OBJECT.to_raw() as u32
-                && code == ErrorCode::UNSUPPORTED_OBJECT_TYPE.to_raw() as u32));
+            if class == ErrorClass::OBJECT
+                && code == ErrorCode::UNSUPPORTED_OBJECT_TYPE));
         assert!(response.is_empty());
         assert!(db.is_empty());
     }
@@ -145,8 +145,8 @@ fn network_port_delete_object_is_denied() {
     let result = handle_delete_object(&mut db, &request).map(|_removed| ());
     assert!(
         matches!(result, Err(Error::Protocol { class, code })
-            if class == ErrorClass::OBJECT.to_raw() as u32
-                && code == ErrorCode::OBJECT_DELETION_NOT_PERMITTED.to_raw() as u32),
+            if class == ErrorClass::OBJECT
+                && code == ErrorCode::OBJECT_DELETION_NOT_PERMITTED),
         "DeleteObject must reject NETWORK_PORT, got {result:?}"
     );
     assert!(

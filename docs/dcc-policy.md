@@ -200,7 +200,9 @@ that runs out writes one DEVICE_ENABLE_COMM record with this device as its sourc
 and no invoke ID; an ENABLE's own duration changes nothing when it ends, so it
 writes none. Each record names this Device as its target, with no target object,
 property or value, and no Result. A refused request (password, DISABLE, policy,
-source or rate denial) writes nothing.
+source or rate denial) writes nothing. An accepted WARMSTART or COLDSTART
+ReinitializeDevice that ends DISABLE_INITIATION writes only its DEVICE_RESET
+record, not a DEVICE_ENABLE_COMM as well (#1564).
 
 The record goes through the Reporter that monitors the local Device object, and
 needs its DEVICE_DISABLE_COMM or DEVICE_ENABLE_COMM operation bit. It honours

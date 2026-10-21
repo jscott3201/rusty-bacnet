@@ -269,13 +269,13 @@ fn dcc_configured_validation_retains_decode_password_unknown_mode_precedence() {
         // request's Reject for a missing parameter (#1446).
         let failure = validate(&[0x19]);
         assert!(matches!(failure.error, Error::Reject { reason }
-            if reason == RejectReason::MISSING_REQUIRED_PARAMETER.to_raw()));
+            if reason == RejectReason::MISSING_REQUIRED_PARAMETER));
         assert!(matches!(failure.outcome, DccOutcome::Malformed));
         // The password is checked before the mode, so an unknown mode with
         // no password is a password failure.
         let failure = validate(&[0x19, 3]);
         assert!(matches!(failure.error, Error::Protocol { class, code }
-            if class == ErrorClass::SECURITY.to_raw() as u32 && code == ErrorCode::PASSWORD_FAILURE.to_raw() as u32));
+            if class == ErrorClass::SECURITY && code == ErrorCode::PASSWORD_FAILURE));
         assert!(matches!(failure.outcome, DccOutcome::PasswordFailure));
         let mut data = BytesMut::new();
         DeviceCommunicationControlRequest {
@@ -299,7 +299,7 @@ pub(super) async fn legacy_fixture() -> (
     fixture_with_config(
         "recovery",
         ServerConfig {
-            segmentation_supported: Segmentation::BOTH,
+            device: bacnet_objects::DeviceIdentity::default().with_segmentation(Segmentation::BOTH),
             dcc_policy: DccPolicy::LegacyPermissive,
             ..Default::default()
         },

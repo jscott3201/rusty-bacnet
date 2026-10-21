@@ -108,7 +108,7 @@ impl<const N: usize> Slot<N> {
 pub(super) type Selected = (QueueKind, usize, QueueItemInfo);
 
 /// One destination class's queue: its slots, how many hold an item, and its
-/// counters. `S` keeps the slots: an array in `HeaplessQueues`, a vector
+/// counters. `S` keeps the slots: an array in `FixedQueues`, a vector
 /// that grows to its capacity in `AllocQueues`.
 pub(super) struct Lane<S> {
     pub(super) slots: S,

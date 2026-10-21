@@ -66,6 +66,7 @@ async fn dispatch_counted(server: &BACnetServer<TestTransport>, request: Bytes) 
             service_request: request,
         }),
         ReceivedApdu {
+            router_response: None,
             direct_response: None,
             apdu: Bytes::new(),
             source_mac: MacAddr::from_slice(SOURCE),
@@ -107,10 +108,11 @@ async fn deciding_attempts_ahead_counts_and_audits_only_the_attempts_reached() {
         .unwrap();
     let calls = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&calls);
-    fixture.server.config_mut().mutation_authorizer = Some(Arc::new(move |_| {
-        counted.fetch_add(1, Ordering::SeqCst);
-        true
-    }));
+    fixture.server.config_mut().policy =
+        Some(Arc::new(crate::FnPolicy::new().mutation(move |_| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            true
+        })));
     let zone = oid(ObjectType::ACCESS_ZONE, 1);
     let mut rule = BytesMut::new();
     encode_access_rule(

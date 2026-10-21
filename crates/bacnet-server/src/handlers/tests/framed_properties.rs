@@ -415,7 +415,7 @@ fn malformed_framed_event_parameters_write_rejected() {
             write_framed(&mut db, oid, PropertyIdentifier::EVENT_PARAMETERS, bad).unwrap_err();
         match err {
             Error::Protocol { class, .. } => {
-                assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
+                assert_eq!(class, ErrorClass::PROPERTY);
             }
             other => panic!("expected protocol error, got {other:?}"),
         }

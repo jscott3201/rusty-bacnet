@@ -254,7 +254,7 @@ async fn a_reference_in_another_device_is_refused_and_changes_nothing() {
     let refused = write_local(&h, PropertyValue::ApplicationData(present_value(remote()))).await;
     assert!(
         matches!(refused, Err(Error::Protocol { code, .. })
-            if code == ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32),
+            if code == ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED),
         "write_local of a remote reference: {refused:?}"
     );
 

@@ -22,6 +22,7 @@
 #    and --auditwheel check fails the build on a symbol or library outside that
 #    policy instead of copying a library into the wheel;
 # 4. builds the CLI with sc-tls and pcap into out/bacnet-linux-<amd64|arm64>.
+# The wheels and the CLI use the `dist` profile (fat LTO, #973; Cargo.toml).
 # Then it gives dist/, out/ and target/ back to the runner's user.
 # SOURCE_DATE_EPOCH, when set, pins the wheels' timestamps.
 set -euo pipefail
@@ -106,15 +107,16 @@ for py in $pythons; do
   [ -x "$interpreter" ] || fail "the image has no CPython $py ($interpreter)"
   interpreters+=("$interpreter")
 done
-"$(dirname "$maturin_python")/maturin" build --release --locked --target "$target" \
+"$(dirname "$maturin_python")/maturin" build --profile dist --locked --target "$target" \
   --compatibility manylinux2014 --auditwheel check -i "${interpreters[@]}" \
   -m crates/rusty-bacnet/Cargo.toml --out dist
 echo "::endgroup::"
 
+# The default features add the terminal UI (`tui`, #974).
 echo "::group::CLI"
 LIBPCAP_LIBDIR=/tmp/libpcap/lib LIBPCAP_VER=$(pin LIBPCAP_VERSION) \
-  cargo build --release --locked -p bacnet-cli --features sc-tls,pcap --target "$target"
+  cargo build --profile dist --locked -p bacnet-cli --features sc-tls,pcap,serial --target "$target"
 mkdir -p out
-cp "target/$target/release/bacnet" "out/$cli"
+cp "target/$target/dist/bacnet" "out/$cli"
 echo "::endgroup::"
 ls -l dist out

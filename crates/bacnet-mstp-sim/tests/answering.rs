@@ -49,10 +49,12 @@ fn tester(sim: &mut Sim, next: u8, first: Vec<ScriptSend>) {
 #[test]
 fn a_token_that_arrives_during_an_answer_is_used_after_it() {
     let mut sim = Sim::new(SimConfig::new(BAUD));
-    sim.add_master(MasterSpec::new(3, 7, BAUD).reply(ReplyPolicy::Answer {
-        delay: millis(50),
-        payload: ANSWER.to_vec(),
-    }));
+    sim.add_master(
+        MasterSpec::new(3, 7, BAUD).application(ReplyPolicy::Answer {
+            delay: millis(50),
+            payload: ANSWER.to_vec(),
+        }),
+    );
     tester(
         &mut sim,
         3,

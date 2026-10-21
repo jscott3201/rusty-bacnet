@@ -265,8 +265,8 @@ fn trendlog_log_buffer_empty() {
     assert!(matches!(
         tl.read_property(PropertyIdentifier::LOG_BUFFER, None),
         Err(Error::Protocol { class, code })
-            if class == ErrorClass::PROPERTY.to_raw() as u32
-                && code == ErrorCode::READ_ACCESS_DENIED.to_raw() as u32
+            if class == ErrorClass::PROPERTY
+                && code == ErrorCode::READ_ACCESS_DENIED
     ));
 }
 
@@ -551,8 +551,8 @@ fn trendlog_reliability_is_not_network_writable() {
     );
     match result.expect_err("Reliability write must be refused") {
         Error::Protocol { class, code } => {
-            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
-            assert_eq!(code, ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32);
+            assert_eq!(class, ErrorClass::PROPERTY);
+            assert_eq!(code, ErrorCode::WRITE_ACCESS_DENIED);
         }
         other => panic!("expected PROPERTY / WRITE_ACCESS_DENIED, got {other:?}"),
     }
@@ -598,12 +598,8 @@ fn trend_logs_have_no_out_of_service_property() {
         for result in [read, write] {
             match result.expect_err("no Out_Of_Service property") {
                 Error::Protocol { class, code } => {
-                    assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32, "{kind:?}");
-                    assert_eq!(
-                        code,
-                        ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
-                        "{kind:?}"
-                    );
+                    assert_eq!(class, ErrorClass::PROPERTY, "{kind:?}");
+                    assert_eq!(code, ErrorCode::UNKNOWN_PROPERTY, "{kind:?}");
                 }
                 other => panic!("expected PROPERTY / UNKNOWN_PROPERTY, got {other:?}"),
             }
@@ -628,8 +624,8 @@ fn trendlog_multiple_reliability_is_not_network_writable() {
     );
     match result.expect_err("Reliability write must be refused") {
         Error::Protocol { class, code } => {
-            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
-            assert_eq!(code, ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32);
+            assert_eq!(class, ErrorClass::PROPERTY);
+            assert_eq!(code, ErrorCode::WRITE_ACCESS_DENIED);
         }
         other => panic!("expected PROPERTY / WRITE_ACCESS_DENIED, got {other:?}"),
     }

@@ -4,7 +4,8 @@ use crate::life_safety_cov::LifeSafetyCovChange;
 use bacnet_objects::life_safety::{LifeSafetyPointObject, LifeSafetyZoneObject};
 use bacnet_services::life_safety::LifeSafetyOperationRequest;
 use bacnet_types::enums::{
-    ErrorClass, ErrorCode, LifeSafetyOperation, ObjectType, PropertyIdentifier, SilencedState,
+    EngineeringUnits, ErrorClass, ErrorCode, LifeSafetyOperation, ObjectType, PropertyIdentifier,
+    SilencedState,
 };
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
@@ -37,7 +38,7 @@ fn assert_protocol_error(error: Error, class: ErrorClass, code: ErrorCode) {
         Error::Protocol {
             class: actual_class,
             code: actual_code,
-        } if actual_class == class.to_raw() as u32 && actual_code == code.to_raw() as u32
+        } if actual_class == class && actual_code == code
     ));
 }
 
@@ -108,8 +109,10 @@ fn life_safety_operation_reports_target_errors() {
     assert_protocol_error(error, ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT);
 
     let analog_oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-    db.add(Box::new(AnalogInputObject::new(1, "analog", 62).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AnalogInputObject::new(1, "analog", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+    ))
+    .unwrap();
     let error = handle_life_safety_operation(
         &mut db,
         &request(LifeSafetyOperation::SILENCE, Some(analog_oid)),
@@ -179,8 +182,10 @@ fn life_safety_operation_without_target_attempts_every_object() {
     db.add(Box::new(zone)).unwrap();
     db.add(Box::new(already_desired)).unwrap();
     db.add(Box::new(invalid_state)).unwrap();
-    db.add(Box::new(AnalogInputObject::new(1, "analog", 62).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AnalogInputObject::new(1, "analog", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+    ))
+    .unwrap();
 
     let changed =
         handle_life_safety_operation(&mut db, &request(LifeSafetyOperation::SILENCE_VISUAL, None))

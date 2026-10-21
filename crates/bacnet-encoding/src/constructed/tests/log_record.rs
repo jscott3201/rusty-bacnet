@@ -1,6 +1,7 @@
 use super::*;
 use bacnet_types::bitstring::LogStatus;
 use bacnet_types::constructed::{BACnetLogRecord, LogDatum};
+use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::primitives::{Date, StatusFlags, Time};
 
 fn record(log_datum: LogDatum, status_flags: Option<StatusFlags>) -> BACnetLogRecord {
@@ -44,8 +45,8 @@ fn kinds() -> Vec<(LogDatum, Option<StatusFlags>, Vec<u8>)> {
         // failure [8]: PROPERTY / UNKNOWN_PROPERTY.
         (
             LogDatum::Failure {
-                error_class: 2,
-                error_code: 32,
+                error_class: ErrorClass::PROPERTY,
+                error_code: ErrorCode::UNKNOWN_PROPERTY,
             },
             None,
             vec![0x1E, 0x8E, 0x91, 0x02, 0x91, 0x20, 0x8F, 0x1F],
@@ -279,4 +280,54 @@ fn members_cut_short_are_a_short_buffer() {
         });
         assert!(framed > 0);
     }
+}
+
+/// `bytes` with its one run of `from` replaced by `to`.
+fn spliced(bytes: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
+    let at = bytes
+        .windows(from.len())
+        .position(|window| window == from)
+        .unwrap();
+    [&bytes[..at], to, &bytes[at + from.len()..]].concat()
+}
+
+#[test]
+fn a_failure_wider_than_sixteen_bits_is_refused() {
+    // Clause 21 holds an error class and code to 16 bits, so a failure
+    // carrying a wider one is refused, as the Error-PDU decoder refuses it
+    // (#1814); 65535 is the widest kept.
+    let bytes = encoded(&record(
+        LogDatum::Failure {
+            error_class: ErrorClass::PROPERTY,
+            error_code: ErrorCode::UNKNOWN_PROPERTY,
+        },
+        None,
+    ));
+    for (from, to, what) in [
+        (
+            &[0x91, 0x02][..],
+            &[0x93, 0x01, 0x00, 0x00][..],
+            "error class",
+        ),
+        (
+            &[0x91, 0x20][..],
+            &[0x93, 0x01, 0x00, 0x00][..],
+            "error code",
+        ),
+    ] {
+        let error = decode_log_record(&spliced(&bytes, from, to), 0).unwrap_err();
+        let text = error.to_string();
+        assert!(
+            text.contains(what) && text.contains("exceeds u16"),
+            "{text}"
+        );
+    }
+    let widest = spliced(&bytes, &[0x91, 0x02], &[0x92, 0xFF, 0xFF]);
+    assert_eq!(
+        decode_log_record(&widest, 0).unwrap().0.log_datum,
+        LogDatum::Failure {
+            error_class: ErrorClass::from_raw(u16::MAX),
+            error_code: ErrorCode::UNKNOWN_PROPERTY,
+        }
+    );
 }

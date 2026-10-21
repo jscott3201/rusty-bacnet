@@ -10,7 +10,10 @@ use std::marker::PhantomData;
 
 use tokio::sync::mpsc;
 
+use bacnet_router_core::router::{Congestion, Duplicates, Options};
+
 use super::control_policy::{ControlAuthorizer, ControlGate, ControlPolicy};
+use super::engine::OPTIONS;
 use super::BACnetRouter;
 use crate::layer::{
     AdmissionReceiver, QueueAdmissionCounters, ReceivedApdu, ReceivedNetworkControl,
@@ -50,6 +53,7 @@ pub struct RouterOptions<
     policy: ControlPolicy,
     authorizer: Option<ControlAuthorizer>,
     network_control: bool,
+    engine: Options,
     receivers: PhantomData<fn() -> (A, C)>,
 }
 
@@ -76,6 +80,7 @@ impl RouterOptions {
             policy: ControlPolicy::default(),
             authorizer: None,
             network_control: false,
+            engine: OPTIONS,
             receivers: PhantomData,
         }
     }
@@ -184,6 +189,66 @@ impl<A, C> RouterOptions<A, C> {
         self.receivers()
     }
 
+    /// The router's own Router-Busy for a clogged port (#1697): off unless
+    /// this sets a policy.
+    ///
+    /// Each port queues at most 256 sends. With a policy set, a port whose
+    /// queue stays full for [`Congestion::clog_after`] counts as clogged:
+    /// the router broadcasts Router-Busy-To-Network on its other ports for
+    /// the networks it reaches through that one, answers each send the full
+    /// queue then refuses, when it has an origin to answer, with
+    /// Reject-Message-To-Network reason 2, and broadcasts
+    /// Router-Available-To-Network once the queue falls under the policy's
+    /// low-water mark (Clauses 6.6.3.6, 6.6.3.7, 6.6.4).
+    /// [`Congestion::DEFAULT`] clogs after 2 s and drains under half.
+    /// The counts are in [`Counters`](super::Counters).
+    pub fn congestion(mut self, policy: Congestion) -> Self {
+        self.engine.congestion = Some(policy);
+        self
+    }
+
+    /// Apply a received Reject-Message-To-Network to a learned route only
+    /// when it came from that route's next router (#1698).
+    ///
+    /// Off by default: Clause 6.6.3.5 has a router update the route a
+    /// reject names whoever sent it, so a reject relayed by any router
+    /// changes it. On, one from another router is still passed on toward
+    /// its destination, but leaves the route as it was, and is counted in
+    /// [`Counters::not_next_hop`](super::Counters::not_next_hop).
+    /// Router-Busy and Router-Available are always scoped to the routes
+    /// through their sender.
+    pub fn next_hop_rejects(mut self) -> Self {
+        self.engine.next_hop_rejects = true;
+        self
+    }
+
+    /// Drop a global broadcast that repeats one seen within
+    /// [`Duplicates::ttl`] (#1698): off unless this sets it.
+    ///
+    /// In a topology with a loop, routers can pass one global broadcast
+    /// around it until its hop count runs out. With this on, the router
+    /// remembers the last 512 global broadcasts by origin (SNET and SADR,
+    /// or the arrival network and link source) and a hash of the APDU,
+    /// and drops a repeat seen within the time to live, 1 s for
+    /// [`Duplicates::DEFAULT`]: not relayed, not delivered, counted in
+    /// [`Counters::duplicate_drops`](super::Counters::duplicate_drops).
+    /// The standard defines no such suppression, and a sender's own
+    /// identical retry within the time to live is dropped too.
+    ///
+    /// Sizing: the record must hold every global broadcast the router sees
+    /// within one time to live, or the oldest is forgotten before its
+    /// looped copy returns. 512 covers 512 broadcasts a second at the
+    /// default; a longer time to live needs proportionally fewer a second.
+    pub fn duplicates(mut self, policy: Duplicates) -> Self {
+        self.engine.duplicates = Some(policy);
+        self
+    }
+
+    /// The engine's options these select.
+    pub(super) fn engine_options(&self) -> Options {
+        self.engine
+    }
+
     /// The wire-control gate these options select.
     pub(super) fn control_gate(&self) -> ControlGate {
         ControlGate::new(self.policy, self.authorizer.clone())
@@ -200,6 +265,7 @@ impl<A, C> RouterOptions<A, C> {
             policy: self.policy,
             authorizer: self.authorizer,
             network_control: self.network_control,
+            engine: self.engine,
             receivers: PhantomData,
         }
     }
@@ -214,6 +280,7 @@ impl<A, C> fmt::Debug for RouterOptions<A, C> {
                 &self.authorizer.as_ref().map(|_| "<callback>"),
             )
             .field("network_control", &self.network_control)
+            .field("engine", &self.engine)
             .field("apdus", &std::any::type_name::<A>())
             .field("controls", &std::any::type_name::<C>())
             .finish()

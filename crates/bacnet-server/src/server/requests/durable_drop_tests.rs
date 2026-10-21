@@ -78,11 +78,12 @@ async fn serving(
     let (transport, inbound) = TestTransport::inbound(4);
     let mut db = ObjectDatabase::new();
     let mut device = DeviceObject::new(DeviceConfig {
-        instance: 100,
+        identity: bacnet_objects::DeviceIdentity::new(100, 0).expect("valid Device identity"),
         ..DeviceConfig::default()
     })
     .unwrap();
     let mut builder = BACnetServer::generic_builder()
+        .device(bacnet_objects::DeviceIdentity::new(100, 0).unwrap())
         .transport(transport)
         .enable_event_enrollment(false);
     if dcc_audit {

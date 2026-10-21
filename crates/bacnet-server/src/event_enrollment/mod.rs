@@ -34,8 +34,23 @@
 //! `Acked_Transitions` bit is set/cleared per the referenced Notification
 //! Class's `Ack_Required` (Clause 13.2.3), and the transition is emitted with
 //! its `Event_Enable`-scoped `distribute` flag. What is NOT here, by design:
-//! `Event_Time_Stamps` is committed atomically with `Event_State` and
-//! `Acked_Transitions`; `Event_Message_Texts` remains intentionally absent.
+//! `Event_Time_Stamps` and `Event_Message_Texts` are committed atomically
+//! with `Event_State` and `Acked_Transitions`. The server has no message text
+//! of its own for an enrollment, so a transition's text is the matching
+//! `Event_Message_Texts_Config` entry, sent as written (no substitution
+//! codes), or none when that entry is empty (#1507).
+//!
+//! `Event_Algorithm_Inhibit` (#1507) gates the algorithm as it does the
+//! intrinsic reporters: see `algorithms::inhibited_arm`. A pass that can't
+//! read the monitored value at all is an observation gap and changes no
+//! state, inhibited or not, so a forced return to NORMAL waits for the next
+//! readable pass: its notification carries that value. An enrollment whose
+//! parameters this evaluator doesn't model (Opaque or Extended) still gets
+//! the forced NORMAL, since leaving the OffNormal state under the inhibit
+//! doesn't depend on the algorithm (Clause 13.2.2.1.2). With
+//! `Event_Algorithm_Inhibit_Ref` set, the value is the referenced property's
+//! as of the last refresh: each write of the enrollment, the server's
+//! one-second tick and the start of each evaluation pass.
 //! The server lifecycle projects successful commits into its shared
 //! notification sender without repeating these transition actions.
 
@@ -63,8 +78,8 @@ pub use commit::{
 
 use algorithms::{
     eval_change_of_bitstring_struct, eval_change_of_state_struct, eval_change_of_value_struct,
-    eval_floating_limit_struct, eval_legacy_le_arm, eval_out_of_range_struct, extract_bitstring,
-    extract_property_state_value, extract_real, ArmEvaluation,
+    eval_floating_limit_struct, eval_legacy_le_arm, eval_none_arm, eval_out_of_range_struct,
+    extract_bitstring, extract_property_state_value, extract_real, inhibited_arm, ArmEvaluation,
 };
 #[cfg(test)]
 use commit::apply_updates;
@@ -113,6 +128,11 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
 ) -> EventEnrollmentEvaluationBatch {
     let interval_secs = interval_secs.max(1);
     let oids = db.find_by_type(ObjectType::EVENT_ENROLLMENT);
+    // Event_Algorithm_Inhibit follows its reference as of this pass too, on
+    // top of the server's one-second tick (#1507).
+    for oid in &oids {
+        db.follow_event_algorithm_inhibit(oid);
+    }
     // The monitored, setpoint and fault references all resolve through this
     // one rule: unqualified or naming this device is local (#1184).
     let local_device = db.local_device();
@@ -486,19 +506,38 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
         // channel evaluates without a durable countdown or COV baseline.
         let mut eval_state_dirty = false;
 
+        // Event_Algorithm_Inhibit (Clauses 12.12.18 and 13.2.2.1.5) sets the
+        // algorithm aside; fault handling above has already run. It is read
+        // before any exit that the algorithm's own inputs could take (a
+        // parameter fingerprint, a monitored value of the wrong datatype, a
+        // setpoint gap), so an offnormal enrollment returns to NORMAL whenever
+        // its monitored value can be read. See `inhibited_arm`.
+        let inhibited = matches!(
+            enrollment.read_property(PropertyIdentifier::EVENT_ALGORITHM_INHIBIT, None),
+            Ok(PropertyValue::Boolean(true))
+        );
+
         // A parameter (or reference) change mid-pending cancels the countdown
         // and re-gates from the current parameters; no partial countdown is
-        // resumed.
-        let Ok(fingerprint) =
-            params_fingerprint(&params, normal_delay as u64, event_type, &monitored)
-        else {
-            queue_pending_cancellation(&mut updates, *oid, eval_state_supported, &mut eval_state);
-            continue;
-        };
+        // resumed. An inhibited pass seeds no countdown, so it needs none.
+        let fingerprint =
+            match params_fingerprint(&params, normal_delay as u64, event_type, &monitored) {
+                Ok(fingerprint) => Some(fingerprint),
+                Err(_) if inhibited => None,
+                Err(_) => {
+                    queue_pending_cancellation(
+                        &mut updates,
+                        *oid,
+                        eval_state_supported,
+                        &mut eval_state,
+                    );
+                    continue;
+                }
+            };
         if eval_state
             .pending
             .as_ref()
-            .is_some_and(|p| p.params_fingerprint != fingerprint)
+            .is_some_and(|p| Some(p.params_fingerprint) != fingerprint)
         {
             eval_state.pending = None;
             if eval_state_supported {
@@ -511,6 +550,21 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
 
         let mut projection_setpoint = None;
         let (time_delay, arm) = match &params {
+            _ if inhibited => {
+                // The forced NORMAL's notification wants the setpoint too,
+                // when it can be read; a gap only leaves it out.
+                if let BACnetEventParameter::FloatingLimit {
+                    setpoint_reference, ..
+                } = &params
+                {
+                    if let SetpointRead::Value(setpoint) =
+                        read_setpoint(db, local_device, setpoint_reference)
+                    {
+                        projection_setpoint = Some(setpoint);
+                    }
+                }
+                (0, inhibited_arm(&params, &monitored_value, current_state))
+            }
             BACnetEventParameter::OutOfRange {
                 high_limit,
                 low_limit,
@@ -665,6 +719,10 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
                 0,
                 eval_legacy_le_arm(data, &monitored_value, current_state, event_type),
             ),
+            // `none` [20] has no offnormal states (#1868).
+            BACnetEventParameter::Opaque { tag: 20, data } if data.is_empty() => {
+                (0, eval_none_arm(current_state))
+            }
             BACnetEventParameter::Opaque { .. } => continue,
             // Extended [9] and any other modeled-but-unmodeled-for-evaluation
             // alternatives produce no transition here.
@@ -696,15 +754,15 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
         // pTimeDelayNormal (already the fallback-composed effective value)
         // toward NORMAL — the Clause 13.3 split, mirroring the intrinsic
         // detectors' `delay_toward` without sharing code across the boundary.
-        let delay = if ind.target == EventState::NORMAL {
+        let delay = if inhibited {
+            0
+        } else if ind.target == EventState::NORMAL {
             normal_delay
         } else {
             time_delay
         };
 
-        let fired = if delay == 0 {
-            Some(ind)
-        } else {
+        let fired = if let (false, Some(fingerprint)) = (delay == 0, fingerprint) {
             let mut fire = None;
             match &mut eval_state.pending {
                 // In flight to the same target under the same condition: the
@@ -737,6 +795,14 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
                 eval_state.pending = None;
             }
             fire
+        } else {
+            // A transition that fires at once leaves no countdown behind,
+            // whichever target it was counting toward (an inhibited pass
+            // always fires at once).
+            if eval_state.pending.take().is_some() {
+                eval_state_dirty = true;
+            }
+            Some(ind)
         };
 
         let Some(fired) = fired else {

@@ -111,6 +111,30 @@ pub enum BdtError {
         /// The later of the two rows.
         entry: BdtEntry,
     },
+    /// Behind a NAT router, a row with a mask other than [`TWO_HOP_MASK`]:
+    /// a directed broadcast can't cross the router (Annex J.7.5).
+    OneHopBehindNat {
+        /// The row.
+        entry: BdtEntry,
+    },
+    /// For a BBMD that serves a B/IP-M group ([`Bdt::set_serves_group`]),
+    /// an own row with a mask other than [`TWO_HOP_MASK`]: the peers must
+    /// send this BBMD the network's broadcasts itself, for it to pass them
+    /// on to the group, rather than to its IP subnet's directed broadcast
+    /// address. Annex J.8.3 gives the reason: a member on that subnet would
+    /// otherwise get each such broadcast twice, once by the directed
+    /// broadcast and once through the group.
+    OneHopForGroup {
+        /// The row.
+        entry: BdtEntry,
+    },
+    /// Behind a NAT router, a table with no row for this BBMD's global
+    /// address, which is how the table names this BBMD there (Annex
+    /// J.7.5). It isn't added, since the peers' tables must list it too.
+    NoOwnRow {
+        /// The global address.
+        own: SocketAddrV4,
+    },
     /// The distinct rows, with this BBMD's own row where the table needs it
     /// added, would not fit.
     Capacity {
@@ -131,6 +155,21 @@ impl fmt::Display for BdtError {
                 f,
                 "BDT rows for {} with conflicting masks (one is {})",
                 entry.address, entry.mask
+            ),
+            Self::OneHopBehindNat { entry } => write!(
+                f,
+                "BDT row {} mask {}: behind a NAT router every mask must be all ones",
+                entry.address, entry.mask
+            ),
+            Self::OneHopForGroup { entry } => write!(
+                f,
+                "BDT row {} mask {}: a BBMD that serves a multicast group needs an all-ones mask \
+                 on its own row",
+                entry.address, entry.mask
+            ),
+            Self::NoOwnRow { own } => write!(
+                f,
+                "behind a NAT router the BDT must list the global address {own} as this BBMD's own row"
             ),
             Self::Capacity { needed, available } => {
                 write!(
@@ -260,7 +299,11 @@ pub fn canonicalize(table: BdtEntries<'_>, out: &mut [BdtEntry]) -> Result<usize
 /// Rows keep the order they were given in. A table that the caller sets
 /// without this BBMD's own address gets a row for it, with
 /// [`TWO_HOP_MASK`], at the end; that row follows the address when
-/// [`Bdt::set_own_address`] changes it.
+/// [`Bdt::set_own_address`] changes it. Behind a NAT router
+/// ([`Tables::set_nat`](super::Tables::set_nat)) nothing is added: the
+/// table must list the own (global) address, and every mask must be
+/// [`TWO_HOP_MASK`]. For a BBMD that serves a B/IP-M group
+/// ([`Bdt::set_serves_group`]) the own row must be [`TWO_HOP_MASK`] too.
 #[derive(Clone)]
 pub struct Bdt<const N: usize> {
     rows: [BdtEntry; N],
@@ -268,6 +311,11 @@ pub struct Bdt<const N: usize> {
     own: SocketAddrV4,
     /// The last row is the own row that `set` appended.
     own_row_appended: bool,
+    /// The own address is a NAT router's global address (Annex J.7.5).
+    behind_nat: bool,
+    /// The BBMD serves a B/IP-M group, so its own row is two-hop (Annex
+    /// J.8.3).
+    serves_group: bool,
 }
 
 /// Shows the rows in use, not the whole array.
@@ -277,6 +325,8 @@ impl<const N: usize> fmt::Debug for Bdt<N> {
             .field("own", &self.own)
             .field("rows", &self.rows())
             .field("own_row_appended", &self.own_row_appended)
+            .field("behind_nat", &self.behind_nat)
+            .field("serves_group", &self.serves_group)
             .finish()
     }
 }
@@ -294,7 +344,63 @@ impl<const N: usize> Bdt<N> {
             len: 0,
             own,
             own_row_appended: false,
+            behind_nat: false,
+            serves_group: false,
         }
+    }
+
+    /// An empty table for the BBMD at `own`, behind a NAT router or not,
+    /// under this table's group rule.
+    pub(super) const fn with_nat(&self, own: SocketAddrV4, behind_nat: bool) -> Self {
+        let mut bdt = Self::new(own);
+        bdt.behind_nat = behind_nat;
+        bdt.serves_group = self.serves_group;
+        bdt
+    }
+
+    /// Whether the BBMD serves a B/IP-M group, so its own row must be
+    /// two-hop ([`Bdt::set_serves_group`]).
+    #[must_use]
+    pub const fn serves_group(&self) -> bool {
+        self.serves_group
+    }
+
+    /// Say whether the BBMD serves a B/IP-M group (Annex J.8.3), as a BBMD
+    /// whose link's subnet is a multicast group does
+    /// ([`LocalSubnet::is_group`](crate::LocalSubnet::is_group)).
+    ///
+    /// Such a BBMD hears the network's broadcasts from its peers only when
+    /// they send them to it, not to its IP subnet's directed broadcast
+    /// address, which no group member takes. So its own row, the one every
+    /// BDT of the network lists for it, must have [`TWO_HOP_MASK`]: from
+    /// now on [`Bdt::set`] and [`Bdt::set_own_address`] refuse a table whose
+    /// own row has another mask ([`BdtError::OneHopForGroup`]). An own row
+    /// the table appends has it already. Turning it on refuses, changing
+    /// nothing, while the table's own row has another mask.
+    pub fn set_serves_group(&mut self, serves: bool) -> Result<(), BdtError> {
+        if serves {
+            Self::check_group_row(self.own, self.rows().iter().copied())?;
+        }
+        self.serves_group = serves;
+        Ok(())
+    }
+
+    /// The group rule: `rows`' row for `own`, if any, is two-hop.
+    fn check_group_row(
+        own: SocketAddrV4,
+        mut rows: impl Iterator<Item = BdtEntry>,
+    ) -> Result<(), BdtError> {
+        match rows.find(|row| row.address == own && row.mask != TWO_HOP_MASK) {
+            Some(entry) => Err(BdtError::OneHopForGroup { entry }),
+            None => Ok(()),
+        }
+    }
+
+    /// Whether the own address is a NAT router's global address, so the
+    /// NAT rules of [`Bdt::set`] apply.
+    #[must_use]
+    pub const fn behind_nat(&self) -> bool {
+        self.behind_nat
     }
 
     /// This BBMD's own B/IP address.
@@ -351,12 +457,29 @@ impl<const N: usize> Bdt<N> {
 
     /// Replace the table with `table`, as [`canonicalize`] cleans it, plus a
     /// row for this BBMD's own address with [`TWO_HOP_MASK`] when `table` has
-    /// none. On error the table is unchanged.
+    /// none. Behind a NAT router no own row is added: a table with rows must
+    /// list the own (global) address ([`BdtError::NoOwnRow`]), and every
+    /// mask must be [`TWO_HOP_MASK`] ([`BdtError::OneHopBehindNat`]). An
+    /// empty table is taken there: a BBMD with no peers that serves only
+    /// foreign devices (Annex J.7.5). A BBMD that serves a B/IP-M group
+    /// needs [`TWO_HOP_MASK`] on its own row ([`BdtError::OneHopForGroup`]).
+    /// On error the table is unchanged.
     pub fn set(&mut self, table: BdtEntries<'_>) -> Result<(), BdtError> {
-        let mut next = Self::new(self.own);
+        let mut next = self.with_nat(self.own, self.behind_nat);
         let found = canonical_rows(table, &mut next.rows)?;
         let has_own = table.iter().any(|row| row.address == self.own);
-        let needed = found.distinct + usize::from(!has_own);
+        if self.behind_nat {
+            if let Some(entry) = table.iter().find(|row| row.mask != TWO_HOP_MASK) {
+                return Err(BdtError::OneHopBehindNat { entry });
+            }
+            if !has_own && found.distinct > 0 {
+                return Err(BdtError::NoOwnRow { own: self.own });
+            }
+        }
+        if self.serves_group {
+            Self::check_group_row(self.own, table.iter())?;
+        }
+        let needed = found.distinct + usize::from(!has_own && !self.behind_nat);
         if needed > N {
             return Err(BdtError::Capacity {
                 needed,
@@ -364,7 +487,9 @@ impl<const N: usize> Bdt<N> {
             });
         }
         next.len = found.stored;
-        next.ensure_own_row();
+        if !self.behind_nat {
+            next.ensure_own_row();
+        }
         *self = next;
         Ok(())
     }
@@ -374,12 +499,23 @@ impl<const N: usize> Bdt<N> {
     /// An own row that [`Bdt::set`] appended moves to the new address. A row
     /// the table lists for the old address stays, as an ordinary peer row,
     /// and the new address gets a row unless it has one. On error, for want
-    /// of room for that row, nothing changes.
+    /// of room for that row, nothing changes. Behind a NAT router `own` is
+    /// a new global address, which the table must already list
+    /// ([`BdtError::NoOwnRow`] otherwise). For a BBMD that serves a B/IP-M
+    /// group a row the table lists for `own` must be two-hop
+    /// ([`BdtError::OneHopForGroup`]).
     pub fn set_own_address(&mut self, own: SocketAddrV4) -> Result<(), BdtError> {
         if own == self.own {
             return Ok(());
         }
+        if self.behind_nat {
+            // The table must list the new global address itself.
+            return self.reconfigure(own, true, None);
+        }
         let configured = self.configured_rows();
+        if self.serves_group {
+            Self::check_group_row(own, configured.iter().copied())?;
+        }
         let has_own = configured.iter().any(|row| row.address == own);
         let needed = configured.len() + usize::from(!has_own);
         if needed > N {
@@ -395,6 +531,51 @@ impl<const N: usize> Bdt<N> {
         self.own = own;
         self.ensure_own_row();
         Ok(())
+    }
+
+    /// Move to the own address `own`, behind a NAT router or not, keeping
+    /// the configured rows but `drop`'s: they are set again under the new
+    /// rules, so an own row appended for the old address goes, and on error
+    /// nothing changes. A table never set takes the new address and rules
+    /// alone.
+    pub(super) fn reconfigure(
+        &mut self,
+        own: SocketAddrV4,
+        behind_nat: bool,
+        drop: Option<SocketAddrV4>,
+    ) -> Result<(), BdtError> {
+        // Only a table behind NAT is empty once set.
+        if self.is_empty() && !self.behind_nat {
+            self.own = own;
+            self.behind_nat = behind_nat;
+            return Ok(());
+        }
+        let mut next = self.with_nat(own, behind_nat);
+        next.set_without(BdtEntries::from_entries(self.configured_rows()), drop)?;
+        *self = next;
+        Ok(())
+    }
+
+    /// [`Bdt::set`] with `table` less any row for `drop`.
+    pub(super) fn set_without(
+        &mut self,
+        table: BdtEntries<'_>,
+        drop: Option<SocketAddrV4>,
+    ) -> Result<(), BdtError> {
+        let Some(drop) = drop else {
+            return self.set(table);
+        };
+        let mut kept = [EMPTY_ROW; N];
+        let mut len = 0;
+        for row in table.iter().filter(|row| row.address != drop) {
+            // A candidate longer than the storage is refused as `set` would.
+            let Some(slot) = kept.get_mut(len) else {
+                return self.set(table);
+            };
+            *slot = row;
+            len += 1;
+        }
+        self.set(BdtEntries::from_entries(&kept[..len]))
     }
 
     /// Append the own row when the table lacks one. The callers have checked

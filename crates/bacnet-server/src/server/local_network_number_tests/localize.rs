@@ -11,7 +11,7 @@ use crate::server::event_recipient_route::{ConfirmedRouteRefusal, RecipientRoute
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::event::EventStateChange;
 use bacnet_objects::traits::BACnetObject;
-use bacnet_types::enums::{EventState, EventType, NotifyType};
+use bacnet_types::enums::{EngineeringUnits, EventState, EventType, NotifyType};
 
 fn is_link_broadcast(mac: &[u8]) -> bool {
     mac == LITERAL_BROADCAST_MAC
@@ -194,7 +194,7 @@ fn input_oid() -> ObjectIdentifier {
 
 /// An alarm-reporting Analog Input under Notification Class 0.
 fn alarm_input() -> AnalogInputObject {
-    let mut ai = AnalogInputObject::new(1, "AI-1", 0).unwrap();
+    let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::SQUARE_METERS).unwrap();
     ai.write_property(
         PropertyIdentifier::NOTIFY_TYPE,
         None,

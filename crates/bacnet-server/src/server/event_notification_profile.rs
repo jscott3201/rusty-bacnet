@@ -14,11 +14,6 @@ pub(in crate::server) struct CommittedHistorySnapshot {
     pub(in crate::server) message_text: Option<String>,
 }
 
-pub(in crate::server) enum CommittedMessageProjection {
-    RequiredProperty,
-    IntentionallyAbsent,
-}
-
 /// The source boundary for the notification's timestamp and message.
 pub(in crate::server) enum NotificationHistorySource {
     /// Non-intrinsic events and acknowledgment notices sample at distribution.

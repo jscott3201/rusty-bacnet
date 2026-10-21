@@ -3,13 +3,13 @@ use bacnet_client::client::BACnetClient;
 use bacnet_client::tags::{decode_tags_read, TagsRead};
 use bacnet_encoding::apdu::{decode_apdu, Apdu};
 use bacnet_network::layer::NetworkLayer;
+use bacnet_npdu::NetworkPriority;
 use bacnet_services::read_property::ReadPropertyRequest;
 use bacnet_services::rpm::ReadPropertyMultipleRequest;
 use bacnet_transport::bip::BipTransport;
 use bacnet_types::constructed::{BACnetNameValue, PropertyReference, ReadAccessSpecification};
 use bacnet_types::enums::{
-    ConfirmedServiceChoice as S, ErrorClass, ErrorCode, NetworkPriority, ObjectType,
-    PropertyIdentifier as P,
+    ConfirmedServiceChoice as S, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier as P,
 };
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use std::net::Ipv4Addr;
@@ -77,7 +77,7 @@ async fn tags_reads_preserve_raw_acks_and_type_successes_without_hiding_rpm_erro
                 &response,
                 &received.source_mac,
                 false,
-                NetworkPriority::NORMAL,
+                NetworkPriority::Normal,
             )
             .await
             .unwrap();
@@ -122,7 +122,7 @@ async fn tags_reads_preserve_raw_acks_and_type_successes_without_hiding_rpm_erro
             &response,
             &received.source_mac,
             false,
-            NetworkPriority::NORMAL,
+            NetworkPriority::Normal,
         )
         .await
         .unwrap();

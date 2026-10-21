@@ -1,6 +1,6 @@
 [
   {
-    "label": "Start with v0.13",
+    "label": "Start with v0.14",
     "items": [
       {
         "label": "Choose your path",
@@ -25,6 +25,10 @@
       {
         "label": "Embed with Rust",
         "slug": "start/rust"
+      },
+      {
+        "label": "Run on a microcontroller",
+        "slug": "start/embedded"
       }
     ]
   },
@@ -79,6 +83,55 @@
       {
         "label": "Write & relinquish",
         "slug": "guides/safe-writes"
+      }
+    ]
+  },
+  {
+    "label": "Terminal UI",
+    "items": [
+      {
+        "label": "Overview & quick start",
+        "slug": "tui/overview"
+      },
+      {
+        "label": "Profiles & safety",
+        "slug": "tui/profiles"
+      },
+      {
+        "label": "Discover devices",
+        "slug": "tui/discovery"
+      },
+      {
+        "label": "Browse a device",
+        "slug": "tui/browser"
+      },
+      {
+        "label": "Write safely",
+        "slug": "tui/writes"
+      },
+      {
+        "label": "Watch points",
+        "slug": "tui/watch"
+      },
+      {
+        "label": "BBMDs & routers",
+        "slug": "tui/network"
+      },
+      {
+        "label": "BACnet/SC screen",
+        "slug": "tui/bacnet-sc"
+      },
+      {
+        "label": "MS/TP monitor & join",
+        "slug": "tui/mstp"
+      },
+      {
+        "label": "Keys & commands",
+        "slug": "tui/keys"
+      },
+      {
+        "label": "Terminal problems",
+        "slug": "tui/troubleshooting"
       }
     ]
   },

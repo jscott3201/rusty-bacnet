@@ -115,7 +115,7 @@ async fn avg_value(h: &Harness, property: PropertyIdentifier) -> PropertyValue {
 fn assert_error(error: Error, class: ErrorClass, code: ErrorCode) {
     assert!(
         matches!(error, Error::Protocol { class: c, code: e }
-            if c == class.to_raw() as u32 && e == code.to_raw() as u32),
+            if c == class && e == code),
         "expected {class:?}/{code:?}, got {error:?}"
     );
 }

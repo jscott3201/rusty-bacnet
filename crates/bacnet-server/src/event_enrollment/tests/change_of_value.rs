@@ -20,6 +20,7 @@ use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetEventParameter, ChangeOfValueCriteria,
 };
+use bacnet_types::enums::EngineeringUnits;
 
 /// Helper: an AnalogInput monitored by a CHANGE_OF_VALUE enrollment with the
 /// given increment (IEEE-754 REAL criterion).
@@ -30,7 +31,7 @@ fn setup_cov(
 ) -> (ObjectDatabase, ObjectIdentifier, ObjectIdentifier) {
     let mut db = ObjectDatabase::new();
 
-    let mut ai = AnalogInputObject::new(70, "AI-COV", 62).unwrap();
+    let mut ai = AnalogInputObject::new(70, "AI-COV", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ai.set_present_value(present_value);
     let ai_oid = ai.object_identifier();
     db.add(Box::new(ai)).unwrap();

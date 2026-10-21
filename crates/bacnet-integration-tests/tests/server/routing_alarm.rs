@@ -12,8 +12,9 @@ use super::*;
 async fn iam_routed_back_to_remote_whois_requester() {
     use bacnet_encoding::apdu::{self, encode_apdu, Apdu, UnconfirmedRequest};
     use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress};
+    use bacnet_npdu::NetworkPriority;
     use bacnet_transport::port::TransportPort;
-    use bacnet_types::enums::{NetworkPriority, UnconfirmedServiceChoice};
+    use bacnet_types::enums::UnconfirmedServiceChoice;
     use tokio::time::Duration;
 
     let mut server = make_server().await;
@@ -35,9 +36,8 @@ async fn iam_routed_back_to_remote_whois_requester() {
     // Wrap in an NPDU with source routing: SNET=100, SADR=[10,20,30]
     // This simulates a WhoIs that was forwarded by a router from network 100.
     let npdu = Npdu {
-        is_network_message: false,
         expecting_reply: false,
-        priority: NetworkPriority::NORMAL,
+        priority: NetworkPriority::Normal,
         destination: None,
         source: Some(NpduAddress {
             network: 100,
@@ -107,8 +107,9 @@ async fn iam_routed_back_to_remote_whois_requester() {
 async fn iam_broadcast_for_local_whois() {
     use bacnet_encoding::apdu::{self, encode_apdu, Apdu, UnconfirmedRequest};
     use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
+    use bacnet_npdu::NetworkPriority;
     use bacnet_transport::port::TransportPort;
-    use bacnet_types::enums::{NetworkPriority, UnconfirmedServiceChoice};
+    use bacnet_types::enums::UnconfirmedServiceChoice;
     use tokio::time::Duration;
 
     let mut server = make_server().await;
@@ -128,9 +129,8 @@ async fn iam_broadcast_for_local_whois() {
 
     // Wrap in an NPDU without source routing
     let npdu = Npdu {
-        is_network_message: false,
         expecting_reply: false,
-        priority: NetworkPriority::NORMAL,
+        priority: NetworkPriority::Normal,
         destination: None,
         source: None,
         payload: Bytes::from(apdu_buf.to_vec()),
@@ -185,9 +185,10 @@ async fn iam_broadcast_for_local_whois() {
 async fn subscribe_cov_routed_ack_and_initial_notification_return_to_remote_subscriber() {
     use bacnet_encoding::apdu::{self, encode_apdu, Apdu, ConfirmedRequest};
     use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress};
+    use bacnet_npdu::NetworkPriority;
     use bacnet_services::cov::SubscribeCOVRequest;
     use bacnet_transport::port::TransportPort;
-    use bacnet_types::enums::{ConfirmedServiceChoice, NetworkPriority, UnconfirmedServiceChoice};
+    use bacnet_types::enums::{ConfirmedServiceChoice, UnconfirmedServiceChoice};
     use tokio::time::Duration;
 
     let mut server = make_server().await;
@@ -227,9 +228,8 @@ async fn subscribe_cov_routed_ack_and_initial_notification_return_to_remote_subs
     encode_apdu(&mut apdu_buf, &request).expect("valid APDU encoding");
 
     let npdu = Npdu {
-        is_network_message: false,
         expecting_reply: true,
-        priority: NetworkPriority::NORMAL,
+        priority: NetworkPriority::Normal,
         destination: None,
         source: Some(remote.clone()),
         hop_count: 255,
@@ -295,11 +295,12 @@ async fn subscribe_cov_routed_ack_and_initial_notification_return_to_remote_subs
 
 async fn make_acknowledge_alarm_server() -> BACnetServer<BipTransport> {
     use bacnet_objects::event::{EventStateChange, EventTransition, EventTransitionCommit};
+    use bacnet_types::enums::EngineeringUnits;
     use bacnet_types::enums::EventState;
     use bacnet_types::primitives::BACnetTimeStamp;
 
     let mut db = ObjectDatabase::new();
-    let mut ai = AnalogInputObject::new(1, "Zone Temp", 62).unwrap();
+    let mut ai = AnalogInputObject::new(1, "Zone Temp", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ai.commit_event_transition_internal(EventTransitionCommit {
         change: EventStateChange {
             from: EventState::NORMAL,

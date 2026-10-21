@@ -5,7 +5,7 @@ description: "Connect an SC node with explicit trust, operational credentials an
 
 [Build and integrate](/rusty-bacnet/development/overview/) / BACnet/SC setup
 
-This page configures BACnet/SC for the CLI, Python and Rust. The [BACnet/SC guide](/rusty-bacnet/guides/bacnet-sc/) explains the trust roles. Every surface requires explicit trust and identity. The [upgrade guide's BACnet/SC section](/rusty-bacnet/project/upgrading/#bacnetsc) lists what changed for SC in this release.
+This page configures BACnet/SC for the CLI, Python and Rust. The [BACnet/SC guide](/rusty-bacnet/guides/bacnet-sc/) explains the trust roles. Every surface requires explicit trust and identity. The [upgrade guide's BACnet/SC section](/rusty-bacnet/project/upgrading/#bacnetsc-security-serverpolicy-and-principals) lists what changed for SC in this release.
 
 ## Prepare identities and credentials before connecting
 
@@ -39,13 +39,13 @@ bacnet --sc \
   read 00:01:02:03:04:05 ai:1 pv
 ```
 
-`--sc-vmac` identifies the local node; the final VMAC identifies the remote target. CLI trust requires `--sc-ca`: there is no system-root fallback. The read sends traffic to the named peer and does not perform discovery. Check the [CLI transport reference](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/docs/CLI.md#transport-variants) for exact parser and startup failures.
+`--sc-vmac` identifies the local node; the final VMAC identifies the remote target. CLI trust requires `--sc-ca`: there is no system-root fallback. The read sends traffic to the named peer and does not perform discovery. Check the [CLI transport reference](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/CLI.md#transport-variants) for exact parser and startup failures.
 
 ## Use the same prerequisites in Python and Rust
 
 Python `BACnetClient` and `BACnetServer` with `transport="sc"` require nonempty `sc_ca_cert`, `sc_client_cert`, `sc_client_key` and keyword-only `sc_device_uuid`. Load the latter as 16 bytes from caller-owned durable storage. Missing or invalid identity/credential presence fails construction; file loading and TLS configuration happen at async startup. A trusted hub's verification policy remains a separate fact.
 
-The [Python credential example](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/docs/python-api.md#required-operational-credentials) and [UUID migration](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/docs/python-api.md#sc-device-uuid-migration) are the signature authority. Local TLS configuration errors can be repaired at the same paths and retried within the documented boundary; this does not promise rollback after every later peer/dial failure.
+The [Python credential example](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/python-api.md#required-operational-credentials) and [UUID migration](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/python-api.md#sc-device-uuid-migration) are the signature authority. Local TLS configuration errors can be repaired at the same paths and retried within the documented boundary; this does not promise rollback after every later peer/dial failure.
 
 Rust uses `ScNodeTlsConfig` and the transport's configured device identity. Raw `ScTransport::new(ws, vmac)` is initially unconfigured; set a valid UUID before start. Because the caller can dial `ws` first, transport validation cannot undo that earlier connection. A shared endpoint uses `ScEndpointBuilder` with a caller-dialed TLS WebSocket; see [shared endpoints](/rusty-bacnet/development/shared-endpoints/).
 
@@ -69,4 +69,4 @@ Passive Number replies, including replies to direct queries, use the Hub broadca
 
 ## Next steps
 
-[SC Rust contracts](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/docs/rust-api.md#bacnetsc-client-transport) · [Transport evidence](/rusty-bacnet/development/transports/) · [Network Number controls](/rusty-bacnet/development/network-number/)
+[SC Rust contracts](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/rust-api.md#bacnetsc-client-transport) · [Transport evidence](/rusty-bacnet/development/transports/) · [Network Number controls](/rusty-bacnet/development/network-number/)

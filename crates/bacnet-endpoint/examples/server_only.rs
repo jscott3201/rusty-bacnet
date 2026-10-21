@@ -14,11 +14,12 @@ use bacnet_endpoint::bip::BipEndpointBuilder;
 use bacnet_endpoint::identity::{build_database_with_extra, DeviceIdentity};
 use bacnet_endpoint::session::SessionRole;
 use bacnet_network::layer::NetworkLayer;
+use bacnet_npdu::NetworkPriority;
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_transport::bip::BipTransport;
 use bacnet_types::enums::{
-    ConfirmedServiceChoice, NetworkPriority, ObjectType, PropertyIdentifier,
+    ConfirmedServiceChoice, EngineeringUnits, ObjectType, PropertyIdentifier,
 };
 use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::MacAddr;
@@ -46,14 +47,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Single Device identity: I-Am + Device readback + role limits agree.
     let port = free_port();
     let identity = DeviceIdentity::new(1001, 42)?.with_bip_port(1, 0, Ipv4Addr::LOCALHOST, port)?;
-    let mut point = AnalogInputObject::new(1, "server-ai-1", 0)?;
+    let mut point = AnalogInputObject::new(1, "server-ai-1", EngineeringUnits::SQUARE_METERS)?;
     point.set_present_value(42.0);
     let db = build_database_with_extra(&identity, vec![Box::new(point)])?;
 
     let mut endpoint = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, port, Ipv4Addr::LOCALHOST)
         .role(SessionRole::ServerOnly)
         .database(db)
-        .identity(identity.clone())
+        .device(identity.clone())
         .build_session()?;
     endpoint.start().await?;
     assert!(endpoint.server().is_some());
@@ -92,7 +93,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }),
     )?;
     peer_net
-        .send_apdu(&enc, &endpoint_mac, true, NetworkPriority::NORMAL)
+        .send_apdu(&enc, &endpoint_mac, true, NetworkPriority::Normal)
         .await?;
     let reply = tokio::time::timeout(WAIT, peer_rx.recv())
         .await?

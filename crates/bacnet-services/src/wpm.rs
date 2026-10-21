@@ -38,7 +38,7 @@ pub use error::WritePropertyMultipleError;
 /// This stack's server doesn't: it walks the cursor itself and answers that
 /// priority with an Error, PARAMETER_OUT_OF_RANGE, as it answers
 /// WriteProperty's. Clause 20.1.8 leaves that choice to the implementation.
-fn failure_kind(failure: WritePropertyMultipleFailureKind) -> DecodingKind {
+pub(crate) fn failure_kind(failure: WritePropertyMultipleFailureKind) -> DecodingKind {
     use RejectReason as R;
     match failure {
         WritePropertyMultipleFailureKind::PriorityOutOfRange => DecodingKind::OutOfRange,
@@ -81,24 +81,18 @@ impl WritePropertyMultipleRequest {
     pub fn validate(&self) -> Result<(), Error> {
         use bacnet_types::enums::PropertyIdentifier as P;
         if self.list_of_write_access_specs.is_empty() {
-            return Err(Error::Encoding(
-                "WPM requires at least one object specification".into(),
-            ));
+            return Err(Error::encode("WPM requires at least one object specification"));
         }
         for spec in &self.list_of_write_access_specs {
             if spec.list_of_properties.is_empty() {
-                return Err(Error::Encoding(
-                    "WPM requires at least one property per object".into(),
-                ));
+                return Err(Error::encode("WPM requires at least one property per object"));
             }
             for property in &spec.list_of_properties {
                 if matches!(
                     property.property_identifier,
                     P::ALL | P::REQUIRED | P::OPTIONAL
                 ) {
-                    return Err(Error::Encoding(
-                        "WPM does not accept ALL, REQUIRED or OPTIONAL selectors".into(),
-                    ));
+                    return Err(Error::encode("WPM does not accept ALL, REQUIRED or OPTIONAL selectors"));
                 }
                 crate::write_property::validate_priority(property.priority)?;
             }
@@ -132,13 +126,10 @@ impl WritePropertyMultipleRequest {
         let mut specs = Vec::new();
         let mut current = None;
 
-        while let Some(event) = cursor.next_event().map_err(|error| {
-            Error::decoding_kind(
-                failure_kind(error.kind),
-                error.offset,
-                format!("WPM {:?}: {}", error.stage, error.message),
-            )
-        })? {
+        while let Some(event) = cursor
+            .next_event()
+            .map_err(|error| Error::Decoding(error.error))?
+        {
             match event {
                 WritePropertyMultipleEvent::ObjectStart(object_identifier) => {
                     current = Some(WriteAccessSpecification {

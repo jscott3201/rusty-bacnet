@@ -7,16 +7,23 @@ use bacnet_objects::binary::BinaryValueObject;
 use bacnet_objects::multistate::{
     MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject,
 };
+use bacnet_types::enums::EngineeringUnits;
 use PropertyIdentifier as P;
 
 fn pics() -> Pics {
     let mut db = ObjectDatabase::new();
-    db.add(Box::new(AnalogInputObject::new(1, "ai", 95).unwrap()))
-        .unwrap();
-    db.add(Box::new(AnalogOutputObject::new(1, "ao", 95).unwrap()))
-        .unwrap();
-    db.add(Box::new(AnalogValueObject::new(1, "av", 95).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AnalogInputObject::new(1, "ai", EngineeringUnits::NO_UNITS).unwrap(),
+    ))
+    .unwrap();
+    db.add(Box::new(
+        AnalogOutputObject::new(1, "ao", EngineeringUnits::NO_UNITS).unwrap(),
+    ))
+    .unwrap();
+    db.add(Box::new(
+        AnalogValueObject::new(1, "av", EngineeringUnits::NO_UNITS).unwrap(),
+    ))
+    .unwrap();
     db.add(Box::new(BinaryValueObject::new(1, "bv").unwrap()))
         .unwrap();
     db.add(Box::new(MultiStateInputObject::new(1, "msi", 2).unwrap()))

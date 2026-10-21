@@ -1,0 +1,28 @@
+---
+source: crates/bacnet-cli/src/tui/tests/watch.rs
+expression: text
+---
+" bacnet | 1 2 [3 Watch] 4 7 | BIP | up | READ-ONLY | COV 1 | drop 0      ? help "
+"┌ Watch (1) | COV 1 | requests 0.4/s ──────────────────────────────────────────┐"
+"│Device Object         Name      Value Flags       Source Age Trend            │"
+"│100    analog-input 1 Zone Temp 74 °F ALM FLT OOS COV    0s  ▅▆▇█▁▂▃▄▅▆▇█▁▂▃▄▅│"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│ COV, lifetime 300 s, renewed before it runs out · analog-input 1, Zone Temp  │"
+"└──────────────────────────────────────────────────────────────────────────────┘"
+" x remove  :watch DEV OBJ  Esc back  ? help  q quit                             "

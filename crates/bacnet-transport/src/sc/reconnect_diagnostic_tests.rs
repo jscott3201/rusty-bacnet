@@ -1,80 +1,13 @@
 use super::*;
+use crate::log_capture::{Captured as Record, LogCapture};
 use crate::sc_frame::connect_test_support::valid_connect;
-use std::collections::BTreeMap;
 use std::sync::atomic::AtomicUsize;
-use tracing::{span, Event, Metadata, Subscriber};
 
-#[derive(Clone, Debug)]
-struct Record {
-    at: tokio::time::Instant,
-    level: tracing::Level,
-    fields: BTreeMap<String, String>,
-}
-
-#[derive(Clone)]
-struct Capture(Arc<StdMutex<Vec<Record>>>);
-
-impl Default for Capture {
-    fn default() -> Self {
-        // Match the dcc_trace_tests scoped-subscriber precedent: retain a
-        // disabled registration peer so parallel cold callsites cannot cache
-        // "never" from a thread without our subscriber. No global default.
-        static PEER: std::sync::OnceLock<tracing::Dispatch> = std::sync::OnceLock::new();
-        PEER.get_or_init(|| tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default()));
-        Self(Arc::default())
-    }
-}
-
-impl Subscriber for Capture {
-    fn register_callsite(&self, _: &'static Metadata<'static>) -> tracing::subscriber::Interest {
-        tracing::subscriber::Interest::sometimes()
-    }
-    fn max_level_hint(&self) -> Option<tracing::metadata::LevelFilter> {
-        Some(tracing::metadata::LevelFilter::INFO)
-    }
-    fn enabled(&self, metadata: &Metadata<'_>) -> bool {
-        metadata.target() == "bacnet_transport::sc::recovery"
-    }
-    fn new_span(&self, _: &span::Attributes<'_>) -> span::Id {
-        span::Id::from_u64(1)
-    }
-    fn record(&self, _: &span::Id, _: &span::Record<'_>) {}
-    fn record_follows_from(&self, _: &span::Id, _: &span::Id) {}
-    fn event(&self, event: &Event<'_>) {
-        if !self.enabled(event.metadata()) {
-            return;
-        }
-        struct Visitor(BTreeMap<String, String>);
-        impl tracing::field::Visit for Visitor {
-            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-                self.0.insert(field.name().into(), format!("{value:?}"));
-            }
-            fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
-                self.0.insert(field.name().into(), value.into());
-            }
-        }
-        let mut visitor = Visitor(BTreeMap::new());
-        event.record(&mut visitor);
-        self.0.lock().unwrap().push(Record {
-            at: tokio::time::Instant::now(),
-            level: *event.metadata().level(),
-            fields: visitor.0,
-        });
-    }
-    fn enter(&self, _: &span::Id) {}
-    fn exit(&self, _: &span::Id) {}
-}
-
-impl Capture {
-    fn matching(&self, message: &str) -> Vec<Record> {
-        self.0
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|record| record.fields["message"].starts_with(message))
-            .cloned()
-            .collect()
-    }
+fn capture() -> (LogCapture, tracing::subscriber::DefaultGuard) {
+    LogCapture::start_for_target(
+        "bacnet_transport::sc::recovery",
+        tracing::metadata::LevelFilter::INFO,
+    )
 }
 
 fn assert_summary(record: &Record, suppressed: u64) {
@@ -139,8 +72,7 @@ async fn wait_exhausted(transport: &mut ScTransport<LoopbackWebSocket>) {
 #[tokio::test(start_paused = true)]
 async fn outage_diagnostics_scale_with_windows_not_dial_attempts() {
     for max_retries in [0, 1, 100, 2_500] {
-        let capture = Capture::default();
-        let _subscriber = tracing::subscriber::set_default(capture.clone());
+        let (capture, _subscriber) = capture();
         let (client, hub) = LoopbackWebSocket::pair();
         let dials = Arc::new(AtomicUsize::new(0));
         let mut transport = transport(client, max_retries).with_connector({
@@ -187,15 +119,14 @@ async fn outage_diagnostics_scale_with_windows_not_dial_attempts() {
             total_suppressed += suppressed;
         }
         assert_eq!(attempts.len() as u64 + total_suppressed, max_retries as u64);
-        assert_eq!(capture.0.lock().unwrap().len(), attempts.len() + 2);
+        assert_eq!(capture.len(), attempts.len() + 2);
         transport.stop().await.unwrap();
     }
 }
 
 #[tokio::test(start_paused = true)]
 async fn reconnect_flaps_preserve_the_transport_task_diagnostic_window() {
-    let capture = Capture::default();
-    let _subscriber = tracing::subscriber::set_default(capture.clone());
+    let (capture, _subscriber) = capture();
     let (client, hub) = LoopbackWebSocket::pair();
     let (hub_tx, mut hubs) = mpsc::unbounded_channel();
     let dials = Arc::new(AtomicUsize::new(0));
@@ -254,8 +185,7 @@ async fn reconnect_flaps_preserve_the_transport_task_diagnostic_window() {
 
 #[tokio::test(start_paused = true)]
 async fn handshake_retry_warnings_share_the_redial_diagnostic_budget() {
-    let capture = Capture::default();
-    let _subscriber = tracing::subscriber::set_default(capture.clone());
+    let (capture, _subscriber) = capture();
     let (client, hub) = LoopbackWebSocket::pair();
     let dials = Arc::new(AtomicUsize::new(0));
     let mut transport = transport(client, 100).with_connector({
@@ -291,8 +221,7 @@ async fn handshake_retry_warnings_share_the_redial_diagnostic_budget() {
 #[tokio::test(start_paused = true)]
 async fn failover_transition_and_outcomes_bypass_a_full_diagnostic_window() {
     for succeeds in [false, true] {
-        let capture = Capture::default();
-        let _subscriber = tracing::subscriber::set_default(capture.clone());
+        let (capture, _subscriber) = capture();
         let (client, hub) = LoopbackWebSocket::pair();
         let (failover, failover_hub) = LoopbackWebSocket::pair();
         let mut transport = transport(client, 100)
@@ -337,8 +266,7 @@ async fn failover_transition_and_outcomes_bypass_a_full_diagnostic_window() {
 async fn skipped_retries_are_gated_but_disconnect_and_exhaustion_always_emit() {
     for eligible in [false, true] {
         for already_emitted in [false, true] {
-            let capture = Capture::default();
-            let _subscriber = tracing::subscriber::set_default(capture.clone());
+            let (capture, _subscriber) = capture();
             let (client, _hub) = LoopbackWebSocket::pair();
             let ws = Arc::new(client);
             let conn = Arc::new(Mutex::new(ScConnection::new([0x22; 6], [1; 16])));
@@ -351,7 +279,7 @@ async fn skipped_retries_are_gated_but_disconnect_and_exhaustion_always_emit() {
             }
             let config = config(10);
             let mut failover_ws = None;
-            let maximum = AtomicU16::new(DEFAULT_MAX_APDU_LENGTH);
+            let limits = HubLimits::new();
             let mut recovery = Recovery {
                 config: &config,
                 diagnostic_throttle: &mut throttle,
@@ -362,10 +290,11 @@ async fn skipped_retries_are_gated_but_disconnect_and_exhaustion_always_emit() {
                 active_ws: &active_ws,
                 state_tx: &state_tx,
                 connect_timeout_ms: 10,
-                effective_max_apdu_length: &maximum,
+                hub_limits: &limits,
+                observer: &super::super::ScObserver::new(),
             };
             assert!(recovery
-                .reconnect(&ws, ActiveHub::Primary, false)
+                .reconnect(&ws, ScActiveHub::Primary, false)
                 .await
                 .is_none());
             let skipped = capture.matching(if eligible {

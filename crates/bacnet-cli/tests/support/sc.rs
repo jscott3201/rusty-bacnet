@@ -130,9 +130,9 @@ pub fn cli(files: &Files, url: &str, leaf: &Leaf) -> Command {
 }
 
 pub fn read(cmd: &mut Command) -> &mut Command {
-    // Existing CLI target parser encodes IP:port into six MAC bytes. On SC
-    // these are the fixture server's VMAC, NOT an IP destination to dial.
-    // Colon-hex VMAC target syntax is not currently accepted by that parser.
+    // The IP:port spelling of six MAC octets: on SC these are the fixture
+    // server's VMAC, NOT an IP destination to dial. The hex VMAC spelling
+    // (02:00:00:00:00:01) is tested in sc_handshake.rs.
     cmd.args(["read", "2.0.0.0:1", "dev:123", "object-name"])
 }
 
@@ -169,8 +169,9 @@ impl Fixture {
         let mut db = ObjectDatabase::new();
         db.add(Box::new(
             DeviceObject::new(DeviceConfig {
-                instance: 123,
-                name: "CLI site device".into(),
+                identity: bacnet_objects::DeviceIdentity::new(123, 0)
+                    .expect("valid Device identity")
+                    .with_name("CLI site device"),
                 ..Default::default()
             })
             .unwrap(),
@@ -181,6 +182,7 @@ impl Fixture {
         self.server = Some(
             bounded(Box::pin(
                 BACnetServer::generic_builder()
+                    .device(bacnet_objects::DeviceIdentity::new(123, 0).unwrap())
                     .transport(transport)
                     .database(db)
                     .build(),

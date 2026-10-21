@@ -151,7 +151,7 @@ async fn device_execution_owned_wp_rejects_custom_writer() {
         )
         .await;
     assert!(
-        matches!(local, Err(Error::Protocol { class, code }) if class == ErrorClass::PROPERTY.to_raw() as u32 && code == ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32)
+        matches!(local, Err(Error::Protocol { class, code }) if class == ErrorClass::PROPERTY && code == ErrorCode::WRITE_ACCESS_DENIED)
     );
     assert!(calls.lock().unwrap().is_empty());
     simple_ack(

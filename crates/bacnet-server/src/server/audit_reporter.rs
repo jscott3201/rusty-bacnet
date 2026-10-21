@@ -15,9 +15,10 @@ const DELIVERY_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[path = "audit_reporter_read.rs"]
 mod read;
+pub(super) use read::ReadAuditIntent;
 
-#[path = "audit_reporter_dcc.rs"]
-mod dcc;
+#[path = "audit_reporter_device.rs"]
+mod device;
 
 #[path = "audit_reporter_write.rs"]
 mod write;
@@ -229,7 +230,9 @@ pub(super) struct WriteAudit<'a, T: TransportPort> {
     transactions: &'a Arc<NotificationTransactions>,
     source: BACnetRecipient,
     invoke_id: Option<u8>,
-    pending: Option<PendingWrite>,
+    /// Boxed: a write's audit record is large, and a read, which never
+    /// has one, would otherwise carry its space in its handler (#1713).
+    pending: Option<Box<PendingWrite>>,
 }
 
 struct PendingWrite {
@@ -417,7 +420,7 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         if !selected {
             return;
         }
-        self.pending = Some(PendingWrite {
+        self.pending = Some(Box::new(PendingWrite {
             delay: (!mandatory)
                 .then_some(reporter.maximum_send_delay)
                 .flatten(),
@@ -446,7 +449,7 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
                 current_value: None,
                 result: None,
             },
-        });
+        }));
         match result {
             Ok(()) => self.committed(db),
             Err(error) => self.failed(db, error),
@@ -492,7 +495,7 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         if !selected {
             return;
         }
-        self.pending = Some(PendingWrite {
+        self.pending = Some(Box::new(PendingWrite {
             delay: (!mandatory)
                 .then_some(reporter.maximum_send_delay)
                 .flatten(),
@@ -533,7 +536,7 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
                 }),
                 result: None,
             },
-        });
+        }));
     }
 
     /// Called under the execution database guard: after CREATE's final/candidate
@@ -571,7 +574,7 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         if !selected || !policy.reports(operation, None, None) {
             return;
         }
-        self.pending = Some(PendingWrite {
+        self.pending = Some(Box::new(PendingWrite {
             delay: reporter.maximum_send_delay,
             selection: None,
             failure: self.failure_ticket(&status, reporter.confirmed, device, route.clone()),
@@ -598,7 +601,7 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
                 current_value: None,
                 result: None,
             },
-        });
+        }));
     }
 
     pub(super) fn lifecycle_completed(
@@ -631,7 +634,7 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         pending.notification.result = result;
         pending.notification.target_timestamp =
             Some(super::event_timestamp::sample_event_timestamp(db).timestamp);
-        self.admit(pending);
+        self.admit(*pending);
     }
 
     fn admit(&self, pending: PendingWrite) {
@@ -686,7 +689,7 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         let Some(mut bytes) = encode_notification(
             &pending.notification,
             pending.confirmed,
-            self.config.max_apdu_length,
+            u32::from(self.config.device.max_apdu_length()),
             0,
         ) else {
             return;
@@ -721,7 +724,7 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
             let Some(encoded) = encode_notification(
                 &pending.notification,
                 confirmed,
-                self.config.max_apdu_length,
+                u32::from(self.config.device.max_apdu_length()),
                 operation.invoke_id(),
             ) else {
                 return;

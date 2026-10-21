@@ -1,5 +1,6 @@
 use super::*;
 use crate::server::ReadRangeBudget;
+use bacnet_types::enums::EngineeringUnits;
 
 fn page(
     db: &ObjectDatabase,
@@ -261,7 +262,7 @@ fn missing_references_empty_lists_and_validation_precede_tiny_budget() {
     let missing_oid = ObjectIdentifier::new(ObjectType::TREND_LOG, 92).unwrap();
     assert!(
         matches!(page(&db, missing_oid, None, 1, 1), Err(ReadRangeFailure::Service(Error::Protocol { code, .. }))
-        if code == ErrorCode::UNKNOWN_OBJECT.to_raw() as u32)
+        if code == ErrorCode::UNKNOWN_OBJECT)
     );
 }
 
@@ -302,7 +303,12 @@ fn read_range_error_precedence_matches_legacy_before_pagination() {
         assert_eq!(&output[..], b"old");
     }
     let mut scalar_db = ObjectDatabase::new();
-    let scalar = bacnet_objects::analog::AnalogValueObject::new(1, "scalar", 62).unwrap();
+    let scalar = bacnet_objects::analog::AnalogValueObject::new(
+        1,
+        "scalar",
+        EngineeringUnits::DEGREES_CELSIUS,
+    )
+    .unwrap();
     let scalar_oid = scalar.object_identifier();
     scalar_db.add(Box::new(scalar)).unwrap();
     let mut request = BytesMut::new();
@@ -317,7 +323,7 @@ fn read_range_error_precedence_matches_legacy_before_pagination() {
     assert!(
         matches!(handle_read_range_budgeted(&scalar_db, &request, &mut BytesMut::new(),
         ReadRangeBudget { max_returned_items:1, max_service_ack_bytes:1 }),
-        Err(ReadRangeFailure::Service(Error::Protocol { code, .. })) if code == ErrorCode::PROPERTY_IS_NOT_A_LIST.to_raw() as u32)
+        Err(ReadRangeFailure::Service(Error::Protocol { code, .. })) if code == ErrorCode::PROPERTY_IS_NOT_A_LIST)
     );
 }
 

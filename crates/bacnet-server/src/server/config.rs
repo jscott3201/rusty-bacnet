@@ -1,5 +1,6 @@
 use super::*;
-use crate::mutation::{MutationAuthorizationContext, MutationAuthorizer, MutationPolicy};
+use crate::mutation::MutationPolicy;
+use crate::ServerPolicy;
 
 /// Server configuration.
 #[derive(Clone)]
@@ -35,31 +36,14 @@ pub struct ServerConfig {
     /// B/IP only: bind the interface address itself, so devices on other
     /// addresses of this host can share the port (#1538). Off by default.
     /// Needs an explicit interface and a nonzero port; see
-    /// `BipTransport::set_share_port_by_address` for what changes, including
-    /// that broadcasts and unicast are then received in no fixed order. Only
-    /// the B/IP builder reads it; a transport passed to `start` has its own.
+    /// `BipTransport::set_share_port_by_address` for what changes. Only the
+    /// B/IP builder reads it; a transport passed to `start` has its own.
     pub share_port_by_address: bool,
-    /// Raw local APDU receive ceiling, clamped to the transport's stable capacity.
-    /// The effective value must be at least 50 and equal the selected Device's
-    /// `Max_APDU_Length_Accepted`. I-Am retains this raw value; only originated
-    /// Confirmed-Request headers floor it to a supported encoding.
-    pub max_apdu_length: u32,
-    /// Segmentation support level.
-    ///
-    /// Enforced, not just advertised: the dispatch loop reassembles inbound
-    /// segmented requests only under `BOTH`/`RECEIVE` and transmits
-    /// segmented responses only under `BOTH`/`TRANSMIT` (Clauses 5.4.5.1 and
-    /// 5.4.5.3); anything else draws a SEGMENTATION_NOT_SUPPORTED Abort. The
-    /// default is `NONE`, so a default-configured server refuses segmented
-    /// traffic in both directions — set this to what the device should
-    /// actually honor.
-    pub segmentation_supported: Segmentation,
-    /// Segment timeout (Tseg) in milliseconds; shared by request receive
-    /// (4 * Tseg) and response SegmentACK waits. Default: 5000 ms. When
-    /// segmentation is active it must be positive and match the selected Device.
-    pub apdu_segment_timeout_ms: u64,
-    /// Vendor identifier.
-    pub vendor_id: u16,
+    /// Device declarations shared by stock objects, discovery and active limits.
+    /// Startup resolves its receive ceiling against the owned transport. An
+    /// explicitly supplied selected Device must match; an empty database may
+    /// later add this same OID, but never rebinds the runtime to another Device.
+    pub device: bacnet_objects::DeviceIdentity,
     /// APDU timeout in ms of confirmed COV and event notifications and of the
     /// WriteProperty a Command action sends to another device (default
     /// 3000 ms): how long each attempt waits for the reply once its send has
@@ -79,55 +63,43 @@ pub struct ServerConfig {
     /// SERVICES / SERVICE_REQUEST_DENIED.
     ///
     /// The rules are on [`ReinitializeHandler`]. In short: the SimpleACK goes
-    /// out only after the handler returns, so schedule any restart for after
-    /// the reply rather than restarting inline. Nothing yet signals when the
-    /// reply has left (#1565), so a delay is best effort, and stopping the
-    /// server before then drops the reply. It runs synchronously with the
+    /// out only after the handler returns, so register any restart with
+    /// [`ReinitializeContext::after_reply`] rather than restarting inline; it
+    /// runs once the reply has been handed to the transport (#1565), and
+    /// never for a refusal. The handler runs synchronously with the
     /// object database write-locked, so keep it quick and hand slow work to a
     /// task; its database edits skip the COV, event and Audit work of
     /// [`BACnetServer::write_local`], so apply changes that need it there
     /// afterwards. Without [`reinit_password`](Self::reinit_password) any peer
-    /// reaches it, and neither the mutation policy nor the mutation authorizer
-    /// covers this service, so restrict sources through the context. Refuse
+    /// reaches it, and neither [`mutation_policy`](Self::mutation_policy) nor
+    /// [`policy`](Self::policy) covers this service, so restrict sources
+    /// through the context. Refuse
     /// with [`Error::Protocol`]: a panic or an [`Error::Reject`] is answered
     /// SERVICES / OTHER.
     pub on_reinitialize: Option<ReinitializeHandler>,
     /// Local mutation authorization mode (default: permissive). SC mTLS channel/peer
-    /// authentication is not service authorization; addresses here are claimed,
-    /// never certificate principals. See [`MutationPolicy`]. Each decision also
-    /// carries the reassembled ingress [`TransportProvenance`](bacnet_transport::port::TransportProvenance)
-    /// snapshot and the derived channel/relay [`MutationTrust`](crate::mutation::MutationTrust)
-    /// scope (never leaf identity); unknown origin never satisfies a
-    /// baseline-only allow rule. Denials mutate nothing and write no audit log.
-    /// `DenyAll` also denies each Channel write of an inbound WriteGroup,
-    /// counted in `BACnetServer::mutation_decision_counters` (#1319).
+    /// authentication is not service authorization. See [`MutationPolicy`].
+    /// `DenyAll` denies every covered mutation without asking
+    /// [`policy`](Self::policy), each Channel write of an inbound WriteGroup
+    /// included, counted in `BACnetServer::mutation_decision_counters` (#1319).
+    /// Denials mutate nothing and write no audit log.
     pub mutation_policy: MutationPolicy,
-    /// Opt-in mutation authorizer; `None` allows only in permissive mode.
-    /// See [`MutationAuthorizer`]. It also decides each Channel write of an
-    /// inbound WriteGroup, with no invoke ID and the unconfirmed service in its
-    /// context, so it can allow some Channels and not others (#1319).
-    pub mutation_authorizer: Option<MutationAuthorizer>,
-    /// Optional LifeSafetyOperation authorization policy.
-    ///
-    /// Absence is fail-closed: requests receive SERVICES /
-    /// SERVICE_REQUEST_DENIED before object mutation.
-    pub life_safety_operation_authorizer: Option<LifeSafetyOperationAuthorizer>,
+    /// The application's authorization decisions (default: none). See
+    /// [`ServerPolicy`] for what it decides, each method's default and the
+    /// direct-SC principal its contexts carry. `None` behaves as those
+    /// defaults: covered mutations are allowed (without being decoded for
+    /// authorization first), and LifeSafetyOperation and both
+    /// AuditNotification services are denied.
+    pub policy: Option<Arc<dyn ServerPolicy>>,
     /// Exactly one explicitly configured Audit Log notification sink.
     ///
     /// Absence is fail-closed; the server never selects a sink by database
-    /// iteration order.
+    /// iteration order. Storing a notification also needs
+    /// [`policy`](Self::policy) to authorize it.
     /// A built-in AuditLogObject configured with `set_member_of` also forwards
     /// record-changing accepted batches once, after commit, to that parent using
     /// a configured DeviceBinding. No backlog, retries, or durable send progress.
     pub audit_notification_sink: Option<ObjectIdentifier>,
-    /// Optional fast, nonblocking ConfirmedAuditNotification authorizer.
-    ///
-    /// Absence, `false`, or a panic denies the request before mutation.
-    pub audit_notification_authorizer: Option<AuditNotificationAuthorizer>,
-    /// Optional fast, nonblocking UnconfirmedAuditNotification authorizer.
-    ///
-    /// Absence, `false`, or a panic silently denies the request before mutation.
-    pub unconfirmed_audit_notification_authorizer: Option<UnconfirmedAuditNotificationAuthorizer>,
     /// Optional password required for DeviceCommunicationControl.
     pub dcc_password: Option<String>,
     /// Local DCC authorization. Supplying a password alone does not enable DCC.
@@ -215,10 +187,7 @@ impl std::fmt::Debug for ServerConfig {
             .field("port", &self.port)
             .field("broadcast_address", &self.broadcast_address)
             .field("share_port_by_address", &self.share_port_by_address)
-            .field("max_apdu_length", &self.max_apdu_length)
-            .field("segmentation_supported", &self.segmentation_supported)
-            .field("apdu_segment_timeout_ms", &self.apdu_segment_timeout_ms)
-            .field("vendor_id", &self.vendor_id)
+            .field("device", &self.device)
             .field("cov_retry_timeout_ms", &self.cov_retry_timeout_ms)
             .field("time_sync_policy", &self.time_sync_policy)
             .field("mutation_policy", &self.mutation_policy)
@@ -230,32 +199,8 @@ impl std::fmt::Debug for ServerConfig {
                 "on_reinitialize",
                 &self.on_reinitialize.as_ref().map(|_| "<callback>"),
             )
-            .field(
-                "mutation_authorizer",
-                &self.mutation_authorizer.as_ref().map(|_| "<callback>"),
-            )
-            .field(
-                "life_safety_operation_authorizer",
-                &self
-                    .life_safety_operation_authorizer
-                    .as_ref()
-                    .map(|_| "<callback>"),
-            )
+            .field("policy", &self.policy.as_ref().map(|_| "<policy>"))
             .field("audit_notification_sink", &self.audit_notification_sink)
-            .field(
-                "audit_notification_authorizer",
-                &self
-                    .audit_notification_authorizer
-                    .as_ref()
-                    .map(|_| "<callback>"),
-            )
-            .field(
-                "unconfirmed_audit_notification_authorizer",
-                &self
-                    .unconfirmed_audit_notification_authorizer
-                    .as_ref()
-                    .map(|_| "<callback>"),
-            )
             .field("dcc_password", &self.dcc_password.as_ref().map(|_| "***"))
             .field("dcc_policy", &self.dcc_policy)
             .field("dcc_source_restriction", &self.dcc_source_restriction)
@@ -277,9 +222,21 @@ impl std::fmt::Debug for ServerConfig {
     }
 }
 
+impl ServerConfig {
+    /// The installed policy, if it decides mutations
+    /// ([`ServerPolicy::decides_mutations`]). `None` takes the no-policy
+    /// path: allowed without decoding for authorization.
+    pub(crate) fn mutation_decider(&self) -> Option<&dyn ServerPolicy> {
+        self.policy
+            .as_deref()
+            .filter(|policy| policy.decides_mutations())
+    }
+}
+
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
+            device: bacnet_objects::DeviceIdentity::default(),
             registered_network_port: None,
             audit_reporters: None,
             interface: Ipv4Addr::UNSPECIFIED,
@@ -293,20 +250,13 @@ impl Default for ServerConfig {
             port: 0xBAC0,
             broadcast_address: Ipv4Addr::BROADCAST,
             share_port_by_address: false,
-            max_apdu_length: 1476,
-            segmentation_supported: Segmentation::NONE,
-            apdu_segment_timeout_ms: 5000,
-            vendor_id: 0,
             cov_retry_timeout_ms: 3000,
             time_sync_policy: TimeSyncPolicy::default(),
             on_time_sync: None,
             on_reinitialize: None,
             mutation_policy: MutationPolicy::default(),
-            mutation_authorizer: None,
-            life_safety_operation_authorizer: None,
+            policy: None,
             audit_notification_sink: None,
-            audit_notification_authorizer: None,
-            unconfirmed_audit_notification_authorizer: None,
             dcc_password: None,
             dcc_policy: DccPolicy::default(),
             dcc_source_restriction: None,
@@ -324,25 +274,41 @@ impl Default for ServerConfig {
 
 impl<T: TransportPort + 'static> ServerBuilder<T> {
     /// Select local mutation authorization (default: [`MutationPolicy::Permissive`]).
-    /// SC mTLS channel/peer authentication is not service authorization; identities
-    /// here are claimed link/routed addresses, never certificate principals.
+    /// SC mTLS channel/peer authentication is not service authorization.
     pub fn mutation_policy(mut self, policy: MutationPolicy) -> Self {
         self.config.mutation_policy = policy;
         self
     }
 
-    /// Set opt-in mutation policy. See [`MutationAuthorizer`] for callback rules,
-    /// the Channel writes of an inbound WriteGroup among them (#1319).
-    pub fn mutation_authorizer<F>(mut self, authorizer: F) -> Self
-    where
-        F: Fn(&MutationAuthorizationContext) -> bool + Send + Sync + 'static,
-    {
-        self.config.mutation_authorizer = Some(Arc::new(authorizer));
+    /// Install the server's authorization policy; see [`ServerPolicy`], or
+    /// [`FnPolicy`](crate::FnPolicy) to build one from closures.
+    /// It replaces any policy set before; put every decision in one policy
+    /// (one `FnPolicy` chain) rather than calling this twice.
+    pub fn policy(mut self, policy: impl ServerPolicy) -> Self {
+        self.config.policy = Some(Arc::new(policy));
         self
     }
 }
 
 impl BipServerBuilder {
+    /// Set the local interface IP.
+    pub fn interface(mut self, ip: Ipv4Addr) -> Self {
+        self.config.interface = ip;
+        self
+    }
+
+    /// Set the UDP port.
+    pub fn port(mut self, port: u16) -> Self {
+        self.config.port = port;
+        self
+    }
+
+    /// Set the directed broadcast address.
+    pub fn broadcast_address(mut self, addr: Ipv4Addr) -> Self {
+        self.config.broadcast_address = addr;
+        self
+    }
+
     /// Set the B/IP mode: a normal node (the default), a foreign device or
     /// a BBMD (#938). A foreign device's `build()` doesn't wait for its BBMD
     /// to accept the registration; poll
@@ -363,20 +329,34 @@ impl BipServerBuilder {
         self
     }
 
+    /// Make the server a B/IP-M node in `multicast`'s group (Annex J.8), or,
+    /// with `None` (the default), not: its broadcasts go to the group, and
+    /// it takes broadcasts only from the group. Needs an explicit
+    /// [`interface`](Self::interface), and a nonzero [`port`](Self::port)
+    /// unless the group has its own; `build()` fails on what
+    /// [`BipTransport::set_multicast`](bacnet_transport::bip::BipTransport::set_multicast)
+    /// refuses. With [`BipMode::Bbmd`]
+    /// the server is the BBMD that serves the group (Annex J.8.3), and its
+    /// own BDT row must be two-hop. A registered Network Port serves the
+    /// group as `BACnet_IP_Multicast_Address`, writable when the server
+    /// answers ReinitializeDevice and isn't a BBMD (#941).
+    pub fn multicast(mut self, multicast: Option<BipMulticast>) -> Self {
+        self.multicast = multicast;
+        self
+    }
+
     /// Bind the interface address itself, so devices on other addresses of
     /// this host can share the port, each getting only its own unicast
     /// (#1538). Off by default, which binds `0.0.0.0`. Needs an explicit
     /// [`interface`](Self::interface) and a nonzero port, or `build` fails.
-    /// Broadcasts and unicast are then received in no fixed order; see
-    /// [`BipTransport::set_share_port_by_address`].
+    /// See [`BipTransport::set_share_port_by_address`] for what changes.
     pub fn share_port_by_address(mut self, enabled: bool) -> Self {
         self.config.share_port_by_address = enabled;
         self
     }
 
     /// Select local mutation authorization (default: [`MutationPolicy::Permissive`]).
-    /// SC mTLS channel/peer authentication is not service authorization; identities
-    /// here are claimed link/routed addresses, never certificate principals.
+    /// SC mTLS channel/peer authentication is not service authorization.
     ///
     /// ```
     /// use bacnet_server::{mutation::MutationPolicy, server::BACnetServer};
@@ -387,18 +367,19 @@ impl BipServerBuilder {
         self
     }
 
-    /// Set opt-in mutation policy. See [`MutationAuthorizer`] for callback rules,
-    /// the Channel writes of an inbound WriteGroup among them (#1319).
+    /// Install the server's authorization policy; see [`ServerPolicy`], or
+    /// [`FnPolicy`](crate::FnPolicy) to build one from closures.
+    /// It replaces any policy set before; put every decision in one policy
+    /// (one `FnPolicy` chain) rather than calling this twice.
     ///
     /// ```
     /// use bacnet_server::server::BACnetServer;
-    /// let builder = BACnetServer::bip_builder().mutation_authorizer(|_| false);
+    /// use bacnet_server::FnPolicy;
+    /// // Refuse every remote write; LifeSafety and Audit keep denying.
+    /// let builder = BACnetServer::bip_builder().policy(FnPolicy::new().mutation(|_| false));
     /// ```
-    pub fn mutation_authorizer<F>(mut self, authorizer: F) -> Self
-    where
-        F: Fn(&MutationAuthorizationContext) -> bool + Send + Sync + 'static,
-    {
-        self.config.mutation_authorizer = Some(Arc::new(authorizer));
+    pub fn policy(mut self, policy: impl ServerPolicy) -> Self {
+        self.config.policy = Some(Arc::new(policy));
         self
     }
 }
@@ -406,36 +387,31 @@ impl BipServerBuilder {
 #[cfg(feature = "sc-tls")]
 impl ScServerBuilder {
     /// Select local mutation authorization (default: [`MutationPolicy::Permissive`]).
-    /// SC mTLS channel/peer authentication is not service authorization; identities
-    /// here are claimed link/routed addresses, never certificate principals.
+    /// SC mTLS channel/peer authentication is not service authorization.
     pub fn mutation_policy(mut self, policy: MutationPolicy) -> Self {
         self.config.mutation_policy = policy;
         self
     }
 
-    /// Set opt-in mutation policy. See [`MutationAuthorizer`] for callback rules,
-    /// the Channel writes of an inbound WriteGroup among them (#1319).
-    pub fn mutation_authorizer<F>(mut self, authorizer: F) -> Self
-    where
-        F: Fn(&MutationAuthorizationContext) -> bool + Send + Sync + 'static,
-    {
-        self.config.mutation_authorizer = Some(Arc::new(authorizer));
+    /// Install the server's authorization policy; see [`ServerPolicy`], or
+    /// [`FnPolicy`](crate::FnPolicy) to build one from closures.
+    /// It replaces any policy set before; put every decision in one policy
+    /// (one `FnPolicy` chain) rather than calling this twice.
+    pub fn policy(mut self, policy: impl ServerPolicy) -> Self {
+        self.config.policy = Some(Arc::new(policy));
         self
     }
 }
 
-impl<T: TransportPort + 'static> ServerBuilder<T> {
-    /// Sets the segment timeout in milliseconds for receive and response transfers.
-    pub fn apdu_segment_timeout_ms(mut self, timeout_ms: u64) -> Self {
-        self.config.apdu_segment_timeout_ms = timeout_ms;
-        self
-    }
-}
-
-impl BipServerBuilder {
-    /// Sets the segment timeout in milliseconds for receive and response transfers.
-    pub fn apdu_segment_timeout_ms(mut self, timeout_ms: u64) -> Self {
-        self.config.apdu_segment_timeout_ms = timeout_ms;
-        self
+impl<T: TransportPort + 'static> BACnetServer<T> {
+    /// Start a server builder for a caller-supplied transport type, with default configuration and
+    /// stock Device generation unless a database is supplied.
+    pub fn generic_builder() -> ServerBuilder<T> {
+        ServerBuilder {
+            config: ServerConfig::default(),
+            db: None,
+            transport: None,
+            configured_device_bindings: Vec::new(),
+        }
     }
 }

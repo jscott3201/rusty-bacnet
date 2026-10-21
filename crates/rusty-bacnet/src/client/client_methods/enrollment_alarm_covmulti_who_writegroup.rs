@@ -42,12 +42,7 @@ impl BACnetClient {
 
         crate::py_async::future_into_py(py, async move {
             let mac = peers.parse(&address)?;
-            let c = {
-                let guard = inner.lock().await;
-                Arc::clone(guard.as_ref().ok_or_else(|| {
-                    PyRuntimeError::new_err("client not started — use 'async with'")
-                })?)
-            };
+            let c = started(&inner).await?;
             let req = GetEnrollmentSummaryRequest {
                 acknowledgment_filter: af,
                 enrollment_filter: None, // not exposed in Python API
@@ -109,12 +104,7 @@ impl BACnetClient {
         let peers = PeerAddresses::for_transport(&self.transport_type);
         crate::py_async::future_into_py(py, async move {
             let mac = peers.parse(&address)?;
-            let c = {
-                let guard = inner.lock().await;
-                Arc::clone(guard.as_ref().ok_or_else(|| {
-                    PyRuntimeError::new_err("client not started — use 'async with'")
-                })?)
-            };
+            let c = started(&inner).await?;
             let resp = c
                 .confirmed_request(&mac, ConfirmedServiceChoice::GET_ALARM_SUMMARY, &[])
                 .await
@@ -203,12 +193,7 @@ impl BACnetClient {
         let peers = PeerAddresses::for_transport(&self.transport_type);
         let future = async move {
             let mac = peers.parse(&address)?;
-            let c = {
-                let guard = inner.lock().await;
-                Arc::clone(guard.as_ref().ok_or_else(|| {
-                    PyRuntimeError::new_err("client not started — use 'async with'")
-                })?)
-            };
+            let c = started(&inner).await?;
             c.confirmed_request(
                 &mac,
                 ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY_MULTIPLE,
@@ -247,12 +232,7 @@ impl BACnetClient {
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         let inner = self.inner.clone();
         let future = async move {
-            let c = {
-                let guard = inner.lock().await;
-                Arc::clone(guard.as_ref().ok_or_else(|| {
-                    PyRuntimeError::new_err("client not started — use 'async with'")
-                })?)
-            };
+            let c = started(&inner).await?;
             c.broadcast_unconfirmed(UnconfirmedServiceChoice::WHO_AM_I, &buf)
                 .await
                 .map_err(to_py_err)?;
@@ -326,12 +306,7 @@ impl BACnetClient {
                 ),
                 (None, None) => unreachable!("no address means a broadcast"),
             };
-            let c = {
-                let guard = inner.lock().await;
-                Arc::clone(guard.as_ref().ok_or_else(|| {
-                    PyRuntimeError::new_err("client not started — use 'async with'")
-                })?)
-            };
+            let c = started(&inner).await?;
             c.write_group(&destination, &req).await.map_err(to_py_err)?;
             Ok(())
         };

@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;
 use bacnet_types::enums::{PropertyIdentifier, RejectReason};
-use bacnet_types::error::Error;
+use bacnet_types::error::{EncodeError, Error};
 use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
 use bytes::BytesMut;
 
@@ -17,7 +17,7 @@ use super::helpers::{
 };
 use crate::common::MAX_DECODED_ITEMS;
 use bacnet_encoding::constructed::tagged::{
-    decode_ctx_fixed, decode_ctx_object_id, decode_ctx_unsigned, expect_end, misplaced_tag,
+    decode_ctx_fixed, decode_ctx_object_id, decode_ctx_unsigned, expect_end, misplaced_tag, Fixed,
     next_is_context,
 };
 
@@ -117,9 +117,7 @@ impl COVNotificationMultipleRequest {
 
     fn validate(&self) -> Result<(), Error> {
         if self.list_of_cov_notifications.is_empty() {
-            return Err(Error::Encoding(
-                "COVNotificationMultiple notification list must not be empty".into(),
-            ));
+            return Err(Error::encode("COVNotificationMultiple notification list must not be empty"));
         }
         let mut total_values = 0usize;
         let mut has_time_of_change = false;
@@ -128,22 +126,20 @@ impl COVNotificationMultipleRequest {
         }
         for item in &self.list_of_cov_notifications {
             if item.list_of_values.is_empty() {
-                return Err(Error::Encoding(
-                    "COVNotificationMultiple value list must not be empty".into(),
-                ));
+                return Err(Error::encode("COVNotificationMultiple value list must not be empty"));
             }
             total_values = total_values
                 .checked_add(item.list_of_values.len())
-                .ok_or_else(|| Error::Encoding("notification value count overflow".into()))?;
+                .ok_or_else(|| Error::encode("notification value count overflow"))?;
             if total_values > MAX_DECODED_ITEMS {
-                return Err(Error::Encoding(format!(
-                    "COVNotificationMultiple exceeds {MAX_DECODED_ITEMS} values"
-                )));
+                return Err(EncodeError::new("COVNotificationMultiple exceeds {} values")
+                    .with_value(MAX_DECODED_ITEMS as u32)
+                    .into());
             }
             for value in &item.list_of_values {
                 validate_property_identifier(
                     value.property_identifier,
-                    "COVNotificationMultiple property",
+                    "COVNotificationMultiple property cannot be ALL, OPTIONAL, or REQUIRED",
                 )?;
                 validate_raw_property_value(&value.value)?;
                 if let Some(time) = &value.time_of_change {
@@ -153,10 +149,7 @@ impl COVNotificationMultipleRequest {
             }
         }
         if self.timestamp.is_some() != has_time_of_change {
-            return Err(Error::Encoding(
-                "COVNotificationMultiple timestamp must be present iff a time-of-change is present"
-                    .into(),
-            ));
+            return Err(Error::encode("COVNotificationMultiple timestamp must be present iff a time-of-change is present"));
         }
         Ok(())
     }
@@ -287,7 +280,7 @@ impl COVNotificationMultipleRequest {
                 let property_identifier = PropertyIdentifier::from_raw(prop_id);
                 validate_decoded_property_identifier(
                     property_identifier,
-                    "COVNotificationMultiple property",
+                    "COVNotificationMultiple property cannot be ALL, OPTIONAL, or REQUIRED",
                 )?;
 
                 // [1] propertyArrayIndex OPTIONAL
@@ -340,8 +333,7 @@ impl COVNotificationMultipleRequest {
                         data,
                         offset,
                         3,
-                        4,
-                        "Time",
+                        Fixed::TIME,
                         "COVNotificationMultiple time-of-change",
                     )
                     .map_err(|error| match error {

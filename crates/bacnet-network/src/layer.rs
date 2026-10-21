@@ -10,22 +10,38 @@
 //! [`NetworkLayer`] and [`BACnetRouter`](crate::router::BACnetRouter) use the
 //! same drop-arriving policy for application delivery. Each receive queue holds
 //! **256 items**. Admission never waits for a consumer and never evicts an older
-//! queued item. NetworkLayer APDU and opted-in control queues have independent
-//! capacities, so saturation of either does not stall admission to the other.
-//! All router ports share one local APDU queue; its saturation does not stop
-//! forwarding or inline network-message handling.
+//! queued item. A tracked NetworkLayer APDU queue and an opted-in control queue
+//! have independent capacities, so saturation of either does not stall
+//! admission to the other. All router ports share one local APDU queue; its
+//! saturation does not stop forwarding or inline network-message handling.
+//!
+//! The raw NetworkLayer receiver is different: [`ApduReceiver`] has no queue
+//! of its own (#1713). It decodes the transport's NPDUs in the task that polls
+//! it, so **network controls flow only while it is polled**: while the
+//! consumer is busy in an inline await they wait in the transport's queue,
+//! which adds latency, not a deadlock. That queue is the only buffer. It
+//! holds 256 NPDUs on B/IP, B/IPv6, BACnet/SC, Ethernet and loopback, and 64
+//! on MS/TP, whose deliveries were buffered 64 + 256 deep before. Under
+//! overload it bounds memory and the transport counts what it drops: B/IP
+//! and B/IPv6 as `npdu_channel_full` in `receive_counters()`, MS/TP as
+//! `delivery_drops` in its diagnostics' MAC counters, BACnet/SC in
+//! `npdu_drop_counts()`, and loopback in `receive_drops()`. Ethernet has no
+//! drop counter, only throttled warnings.
 //!
 //! ## Raw and tracked receivers
 //!
 //! | Receiver kind | Entry points | Capacity | Per-source quota | Accounting |
 //! | --- | --- | --- | --- | --- |
-//! | Raw APDU | [`NetworkLayer::start`], [`BACnetRouter::start`](crate::router::BACnetRouter::start) with [`RouterOptions::new`](crate::router::RouterOptions::new) | 256 | None | Full/Closed counted internally; no admission snapshot or depth/high-water tracking |
+//! | Raw APDU, NetworkLayer | [`NetworkLayer::start`] ([`ApduReceiver`]) | The transport's queue | None | Drops counted by the transport; no admission snapshot |
+//! | Raw APDU, router | [`BACnetRouter::start`](crate::router::BACnetRouter::start) with [`RouterOptions::new`](crate::router::RouterOptions::new) | 256 | None | Full/Closed counted internally; no admission snapshot or depth/high-water tracking |
 //! | Tracked APDU | [`NetworkLayer::start_with_admission`], [`RouterOptions::track_admission`](crate::router::RouterOptions::track_admission) | 256 | 16 queued APDUs per key, defined below | Exact depth/high-water and Full/fairness/Closed totals via [`AdmissionReceiver::counters`] |
 //! | Raw control | [`NetworkLayer::enable_network_control_receiver`], [`RouterOptions::network_control_receiver`](crate::router::RouterOptions::network_control_receiver) | 256, separate from APDUs | None | Full/Closed counted internally; no admission snapshot or depth/high-water tracking |
 //! | Tracked control | [`NetworkLayer::enable_network_control_receiver_with_admission`], [`RouterOptions::network_control_receiver_with_admission`](crate::router::RouterOptions::network_control_receiver_with_admission) | 256, separate from APDUs | None | Exact depth/high-water and Full/Closed totals; fairness always zero |
 //!
-//! Raw receivers remain `tokio::sync::mpsc::Receiver`; tracked receivers are the
-//! additive [`AdmissionReceiver`] alternatives. APDU and control opt-ins are
+//! The router's raw receivers and the raw control receiver are
+//! `tokio::sync::mpsc::Receiver`s; NetworkLayer's raw APDU receiver is an
+//! [`ApduReceiver`]; tracked receivers are the [`AdmissionReceiver`]
+//! alternatives. APDU and control opt-ins are
 //! independent. Routers process network messages inline; their control receiver
 //! gets only the Reject-Message-To-Network messages addressed to the router
 //! itself, and every closed admission attempt counts as Closed without
@@ -67,8 +83,10 @@
 //! Neither operation resets high-water/drop totals, and discarding queued items
 //! is not an admission drop.
 //!
-//! NetworkLayer ends its dispatcher on the first APDU admission attempt after
-//! that receiver closes/drops, also ending control delivery. A closed/dropped
+//! A tracked NetworkLayer ends its dispatcher on the first APDU admission
+//! attempt after that receiver closes/drops, also ending control delivery.
+//! Closing an [`ApduReceiver`] stops the transport handing up NPDUs while
+//! those it queued stay drainable; dropping it discards them. A closed/dropped
 //! control receiver instead disables only that stream on the first subsequent
 //! control admission attempt. Later discarded controls (like controls received
 //! without either opt-in) are not admission attempts. Router forwarding and
@@ -77,7 +95,7 @@
 //!
 //! [`NetworkLayer::stop`] after start and [`BACnetRouter::stop`](crate::router::BACnetRouter::stop)
 //! end dispatch without waiting for application queues to drain; queued items
-//! remain drainable. Stopping is not an admission drop. An independently owned
+//! remain drainable, for an [`ApduReceiver`] the NPDUs the transport queued. Stopping is not an admission drop. An independently owned
 //! [`QueueAdmissionCounters`] handle remains readable after the receiver, layer,
 //! or router is dropped; it keeps accounting alive, not the channel or tasks.
 //! [`snapshot`](QueueAdmissionCounters::snapshot) is consistent for one queue,
@@ -86,10 +104,11 @@
 
 use crate::network_number::LocalNetworkNumber;
 use bacnet_encoding::npdu::{encode_npdu, Npdu, NpduAddress};
+use bacnet_npdu::NetworkPriority;
 use bacnet_transport::port::{
     DataAttribute, GroupDestinations, TransportPort, TransportProvenance,
 };
-use bacnet_types::enums::{NetworkPriority, PduType};
+use bacnet_types::enums::PduType;
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 use bytes::{Bytes, BytesMut};
@@ -101,6 +120,18 @@ use tokio::task::JoinHandle;
 #[path = "layer_issuance.rs"]
 mod issuance;
 pub use issuance::IssuedApdu;
+
+#[path = "layer_network_message.rs"]
+mod network_message;
+pub use network_message::{NetworkReport, ReceivedNetworkReport, SENDABLE_NETWORK_MESSAGES};
+
+#[path = "layer_receive.rs"]
+pub(crate) mod receive;
+pub use receive::Counters;
+
+#[path = "layer_ingress.rs"]
+mod ingress;
+pub use ingress::ApduReceiver;
 
 #[path = "layer_admission.rs"]
 mod admission;
@@ -155,6 +186,10 @@ pub struct ReceivedApdu {
     pub provenance: TransportProvenance,
     /// Sealed route back to this envelope's original verified direct socket.
     pub direct_response: Option<bacnet_transport::port::DirectResponse>,
+    /// Captured router endpoint and return-port authority for local delivery
+    /// of a Confirmed-Request, the only APDU answered on its arrival route;
+    /// `None` for every other APDU (#1713).
+    pub router_response: Option<crate::router::RouterResponse>,
     /// Optional reply channel for MS/TP DataExpectingReply flows.
     /// The application layer can send NPDU-wrapped reply bytes through this channel.
     /// An APDU dropped at queue admission releases this sender without sending
@@ -219,6 +254,7 @@ impl Clone for ReceivedApdu {
             data_attributes: self.data_attributes.clone(),
             provenance: self.provenance,
             direct_response: self.direct_response.clone(),
+            router_response: self.router_response.clone(),
             reply_tx: None,
         }
     }
@@ -246,13 +282,6 @@ impl std::fmt::Debug for ReceivedApdu {
             .field("reply_tx", &self.reply_tx.as_ref().map(|_| "Some(...)"))
             .finish_non_exhaustive()
     }
-}
-
-/// Whether an NPDU destination names the global broadcast network. Ingress
-/// has already dropped one that also carries a DADR (#1379), so on a
-/// delivered NPDU this is a plain global broadcast.
-pub(crate) fn is_global_broadcast(destination: Option<&NpduAddress>) -> bool {
-    destination.is_some_and(|destination| destination.network == 0xFFFF)
 }
 
 /// Refuse a caller-supplied DNET that a send naming one network cannot take.
@@ -298,13 +327,6 @@ pub(crate) fn check_broadcast_apdu(apdu: &[u8], what: &str) -> Result<(), Error>
     )))
 }
 
-pub(crate) fn is_group_delivery(link_layer_group: bool, destination: Option<&NpduAddress>) -> bool {
-    match destination {
-        None => link_layer_group,
-        Some(destination) => destination.network == 0xFFFF || destination.mac_address.is_empty(),
-    }
-}
-
 /// A remote device reached through a local router.
 #[derive(Debug, Clone, Copy)]
 pub struct RoutedTarget<'a> {
@@ -325,20 +347,30 @@ pub struct RoutedTarget<'a> {
 /// See the [receive-queue contract](self#receive-queue-admission) for raw/tracked
 /// receiver choices, admission limits, drop attribution and lifecycle.
 /// An inbound frame from a link-layer source MAC longer than
-/// [`NpduAddress::MAX_MAC_LEN`], or whose DLEN or SLEN is past it, is dropped
+/// [`MAX_MAC_LEN`](bacnet_npdu::MAX_MAC_LEN), or whose DLEN or SLEN is past it, is dropped
 /// before admission and counted by [`Self::address_length_drops`]; one whose
 /// DNET 0xFFFF carries a DADR is dropped and counted by
 /// [`Self::global_broadcast_dadr_drops`], and a broadcast whose APDU isn't an
-/// Unconfirmed-Request by [`Self::broadcast_pdu_type_drops`].
+/// Unconfirmed-Request by [`Self::broadcast_pdu_type_drops`]. These rules
+/// are `bacnet-router-core`'s, the router engine's own (#1795): the layer
+/// also drops a malformed NPDU, and one whose DNET names one network, APDU
+/// or network message, which no node but a router acts on (Clauses
+/// 6.5.2.1 and 6.5.2.2). [`Self::counters`] totals every drop by reason.
 pub struct NetworkLayer<T: TransportPort> {
     transport: T,
     response_scope: bacnet_transport::port::DirectResponseScope,
     dispatch_task: Option<JoinHandle<()>>,
+    /// Whether [`Self::start`] or [`Self::start_with_admission`] has run.
+    started: bool,
+    /// The [`ApduReceiver`]'s transport queue, which [`Self::stop`] and
+    /// drop close so its stream ends once drained.
+    receiver_queue: std::sync::Weak<
+        std::sync::Mutex<tokio::sync::mpsc::Receiver<bacnet_transport::port::ReceivedNpdu>>,
+    >,
     network_control_tx: Option<AdmissionSender<ReceivedNetworkControl>>,
     network_control_ingress_sequence: Arc<AtomicU64>,
-    address_length_drops: Arc<AtomicU64>,
-    global_broadcast_dadr_drops: Arc<AtomicU64>,
-    broadcast_pdu_type_drops: Arc<AtomicU64>,
+    /// What the dispatch task's node dropped, since the layer was made.
+    node_totals: Arc<receive::NodeTotals>,
     local_network_number: LocalNetworkNumber,
     /// The group destinations the transport's local broadcast stands for,
     /// taken when the layer is made and again when the transport starts and
@@ -355,11 +387,11 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
             transport,
             response_scope: Default::default(),
             dispatch_task: None,
+            started: false,
+            receiver_queue: std::sync::Weak::new(),
             network_control_tx: None,
             network_control_ingress_sequence: Arc::new(AtomicU64::new(0)),
-            address_length_drops: Arc::new(AtomicU64::new(0)),
-            global_broadcast_dadr_drops: Arc::new(AtomicU64::new(0)),
-            broadcast_pdu_type_drops: Arc::new(AtomicU64::new(0)),
+            node_totals: Arc::default(),
             local_network_number: LocalNetworkNumber::default(),
         }
     }
@@ -412,18 +444,13 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         priority: NetworkPriority,
         data_attributes: &[DataAttribute],
     ) -> Result<(), Error> {
-        let npdu = Npdu {
-            is_network_message: false,
+        // Straight from the borrowed APDU, no copy of it first (#1713).
+        let buf = crate::response_route::encode_checked_response_npdu(
+            apdu,
+            None,
             expecting_reply,
             priority,
-            destination: None,
-            source: None,
-            payload: Bytes::copy_from_slice(apdu),
-            ..Npdu::default()
-        };
-
-        let mut buf = BytesMut::with_capacity(2 + apdu.len());
-        encode_npdu(&mut buf, &npdu)?;
+        )?;
 
         // An Unconfirmed-Request for a group address of this link is this
         // link's local broadcast, so it goes out as one: B/IP refuses a
@@ -466,7 +493,6 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     ) -> Result<(), Error> {
         check_broadcast_apdu(apdu, "a local broadcast")?;
         let npdu = Npdu {
-            is_network_message: false,
             expecting_reply,
             priority,
             destination: None,
@@ -509,7 +535,6 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     ) -> Result<(), Error> {
         check_broadcast_apdu(apdu, "a global broadcast")?;
         let npdu = Npdu {
-            is_network_message: false,
             expecting_reply,
             priority,
             destination: Some(NpduAddress {
@@ -567,7 +592,6 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         check_destination(dest_network, "use broadcast_apdu for the local network")?;
         check_broadcast_apdu(apdu, "a broadcast to one network")?;
         let npdu = Npdu {
-            is_network_message: false,
             expecting_reply,
             priority,
             destination: Some(NpduAddress {
@@ -751,7 +775,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     }
 
     /// Inbound NPDUs dropped since this layer was created because an address
-    /// in them was past [`NpduAddress::MAX_MAC_LEN`]: their DLEN or SLEN
+    /// in them was past [`MAX_MAC_LEN`](bacnet_npdu::MAX_MAC_LEN): their DLEN or SLEN
     /// (#1141), or the link-layer source MAC the transport reported (#1198).
     /// Saturates at `u64::MAX`.
     ///
@@ -762,7 +786,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     /// reports a source MAC that long, so a nonzero count with well-formed
     /// traffic points at a custom transport.
     pub fn address_length_drops(&self) -> u64 {
-        self.address_length_drops.load(Ordering::Relaxed)
+        self.counters().address_length_drops
     }
 
     /// Inbound NPDUs dropped since this layer was created because their DNET
@@ -777,7 +801,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     /// this one is well formed, only contradictory, and points at the peer
     /// that sent it.
     pub fn global_broadcast_dadr_drops(&self) -> u64 {
-        self.global_broadcast_dadr_drops.load(Ordering::Relaxed)
+        self.counters().global_broadcast_dadr_drops
     }
 
     /// Inbound NPDUs dropped since this layer was created because they were
@@ -793,7 +817,15 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     /// from the first APDU octet, with no decode; network messages, and an
     /// APDU sent with no DNET, are not affected.
     pub fn broadcast_pdu_type_drops(&self) -> u64 {
-        self.broadcast_pdu_type_drops.load(Ordering::Relaxed)
+        self.counters().broadcast_pdu_type_drops
+    }
+
+    /// What this layer has dropped on receipt since it was created, by
+    /// reason: the totals of the receive rules it shares with the router's
+    /// engine (`bacnet-router-core`'s `node`, #1795). Reading them takes no
+    /// lock.
+    pub fn counters(&self) -> Counters {
+        self.node_totals.load()
     }
 
     /// Encode an APDU into an NPDU whose destination is `dest_network` /
@@ -807,7 +839,6 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         priority: NetworkPriority,
     ) -> Result<BytesMut, Error> {
         let npdu = Npdu {
-            is_network_message: false,
             expecting_reply,
             priority,
             destination: Some(NpduAddress {
@@ -828,12 +859,15 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     ///
     /// After start, aborts and awaits dispatch before stopping the transport;
     /// it does not wait for consumers, even with full APDU/control queues.
+    /// An [`ApduReceiver`] yields what the transport had queued, then `None`.
     /// Queued items remain drainable, retaining their reply senders until
     /// consumed or the receiver is dropped. Stop does not count as an admission
     /// drop or clear depth/high-water/drop totals. See the
     /// [receive-queue contract](self#receive-queue-admission).
     pub async fn stop(&mut self) -> Result<(), Error> {
         self.seal_responses();
+        // The raw receiver drains what the transport queued, then ends.
+        ingress::close_queue(&self.receiver_queue);
         if let Some(task) = self.abort_dispatch_task() {
             let _ = task.await;
         }
@@ -853,13 +887,6 @@ pub(crate) fn next_ingress_sequence(sequence: &AtomicU64) -> u64 {
     previous.saturating_add(1)
 }
 
-/// Count one dropped NPDU in `counter`, saturating at `u64::MAX`. Shared by
-/// [`NetworkLayer`] and the router for each of their drop counters.
-pub(crate) fn count_drop(counter: &AtomicU64) {
-    #[allow(deprecated, reason = "try_update needs Rust 1.95; the MSRV is 1.93")]
-    let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1));
-}
-
 impl<T: TransportPort> NetworkLayer<T> {
     fn abort_dispatch_task(&mut self) -> Option<JoinHandle<()>> {
         let task = self.dispatch_task.take()?;
@@ -871,6 +898,7 @@ impl<T: TransportPort> NetworkLayer<T> {
 impl<T: TransportPort> Drop for NetworkLayer<T> {
     fn drop(&mut self) {
         self.response_scope.seal();
+        ingress::close_queue(&self.receiver_queue);
         let _ = self.abort_dispatch_task();
         self.transport.abort();
     }
@@ -1001,7 +1029,7 @@ mod tests {
             &apdu,
             &dest_vmac,
             false,
-            NetworkPriority::NORMAL,
+            NetworkPriority::Normal,
             &data_attributes,
         )
         .await
@@ -1021,7 +1049,7 @@ mod tests {
         let npdu = decode_npdu(msg.payload).unwrap();
         assert_eq!(npdu.payload, apdu);
         assert!(!npdu.expecting_reply);
-        assert_eq!(npdu.priority, NetworkPriority::NORMAL);
+        assert_eq!(npdu.priority, NetworkPriority::Normal);
 
         net.stop().await.unwrap();
     }
@@ -1048,7 +1076,7 @@ mod tests {
         encode_apdu(&mut apdu_buf, &who_is_apdu).expect("valid APDU encoding");
 
         net_a
-            .send_apdu(&apdu_buf, net_b.local_mac(), false, NetworkPriority::NORMAL)
+            .send_apdu(&apdu_buf, net_b.local_mac(), false, NetworkPriority::Normal)
             .await
             .unwrap();
 

@@ -23,12 +23,7 @@ impl BACnetClient {
 
         let future = async move {
             let mac = peers.parse(&address)?;
-            let c = {
-                let guard = inner.lock().await;
-                Arc::clone(guard.as_ref().ok_or_else(|| {
-                    PyRuntimeError::new_err("client not started — use 'async with'")
-                })?)
-            };
+            let c = started(&inner).await?;
             c.subscribe_cov(
                 &mac,
                 subscriber_process_identifier,
@@ -58,12 +53,7 @@ impl BACnetClient {
 
         let future = async move {
             let mac = peers.parse(&address)?;
-            let c = {
-                let guard = inner.lock().await;
-                Arc::clone(guard.as_ref().ok_or_else(|| {
-                    PyRuntimeError::new_err("client not started — use 'async with'")
-                })?)
-            };
+            let c = started(&inner).await?;
             c.unsubscribe_cov(&mac, subscriber_process_identifier, oid)
                 .await
                 .map_err(to_py_err)?;
@@ -76,11 +66,7 @@ impl BACnetClient {
     fn cov_notifications<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         crate::py_async::future_into_py(py, async move {
-            let guard = inner.lock().await;
-            let c = guard
-                .as_ref()
-                .ok_or_else(|| PyRuntimeError::new_err("client not started — use 'async with'"))?;
-            let rx = c.cov_notifications();
+            let rx = started(&inner).await?.cov_notifications();
             Ok(PyCovNotificationIterator::new(rx))
         })
     }
@@ -106,12 +92,7 @@ impl BACnetClient {
         let oid = object_id.to_rust();
 
         let future = async move {
-            let c = {
-                let guard = inner.lock().await;
-                Arc::clone(guard.as_ref().ok_or_else(|| {
-                    PyRuntimeError::new_err("client not started — use 'async with'")
-                })?)
-            };
+            let c = started(&inner).await?;
             c.who_has(WhoHasObject::Identifier(oid), range)
                 .await
                 .map_err(to_py_err)?;
@@ -134,12 +115,7 @@ impl BACnetClient {
         let inner = self.inner.clone();
 
         let future = async move {
-            let c = {
-                let guard = inner.lock().await;
-                Arc::clone(guard.as_ref().ok_or_else(|| {
-                    PyRuntimeError::new_err("client not started — use 'async with'")
-                })?)
-            };
+            let c = started(&inner).await?;
             c.who_has(WhoHasObject::Name(name), range)
                 .await
                 .map_err(to_py_err)?;
@@ -153,12 +129,7 @@ impl BACnetClient {
         let inner = self.inner.clone();
 
         crate::py_async::future_into_py(py, async move {
-            let c = {
-                let guard = inner.lock().await;
-                Arc::clone(guard.as_ref().ok_or_else(|| {
-                    PyRuntimeError::new_err("client not started — use 'async with'")
-                })?)
-            };
+            let c = started(&inner).await?;
             let devices = c.discovered_devices().await;
             Ok(devices
                 .into_iter()
@@ -172,12 +143,7 @@ impl BACnetClient {
         let inner = self.inner.clone();
 
         crate::py_async::future_into_py(py, async move {
-            let c = {
-                let guard = inner.lock().await;
-                Arc::clone(guard.as_ref().ok_or_else(|| {
-                    PyRuntimeError::new_err("client not started — use 'async with'")
-                })?)
-            };
+            let c = started(&inner).await?;
             Ok(c.get_device(instance)
                 .await
                 .map(PyDiscoveredDevice::from_rust))
@@ -189,12 +155,7 @@ impl BACnetClient {
         let inner = self.inner.clone();
 
         let future = async move {
-            let c = {
-                let guard = inner.lock().await;
-                Arc::clone(guard.as_ref().ok_or_else(|| {
-                    PyRuntimeError::new_err("client not started — use 'async with'")
-                })?)
-            };
+            let c = started(&inner).await?;
             c.clear_devices().await;
             Ok(())
         };
@@ -216,12 +177,7 @@ impl BACnetClient {
 
         crate::py_async::future_into_py(py, async move {
             let peer = parse_bip6_address(&address)?;
-            let c = {
-                let guard = inner.lock().await;
-                Arc::clone(guard.as_ref().ok_or_else(|| {
-                    PyRuntimeError::new_err("client not started — use 'async with'")
-                })?)
-            };
+            let c = started(&inner).await?;
             let AnyTransport::Bip6(transport) = c.transport() else {
                 return Err(PyRuntimeError::new_err(
                     "resolve_vmac needs a client with transport='ipv6'",

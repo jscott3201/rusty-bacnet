@@ -4,11 +4,13 @@ use super::*;
 fn intrinsic_proposals_and_commit_results_survive_wrapping() {
     use bacnet_objects::analog::AnalogInputObject;
     use bacnet_objects::event::{EventTransitionCommit, EventTransitionCommitError};
+    use bacnet_types::enums::EngineeringUnits;
     use bacnet_types::enums::EventState;
     use bacnet_types::primitives::BACnetTimeStamp;
 
     for delay in [0, 1] {
-        let mut input = AnalogInputObject::new(1, "wrapped input", 0).unwrap();
+        let mut input =
+            AnalogInputObject::new(1, "wrapped input", EngineeringUnits::SQUARE_METERS).unwrap();
         input.set_present_value(81.0);
         let mut object: Box<dyn BACnetObject> = Box::new(input);
         for (property, value) in [

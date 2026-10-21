@@ -24,7 +24,7 @@ use bacnet_types::constructed::{
     BACnetLogMultipleRecord, BACnetLogRecord, BACnetRecipient, EventLogDatum,
     EventNotificationRequest, LogData, LogDatum,
 };
-use bacnet_types::enums::{ErrorClass, ErrorCode, NotifyType, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{NotifyType, ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlags, Time};
 use serde::Serialize;
 
@@ -413,21 +413,10 @@ fn log_datum(datum: &LogDatum) -> String {
         LogDatum::Failure {
             error_class,
             error_code,
-        } => format!("failure {}", raw_error(*error_class, *error_code)),
+        } => format!("failure {error_class}/{error_code}"),
         LogDatum::TimeChange(seconds) => time_change(*seconds),
         LogDatum::AnyValue(bytes) => decode_and_format(bytes),
     }
-}
-
-/// An error class and code by name, or by number when one doesn't fit the
-/// enumeration.
-fn raw_error(class: u32, code: u32) -> String {
-    let class = u16::try_from(class).map_or(class.to_string(), |raw| {
-        ErrorClass::from_raw(raw).to_string()
-    });
-    let code =
-        u16::try_from(code).map_or(code.to_string(), |raw| ErrorCode::from_raw(raw).to_string());
-    format!("{class}/{code}")
 }
 
 /// Notify type, event type, event object and transition, then the message.

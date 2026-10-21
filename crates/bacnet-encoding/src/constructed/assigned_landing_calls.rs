@@ -20,7 +20,8 @@ const NAMES: PairNames = PairNames {
     frame: "assigned landing calls landing-calls",
     floor: "landing call floor-number",
     second: "landing call direction",
-    second_oversized: "direction [1] exceeds 32 bits",
+    floor_oversized: "assigned landing calls floor-number [0] exceeds an Unsigned8",
+    second_oversized: "assigned landing calls direction [1] exceeds 32 bits",
 };
 
 /// Encode one `BACnetAssignedLandingCalls` SEQUENCE.
@@ -46,7 +47,7 @@ pub fn encode_assigned_landing_calls(buf: &mut BytesMut, value: &BACnetAssignedL
 /// or more than 10,000 calls) fails with [`Error::Decoding`] or
 /// [`Error::BufferTooShort`], and a well-formed value whose floor-number
 /// exceeds an Unsigned8 or whose direction exceeds 32 bits fails with
-/// [`Error::OutOfRange`] naming the first oversized member. Within 32 bits a
+/// [`Error::Range`] naming the first oversized member. Within 32 bits a
 /// direction is kept as received, reserved and proprietary values included,
 /// for the receiver to judge.
 pub fn decode_assigned_landing_calls(

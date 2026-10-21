@@ -1,5 +1,6 @@
 //! Who-Is a BACnet device, WriteProperty on present-value, verify via read-back
 //! and priority-array slot, relinquish with Null, verify again, exit.
+#![forbid(unsafe_code)]
 
 use std::net::Ipv4Addr;
 use std::process;

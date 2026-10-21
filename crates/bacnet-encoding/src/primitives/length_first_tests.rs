@@ -16,7 +16,7 @@ fn short<T: std::fmt::Debug>(result: Result<T, Error>) -> (usize, usize) {
 /// The message of a decoding error, failing on any other result.
 fn malformed<T: std::fmt::Debug>(result: Result<T, Error>) -> String {
     match result {
-        Err(Error::Decoding { message, .. }) => message,
+        Err(Error::Decoding(error)) => error.message().to_string(),
         other => panic!("expected a decoding error, got {other:?}"),
     }
 }

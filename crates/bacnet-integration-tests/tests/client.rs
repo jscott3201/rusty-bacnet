@@ -6,7 +6,7 @@ use bacnet_objects::analog::AnalogOutputObject;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_server::server::BACnetServer;
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 use std::net::Ipv4Addr;
@@ -16,19 +16,21 @@ use tokio::time::{timeout, Duration};
 async fn cov_subscribe_and_notification() {
     // Set up a server with an AnalogOutput (writable without out-of-service)
     let mut db = ObjectDatabase::new();
-    let ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
+    let ao = AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     db.add(Box::new(ao)).unwrap();
 
     // Add a device object so COV notifications have an initiating-device-identifier
     let dev = DeviceObject::new(DeviceConfig {
-        instance: 1234,
-        name: "Test-Dev".into(),
+        identity: bacnet_objects::DeviceIdentity::new(1234, 0)
+            .expect("valid Device identity")
+            .with_name("Test-Dev"),
         ..DeviceConfig::default()
     })
     .unwrap();
     db.add(Box::new(dev)).unwrap();
 
     let mut server = BACnetServer::bip_builder()
+        .device(bacnet_objects::DeviceIdentity::new(1234, 0).unwrap())
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
         .database(db)

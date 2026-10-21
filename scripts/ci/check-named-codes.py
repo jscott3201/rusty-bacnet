@@ -3,8 +3,8 @@
 
 The macro builds the open wire-code newtypes of the no_std crates:
 `BvlcFunction` and friends in bacnet-bip-codec, `FrameType` in
-bacnet-mstp-codec, and `MessageType` and `RejectReason` in
-bacnet-router-core. None of them depends on another for it, and the macro
+bacnet-mstp-codec, and `NetworkMessageType` and `RejectMessageReason` in
+bacnet-npdu. None of them depends on another for it, and the macro
 is private to each, so each keeps a copy (#1684). This compares the
 `macro_rules! named_codes { ... }` definitions, from that line to its
 closing brace, against the first copy, and prints a diff for each that
@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[2]
 COPIES = [
     "crates/bacnet-bip-codec/src/function.rs",
     "crates/bacnet-mstp-codec/src/frame.rs",
-    "crates/bacnet-router-core/src/message/codes.rs",
+    "crates/bacnet-npdu/src/codes.rs",
 ]
 START = "macro_rules! named_codes {"
 

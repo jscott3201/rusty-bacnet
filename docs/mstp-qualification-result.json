@@ -25,7 +25,7 @@
     "echo_mismatches", "echo_missing", "echo_fragments_dropped", "late_answers_queued",
     "late_answers_dropped",
     "late_answers_expired", "mac.frames_received", "mac.npdus_delivered",
-    "mac.parser_errors", "mac.frame_aborts", "mac.deadline_misses",
+    "mac.parser_errors", "mac.frame_aborts", "mac.late_deadlines", "mac.deadline_lateness",
     "mac.token_rotations", "mac.token_retries", "mac.deferred_starts"
   ],
   "participant_template": {

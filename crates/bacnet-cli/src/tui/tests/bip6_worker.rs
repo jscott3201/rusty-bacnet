@@ -15,9 +15,8 @@ use bacnet_transport::port::TransportPort;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 
-use crate::tui::message::{
-    AddressStyle, Command, DirectedTo, OpOutcome, WhoIsScope, WhoIsSpec, WorkerEvent,
-};
+use crate::core::target::AddressStyle;
+use crate::tui::message::{Command, DirectedTo, OpOutcome, WhoIsScope, WhoIsSpec, WorkerEvent};
 use crate::tui::worker::{session, EventSink, EVENT_CHANNEL_CAPACITY};
 
 /// Long enough for any step here, short of a hang.
@@ -74,6 +73,7 @@ async fn a_directed_bip6_who_is_resolves_beside_the_loop() {
         AddressStyle::Bip6,
         sink,
         command_rx,
+        Default::default(),
     )));
 
     // The status line: the VMAC instance 4321 gives (H.7.2) and where the
@@ -83,6 +83,14 @@ async fn a_directed_bip6_who_is_resolves_beside_the_loop() {
     };
     assert!(local.starts_with("bip6:0x0010E1 ([::1]:"), "{local}");
     assert!(local.ends_with(')'), "{local}");
+    // The write session opens beside the loop; a flags-only one can't arm.
+    assert!(matches!(
+        next_event(&mut events).await,
+        WorkerEvent::Safety(crate::tui::safety::SafetyEvent::Ready {
+            workspace: false,
+            ..
+        })
+    ));
 
     // Nobody answers this lookup, yet Cancel ends it at once, well inside
     // the three seconds the lookup may wait.

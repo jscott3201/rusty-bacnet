@@ -6,6 +6,7 @@ use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+pub mod lab;
 #[cfg(feature = "sc-tls")]
 pub mod sc;
 
@@ -77,21 +78,23 @@ impl Process {
         }
     }
 
-    pub async fn output(mut self) -> Output {
-        bounded(async {
-            loop {
-                if let Some(status) = self.child.try_wait().unwrap() {
-                    return Output {
-                        status,
-                        stdout: fs::read(self.files.0.join("stdout")).unwrap(),
-                        stderr: fs::read(self.files.0.join("stderr")).unwrap(),
-                    };
-                }
-                // Process-exit polling only, never a service-readiness barrier.
-                tokio::time::sleep(Duration::from_millis(5)).await;
+    pub async fn output(self) -> Output {
+        bounded(self.output_unbounded()).await
+    }
+
+    /// [`Self::output`] without its deadline, for a caller that sets its own.
+    pub async fn output_unbounded(mut self) -> Output {
+        loop {
+            if let Some(status) = self.child.try_wait().unwrap() {
+                return Output {
+                    status,
+                    stdout: fs::read(self.files.0.join("stdout")).unwrap(),
+                    stderr: fs::read(self.files.0.join("stderr")).unwrap(),
+                };
             }
-        })
-        .await
+            // Process-exit polling only, never a service-readiness barrier.
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
     }
 }
 

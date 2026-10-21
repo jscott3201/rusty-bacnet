@@ -18,7 +18,7 @@ fn structured<T: std::fmt::Debug>(
             class: c,
             code: k,
             detail,
-        }) if c == class.to_raw() as u32 && k == code.to_raw() as u32 => *detail,
+        }) if c == class && k == code => *detail,
         other => panic!("expected a structured {class:?} / {code:?} error, got {other:?}"),
     }
 }

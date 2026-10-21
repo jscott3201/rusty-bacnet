@@ -197,8 +197,8 @@ mod tests {
     fn assert_error(error: Error, expected: ErrorCode) {
         assert!(
             matches!(error, Error::Protocol { class, code }
-                if class == ErrorClass::PROPERTY.to_raw() as u32
-                    && code == expected.to_raw() as u32),
+                if class == ErrorClass::PROPERTY
+                    && code == expected),
             "expected {expected:?}, got {error:?}"
         );
     }
@@ -229,8 +229,8 @@ mod tests {
         assert!(matches!(
             other.set_audit_log_parent_internal(parent),
             Err(Error::Protocol { class, code })
-                if class == ErrorClass::OBJECT.to_raw() as u32
-                    && code == ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32
+                if class == ErrorClass::OBJECT
+                    && code == ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED
         ));
         assert!(other.audit_log_forwarding_internal().is_none());
     }
@@ -433,8 +433,8 @@ mod tests {
             .unwrap_err();
         assert!(
             matches!(error, Error::Protocol { class, code }
-                if class == ErrorClass::DEVICE.to_raw() as u32
-                    && code == ErrorCode::OPERATIONAL_PROBLEM.to_raw() as u32),
+                if class == ErrorClass::DEVICE
+                    && code == ErrorCode::OPERATIONAL_PROBLEM),
             "expected DEVICE/OPERATIONAL_PROBLEM, got {error:?}"
         );
         assert!(object.log_enable());

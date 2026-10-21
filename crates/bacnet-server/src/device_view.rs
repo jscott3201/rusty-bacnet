@@ -1,5 +1,7 @@
 //! Executor-owned Device reads, independent of mutable object declarations.
 //! This request-scoped adapter never changes the database or service dispatch.
+#[path = "device_view_identity.rs"]
+mod identity;
 use crate::cov::active::LiveDeviceCov;
 use bacnet_objects::{
     audit::{AuditLogForwarding, AuditLogStorage, AuditReporterObject, ObjectAuditPolicy},
@@ -21,8 +23,9 @@ use bacnet_types::{
     error::Error,
     primitives::{ObjectIdentifier, PropertyValue},
 };
+use identity::{identity_property, IdentityView};
 use std::borrow::Cow;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 #[derive(Clone, Copy)]
@@ -60,7 +63,7 @@ impl DeviceExecution {
     }
 }
 
-/// One execution profile and clock observation, shared across a served request.
+/// One execution profile and lazy clock availability, shared across a served request.
 pub(crate) struct DeviceReadContext<'a> {
     pub(crate) registered_port: Option<ObjectIdentifier>,
     /// Result rows a single-property read of a Group's Present_Value may
@@ -69,33 +72,59 @@ pub(crate) struct DeviceReadContext<'a> {
     /// and the endpoint responder sets its configured limit (#1215).
     pub(crate) work_limit: usize,
     execution: DeviceExecution,
-    clock: bool,
+    db: &'a ObjectDatabase,
+    clock: OnceLock<bool>,
     live: Option<&'a LiveDeviceCov>,
+    identity: Option<IdentityView>,
 }
 
 impl<'a> DeviceReadContext<'a> {
     /// A context serving no live COV list; a request that reads one adds its
     /// snapshot with [`with_live`](Self::with_live) once its plan is known.
-    pub(crate) fn new(db: &ObjectDatabase, execution: DeviceExecution) -> Self {
+    pub(crate) fn new(db: &'a ObjectDatabase, execution: DeviceExecution) -> Self {
         Self {
             registered_port: None,
             work_limit: crate::server::ReadPropertyMultipleBudget::default().max_result_elements,
             execution,
-            clock: db.clock_frame().is_some(),
+            db,
+            clock: OnceLock::new(),
             live: None,
+            identity: None,
         }
     }
     /// The same context, serving the selected Device's COV lists from `live`.
     /// A request plans with the context alone, since planning reads no value,
     /// then samples the lists its plan reads and serves them from here (#1213).
-    pub(crate) fn with_live<'b>(self, live: Option<&'b LiveDeviceCov>) -> DeviceReadContext<'b> {
+    pub(crate) fn with_live<'b>(self, live: Option<&'b LiveDeviceCov>) -> DeviceReadContext<'b>
+    where
+        'a: 'b,
+    {
         DeviceReadContext {
             registered_port: self.registered_port,
             work_limit: self.work_limit,
             execution: self.execution,
+            db: self.db,
             clock: self.clock,
             live,
+            identity: self.identity,
         }
+    }
+    /// Only full-server service bits depend on clock availability. Cache both
+    /// answers for this request; Device time values and metadata stay live.
+    fn clock_available(&self) -> bool {
+        matches!(self.execution, DeviceExecution::FullServer)
+            && *self.clock.get_or_init(|| self.db.clock_frame().is_some())
+    }
+    pub(crate) fn with_identity(
+        mut self,
+        identity: Option<&bacnet_objects::DeviceIdentity>,
+    ) -> Self {
+        self.identity = identity.map(IdentityView::from);
+        self
+    }
+    /// The executor's fixed wildcard target, even when its object is absent.
+    pub(crate) fn device_oid(&self) -> Option<ObjectIdentifier> {
+        self.identity.map(|identity| identity.oid)
     }
     pub(crate) fn with_registered_port(mut self, oid: Option<ObjectIdentifier>) -> Self {
         self.registered_port = oid;
@@ -128,10 +157,10 @@ fn owned(property: P) -> bool {
             | P::DEVICE_ADDRESS_BINDING
     )
 }
-/// The five served fields cannot be assigned through a custom Device writer.
+/// Executor-owned fields cannot be assigned through a custom Device writer.
 /// Call only after the existing object/index/value and authorization preflight.
 pub(crate) fn check_executor_owned_write(oid: ObjectIdentifier, property: P) -> Result<(), Error> {
-    if oid.object_type() == ObjectType::DEVICE && owned(property) {
+    if oid.object_type() == ObjectType::DEVICE && (owned(property) || identity_property(property)) {
         Err(property_error(ErrorCode::WRITE_ACCESS_DENIED))
     } else {
         Ok(())
@@ -140,12 +169,21 @@ pub(crate) fn check_executor_owned_write(oid: ObjectIdentifier, property: P) -> 
 
 fn property_error(code: ErrorCode) -> Error {
     Error::Protocol {
-        class: ErrorClass::PROPERTY.to_raw() as u32,
-        code: code.to_raw() as u32,
+        class: ErrorClass::PROPERTY,
+        code,
     }
 }
 
 impl DeviceReadView<'_> {
+    fn identity(&self) -> Option<&IdentityView> {
+        self.context
+            .identity
+            .as_ref()
+            .filter(|identity| identity.oid == self.object.object_identifier())
+    }
+    fn owns(&self, property: P) -> bool {
+        owned(property) || (self.identity().is_some() && identity_property(property))
+    }
     fn is_device(&self) -> bool {
         self.object.object_identifier().object_type() == ObjectType::DEVICE
     }
@@ -162,6 +200,14 @@ impl BACnetObject for DeviceReadView<'_> {
         self.object.object_name()
     }
     fn read_property(&self, property: P, index: Option<u32>) -> Result<PropertyValue, Error> {
+        if let Some(identity) = self.identity().filter(|_| identity_property(property)) {
+            let value = identity.value(property)?;
+            return if index.is_some() {
+                Err(property_error(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY))
+            } else {
+                Ok(value)
+            };
+        }
         if !self.is_device() || !owned(property) {
             return self.object.read_property(property, index);
         }
@@ -201,7 +247,11 @@ impl BACnetObject for DeviceReadView<'_> {
             P::PROTOCOL_SERVICES_SUPPORTED => {
                 // Clause 21 BACnetServicesSupported: 49 defined bits, MSB first.
                 let mut data = vec![0; 7];
-                for service in self.context.execution.services(self.context.clock) {
+                for service in self
+                    .context
+                    .execution
+                    .services(self.context.clock_available())
+                {
                     let bit = usize::from(service.to_raw());
                     data[bit / 8] |= 0x80 >> (bit % 8);
                 }
@@ -266,7 +316,17 @@ impl BACnetObject for DeviceReadView<'_> {
         } else {
             original.into_owned()
         };
-        rows.retain(|row| !owned(row.property_identifier));
+        rows.retain(|row| !self.owns(row.property_identifier));
+        if let Some(identity) = self.identity() {
+            rows.extend(identity.properties().map(|property| {
+                PropertyMetadata::new(
+                    property,
+                    PropertyConformance::RequiredRead,
+                    None,
+                    PropertyWriteCapability::ReadOnly,
+                )
+            }));
+        }
         for property in [
             P::PROTOCOL_SERVICES_SUPPORTED,
             P::PROPERTY_LIST,
@@ -315,7 +375,7 @@ impl BACnetObject for DeviceReadView<'_> {
         )
     }
     fn is_array_property(&self, property: P) -> bool {
-        if self.is_device() && owned(property) {
+        if self.is_device() && self.owns(property) {
             property == P::PROPERTY_LIST
         } else {
             self.object.is_array_property(property)
@@ -325,7 +385,7 @@ impl BACnetObject for DeviceReadView<'_> {
     /// and Device_Address_Binding are BACnetLISTs, Property_List is an array
     /// and the services bit string is a single value.
     fn is_list_property(&self, property: P) -> bool {
-        if self.is_device() && owned(property) {
+        if self.is_device() && self.owns(property) {
             matches!(
                 property,
                 P::ACTIVE_COV_SUBSCRIPTIONS
@@ -337,7 +397,7 @@ impl BACnetObject for DeviceReadView<'_> {
         }
     }
     fn is_writable_property(&self, property: P) -> bool {
-        if self.is_device() && owned(property) {
+        if self.is_device() && self.owns(property) {
             false
         } else {
             self.object.is_writable_property(property)
@@ -441,6 +501,9 @@ impl BACnetObject for DeviceReadView<'_> {
     fn logs_received_event_notifications_internal(&self) -> bool {
         self.object.logs_received_event_notifications_internal()
     }
+    fn log_collecting_internal(&self) -> bool {
+        self.object.log_collecting_internal()
+    }
     fn buffer_ready_report_internal(&self) -> Option<BufferReadyReport> {
         self.object.buffer_ready_report_internal()
     }
@@ -452,3 +515,7 @@ impl BACnetObject for DeviceReadView<'_> {
 #[cfg(test)]
 #[path = "device_view_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "device_view_clock_tests.rs"]
+mod clock_tests;

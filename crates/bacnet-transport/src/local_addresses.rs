@@ -9,60 +9,11 @@
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 
-#[cfg(any(
-    target_os = "linux",
-    target_os = "l4re",
-    target_os = "android",
-    target_os = "emscripten",
-    target_vendor = "apple",
-    target_os = "freebsd",
-    target_os = "dragonfly",
-    target_os = "openbsd",
-    target_os = "netbsd",
-    target_os = "solaris",
-    target_os = "illumos",
-    target_os = "haiku",
-    target_os = "nto",
-    target_os = "hurd",
-    target_os = "fuchsia",
-))]
-mod getifaddrs;
-#[cfg(any(
-    target_os = "linux",
-    target_os = "l4re",
-    target_os = "android",
-    target_os = "emscripten",
-    target_vendor = "apple",
-    target_os = "freebsd",
-    target_os = "dragonfly",
-    target_os = "openbsd",
-    target_os = "netbsd",
-    target_os = "solaris",
-    target_os = "illumos",
-    target_os = "haiku",
-    target_os = "nto",
-    target_os = "hurd",
-    target_os = "fuchsia",
-))]
-pub(crate) use getifaddrs::interface_of;
-#[cfg(any(
-    target_os = "linux",
-    target_os = "l4re",
-    target_os = "android",
-    target_os = "emscripten",
-    target_vendor = "apple",
-    target_os = "freebsd",
-    target_os = "dragonfly",
-    target_os = "openbsd",
-    target_os = "netbsd",
-    target_os = "solaris",
-    target_os = "illumos",
-    target_os = "haiku",
-    target_os = "nto",
-    target_os = "hurd",
-    target_os = "fuchsia",
-))]
-use getifaddrs::reported_ipv4;
+with_getifaddrs! {
+    mod getifaddrs;
+    pub(crate) use getifaddrs::interface_of;
+    use getifaddrs::reported_ipv4;
+}
 
 /// An IPv4 address the OS reports on one of the host's interfaces.
 #[derive(Clone, Copy, Debug)]
@@ -112,7 +63,7 @@ fn reported_ipv4() -> io::Result<Vec<ReportedAddress>> {
     use std::net::IpAddr;
     use windows_sys::Win32::Networking::WinSock::AF_INET;
 
-    Ok(crate::windows_adapters::unicast_addresses(AF_INET)?
+    Ok(crate::sys::win_adapters::unicast_addresses(AF_INET)?
         .into_iter()
         .filter_map(|address| match address.ip {
             IpAddr::V4(ip) => Some(ReportedAddress {
@@ -124,52 +75,18 @@ fn reported_ipv4() -> io::Result<Vec<ReportedAddress>> {
         .collect())
 }
 
-#[cfg(not(any(
-    target_os = "linux",
-    target_os = "l4re",
-    target_os = "android",
-    target_os = "emscripten",
-    target_vendor = "apple",
-    target_os = "freebsd",
-    target_os = "dragonfly",
-    target_os = "openbsd",
-    target_os = "netbsd",
-    target_os = "solaris",
-    target_os = "illumos",
-    target_os = "haiku",
-    target_os = "nto",
-    target_os = "hurd",
-    target_os = "fuchsia",
-    windows,
-)))]
-fn reported_ipv4() -> io::Result<Vec<ReportedAddress>> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "listing local IPv4 addresses is not supported on this OS",
-    ))
-}
+without_interface_list! {
+    fn reported_ipv4() -> io::Result<Vec<ReportedAddress>> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "listing local IPv4 addresses is not supported on this OS",
+        ))
+    }
 
-/// No interface list on this OS.
-#[cfg(not(any(
-    target_os = "linux",
-    target_os = "l4re",
-    target_os = "android",
-    target_os = "emscripten",
-    target_vendor = "apple",
-    target_os = "freebsd",
-    target_os = "dragonfly",
-    target_os = "openbsd",
-    target_os = "netbsd",
-    target_os = "solaris",
-    target_os = "illumos",
-    target_os = "haiku",
-    target_os = "nto",
-    target_os = "hurd",
-    target_os = "fuchsia",
-    windows,
-)))]
-pub(crate) fn interface_of(_ip: Ipv4Addr) -> io::Result<Option<LocalInterface>> {
-    Ok(None)
+    /// No interface list on this OS.
+    pub(crate) fn interface_of(_ip: Ipv4Addr) -> io::Result<Option<LocalInterface>> {
+        Ok(None)
+    }
 }
 
 /// The adapter address that is `ip`, or whose subnet holds it.
@@ -178,7 +95,7 @@ pub(crate) fn interface_of(ip: Ipv4Addr) -> io::Result<Option<LocalInterface>> {
     use std::net::IpAddr;
     use windows_sys::Win32::Networking::WinSock::AF_INET;
 
-    let addresses: Vec<_> = crate::windows_adapters::unicast_addresses(AF_INET)?
+    let addresses: Vec<_> = crate::sys::win_adapters::unicast_addresses(AF_INET)?
         .into_iter()
         .filter_map(|address| match address.ip {
             IpAddr::V4(own) => Some((own, address)),
@@ -189,7 +106,7 @@ pub(crate) fn interface_of(ip: Ipv4Addr) -> io::Result<Option<LocalInterface>> {
         let host_bits = 32u32.checked_sub(u32::from(length))?;
         Some(Ipv4Addr::from(u32::MAX.checked_shl(host_bits).unwrap_or(0)))
     };
-    let on_subnet = |(own, address): &&(Ipv4Addr, crate::windows_adapters::UnicastAddress)| {
+    let on_subnet = |(own, address): &&(Ipv4Addr, crate::sys::win_adapters::UnicastAddress)| {
         netmask(address.prefix_length)
             .is_some_and(|mask| !mask.is_unspecified() && *own & mask == ip & mask)
     };

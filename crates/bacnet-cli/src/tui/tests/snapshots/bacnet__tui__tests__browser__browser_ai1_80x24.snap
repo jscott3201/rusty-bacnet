@@ -1,0 +1,28 @@
+---
+source: crates/bacnet-cli/src/tui/tests/browser.rs
+expression: text
+---
+" 1 [2 Browse] 3 4 7 | BIP 10.0.0.1:47808 | up | READ-ONLY | drop 0       ? help "
+" Device 100   Card    Objects   [Properties]   Tab switches                     "
+"┌ analog-input 1 ──────────────────────────────────────────────────────────────┐"
+"│ Status: [ALM] [FLT] [OOS]                                                    │"
+"│ object-identifier               analog-input 1                               │"
+"│ object-name                     "Zone Temp"                                  │"
+"│ description                     ""                                           │"
+"│ object-type                     analog-input                                 │"
+"│ present-value                   72.5 °F                                      │"
+"│ status-flags                    in-alarm | fault | out-of-service            │"
+"│ event-state                     fault                                        │"
+"│ event-detection-enable          true                                         │"
+"│ out-of-service                  true                                         │"
+"│ units                           degrees-fahrenheit                           │"
+"│ cov-increment                   0                                            │"
+"│ high-limit                      100                                          │"
+"│ low-limit                       0                                            │"
+"│ deadband                        1                                            │"
+"│ limit-enable                    none                                         │"
+"│ event-enable                    none                                         │"
+"│ notify-type                     alarm                                        │"
+"│ notification-class              0                                            │"
+"└──────────────────────────────────────────────────────────────────────────────┘"
+" Enter read  a watch  Tab pane  / filter  r refresh  Esc devices  ? help  q quit"

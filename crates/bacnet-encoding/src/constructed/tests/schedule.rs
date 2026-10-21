@@ -389,7 +389,10 @@ fn weekly_schedule_round_trips_and_rejects_a_wrong_day_count() {
 
     let six = [0x0E, 0x0F].repeat(6);
     let err = decode_weekly_schedule(&six).unwrap_err();
-    assert!(format!("{err}").contains("day 6"), "{err}");
+    assert!(
+        format!("{err}").contains("weekly schedule day[6]: "),
+        "{err}"
+    );
     let mut trailing = [0x0E, 0x0F].repeat(7);
     trailing.extend_from_slice(&[0xAA, 0xBB]);
     let err = decode_weekly_schedule(&trailing).unwrap_err();

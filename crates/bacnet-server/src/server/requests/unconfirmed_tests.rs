@@ -44,6 +44,7 @@ fn config_with_counter(counter: Arc<AtomicUsize>) -> ServerConfig {
 
 fn received() -> bacnet_network::layer::ReceivedApdu {
     bacnet_network::layer::ReceivedApdu {
+        router_response: None,
         direct_response: None,
         apdu: Bytes::new(),
         source_mac: bacnet_types::MacAddr::from_slice(&[1]),

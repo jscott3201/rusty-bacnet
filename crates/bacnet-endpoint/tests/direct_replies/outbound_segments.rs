@@ -9,8 +9,10 @@ async fn outbound_tls_server_reassembles_requests_and_completes_segmented_replie
     let (mut peer, port) = Peer::start(&ca).await;
     let name = "segmented".repeat(40);
     let config = bacnet_server::server::ServerConfig {
-        max_apdu_length: 480,
-        segmentation_supported: Segmentation::BOTH,
+        device: bacnet_objects::DeviceIdentity::default()
+            .with_max_apdu(480)
+            .expect("valid Device APDU")
+            .with_segmentation(Segmentation::BOTH),
         ..Default::default()
     };
     let mut server =

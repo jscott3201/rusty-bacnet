@@ -3,6 +3,7 @@
 use super::*;
 use crate::analog::AnalogValueObject;
 use crate::device::{DeviceConfig, DeviceObject};
+use bacnet_types::enums::EngineeringUnits;
 
 fn device(instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap()
@@ -10,13 +11,16 @@ fn device(instance: u32) -> ObjectIdentifier {
 
 fn database(instances: &[u32]) -> ObjectDatabase {
     let mut db = ObjectDatabase::new();
-    db.add(Box::new(AnalogValueObject::new(1, "AV-1", 62).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+    ))
+    .unwrap();
     for &instance in instances {
         db.add(Box::new(
             DeviceObject::new(DeviceConfig {
-                instance,
-                name: format!("Device-{instance}"),
+                identity: crate::DeviceIdentity::new(instance, 0)
+                    .expect("valid Device identity")
+                    .with_name(format!("Device-{instance}")),
                 ..DeviceConfig::default()
             })
             .unwrap(),

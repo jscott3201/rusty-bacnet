@@ -386,15 +386,24 @@ async fn rejection_deadline_huge_valid_timeout_does_not_overflow() {
     transport.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn rejection_deadline_checks_before_repoll_and_after_slow_completion() {
     use super::rejection::{RejectionBudget, RejectionExpired};
     struct SlowReady(AtomicUsize);
     impl WebSocketPort for SlowReady {
         async fn send(&self, _: &[u8]) -> Result<(), Error> {
             self.0.fetch_add(1, Ordering::SeqCst);
-            // Deliberately block this test-only poll to cross the strict cutoff.
-            std::thread::sleep(Duration::from_millis(30));
+            // Cross the strict cutoff inside this one poll, then complete.
+            // On the paused clock, advance() moves time on its first poll,
+            // before it yields, so the send still finishes without yielding.
+            // The no-op waker drops that yield's deferred wake, which would
+            // otherwise re-poll the next case early. The real clock flaked
+            // here when a runner stall expired the budget before any poll.
+            let advance = std::pin::pin!(tokio::time::advance(Duration::from_millis(30)));
+            let _ = std::future::Future::poll(
+                advance,
+                &mut std::task::Context::from_waker(std::task::Waker::noop()),
+            );
             Ok(())
         }
         async fn recv(&self) -> Result<Vec<u8>, Error> {

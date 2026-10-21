@@ -1,7 +1,7 @@
 use super::*;
 use crate::property_metadata::PropertyWriteCapability;
 use crate::traits::BACnetObject;
-use bacnet_types::enums::{ErrorClass, ErrorCode, Reliability};
+use bacnet_types::enums::{EngineeringUnits, ErrorClass, ErrorCode, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
 use std::collections::HashSet;
@@ -9,8 +9,8 @@ use std::collections::HashSet;
 fn assert_error(error: Error, expected: ErrorCode) {
     assert!(
         matches!(error, Error::Protocol { class, code }
-            if class == ErrorClass::PROPERTY.to_raw() as u32
-                && code == expected.to_raw() as u32),
+            if class == ErrorClass::PROPERTY
+                && code == expected),
         "expected {expected:?}, got {error:?}"
     );
 }
@@ -69,7 +69,7 @@ const READ_ONLY: [P; 8] = [
 
 #[test]
 fn property_metadata_pulse_converter_exact_sets_readable_rows_and_indexed_list() {
-    let object = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+    let object = PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let metadata = object.property_metadata();
     assert!(matches!(metadata, Cow::Borrowed(_)));
     assert_eq!(metadata.len(), ALL.len() + 1);
@@ -170,7 +170,8 @@ fn property_metadata_pulse_converter_write_capabilities_match_dispatch() {
         P::COV_INCREMENT,
     ];
     for out_of_service in [false, true] {
-        let mut object = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+        let mut object =
+            PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
         object
             .write_property(
                 P::OUT_OF_SERVICE,
@@ -228,7 +229,8 @@ fn property_metadata_pulse_converter_reliability_oos_gate_pins() {
     // Reliability can report the Input_Reference CONFIGURATION_ERROR, so it
     // takes a client's value out of service (Clause 12.23.10, #1341). In
     // service the write is denied before the value is judged.
-    let mut object = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+    let mut object =
+        PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let over_range = PropertyValue::Enumerated(Reliability::OVER_RANGE.to_raw());
     for value in [
         over_range.clone(),
@@ -286,7 +288,8 @@ fn property_metadata_pulse_converter_present_value_oos_gate_pins() {
     // In-service writes are denied before value validation (D5): even a
     // mistyped or non-finite value reports WRITE_ACCESS_DENIED, not a
     // datatype or range error, and the stored value is untouched.
-    let mut object = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+    let mut object =
+        PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     assert!(object.is_writable_property(P::PRESENT_VALUE));
     for value in [
         PropertyValue::Real(12.5),
@@ -342,7 +345,8 @@ fn property_metadata_pulse_converter_present_value_oos_gate_pins() {
 #[test]
 fn property_metadata_pulse_converter_writes_store_verbatim_with_range_gates() {
     for out_of_service in [false, true] {
-        let mut object = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+        let mut object =
+            PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
         object
             .write_property(
                 P::OUT_OF_SERVICE,
@@ -452,7 +456,8 @@ fn property_metadata_pulse_converter_writes_store_verbatim_with_range_gates() {
 fn property_metadata_pulse_converter_unserved_rows_stay_unknown() {
     // Optional Table 12-27 rows the object does not implement, plus a row
     // from the Accumulator's table that Table 12-27 does not define.
-    let mut object = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+    let mut object =
+        PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     for p in [
         P::NOTIFICATION_CLASS,
         P::HIGH_LIMIT,

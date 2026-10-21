@@ -22,11 +22,11 @@
 //!
 //! # Bounds and evidence level
 //!
-//! - `SessionConfig` keeps its 480 APDU default, which fits the 501
-//!   frame-data cap. A composed identity may advertise no more than the
-//!   transport carries: 480 with standard frames, the default, and 1476
-//!   with [`MstpEndpointBuilder::extended_frames`]; a larger one is
-//!   rejected at build time.
+//! - An identity-free `SessionConfig` keeps its 480 APDU default. At start,
+//!   a composed identity's requested ceiling resolves against the stable
+//!   local receive capacity: 480 with standard frames, the default, or 1476
+//!   with [`MstpEndpointBuilder::extended_frames`]. An omitted database
+//!   generates a Device after resolution; a supplied Device must match.
 //! - No router capability (RB-25 owns routing): non-routing endpoint
 //!   behavior, the network layer discarding DNET-addressed traffic.
 //! - **Simulator evidence only**: proofs run over [`LoopbackSerial`] with a
@@ -151,7 +151,7 @@ impl<S: SerialPort> MstpEndpointBuilder<S> {
     /// Clause 9.3 leaves them optional for a device. With them on, the
     /// transport carries APDUs of 1476 octets instead of 480, so the
     /// composed identity may advertise a Max_APDU_Length_Accepted of up to
-    /// 1476 ([`build_session`](Self::build_session) checks it), and the
+    /// 1476 (startup resolves the requested ceiling), and the
     /// link's other nodes must take extended frames too: one without them
     /// counts a frame of over 501 octets as invalid. See
     /// [`MstpConfig::extended_frames`].
@@ -241,7 +241,7 @@ impl<S: SerialPort> MstpEndpointBuilder<S> {
     /// Attaches the object database for the server responder.
     ///
     /// Build it from the same identity passed to
-    /// [`identity`](Self::identity) so Device readback agrees with I-Am.
+    /// [`device`](Self::device) so Device readback agrees with I-Am.
     pub fn database(mut self, db: ObjectDatabase) -> Self {
         self.database = Some(db);
         self
@@ -249,13 +249,12 @@ impl<S: SerialPort> MstpEndpointBuilder<S> {
 
     /// Composes the single Device identity.
     ///
-    /// Truth direction (mirror [`BipEndpointBuilder`](crate::bip::BipEndpointBuilder)):
-    /// the database should already be built from the same identity; this
-    /// only wires I-Am + role limits. The identity max-APDU must fit what
-    /// the transport carries, 480, or 1476 with
-    /// [`extended_frames`](Self::extended_frames) (checked at
-    /// [`build_session`](Self::build_session)).
-    pub fn identity(mut self, identity: crate::identity::DeviceIdentity) -> Self {
+    /// At start, its requested ceiling resolves against the transport's
+    /// stable receive capacity: 480, or 1476 with
+    /// [`extended_frames`](Self::extended_frames). With no database, the
+    /// resolved identity generates a Device. A supplied database is preserved
+    /// and its selected Device must match the resolved identity.
+    pub fn device(mut self, identity: crate::identity::DeviceIdentity) -> Self {
         self.identity = Some(identity);
         self
     }
@@ -308,42 +307,30 @@ impl<S: SerialPort> MstpEndpointBuilder<S> {
 
     /// Builds an unstarted session (caller drives `start()`/`stop()` once).
     ///
+    /// The transport's counters stay reachable through
+    /// [`EndpointSession::mstp_diagnostics`].
+    ///
     /// One-link proof: this builds exactly one [`MstpTransport`] (one serial
     /// owner after `start()`); no second serial owner or duplicated MAC state
-    /// machine is created here or in [`EndpointSession`]. The composed
-    /// identity must fit the transport's APDU bound, 480, or 1476 with
-    /// [`extended_frames`](Self::extended_frames); the standalone
-    /// [`SessionConfig`] 480 default is kept untouched otherwise.
+    /// machine is created here or in [`EndpointSession`]. At start, a composed
+    /// identity resolves against the transport's receive capacity before
+    /// generating or validating its Device. An identity-free session keeps
+    /// the [`SessionConfig`] 480 default.
     pub fn build_session(mut self) -> Result<EndpointSession<MstpTransport<S>>, Error> {
         self.validate_only()?;
-        if let Some(identity) = self.identity.as_ref() {
-            // Respect the APDU bound the transport declares
-            // (`local_receive_apdu_capacity`): never compose an identity that
-            // invites responses the link can't carry.
-            let bound = self.config().max_apdu_length();
-            if identity.max_apdu_length() > bound {
-                let frames = if self.extended_frames {
-                    "extended"
-                } else {
-                    "standard"
-                };
-                return Err(Error::Encoding(format!(
-                    "MS/TP endpoint: identity max-APDU {} exceeds MS/TP transport bound {bound} ({frames} frames)",
-                    identity.max_apdu_length()
-                )));
-            }
-        }
         let role = self.role;
         let session = self.session.clone();
         let database = self.database.take();
         let identity = self.identity.take();
         let transport = self.build_transport()?;
+        let diagnostics = transport.diagnostics();
         let mut endpoint = EndpointSession::new(transport, role, session)?;
+        endpoint.mstp_diagnostics = Some(diagnostics);
         if let Some(db) = database {
             endpoint = endpoint.with_database(db);
         }
         if let Some(id) = identity {
-            endpoint = endpoint.with_identity(id);
+            endpoint = endpoint.device(id);
         }
         Ok(endpoint)
     }

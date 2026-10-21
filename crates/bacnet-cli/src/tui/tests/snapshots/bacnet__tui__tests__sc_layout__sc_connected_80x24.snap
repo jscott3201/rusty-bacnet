@@ -1,0 +1,28 @@
+---
+source: crates/bacnet-cli/src/tui/tests/sc_layout.rs
+expression: text
+---
+" 1 2 3 4 [5 SC] 7 | SC | up | hub primary | READ-ONLY | COV 0 | drop 0   ? help "
+"┌ Hub connector ──────────────────────────────┐┌ VMAC and UUID ────────────────┐"
+"│State      connected, primary hub            ││Local VMAC  22:10:20:30:40:50  │"
+"│Hub        wss://hub.site.example:443/bacnet ││Device UUID 6f1c2a9e-4407-4b3d-│"
+"│Reconnect  none since the last connect       ││            9a51-0e7c8821d40b  │"
+"│Heartbeat  heard 6 s ago, round trip 12 ms   ││Hub VMAC    10:10:10:10:10:10  │"
+"│Failover   wss://hub2.site.example:443/bacnet││Dup. VMAC   no NAK seen        │"
+"└─────────────────────────────────────────────┘└───────────────────────────────┘"
+"┌ [Hub certificates] Doctor My credentials | no failure recorded ──────────────┐"
+"│As the connected hub presented them, leaf first. Display only: TLS verified   │"
+"│the chain.                                                                    │"
+"│0 leaf    subject CN=primary hub                                              │"
+"│          issued by CN=site CA                                                │"
+"│          expires 2031-01-01T00:00:00Z (Unix 1924992000)                      │"
+"│          signed with ecdsa-with-SHA256                                       │"
+"│1 issuer  subject CN=site CA                                                  │"
+"│          issued by CN=site CA                                                │"
+"│          expires 2041-01-01T00:00:00Z (Unix 2240524800)                      │"
+"│          signed with ecdsa-with-SHA256                                       │"
+"└──────────────────────────────────────────────────────────────────────────────┘"
+"┌ Events ──────────────────────────────────────────────────────────────────────┐"
+"│   3s ago info  connected to the primary hub (hub VMAC 10:10:10:10:10:10)     │"
+"└──────────────────────────────────────────────────────────────────────────────┘"
+" Tab certificates/doctor/credentials  x disconnect  Esc back  ? help  q quit    "

@@ -7,7 +7,7 @@ use bacnet_objects::analog::AnalogOutputObject;
 use bacnet_objects::clock::{ClockFrame, ClockReader};
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_services::cov_multiple::{COVNotificationItem, COVNotificationValue};
-use bacnet_types::enums::ObjectType;
+use bacnet_types::enums::{EngineeringUnits, ObjectType};
 use bacnet_types::primitives::{Date, Time};
 use bytes::Bytes;
 use std::sync::Arc as StdArc;
@@ -250,15 +250,18 @@ async fn cov_property_multiple_subscription_uses_multiple_notification_on_change
 
     let mut db = ObjectDatabase::new();
     let mut device = DeviceObject::new(DeviceConfig {
-        instance: 1234,
-        name: "COV-Multiple-Test".into(),
+        identity: bacnet_objects::DeviceIdentity::new(1234, 0)
+            .expect("valid Device identity")
+            .with_name("COV-Multiple-Test"),
         ..DeviceConfig::default()
     })
     .unwrap();
     device.set_object_list(vec![device_oid, ao_oid]);
     db.add(Box::new(device)).unwrap();
-    db.add(Box::new(AnalogOutputObject::new(1, "AO-1", 62).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+    ))
+    .unwrap();
 
     let db = Arc::new(RwLock::new(db));
     let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::new()));
@@ -363,15 +366,18 @@ async fn capture_timestamped_cov_multiple(
         db.set_clock_reader(Some(StdArc::new(FixedClock(frame))));
     }
     let mut device = DeviceObject::new(DeviceConfig {
-        instance: 1234,
-        name: "Timestamped-COV-Multiple-Test".into(),
+        identity: bacnet_objects::DeviceIdentity::new(1234, 0)
+            .expect("valid Device identity")
+            .with_name("Timestamped-COV-Multiple-Test"),
         ..DeviceConfig::default()
     })
     .unwrap();
     device.set_object_list(vec![device_oid, ao_oid]);
     db.add(Box::new(device)).unwrap();
-    db.add(Box::new(AnalogOutputObject::new(1, "AO-1", 62).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+    ))
+    .unwrap();
 
     let db = Arc::new(RwLock::new(db));
     let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::new()));
@@ -492,15 +498,18 @@ async fn confirmed_cov_single_and_multiple_retries_retain_their_leases() {
 
     let mut db = clocked_test_database();
     let mut device = DeviceObject::new(DeviceConfig {
-        instance: 1234,
-        name: "Confirmed-COV-Retry-Test".into(),
+        identity: bacnet_objects::DeviceIdentity::new(1234, 0)
+            .expect("valid Device identity")
+            .with_name("Confirmed-COV-Retry-Test"),
         ..DeviceConfig::default()
     })
     .unwrap();
     device.set_object_list(vec![device_oid, ao_oid]);
     db.add(Box::new(device)).unwrap();
-    db.add(Box::new(AnalogOutputObject::new(1, "AO-1", 62).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+    ))
+    .unwrap();
 
     let db = Arc::new(RwLock::new(db));
     let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::new()));
@@ -534,8 +543,10 @@ async fn confirmed_cov_single_and_multiple_retries_retain_their_leases() {
         }
     }
     let config = Arc::new(ServerConfig {
+        device: bacnet_objects::DeviceIdentity::default()
+            .with_max_apdu(1474)
+            .expect("valid Device APDU"),
         cov_retry_timeout_ms: 100,
-        max_apdu_length: 1474,
         ..ServerConfig::default()
     });
 

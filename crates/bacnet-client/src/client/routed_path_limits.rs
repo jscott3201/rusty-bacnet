@@ -2,9 +2,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex, MutexGuard as StdMutexGuard};
 use std::time::{Duration, Instant as StdInstant};
 
-use bacnet_encoding::npdu::decode_reject_message_to_network;
 use bacnet_network::layer::ReceivedNetworkControl;
-use bacnet_types::enums::{NetworkMessageType, RejectMessageReason};
+use bacnet_npdu::{NetworkMessageType, RejectMessageReason, RejectMessageToNetwork};
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 use tokio::time::Instant as TokioInstant;
 
@@ -17,12 +16,12 @@ const CONSERVATIVE_ROUTED_PATH_MAX_NPDU: u16 = 228;
 pub(super) const MAX_ROUTED_PATH_ENTRIES: usize = 256;
 
 /// Whether a router MAC or forwarded source MAC fits a routed path: 1 to
-/// [`NpduAddress::MAX_MAC_LEN`] octets. The NPDU codec carries no longer SADR
+/// [`MAX_MAC_LEN`](bacnet_npdu::MAX_MAC_LEN) octets. The NPDU codec carries no longer SADR
 /// or DADR (#1141), and the network layer drops a frame from a longer
 /// link-layer source (#1198), so a longer MAC could never complete a routed
 /// request (#1267).
 fn routed_mac_fits(length: usize) -> bool {
-    (1..=NpduAddress::MAX_MAC_LEN).contains(&length)
+    (1..=bacnet_npdu::MAX_MAC_LEN).contains(&length)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -142,7 +141,7 @@ impl RoutedPathLimits {
         if !routed_mac_fits(router_mac.len()) {
             return Err(Error::Encoding(format!(
                 "immediate router MAC address must contain 1..={} octets",
-                NpduAddress::MAX_MAC_LEN
+                bacnet_npdu::MAX_MAC_LEN
             )));
         }
         let key = RoutedPathKey::new(router_mac, dnet);
@@ -319,27 +318,28 @@ impl RoutedPathLimits {
         tsm: &Arc<Mutex<Tsm>>,
         control: ReceivedNetworkControl,
     ) {
-        if control.npdu.message_type != Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK.to_raw())
-        {
+        if control.npdu.message_type != Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK) {
             return;
         }
-        let Ok(reject) = decode_reject_message_to_network(&control.npdu.payload) else {
+        let Ok(reject) = RejectMessageToNetwork::decode(&control.npdu.payload) else {
             return;
         };
         if reject.reason != RejectMessageReason::MESSAGE_TOO_LONG {
             return;
         }
 
-        let Some(active) =
-            self.claim_active(&control.source_mac, reject.dnet, control.ingress_sequence)
-        else {
+        let Some(active) = self.claim_active(
+            &control.source_mac,
+            reject.network,
+            control.ingress_sequence,
+        ) else {
             return;
         };
         let outcome = tsm.lock().await.complete_network_path_too_long_for_owner(
             &active.tsm_mac,
             active.invoke_id,
             &active.owner,
-            reject.dnet,
+            reject.network,
         );
         if outcome == CompletionOutcome::Delivered {
             self.commit_learned_limit(active);
@@ -507,11 +507,11 @@ pub(super) fn forwarded_npci_len(
     if !routed_mac_fits(local_source_mac_len) {
         return Err(Error::Encoding(format!(
             "local source MAC address for routed forwarding must contain 1..={} octets",
-            NpduAddress::MAX_MAC_LEN
+            bacnet_npdu::MAX_MAC_LEN
         )));
     }
     Ok(u16::try_from(9 + dadr_len + local_source_mac_len)
-        .expect("two addresses within NpduAddress::MAX_MAC_LEN fit a u16"))
+        .expect("two addresses within bacnet_npdu::MAX_MAC_LEN fit a u16"))
 }
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
@@ -520,7 +520,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// The update waits for any request already active on the same path. It
     /// replaces the previous configured value and deliberately clears learned
     /// reason-4 evidence for that path. A router MAC outside 1 to
-    /// [`NpduAddress::MAX_MAC_LEN`] octets or a DNET outside 1..=65534 is
+    /// [`MAX_MAC_LEN`](bacnet_npdu::MAX_MAC_LEN) octets or a DNET outside 1..=65534 is
     /// refused with [`Error::Encoding`].
     pub async fn configure_routed_path_max_npdu(
         &self,
@@ -561,14 +561,14 @@ pub(super) fn check_remote_dnet(dnet: u16) -> Result<(), Error> {
     Ok(())
 }
 
-/// A DADR that names one station: 1 to [`NpduAddress::MAX_MAC_LEN`] octets.
+/// A DADR that names one station: 1 to [`MAX_MAC_LEN`](bacnet_npdu::MAX_MAC_LEN) octets.
 /// With no DADR the router on DNET broadcasts the NPDU, and a broadcast
 /// network address carries only unconfirmed requests (Clause 6.3).
 fn check_routed_dadr(dadr_len: usize) -> Result<(), Error> {
     if !routed_mac_fits(dadr_len) {
         return Err(Error::Encoding(format!(
             "routed destination MAC address must contain 1..={} octets",
-            NpduAddress::MAX_MAC_LEN
+            bacnet_npdu::MAX_MAC_LEN
         )));
     }
     Ok(())

@@ -1,0 +1,28 @@
+---
+source: crates/bacnet-cli/src/tui/tests/watch_rows.rs
+expression: text
+---
+" 1 2 [3 Watch] 4 7 | BIP 10.0.0.1:47808 | up | READ-ONLY | drop 0        ? help "
+"┌ Watch (4) | COV 0 | requests 0.0/s ──────────────────────────────────────────┐"
+"│Device Object               Name    Value            Flags Source Age Trend   │"
+"│2:2001 analog-input 1       Discha… 77.5 °F                polled 0s  ▁▂▃▄▅▆▇█│"
+"│1001   binary-output 1      Supply… active (Running)       COV    0s  ▄       │"
+"│1001   multi-state-output 1 Fan Sp… 2 (Medium)             COV    0s  ▄       │"
+"│1002   analog-value 7               41.25 %                COV    0s  ▄       │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│ polled: routed device · analog-input 1, Discharge Air Temperature North Wing │"
+"└──────────────────────────────────────────────────────────────────────────────┘"
+" Watching analog-value 7 on device 1002. Press 3 for …  Esc back  ? help  q quit"

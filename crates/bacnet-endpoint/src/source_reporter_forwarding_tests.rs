@@ -43,8 +43,8 @@ fn read(object: &dyn BACnetObject, property: PropertyIdentifier) -> PropertyValu
 
 fn denied(result: Result<(), Error>) {
     assert!(matches!(result, Err(Error::Protocol { class, code })
-        if class == ErrorClass::PROPERTY.to_raw() as u32
-            && code == ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32));
+        if class == ErrorClass::PROPERTY
+            && code == ErrorCode::WRITE_ACCESS_DENIED));
 }
 
 #[tokio::test]

@@ -3,7 +3,8 @@
 //!
 //! Sorting and filtering live in the model. [`DeviceTable::settle`] rebuilds
 //! the visible order only when something changed, and the view renders only
-//! the rows that fit on screen.
+//! the rows that fit on screen. The filter and the Name sort use the names
+//! already in the session's cache (#1929), and never ask for one.
 
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -11,6 +12,7 @@ use std::time::Instant;
 
 use bacnet_types::enums::Segmentation;
 
+use super::names::{device_object, NameCache};
 use crate::tui::message::DeviceRow;
 
 /// Columns the table can sort by, in the order `s` cycles through them.
@@ -26,6 +28,8 @@ pub(crate) enum SortKey {
     Vendor,
     /// Most recently seen first.
     LastSeen,
+    /// The device's name, those not known yet last either way (#1929).
+    Name,
 }
 
 impl SortKey {
@@ -35,7 +39,8 @@ impl SortKey {
             Self::Address => Self::Network,
             Self::Network => Self::Vendor,
             Self::Vendor => Self::LastSeen,
-            Self::LastSeen => Self::Instance,
+            Self::LastSeen => Self::Name,
+            Self::Name => Self::Instance,
         }
     }
 
@@ -43,6 +48,7 @@ impl SortKey {
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Instance => "instance",
+            Self::Name => "name",
             Self::Address => "address",
             Self::Network => "network",
             Self::Vendor => "vendor",
@@ -82,6 +88,12 @@ pub(crate) struct DeviceTable {
     pub(crate) offset: Cell<usize>,
     /// Rows that fit on screen in the last frame; PgUp and PgDn move this far.
     pub(crate) page: Cell<usize>,
+    /// The last frame drew the table with its Name column, so the names
+    /// of the rows it showed are asked for (#1896).
+    pub(crate) named: Cell<bool>,
+    /// The name cache's [`device_changes`](NameCache::device_changes) when the visible
+    /// order was built.
+    names_seen: u64,
 }
 
 impl Default for DeviceTable {
@@ -97,6 +109,8 @@ impl Default for DeviceTable {
             stale: false,
             offset: Cell::new(0),
             page: Cell::new(10),
+            named: Cell::new(false),
+            names_seen: 0,
         }
     }
 }
@@ -109,6 +123,7 @@ impl DeviceTable {
             Some(old) => {
                 self.sort == SortKey::LastSeen
                     || old.address != row.address
+                    || old.via != row.via
                     || old.network != row.network
                     || old.vendor_id != row.vendor_id
             }
@@ -142,9 +157,13 @@ impl DeviceTable {
     }
 
     /// Row for an instance.
-    #[cfg(test)]
     pub(crate) fn get(&self, instance: u32) -> Option<&DeviceRow> {
         self.rows.get(&instance)
+    }
+
+    /// Every row, filtered or not, in no order.
+    pub(crate) fn rows(&self) -> impl Iterator<Item = &DeviceRow> + '_ {
+        self.rows.values()
     }
 
     /// Current sort column and direction.
@@ -190,33 +209,46 @@ impl DeviceTable {
         }
     }
 
-    /// Rebuild the visible order if rows, sort or filter changed.
-    pub(crate) fn settle(&mut self) {
-        if !self.stale {
+    /// Rebuild the visible order if rows, sort or filter changed, or a
+    /// name did while the filter or the sort uses names.
+    pub(crate) fn settle(&mut self, names: &NameCache) {
+        let by_name = !self.filter.is_empty() || self.sort == SortKey::Name;
+        if !self.stale && !(by_name && names.device_changes() != self.names_seen) {
             return;
         }
         self.stale = false;
+        self.names_seen = names.device_changes();
         let needle = self.filter.to_lowercase();
-        let mut visible: Vec<&DeviceRow> = self
+        let name = |row: &DeviceRow| {
+            let object = device_object(row.instance)?;
+            let name = names.known(row.instance, &row.address, object)?;
+            Some(name.to_lowercase())
+        };
+        let mut visible: Vec<(&DeviceRow, Option<String>)> = self
             .rows
             .values()
-            .filter(|row| needle.is_empty() || matches(row, &needle))
+            .map(|row| (row, if by_name { name(row) } else { None }))
+            .filter(|(row, name)| needle.is_empty() || matches(row, name.as_deref(), &needle))
             .collect();
-        let key = self.sort;
-        visible.sort_by(|a, b| {
+        let (key, descending) = (self.sort, self.descending);
+        let direct = |order: std::cmp::Ordering| if descending { order.reverse() } else { order };
+        visible.sort_by(|(a, a_name), (b, b_name)| {
             let order = match key {
                 SortKey::Instance => a.instance.cmp(&b.instance),
+                // Names not known yet go last, whichever the direction.
+                SortKey::Name => match (a_name, b_name) {
+                    (Some(_), None) => return std::cmp::Ordering::Less,
+                    (None, Some(_)) => return std::cmp::Ordering::Greater,
+                    _ => a_name.cmp(b_name),
+                },
                 SortKey::Address => a.address.cmp(&b.address),
                 SortKey::Network => a.network.cmp(&b.network),
                 SortKey::Vendor => a.vendor_id.cmp(&b.vendor_id),
                 SortKey::LastSeen => b.last_seen.cmp(&a.last_seen),
             };
-            order.then(a.instance.cmp(&b.instance))
+            direct(order.then(a.instance.cmp(&b.instance)))
         });
-        if self.descending {
-            visible.reverse();
-        }
-        self.visible = visible.into_iter().map(|r| r.instance).collect();
+        self.visible = visible.into_iter().map(|(r, _)| r.instance).collect();
         self.fix_selection();
     }
 
@@ -231,7 +263,6 @@ impl DeviceTable {
     }
 
     /// Visible rows in display order. Call [`settle`](Self::settle) first.
-    #[cfg(test)]
     pub(crate) fn visible(&self) -> impl Iterator<Item = &DeviceRow> + '_ {
         self.visible.iter().filter_map(|i| self.rows.get(i))
     }
@@ -254,14 +285,19 @@ impl DeviceTable {
             .filter_map(|i| self.rows.get(i))
     }
 
+    /// The selected row. Call [`settle`](Self::settle) first.
+    pub(crate) fn selected_row(&self) -> Option<&DeviceRow> {
+        self.rows.get(&self.selected?)
+    }
+
     /// Index of the selected row among the visible rows.
     pub(crate) fn selected_index(&self) -> Option<usize> {
         self.selected_index
     }
 
     /// Move the selection.
-    pub(crate) fn move_selection(&mut self, movement: Movement) {
-        self.settle();
+    pub(crate) fn move_selection(&mut self, movement: Movement, names: &NameCache) {
+        self.settle(names);
         let Some(last) = self.visible.len().checked_sub(1) else {
             return;
         };
@@ -280,10 +316,16 @@ impl DeviceTable {
     }
 }
 
-/// Case-insensitive substring match on the text columns. `needle` is lowercase.
-fn matches(row: &DeviceRow, needle: &str) -> bool {
-    row.instance.to_string().contains(needle)
+/// Case-insensitive substring match on the text columns and the cached
+/// name (lowercase, like `needle`).
+fn matches(row: &DeviceRow, name: Option<&str>, needle: &str) -> bool {
+    name.is_some_and(|name| name.contains(needle))
+        || row.instance.to_string().contains(needle)
         || row.address.to_lowercase().contains(needle)
+        || row
+            .via
+            .as_ref()
+            .is_some_and(|via| via.to_lowercase().contains(needle))
         || row.network.is_some_and(|n| n.to_string().contains(needle))
         || row.vendor_id.to_string().contains(needle)
 }
@@ -377,7 +419,7 @@ impl Duplicates {
             return false;
         }
         let claims = self.by_instance.entry(instance).or_default();
-        let added = claims.add(&retained.address) | claims.add(&incoming.address);
+        let added = claims.add(&retained.located()) | claims.add(&incoming.located());
         if added {
             self.rebuild_banner();
         }
@@ -436,6 +478,7 @@ mod tests {
         DeviceRow {
             instance,
             address: address.into(),
+            via: None,
             network: None,
             vendor_id: 1,
             max_apdu: 1476,

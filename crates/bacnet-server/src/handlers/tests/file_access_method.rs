@@ -23,7 +23,7 @@ use bacnet_services::file::{
     AtomicReadFileAck, AtomicReadFileRequest, AtomicWriteFileAck, AtomicWriteFileRequest,
     FileAccessMethod, FileReadAckMethod, FileWriteAccessMethod,
 };
-use bacnet_types::enums::FileAccessMethod as ObjectFileAccessMethod;
+use bacnet_types::enums::{EngineeringUnits, FileAccessMethod as ObjectFileAccessMethod};
 
 pub(super) const SENTINEL: &[u8] = &[0xDE, 0xAD, 0xBE, 0xEF];
 
@@ -79,14 +79,10 @@ fn write_wire(access: FileWriteAccessMethod) -> Vec<u8> {
 pub(super) fn assert_invalid_access(result: Result<(), Error>, context: &str) {
     match result.expect_err(&format!("{context}: request must be refused")) {
         Error::Protocol { class, code } => {
-            assert_eq!(
-                class,
-                ErrorClass::SERVICES.to_raw() as u32,
-                "{context}: wrong error class"
-            );
+            assert_eq!(class, ErrorClass::SERVICES, "{context}: wrong error class");
             assert_eq!(
                 code,
-                ErrorCode::INVALID_FILE_ACCESS_METHOD.to_raw() as u32,
+                ErrorCode::INVALID_FILE_ACCESS_METHOD,
                 "{context}: wrong error code"
             );
         }
@@ -97,14 +93,10 @@ pub(super) fn assert_invalid_access(result: Result<(), Error>, context: &str) {
 pub(super) fn assert_file_access_denied(result: Result<(), Error>, context: &str) {
     match result.expect_err(&format!("{context}: request must be refused")) {
         Error::Protocol { class, code } => {
-            assert_eq!(
-                class,
-                ErrorClass::SERVICES.to_raw() as u32,
-                "{context}: wrong error class"
-            );
+            assert_eq!(class, ErrorClass::SERVICES, "{context}: wrong error class");
             assert_eq!(
                 code,
-                ErrorCode::FILE_ACCESS_DENIED.to_raw() as u32,
+                ErrorCode::FILE_ACCESS_DENIED,
                 "{context}: wrong error code"
             );
         }
@@ -115,14 +107,10 @@ pub(super) fn assert_file_access_denied(result: Result<(), Error>, context: &str
 fn assert_inconsistent_object_type(result: Result<(), Error>, context: &str) {
     match result.expect_err(&format!("{context}: request must be refused")) {
         Error::Protocol { class, code } => {
-            assert_eq!(
-                class,
-                ErrorClass::SERVICES.to_raw() as u32,
-                "{context}: wrong error class"
-            );
+            assert_eq!(class, ErrorClass::SERVICES, "{context}: wrong error class");
             assert_eq!(
                 code,
-                ErrorCode::INCONSISTENT_OBJECT_TYPE.to_raw() as u32,
+                ErrorCode::INCONSISTENT_OBJECT_TYPE,
                 "{context}: wrong error code"
             );
         }
@@ -133,14 +121,10 @@ fn assert_inconsistent_object_type(result: Result<(), Error>, context: &str) {
 fn assert_unknown_object(result: Result<(), Error>, context: &str) {
     match result.expect_err(&format!("{context}: request must be refused")) {
         Error::Protocol { class, code } => {
-            assert_eq!(
-                class,
-                ErrorClass::OBJECT.to_raw() as u32,
-                "{context}: wrong error class"
-            );
+            assert_eq!(class, ErrorClass::OBJECT, "{context}: wrong error class");
             assert_eq!(
                 code,
-                ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
+                ErrorCode::UNKNOWN_OBJECT,
                 "{context}: wrong error code"
             );
         }
@@ -491,7 +475,7 @@ fn absent_file_oid() -> ObjectIdentifier {
 
 fn stream_file_and_analog_input_db() -> ObjectDatabase {
     let mut db = stream_file_db();
-    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ai.set_present_value(72.5);
     db.add(Box::new(ai)).unwrap();
     db
@@ -654,8 +638,10 @@ fn non_file_identifier_is_refused_before_read_only_and_access_method_gates() {
     file.set_data(vec![1, 2, 3, 4, 5, 6, 7, 8]);
     file.set_read_only(true);
     db.add(Box::new(file)).unwrap();
-    db.add(Box::new(AnalogInputObject::new(1, "AI-1", 62).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+    ))
+    .unwrap();
 
     let record_write = FileWriteAccessMethod::Record {
         file_start_record: 0,

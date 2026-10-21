@@ -1,6 +1,7 @@
 //! What the router asks of its caller during a call: the [`Host`] hooks.
 
-use crate::message::{MessageType, Networks, RejectReason, RoutingEntries};
+use crate::message::{Networks, RoutingEntries};
+use crate::npdu::{NetworkMessageType, RejectMessageReason};
 use crate::table::RejectEffect;
 use crate::PortId;
 
@@ -8,21 +9,13 @@ use crate::PortId;
 /// [`on_deadline`](super::Router::on_deadline) call.
 ///
 /// Every method has a default, so `impl Host for MyHost {}` gives a router
-/// that knows no group addresses, admits every protected message and
+/// that admits every protected message and
 /// reports nothing: what [`Permissive`] is.
 ///
 /// The router calls these with its state borrowed, and a hosted router
 /// calls them under the lock it keeps the router in: an implementation
 /// must not block, and must never call into the router or take that lock.
 pub trait Host {
-    /// Whether `mac` is a group address on `port`, and of which kind: asked
-    /// only for a DADR the router would hand to a node on that directly
-    /// attached port (#1504, #1677).
-    fn group(&self, port: PortId, mac: &[u8]) -> Group {
-        let _ = (port, mac);
-        Group::No
-    }
-
     /// Whether to act on a protected network message (RB-09). The router
     /// asks after the message's data has been checked and before anything
     /// changes. `false` drops it silently: no table change, relay, answer
@@ -38,32 +31,8 @@ pub trait Host {
     }
 }
 
-/// What a DADR is on its delivery port, as [`Host::group`] says.
-///
-/// The router sends nothing to a group address as a unicast. An
-/// Unconfirmed-Request for a [`Broadcast`](Self::Broadcast) one goes out as
-/// that port's local broadcast instead, and reaches the router's own
-/// application where a DLEN 0 broadcast would: when it came from that
-/// network. Any other APDU for one, anything for a [`Refuse`](Self::Refuse)
-/// one, and every network message for either, is dropped and counted in
-/// [`Counters::group_dadr_drops`](super::Counters::group_dadr_drops), with
-/// no reject (#1677, decisions L19, L23 and L24).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
-pub enum Group {
-    /// Not a group address there: sent to it as addressed.
-    #[default]
-    No,
-    /// A group address of the port's own: on B/IP, a broadcast or
-    /// multicast address at the link's own UDP port.
-    Broadcast,
-    /// A group address outside the port's own: on B/IP, a broadcast or
-    /// multicast address at another UDP port, which the link's broadcast
-    /// would not reach.
-    Refuse,
-}
-
-/// A [`Host`] with every default: no group addresses, every protected
-/// message admitted, nothing observed. For firmware and tests.
+/// A [`Host`] with every default: every protected message admitted,
+/// nothing observed. Port group rules still apply. For firmware and tests.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Permissive;
 
@@ -141,7 +110,7 @@ pub struct Claim<'c> {
     /// The link-layer address of the node that sent it.
     pub source: &'c [u8],
     /// Its message type.
-    pub message_type: MessageType,
+    pub message_type: NetworkMessageType,
     /// Its vendor ID, for a proprietary type.
     pub vendor_id: Option<u16>,
     /// The SNET it claims, if any.
@@ -190,7 +159,7 @@ pub enum Event {
         /// The network it names.
         network: u16,
         /// Its reason.
-        reason: RejectReason,
+        reason: RejectMessageReason,
         /// What it did to the route.
         effect: RejectEffect,
     },
@@ -248,13 +217,13 @@ pub enum Event {
     /// rejected.
     SecurityMessage {
         /// Its type.
-        message_type: MessageType,
+        message_type: NetworkMessageType,
     },
     /// A message of a type this router doesn't handle arrived for it; it
     /// draws reject reason 3.
     UnknownMessage {
         /// Its type.
-        message_type: MessageType,
+        message_type: NetworkMessageType,
     },
     /// A Network-Number-Is reported a number other than the port's.
     NumberConflict {

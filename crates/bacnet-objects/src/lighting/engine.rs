@@ -209,31 +209,40 @@ impl LightingOutputObject {
         matches!(self.operation, Some(Operation::Egress { .. }))
     }
 
-    /// Carry out a written Lighting_Command at `now`, at its priority or
+    /// The priority a Lighting_Command acts at: its own, or
     /// Lighting_Command_Default_Priority.
-    pub(super) fn execute(&mut self, command: &BACnetLightingCommand, now: Duration) {
-        let priority = command
+    pub(super) fn command_priority(&self, command: &BACnetLightingCommand) -> u8 {
+        command
             .priority
-            .unwrap_or(self.lighting_command_default_priority as u8);
-        self.advance_to(now);
-        self.operate(command, priority, now);
+            .unwrap_or(self.lighting_command_default_priority as u8)
     }
 
-    /// Carry out a Present_Value write at `priority` and `now`.
+    /// Carry out a written Lighting_Command at `now`, at
+    /// [`Self::command_priority`]; `true` when it acted on that slot (see
+    /// [`Self::operate`]).
+    pub(super) fn execute(&mut self, command: &BACnetLightingCommand, now: Duration) -> bool {
+        let priority = self.command_priority(command);
+        self.advance_to(now);
+        self.operate(command, priority, now)
+    }
+
+    /// Carry out a Present_Value write at `priority` and `now`; `true` when
+    /// it acted on that slot, which a level or NULL always does.
     pub(super) fn write_present_value(
         &mut self,
         priority: u8,
         write: PresentValueWrite,
         now: Duration,
-    ) {
+    ) -> bool {
         self.advance_to(now);
         match write {
             PresentValueWrite::Level(level) => {
                 self.halt_for(priority);
                 self.set_slot(priority, level);
+                true
             }
             PresentValueWrite::Warn(operation) => {
-                self.operate(&BACnetLightingCommand::new(operation), priority, now);
+                self.operate(&BACnetLightingCommand::new(operation), priority, now)
             }
         }
     }
@@ -279,20 +288,24 @@ impl LightingOutputObject {
         }
     }
 
-    /// Carry out `command`'s operation at `priority`.
-    fn operate(&mut self, command: &BACnetLightingCommand, priority: u8, now: Duration) {
+    /// Carry out `command`'s operation at `priority`. `true` when it acted
+    /// on that slot: wrote it, or set an egress or a STOP to work on it.
+    /// That command's writer becomes the slot's Value_Source. WARN, an
+    /// ignored step, a STOP with nothing to stop and a proprietary operation
+    /// leave the slot, and its source, as they were.
+    fn operate(&mut self, command: &BACnetLightingCommand, priority: u8, now: Duration) -> bool {
         let tracking = self.tracking_value_at(now);
         let operation = command.operation;
         match operation {
             Op::FADE_TO | Op::RAMP_TO => {
                 let Some(target) = command.target_level else {
-                    return;
+                    return false;
                 };
                 self.halt_for(priority);
                 let level = engine_level(target);
                 self.set_slot(priority, Some(level));
                 if self.highest_priority() != Some(priority) {
-                    return;
+                    return true;
                 }
                 let (from, to) = self.trimmed_line(tracking, level, now);
                 let transition = if operation == Op::FADE_TO {
@@ -308,6 +321,7 @@ impl LightingOutputObject {
                     self.operation = Some(Operation::Moving { priority, run });
                     self.wake();
                 }
+                true
             }
             Op::STEP_UP | Op::STEP_DOWN | Op::STEP_ON | Op::STEP_OFF => {
                 let increment = command
@@ -322,10 +336,12 @@ impl LightingOutputObject {
                 // occupants the egress time for, rather than stepping from
                 // the off or relinquished level the egress was heading to.
                 let floor = self.step_floor(now);
-                if let Some(level) = step_level(operation, tracking, increment, floor) {
-                    self.halt_for(priority);
-                    self.set_slot(priority, Some(engine_level(level)));
-                }
+                let Some(level) = step_level(operation, tracking, increment, floor) else {
+                    return false;
+                };
+                self.halt_for(priority);
+                self.set_slot(priority, Some(engine_level(level)));
+                true
             }
             Op::WARN => {
                 self.halt_for(priority);
@@ -335,6 +351,7 @@ impl LightingOutputObject {
                 {
                     self.request_blink();
                 }
+                false
             }
             Op::WARN_RELINQUISH => {
                 self.halt_for(priority);
@@ -343,6 +360,7 @@ impl LightingOutputObject {
                     && self.slot(priority) != Some(0.0)
                     && self.next_level_below(priority) <= 0.0;
                 self.warn_then(priority, AfterEgress::Relinquish, eligible, now);
+                true
             }
             Op::WARN_OFF => {
                 self.halt_for(priority);
@@ -350,10 +368,11 @@ impl LightingOutputObject {
                     && self.highest_priority() == Some(priority)
                     && self.present_value != 0.0;
                 self.warn_then(priority, AfterEgress::Off, eligible, now);
+                true
             }
             Op::STOP => self.stop(priority, tracking),
             // A proprietary operation: stored, with no action defined here.
-            _ => {}
+            _ => false,
         }
     }
 
@@ -379,17 +398,20 @@ impl LightingOutputObject {
     }
 
     /// STOP at `priority`: end a fade or ramp there with `tracking` in its
-    /// slot, or cancel an egress timer there. Anything else is ignored.
-    fn stop(&mut self, priority: u8, tracking: f32) {
+    /// slot, or cancel an egress timer there; `true` when it did either.
+    /// Anything else is ignored.
+    fn stop(&mut self, priority: u8, tracking: f32) -> bool {
         match self.operation {
             Some(Operation::Moving { priority: at, .. }) if at == priority => {
                 self.operation = None;
                 self.set_slot(priority, Some(engine_level(tracking)));
+                true
             }
             Some(Operation::Egress { priority: at, .. }) if at == priority => {
                 self.operation = None;
+                true
             }
-            _ => {}
+            _ => false,
         }
     }
 

@@ -7,7 +7,9 @@ use bacnet_objects::multistate::{
     MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject,
 };
 use bacnet_objects::traits::BACnetObject;
-use bacnet_types::enums::{ErrorClass, ErrorCode, EventType, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{
+    EngineeringUnits, ErrorClass, ErrorCode, EventType, ObjectType, PropertyIdentifier,
+};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
@@ -21,17 +23,17 @@ fn acked_transitions_network_policy_is_uniform_on_all_supported_types() {
         (
             "Analog Input",
             ObjectType::ANALOG_INPUT,
-            Box::new(AnalogInputObject::new(1, "AI-1", 95).unwrap()),
+            Box::new(AnalogInputObject::new(1, "AI-1", EngineeringUnits::NO_UNITS).unwrap()),
         ),
         (
             "Analog Output",
             ObjectType::ANALOG_OUTPUT,
-            Box::new(AnalogOutputObject::new(1, "AO-1", 95).unwrap()),
+            Box::new(AnalogOutputObject::new(1, "AO-1", EngineeringUnits::NO_UNITS).unwrap()),
         ),
         (
             "Analog Value",
             ObjectType::ANALOG_VALUE,
-            Box::new(AnalogValueObject::new(1, "AV-1", 95).unwrap()),
+            Box::new(AnalogValueObject::new(1, "AV-1", EngineeringUnits::NO_UNITS).unwrap()),
         ),
         (
             "Binary Input",
@@ -134,8 +136,8 @@ fn acked_transitions_network_policy_is_uniform_on_all_supported_types() {
             matches!(
                 error,
                 Error::Protocol { class, code }
-                    if class == ErrorClass::PROPERTY.to_raw() as u32
-                        && code == ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32
+                    if class == ErrorClass::PROPERTY
+                        && code == ErrorCode::WRITE_ACCESS_DENIED
             ),
             "{label}: expected PROPERTY / WRITE_ACCESS_DENIED, got {error:?}"
         );

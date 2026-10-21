@@ -4,22 +4,22 @@ use crate::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
 use crate::event::{EventStateChange, EventTransition, EventTransitionCommit};
 use crate::multistate::{MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject};
 use crate::traits::BACnetObject;
-use bacnet_types::enums::{EventState, EventType};
+use bacnet_types::enums::{EngineeringUnits, EventState, EventType};
 use bacnet_types::primitives::BACnetTimeStamp;
 
 #[test]
 fn all_eleven_intrinsic_families_report_implied_algorithm_and_shared_commit_coordinate() {
     let mut objects: Vec<(Box<dyn BACnetObject>, EventType)> = vec![
         (
-            Box::new(AnalogInputObject::new(1, "AI", 0).unwrap()),
+            Box::new(AnalogInputObject::new(1, "AI", EngineeringUnits::SQUARE_METERS).unwrap()),
             EventType::OUT_OF_RANGE,
         ),
         (
-            Box::new(AnalogOutputObject::new(1, "AO", 0).unwrap()),
+            Box::new(AnalogOutputObject::new(1, "AO", EngineeringUnits::SQUARE_METERS).unwrap()),
             EventType::OUT_OF_RANGE,
         ),
         (
-            Box::new(AnalogValueObject::new(1, "AV", 0).unwrap()),
+            Box::new(AnalogValueObject::new(1, "AV", EngineeringUnits::SQUARE_METERS).unwrap()),
             EventType::OUT_OF_RANGE,
         ),
         (

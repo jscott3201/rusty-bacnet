@@ -10,6 +10,8 @@ use std::time::{Duration, Instant};
 use bacnet_services::who_is::DeviceInstanceRange;
 use bacnet_types::enums::Segmentation;
 
+use super::point::{BrowseRead, BrowseResult, ReqId};
+
 /// Identifies one user-started operation, so late results can be dropped.
 pub(crate) type OpId = u64;
 
@@ -102,12 +104,25 @@ impl WhoIsSpec {
 /// UI to worker.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Command {
+    /// Load, save or start a named B/IP profile.
+    Profile(super::profile::service::Request),
+    /// Start the most recently selected flags-only configuration again.
+    Reconnect,
+    /// Retire the current connection and wait for resource release.
+    Disconnect,
     /// Bind BACnet/IP to this interface (the answer to the interface picker).
     Connect {
         /// Interface address.
         interface: Ipv4Addr,
         /// Its broadcast address.
         broadcast: Ipv4Addr,
+    },
+    /// Join the MS/TP trunk with these settings, on the port chosen: the
+    /// operator confirmed it (T2). From a monitor session, the monitor ends
+    /// first.
+    JoinTrunk {
+        /// The settings, port included.
+        settings: crate::mstp::MstpArgs,
     },
     /// Send a Who-Is and report when its listen window ends.
     WhoIs {
@@ -121,6 +136,42 @@ pub(crate) enum Command {
         /// Operation id.
         op: OpId,
     },
+    /// Read for the device browser.
+    Browse {
+        /// Request id, echoed in the results.
+        req: ReqId,
+        /// Device instance, from the discovery table.
+        device: u32,
+        /// What to read.
+        read: BrowseRead,
+    },
+    /// Object names for the rows on screen, every device's in one command
+    /// so a tick never fills the queue (#1896).
+    Names {
+        /// Request id, echoed in a refusal.
+        req: ReqId,
+        /// Each device whose ask changed.
+        asks: Vec<super::point::NameAsk>,
+    },
+    /// Stop reading `device`: drop its queued reads and end the running one
+    /// after its outstanding request.
+    StopBrowse {
+        /// Device instance.
+        device: u32,
+    },
+    /// A watch list request.
+    Watch(super::watched::WatchCommand),
+    /// A write session request.
+    Safety(super::safety::SafetyCommand),
+    /// A Network screen request.
+    Network(super::network::NetworkCommand),
+    /// A Who-Has or router discovery request.
+    Discovery(super::network::discovery::DiscoveryCommand),
+    /// A capture request for the session.
+    Capture(super::capture::CaptureCommand),
+    /// Write the ring to pcap files; the coordinator does it, on a
+    /// blocking thread.
+    CaptureExport(Box<super::capture::ExportJob>),
 }
 
 /// One row of the device table, already formatted for display.
@@ -128,9 +179,11 @@ pub(crate) enum Command {
 pub(crate) struct DeviceRow {
     /// Device instance.
     pub(crate) instance: u32,
-    /// Where it answered from: its own address, or for a routed device its
-    /// remote MAC and the router.
+    /// Where it is, as a target the CLI reads back: its own address, or
+    /// for a routed device its routed station, `2:0x05`.
     pub(crate) address: String,
+    /// The router a routed device answered through, on the local network.
+    pub(crate) via: Option<String>,
     /// Remote network number for a routed device.
     pub(crate) network: Option<u16>,
     /// Vendor identifier.
@@ -141,6 +194,96 @@ pub(crate) struct DeviceRow {
     pub(crate) segmentation: Segmentation,
     /// When the last I-Am arrived.
     pub(crate) last_seen: Instant,
+}
+
+impl DeviceRow {
+    /// The address with the router a routed device answered through,
+    /// `2:0x05 via 10.0.1.1:47808`, for the log and the duplicate banner.
+    pub(crate) fn located(&self) -> String {
+        match &self.via {
+            Some(router) => format!("{} via {router}", self.address),
+            None => self.address.clone(),
+        }
+    }
+}
+
+/// Why a connection failed (#1894): a short summary the footer shows with
+/// the recovery keys, and the whole error for the device screen and the
+/// log.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Failure {
+    /// A few words, such as `address in use`.
+    pub(crate) summary: String,
+    /// The whole error.
+    pub(crate) detail: String,
+}
+
+impl Failure {
+    /// From the stack's typed error: an I/O failure by its kind, a timeout
+    /// as such, anything else as its message.
+    pub(crate) fn of(error: &bacnet_types::error::Error) -> Self {
+        use bacnet_types::error::Error;
+        let summary = match error {
+            Error::Transport(io) => io_summary(io),
+            Error::Timeout(_) => "timed out".to_string(),
+            other => other.to_string(),
+        };
+        Self {
+            summary,
+            detail: error.to_string(),
+        }
+    }
+
+    /// `error` with `context` (a serial port, say) in front of both parts.
+    pub(crate) fn within(context: &str, error: &bacnet_types::error::Error) -> Self {
+        let Self { summary, detail } = Self::of(error);
+        Self {
+            summary: format!("{context}: {summary}"),
+            detail: format!("{context}: {detail}"),
+        }
+    }
+
+    /// From an error that is only text (a profile the service refused,
+    /// say): the whole message without an OS error number, which the
+    /// footer shortens with `…`. Its
+    /// clauses aren't split, as a `field: value` error needs both.
+    pub(crate) fn text(detail: impl Into<String>) -> Self {
+        let detail = detail.into();
+        Self {
+            summary: strip_os_error(&detail).to_string(),
+            detail,
+        }
+    }
+}
+
+#[cfg(test)]
+impl From<&str> for Failure {
+    fn from(detail: &str) -> Self {
+        Self::text(detail)
+    }
+}
+
+impl std::fmt::Display for Failure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.detail)
+    }
+}
+
+/// An OS error by its kind (`address in use`); one the stack wrote itself
+/// (`own address not local`) by its own message.
+fn io_summary(error: &std::io::Error) -> String {
+    match error.raw_os_error() {
+        Some(_) => error.kind().to_string(),
+        None => strip_os_error(&error.to_string()).to_string(),
+    }
+}
+
+/// `text` without a trailing ` (os error N)`.
+fn strip_os_error(text: &str) -> &str {
+    match text.rfind(" (os error ") {
+        Some(at) if text.ends_with(')') => &text[..at],
+        _ => text,
+    }
 }
 
 /// How an operation ended.
@@ -155,17 +298,32 @@ pub(crate) enum OpOutcome {
 }
 
 /// Worker to UI.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum WorkerEvent {
+    /// An unexpected worker failure makes resource ownership uncertain.
+    Fatal { error: String },
+    /// A profile I/O operation completed.
+    Profile(Result<super::profile::service::Reply, String>),
+    /// An attempted command was not admitted.
+    Rejected { error: String },
+    /// A new session owns all subsequent tagged events.
+    SessionStarted { generation: u64 },
+    /// Every resource of this session has been retired.
+    Disconnected { generation: u64 },
+    /// Events from a single connection attempt, isolated across reconnects.
+    Session {
+        generation: u64,
+        event: Box<WorkerEvent>,
+    },
     /// The client is up; `local` is its own address.
     Connected {
         /// Local address for the status bar.
         local: String,
     },
-    /// Building the client failed. The TUI exits and prints the error.
+    /// Building the client failed. The connection can be edited and retried.
     ConnectFailed {
         /// The error.
-        error: String,
+        error: Failure,
     },
     /// A new device answered.
     Discovered(DeviceRow),
@@ -187,6 +345,15 @@ pub(crate) enum WorkerEvent {
         /// Operation id.
         op: OpId,
     },
+    /// An operation command could not enter the session's command queue.
+    OpRejected {
+        /// Operation identity, checked even after optimistic cancellation.
+        op: OpId,
+        /// Whether the refused command was a cancellation.
+        cancel: bool,
+        /// Admission failure; this is not an operation completion.
+        error: String,
+    },
     /// An operation ended.
     OpFinished {
         /// Operation id.
@@ -194,48 +361,36 @@ pub(crate) enum WorkerEvent {
         /// How.
         outcome: OpOutcome,
     },
-}
-
-/// How a transport's MAC addresses are shown.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AddressStyle {
-    /// 4-byte IPv4 address and 2-byte port.
-    Bip,
-    /// 3-byte B/IPv6 VMAC, as `bip6:0x0004D2` (Clause U.1.3).
-    Bip6,
-    /// Hex bytes (BACnet/SC VMACs and anything else).
-    Hex,
-}
-
-impl AddressStyle {
-    /// Format a MAC for display, in a form the directed Who-Is reads back.
-    pub(crate) fn format(self, mac: &[u8]) -> String {
-        match (self, mac.len()) {
-            (Self::Bip, 6) | (Self::Bip6, 3) => crate::output::format_mac(mac),
-            _ => hex(mac),
-        }
-    }
-
-    /// The addresses a directed Who-Is takes on this transport.
-    pub(crate) fn directed_forms(self) -> &'static str {
-        match self {
-            Self::Bip => "IP or IP:port",
-            Self::Bip6 => "bip6:N, bip6:0xVMAC or [IPv6]:port",
-            Self::Hex => "VMAC as 12 hex digits",
-        }
-    }
-}
-
-/// Colon-separated lowercase hex.
-pub(crate) fn hex(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 3);
-    for (i, b) in bytes.iter().enumerate() {
-        if i > 0 {
-            out.push(':');
-        }
-        out.push_str(&format!("{b:02x}"));
-    }
-    out
+    /// A device browser result.
+    Browse {
+        /// The request it answers.
+        req: ReqId,
+        /// The result.
+        result: BrowseResult,
+    },
+    /// A watch list report.
+    Watch(super::watched::WatchEvent),
+    /// A write session report.
+    Safety(super::safety::SafetyEvent),
+    /// A passive session started: there is no client.
+    Passive,
+    /// The client holds, or keeps asking for, an entry in this BBMD's
+    /// foreign-device table.
+    ForeignDevice(super::network::Foreign),
+    /// A Network screen report.
+    Network(super::network::NetworkEvent),
+    /// An I-Have, a router announcement or another network report.
+    Discovery(super::network::discovery::DiscoveryEvent),
+    /// An SC screen report.
+    #[cfg_attr(not(feature = "sc-tls"), allow(dead_code))]
+    Sc(super::sc::ScReport),
+    /// An MS/TP screen report.
+    #[cfg_attr(not(feature = "serial"), allow(dead_code))]
+    Mstp(super::mstp::MstpReport),
+    /// An MS/TP monitor report (#970).
+    Monitor(super::monitor::MonitorReport),
+    /// Captured frames and capture reports (#971).
+    Capture(super::capture::CaptureEvent),
 }
 
 #[cfg(test)]
@@ -260,23 +415,5 @@ mod tests {
         assert!(!bounded.wants(100) && !bounded.wants(104));
         assert_eq!(bounded.describe(), "network 5 101-103");
         assert_eq!(spec(WhoIsScope::Global, None).describe(), "global, all");
-    }
-
-    #[test]
-    fn addresses_format_per_transport() {
-        assert_eq!(
-            AddressStyle::Bip.format(&[10, 0, 0, 1, 0xBA, 0xC0]),
-            "10.0.0.1:47808"
-        );
-        // A B/IPv6 MAC is the node's VMAC (Clause U.1.3).
-        assert_eq!(AddressStyle::Bip6.format(&[0, 4, 0xD2]), "bip6:0x0004D2");
-        assert_eq!(
-            AddressStyle::Bip6.format(&[2, 0, 0, 0, 0, 1]),
-            "02:00:00:00:00:01"
-        );
-        assert_eq!(
-            AddressStyle::Hex.format(&[2, 0, 0, 0, 0, 1]),
-            "02:00:00:00:00:01"
-        );
     }
 }

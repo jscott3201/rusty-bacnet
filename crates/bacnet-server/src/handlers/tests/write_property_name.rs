@@ -38,10 +38,7 @@ fn encode_name_write(oid: ObjectIdentifier, name: &str) -> Vec<u8> {
 fn assert_duplicate_name<T: std::fmt::Debug>(result: Result<T, Error>) {
     match result {
         Err(Error::Protocol { class, code }) => assert_eq!(
-            (
-                ErrorClass::from_raw(class as u16),
-                ErrorCode::from_raw(code as u16)
-            ),
+            (class, code),
             (ErrorClass::PROPERTY, ErrorCode::DUPLICATE_NAME)
         ),
         other => panic!("expected PROPERTY / DUPLICATE_NAME, got {other:?}"),

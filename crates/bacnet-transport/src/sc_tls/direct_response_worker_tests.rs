@@ -8,11 +8,14 @@ enum Read {
     Binary,
     Pending,
     Controls(Arc<AtomicUsize>),
+    /// These reads, then the end of the stream.
+    Frames(std::collections::VecDeque<Result<DirectFrame, String>>),
 }
 impl DirectWsRead for Read {
     async fn next_frame(&mut self) -> Option<Result<DirectFrame, String>> {
         match self {
             Self::Binary => Some(Ok(DirectFrame::Binary(vec![0xff]))),
+            Self::Frames(frames) => frames.pop_front(),
             Self::Pending => std::future::pending().await,
             Self::Controls(count) => {
                 count.fetch_add(1, Ordering::AcqRel);
@@ -90,9 +93,22 @@ async fn direct_response_ready_read_and_queue_have_bounded_alternating_progress(
 async fn worker(
     member: Arc<Membership>,
     route: DirectResponse,
+    recv: mpsc::Receiver<crate::direct_response::ResponseWrite>,
+    write: Write,
+    read: Read,
+) {
+    let warnings = DirectWarnings::default();
+    worker_warning_to(member, route, recv, write, read, &warnings).await;
+}
+
+/// [`worker`], warning through `warnings`.
+async fn worker_warning_to(
+    member: Arc<Membership>,
+    route: DirectResponse,
     mut recv: mpsc::Receiver<crate::direct_response::ResponseWrite>,
     mut write: Write,
     mut read: Read,
+    warnings: &DirectWarnings,
 ) {
     let ca = super::super::direct_accept_tests::TestCa::generate();
     let config = DirectAcceptConfig::new(
@@ -115,6 +131,7 @@ async fn worker(
             member: &member,
             identity: route.identity(),
             response: route,
+            warnings,
         },
         &tx,
         &admission,
@@ -262,5 +279,47 @@ async fn direct_response_websocket_controls_preserve_connect_and_idle_deadlines(
     assert!(
         !member.is_current(),
         "controls cannot extend binary-activity idle deadline"
+    );
+}
+
+/// #1950: a burst of bad frames on an established connection, undecodable
+/// and oversized, then a failed read, warns once through the listener's
+/// frame throttle; the rest log at debug and are counted for the next one.
+#[tokio::test(start_paused = true)]
+async fn a_burst_of_bad_frames_warns_once_per_interval() {
+    use crate::warn_throttle::WARNING_INTERVAL;
+    let (member, route, recv) = route();
+    let oversized = vec![0; usize::from(crate::sc_limits::DEFAULT_MAX_BVLC_LENGTH) + 1];
+    let mut frames: std::collections::VecDeque<_> =
+        std::iter::repeat_with(|| Ok(DirectFrame::Binary(vec![0xff])))
+            .take(3)
+            .collect();
+    frames.extend([
+        Ok(DirectFrame::Binary(oversized.clone())),
+        Ok(DirectFrame::Binary(oversized)),
+        Err("connection reset".to_string()),
+    ]);
+    let warnings = DirectWarnings::default();
+    let write = Write {
+        writes: Arc::new(AtomicUsize::new(0)),
+        entered: None,
+        release: None,
+    };
+    worker_warning_to(member, route, recv, write, Read::Frames(frames), &warnings).await;
+    assert_eq!(
+        warnings.frame.note(),
+        None,
+        "the first bad frame warned; the rest, and this, are held back"
+    );
+    tokio::time::advance(WARNING_INTERVAL).await;
+    assert_eq!(
+        warnings.frame.note(),
+        Some(7),
+        "five held back, the check above, and this one"
+    );
+    assert_eq!(
+        warnings.connection.note(),
+        Some(1),
+        "an established connection's frames don't touch the connection throttle"
     );
 }

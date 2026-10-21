@@ -5,7 +5,9 @@ use bacnet_mstp_codec::FrameType;
 use tokio::time::{Duration, Instant};
 
 use super::test_support::{config, Bus, DrainMode, Port, Sent};
-use super::{MstpConfig, USB_TRANSMIT_LATENCY_PAD};
+use super::{
+    LatenessHistogram, MstpConfig, HOST_LATE_DEADLINE, HOST_USAGE_TIMEOUT, USB_TRANSMIT_LATENCY_PAD,
+};
 use crate::port::TransportPort;
 
 /// Slack for Tokio's millisecond timer wheel.
@@ -178,4 +180,72 @@ async fn a_failed_drain_aborts_the_frame() {
     assert_eq!(counts.serial_write_errors, 1);
     assert_eq!(counts.mac.frames_transmitted, 0);
     bus.stop().await;
+}
+
+/// A sole master polls 4, then waits out T_usage_timeout for an answer
+/// nobody sends. With `late` set, the test holds the runtime's clock back
+/// and moves it on in one jump to that long after the timeout, so the
+/// station services it exactly that late. Returns the lateness histogram
+/// (its buckets since the poll ended, its maximum since the start) and
+/// the late count the timeout added.
+async fn usage_timeout_serviced(late: Option<Duration>) -> (LatenessHistogram, u64) {
+    let mut bus = Bus::start(config(3, 7)).await;
+    bus.send(FrameType::TOKEN, 3, 6, &[]);
+    let poll = bus.next().await;
+    assert_eq!(
+        (poll.frame_type, poll.destination),
+        (FrameType::POLL_FOR_MASTER, 4)
+    );
+    // The poll has ended and its timeout is armed, not yet due.
+    bus.until(poll.end + TICK).await;
+    let before = bus.transport.diagnostics().snapshot().mac;
+    if let Some(late) = late {
+        let due = poll.end + HOST_USAGE_TIMEOUT;
+        tokio::time::advance(due + late - Instant::now()).await;
+    }
+    let next = bus.next().await;
+    assert_eq!(
+        (next.frame_type, next.destination),
+        (FrameType::POLL_FOR_MASTER, 5)
+    );
+    let after = bus.transport.diagnostics().snapshot().mac;
+    bus.stop().await;
+    let mut added = after.deadline_lateness;
+    for (total, earlier) in added
+        .buckets
+        .iter_mut()
+        .zip(before.deadline_lateness.buckets)
+    {
+        *total -= earlier;
+    }
+    (added, after.late_deadlines - before.late_deadlines)
+}
+
+/// The transport counts a deadline late from [`HOST_LATE_DEADLINE`], 5 ms,
+/// not the core's 1 ms default (#1897), and puts every serviced deadline in
+/// the lateness histogram. A sole master's T_usage_timeout after a Poll
+/// For Master nobody answers is its one timed wake per frame. On time, the
+/// timer's rounding leaves it under 2 ms late; 3 ms late, it lands in the
+/// 2 to 5 ms bucket and still isn't counted; from 5 ms it is.
+#[tokio::test(start_paused = true)]
+async fn a_usage_timeout_counts_late_from_the_host_threshold() {
+    let core = config(3, 7).core_config().unwrap();
+    assert_eq!(Duration::from(core.late_deadline), HOST_LATE_DEADLINE);
+    assert_eq!(HOST_LATE_DEADLINE, Duration::from_millis(5));
+
+    let (lateness, late) = usage_timeout_serviced(None).await;
+    assert_eq!(lateness.total(), 1, "{lateness:?}");
+    assert_eq!(lateness.buckets[0] + lateness.buckets[1], 1, "{lateness:?}");
+    assert!(Duration::from(lateness.max) < 2 * TICK, "{lateness:?}");
+    assert_eq!(late, 0);
+
+    let ms = Duration::from_millis;
+    for (by, bucket, counted) in [(ms(3), 2, 0), (ms(5), 3, 1), (ms(12), 4, 1)] {
+        let (lateness, late) = usage_timeout_serviced(Some(by)).await;
+        let mut buckets = [0; 6];
+        buckets[bucket] = 1;
+        assert_eq!(lateness.buckets, buckets, "{by:?}");
+        assert_eq!(Duration::from(lateness.max), by);
+        assert_eq!(late, counted, "{by:?}");
+    }
 }

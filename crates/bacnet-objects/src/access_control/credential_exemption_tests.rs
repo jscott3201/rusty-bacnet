@@ -12,8 +12,8 @@ const AE: PropertyIdentifier = PropertyIdentifier::AUTHORIZATION_EXEMPTIONS;
 fn assert_property_error<T: std::fmt::Debug>(result: Result<T, Error>, code: ErrorCode) {
     match result {
         Err(Error::Protocol { class, code: got }) => {
-            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
-            assert_eq!(got, code.to_raw() as u32, "expected {code:?}");
+            assert_eq!(class, ErrorClass::PROPERTY);
+            assert_eq!(got, code, "expected {code:?}");
         }
         other => panic!("expected PROPERTY / {code:?}, got {other:?}"),
     }

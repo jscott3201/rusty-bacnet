@@ -406,7 +406,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             // the history bound keeps room for them (#986).
             store.lock().note_reserve(&context, untimed_octets(&parts));
             let limit = request_limit(
-                config.max_apdu_length,
+                u32::from(config.device.max_apdu_length()),
                 subscriber_max_apdu,
                 representative.issue_confirmed_notifications,
             );
@@ -459,8 +459,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         }
 
         if representative.issue_confirmed_notifications {
-            let max_apdu_length = apdu::max_apdu_header_at_or_below(config.max_apdu_length)
-                .expect("validated local APDU capacity");
+            let max_apdu_length =
+                apdu::max_apdu_header_at_or_below(u32::from(config.device.max_apdu_length()))
+                    .expect("validated local APDU capacity");
             let mut parts = parts.into_iter();
             // Every timestamped value was too large to send, and nothing
             // else changed.

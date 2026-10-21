@@ -1,5 +1,6 @@
 use super::*;
 use bacnet_encoding::{apdu::decode_apdu, npdu::decode_npdu};
+use bacnet_types::enums::{ErrorClass, ErrorCode};
 
 async fn outcomes(
     client: &BACnetClient<LoopbackTransport>,
@@ -165,11 +166,19 @@ async fn reversed(service: u8, reject: bool) {
     assert_eq!(result.iter().map(|r| r.0).collect::<Vec<_>>(), vec![1, 0]);
     assert!(result.iter().all(|r| r.1 == 10));
     if reject {
-        assert!(matches!(result[0].2, Err(Error::Reject { reason: 9 })));
+        assert!(matches!(
+            result[0].2,
+            Err(Error::Reject {
+                reason: RejectReason::UNRECOGNIZED_SERVICE
+            })
+        ));
     } else {
         assert!(matches!(
             result[0].2,
-            Err(Error::Protocol { class: 2, code: 32 })
+            Err(Error::Protocol {
+                class: ErrorClass::PROPERTY,
+                code: ErrorCode::UNKNOWN_PROPERTY
+            })
         ));
     }
     assert!(result[1].2.is_ok());

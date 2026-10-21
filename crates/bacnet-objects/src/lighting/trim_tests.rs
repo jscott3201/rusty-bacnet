@@ -20,8 +20,8 @@ fn assert_error(result: Result<impl std::fmt::Debug, Error>, expected: ErrorCode
     let error = result.unwrap_err();
     assert!(
         matches!(error, Error::Protocol { class, code }
-            if class == ErrorClass::PROPERTY.to_raw() as u32
-                && code == expected.to_raw() as u32),
+            if class == ErrorClass::PROPERTY
+                && code == expected),
         "expected {expected:?}, got {error:?}"
     );
 }

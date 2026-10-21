@@ -15,6 +15,7 @@ use std::sync::{
 
 fn received(mac: &[u8], routed: Option<(u16, &[u8])>) -> ReceivedApdu {
     ReceivedApdu {
+        router_response: None,
         direct_response: None,
         apdu: Bytes::new(),
         source_mac: MacAddr::from_slice(mac),

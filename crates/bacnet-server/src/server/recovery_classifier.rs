@@ -65,7 +65,7 @@ mod tests {
             drop(guard);
             assert_eq!(admission.peer_entries(), [0; 3]);
             assert!(admission.recovery.peers.lock().unwrap().is_empty());
-            assert_eq!(admission.recovery.permits.available_permits(), 4);
+            assert_eq!(admission.recovery.free_slots(), 4);
         }
     }
 

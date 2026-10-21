@@ -85,6 +85,7 @@ impl Node {
             destination: to.into(),
             arrival_index: index,
             os_group_delivery: None,
+            arrival_stamp: None,
         };
         handle_datagram(datagram, &received, arrival, &self.local, &self.ctx).await;
     }
@@ -410,6 +411,7 @@ async fn each_failed_read_counts_as_a_receive_error() {
         destination: LOCAL.into(),
         arrival_index: None,
         os_group_delivery: None,
+        arrival_stamp: None,
     };
     let (local, ctx) = (&node.local, &node.ctx);
     handle_datagram(&unicast, &received, Arrival::Primary, local, ctx).await;

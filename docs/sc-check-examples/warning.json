@@ -1,0 +1,109 @@
+{
+  "outcome": "completed",
+  "summary": {
+    "errors": 0,
+    "warnings": 2,
+    "notices": 0
+  },
+  "inspection": {
+    "inspected_at_unix": 1826257769,
+    "peer_trust_supplied": true,
+    "key_consistency": "match",
+    "key_file_permissions": {
+      "group_readable": false,
+      "world_readable": false
+    },
+    "direct_issuer": "direct",
+    "direct_issuer_index": 0,
+    "certificates": [
+      {
+        "role": "identity",
+        "index": 0,
+        "sha256": "8d59367422771a9f93ab9a75945d5424990e325a60de81f1fc708b705c5e14b3",
+        "metadata": {
+          "subject": "CN=Offline CLI example",
+          "issuer": "CN=Offline CLI example",
+          "not_before_unix": 1792129769,
+          "not_after_unix": 1826689769,
+          "public_key_algorithm_oid": "1.2.840.10045.2.1",
+          "signature_algorithm_oid": "1.2.840.10045.4.3.2",
+          "text_truncated": false
+        },
+        "validity": "within_interval",
+        "expiry": "alarm",
+        "san": {
+          "assessed": true,
+          "present": false,
+          "values": []
+        },
+        "key_usage": {
+          "assessed": true,
+          "present": false,
+          "values": []
+        },
+        "extended_key_usage": {
+          "assessed": true,
+          "present": false,
+          "values": []
+        },
+        "findings": []
+      },
+      {
+        "role": "peer_trust",
+        "index": 0,
+        "sha256": "8d59367422771a9f93ab9a75945d5424990e325a60de81f1fc708b705c5e14b3",
+        "metadata": {
+          "subject": "CN=Offline CLI example",
+          "issuer": "CN=Offline CLI example",
+          "not_before_unix": 1792129769,
+          "not_after_unix": 1826689769,
+          "public_key_algorithm_oid": "1.2.840.10045.2.1",
+          "signature_algorithm_oid": "1.2.840.10045.4.3.2",
+          "text_truncated": false
+        },
+        "validity": "within_interval",
+        "expiry": "alarm",
+        "san": {
+          "assessed": true,
+          "present": false,
+          "values": []
+        },
+        "key_usage": {
+          "assessed": true,
+          "present": false,
+          "values": []
+        },
+        "extended_key_usage": {
+          "assessed": true,
+          "present": false,
+          "values": []
+        },
+        "findings": []
+      }
+    ]
+  },
+  "diagnostics": [
+    {
+      "code": "expiry.alarm",
+      "severity": "warning",
+      "role": "identity",
+      "index": 0,
+      "message": "It expires within seven days. Arrange renewal; this notice does not itself make the certificate invalid."
+    },
+    {
+      "code": "expiry.alarm",
+      "severity": "warning",
+      "role": "peer_trust",
+      "index": 0,
+      "message": "It expires within seven days. Arrange renewal; this notice does not itself make the certificate invalid."
+    }
+  ],
+  "unassessed": [
+    "issuer_authorization",
+    "certificate_path",
+    "peer_name_matching",
+    "revocation",
+    "remote_acceptance"
+  ],
+  "error": null
+}

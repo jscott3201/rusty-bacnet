@@ -2,7 +2,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 use std::path::PathBuf;
 
 use bacnet_client::client::BACnetClient;
-use bacnet_transport::bip::{BipMode, BipTransport, ForeignDeviceConfig};
+use bacnet_transport::bip::{BipMode, BipMulticast, BipTransport, ForeignDeviceConfig};
 use bacnet_transport::bip6::Bip6Transport;
 use bacnet_types::error::Error;
 
@@ -17,6 +17,16 @@ pub struct TransportArgs {
     pub min_interval_ms: u64,
     pub sc: bool,
     pub sc_url: Option<String>,
+    /// The failover hub (#962): from a profile, or `--sc-failover-url`
+    /// (#1831). It needs `sc_reconnect`.
+    pub sc_failover_url: Option<String>,
+    /// How a lost hub connection is redialled: from a profile (on by
+    /// default), or `--sc-reconnect` / `--sc-failover-url`. `None` leaves a
+    /// lost connection down.
+    pub sc_reconnect: Option<bacnet_transport::sc::ScReconnectConfig>,
+    /// The bound on each hub dial and handshake; `None` keeps the client's
+    /// default.
+    pub sc_connect_timeout_ms: Option<u64>,
     pub sc_ca: Option<PathBuf>,
     pub sc_cert: Option<PathBuf>,
     pub sc_key: Option<PathBuf>,
@@ -27,6 +37,10 @@ pub struct TransportArgs {
     pub device_instance: Option<u32>,
     /// `--foreign-bbmd`, with `--ttl` and `--renewal` (#938).
     pub foreign_device: Option<ForeignDeviceConfig>,
+    /// `--bip-multicast` and `--bip-multicast-ttl` (#941).
+    pub multicast: Option<BipMulticast>,
+    /// `--mstp` and its settings (#969).
+    pub mstp: Option<crate::mstp::MstpArgs>,
 }
 
 impl TransportArgs {
@@ -50,6 +64,12 @@ impl TransportArgs {
                 "--foreign-bbmd requires BACnet/IP transport (do not use --sc or --ipv6)".into(),
             );
         }
+        let multicast = crate::multicast::from_cli(cli, interface)?;
+        if let (Some(failover), Some(primary)) = (&cli.sc_failover_url, &cli.sc_url) {
+            if same_hub_url(failover, primary) {
+                return Err("--sc-failover-url must differ from --sc-url".into());
+            }
+        }
         Ok(Self {
             interface,
             port: cli.port,
@@ -58,6 +78,12 @@ impl TransportArgs {
             min_interval_ms: cli.min_interval_ms,
             sc: cli.sc,
             sc_url: cli.sc_url.clone(),
+            sc_failover_url: cli.sc_failover_url.clone(),
+            // A failover hub is only reached by reconnecting, so it brings
+            // the default policy along.
+            sc_reconnect: (cli.sc_reconnect || cli.sc_failover_url.is_some())
+                .then(bacnet_transport::sc::ScReconnectConfig::default),
+            sc_connect_timeout_ms: cli.sc_connect_timeout,
             sc_ca: cli.sc_ca.clone(),
             sc_cert: cli.sc_cert.clone(),
             sc_key: cli.sc_key.clone(),
@@ -67,6 +93,8 @@ impl TransportArgs {
             ipv6_interface,
             device_instance: cli.device_instance,
             foreign_device: crate::foreign::config(cli.foreign_bbmd, cli.ttl, cli.renewal),
+            multicast,
+            mstp: crate::mstp::MstpArgs::from_cli(cli)?,
         })
     }
 }
@@ -134,6 +162,7 @@ pub async fn build_bip_client(args: &TransportArgs) -> Result<BACnetClient<BipTr
                 .clone()
                 .map_or(BipMode::Normal, BipMode::Foreign),
         )
+        .multicast(args.multicast)
         .build()
         .await
 }
@@ -149,10 +178,20 @@ pub async fn build_sc_client(
     BACnetClient<bacnet_transport::sc::ScTransport<bacnet_transport::sc_tls::TlsWebSocket>>,
     Error,
 > {
+    sc_client_builder(args)?.build().await
+}
+
+/// The BACnet/SC client builder for CLI transport arguments, before it
+/// dials: the TLS files loaded and linted, the hubs and identity set.
+#[cfg(feature = "sc-tls")]
+pub fn sc_client_builder(
+    args: &TransportArgs,
+) -> Result<bacnet_client::client::ScClientBuilder, Error> {
+    use bacnet_transport::sc_tls::pem;
     use bacnet_transport::sc_tls::ScNodeTlsConfig;
     use rustls::RootCertStore;
-    use rustls_pki_types::pem::PemObject;
-    use rustls_pki_types::{CertificateDer, PrivateKeyDer};
+    use rustls_pki_types::pem::Error as PemError;
+    use std::fs::File;
 
     let cert_path = args
         .sc_cert
@@ -181,8 +220,9 @@ pub async fn build_sc_client(
         })?;
 
     let mut root_store = RootCertStore::empty();
-    let ca_iter = CertificateDer::pem_file_iter(ca_path)
-        .map_err(|e| Error::Encoding(format!("failed to read --sc-ca PEM: {e}")))?;
+    let ca_file = File::open(ca_path)
+        .map_err(|e| Error::Encoding(format!("failed to read --sc-ca PEM: {}", PemError::Io(e))))?;
+    let ca_iter = pem::certificate_reader(ca_file);
     let mut ca_certs = Vec::new();
     // Preserve CA error precedence before identity file I/O. The factory below
     // owns the actual TLS policy; this store only validates the loaded input.
@@ -201,25 +241,101 @@ pub async fn build_sc_client(
         ));
     }
 
-    let certs = CertificateDer::pem_file_iter(cert_path)
-        .map_err(|e| Error::Encoding(format!("failed to read cert PEM: {e}")))?
+    let cert_file = File::open(cert_path)
+        .map_err(|e| Error::Encoding(format!("failed to read cert PEM: {}", PemError::Io(e))))?;
+    let certs = pem::certificate_reader(cert_file)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| Error::Encoding(format!("failed to parse cert PEM: {e}")))?;
-    let key = PrivateKeyDer::from_pem_file(key_path)
+    let key = File::open(key_path)
+        .map_err(PemError::Io)
+        .and_then(pem::private_key_reader)
         .map_err(|e| Error::Encoding(format!("failed to read key PEM: {e}")))?;
+
+    // The pre-dial lint (#968), for one-shots and the TUI alike:
+    // a hard failure stops here, before any socket. Warnings are logged (to
+    // stderr in one-shots) and never block; the TUI confirms them earlier, so
+    // a warning that first appears between that check and this one is only
+    // logged (accepted by design). Inputs past the inspection limits are a
+    // warning, not a refusal: the loaders above already accepted them.
+    let lint = crate::sc_check::lint::Lint::run(cert_path, Some(ca_path), Some(key_path), None)
+        .map_err(Error::Encoding)?;
+    if let Some(refusal) = lint.refusal() {
+        return Err(Error::Encoding(refusal));
+    }
+    for warning in lint.of(crate::sc_check::lint::Weight::Warning) {
+        tracing::warn!("{}", warning.text);
+    }
 
     let tls_config = ScNodeTlsConfig::from_der(ca_certs, certs, key)
         .map_err(|e| Error::Encoding(format!("TLS config error: {e}")))?;
 
-    BACnetClient::sc_builder()
+    let mut builder = BACnetClient::sc_builder()
         .hub_url(hub_url)
         .tls_config(tls_config)
         .vmac(sc_vmac)
         .device_uuid(sc_device_uuid)
         .apdu_timeout_ms(args.timeout_ms)
-        .min_request_interval_ms(args.min_interval_ms)
-        .build()
-        .await
+        .min_request_interval_ms(args.min_interval_ms);
+    builder = builder.connect_timeout_ms(
+        args.sc_connect_timeout_ms
+            .unwrap_or(DEFAULT_SC_CONNECT_TIMEOUT_MS),
+    );
+    if let Some(policy) = args.sc_reconnect.clone() {
+        builder = builder.reconnect(policy);
+    }
+    if let Some(failover) = &args.sc_failover_url {
+        // The builder refuses a failover hub without a reconnect policy.
+        builder = builder.failover_hub_url(failover);
+    }
+    Ok(builder)
+}
+
+/// The connect timeout the CLI gives the SC client builder when none is
+/// set: 10 s, the builder's own default (`ScClientBuilder::connect_timeout_ms`),
+/// and a profile's.
+#[cfg_attr(not(any(feature = "tui", feature = "sc-tls")), allow(dead_code))]
+pub(crate) const DEFAULT_SC_CONNECT_TIMEOUT_MS: u64 = 10_000;
+
+/// Whether two hub URLs name the same hub: compared with the scheme and
+/// host lowercased and a trailing slash ignored.
+pub(crate) fn same_hub_url(a: &str, b: &str) -> bool {
+    fn normalized(url: &str) -> String {
+        let url = url.trim();
+        let (scheme, rest) = url.split_once("://").unwrap_or(("", url));
+        let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+        let (authority, tail) = rest.split_at(end);
+        let tail = tail.strip_suffix('/').unwrap_or(tail);
+        format!(
+            "{}://{}{tail}",
+            scheme.to_ascii_lowercase(),
+            authority.to_ascii_lowercase()
+        )
+    }
+    normalized(a) == normalized(b)
+}
+
+/// The longest connect timeout a profile or `--sc-connect-timeout` takes.
+pub(crate) const MAX_SC_CONNECT_TIMEOUT_MS: u64 = 600_000;
+
+/// Why an SC connect timeout is out of range, if it is: zero would fail
+/// every dial at once.
+pub(crate) fn check_sc_connect_timeout(ms: u64) -> Result<(), String> {
+    if (1..=MAX_SC_CONNECT_TIMEOUT_MS).contains(&ms) {
+        Ok(())
+    } else {
+        Err(format!(
+            "must be 1 to {MAX_SC_CONNECT_TIMEOUT_MS} ms, got {ms}"
+        ))
+    }
+}
+
+/// `--sc-connect-timeout`: milliseconds, 1 to [`MAX_SC_CONNECT_TIMEOUT_MS`].
+pub(crate) fn parse_sc_connect_timeout_arg(s: &str) -> Result<u64, String> {
+    let ms = s
+        .parse::<u64>()
+        .map_err(|_| format!("'{s}' is not a number of milliseconds"))?;
+    check_sc_connect_timeout(ms)?;
+    Ok(ms)
 }
 
 /// Build a BACnet/IPv6 (BIP6) client from CLI transport arguments.
@@ -253,6 +369,9 @@ mod tests {
             min_interval_ms: 0,
             sc: true,
             sc_url: Some("wss://hub.example.com/bacnet".into()),
+            sc_failover_url: None,
+            sc_reconnect: None,
+            sc_connect_timeout_ms: None,
             sc_ca: Some(PathBuf::from("site-ca.pem")),
             sc_cert: Some(PathBuf::from("cert.pem")),
             sc_key: Some(PathBuf::from("key.pem")),
@@ -262,6 +381,8 @@ mod tests {
             ipv6_interface: None,
             device_instance: None,
             foreign_device: None,
+            multicast: None,
+            mstp: None,
         }
     }
 

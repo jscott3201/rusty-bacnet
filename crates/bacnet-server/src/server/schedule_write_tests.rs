@@ -335,7 +335,7 @@ async fn write_local_of_present_value_follows_out_of_service() {
     let refused = write(PV, PropertyValue::Real(18.0)).await.unwrap_err();
     assert!(
         matches!(refused, Error::Protocol { code, .. }
-            if code == ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32),
+            if code == ErrorCode::WRITE_ACCESS_DENIED),
         "{refused:?}"
     );
     write(OUT_OF_SERVICE, PropertyValue::Boolean(true))

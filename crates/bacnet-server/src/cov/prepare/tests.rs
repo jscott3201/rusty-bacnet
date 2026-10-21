@@ -11,6 +11,7 @@ use bacnet_services::{
     },
 };
 use bacnet_types::constructed::PropertyReference;
+use bacnet_types::enums::EngineeringUnits;
 use bacnet_types::{
     constructed::{BACnetPrescale, BACnetScale},
     primitives::ObjectIdentifier,
@@ -29,7 +30,7 @@ fn prepared(
 }
 #[test]
 fn cov_sample_builtin_array_coordinates_and_pv_threshold_inheritance() {
-    let mut av = AnalogValueObject::new(1, "value", 95).unwrap();
+    let mut av = AnalogValueObject::new(1, "value", EngineeringUnits::NO_UNITS).unwrap();
     av.write_property(
         PropertyIdentifier::COV_INCREMENT,
         None,
@@ -152,7 +153,7 @@ fn cov_sample_takes_event_message_texts_config_whole() {
     // A whole Event_Message_Texts_Config is a known array (#1329), sampled
     // and compared like Event_Message_Texts.
     let p = PropertyIdentifier::EVENT_MESSAGE_TEXTS_CONFIG;
-    let mut av = AnalogValueObject::new(1, "value", 95).unwrap();
+    let mut av = AnalogValueObject::new(1, "value", EngineeringUnits::NO_UNITS).unwrap();
     let before = prepared(&av, p, None, None);
     assert!(!before.numeric);
     let texts = ["High", "", ""].map(|text| PropertyValue::CharacterString(text.into()));
@@ -178,7 +179,7 @@ fn cov_sample_structured_color_and_accumulator_ignore_increment() {
         Some(f32::INFINITY)
     )
     .reports(Some(&first.sample)));
-    let mut accumulator = AccumulatorObject::new(1, "acc", 95).unwrap();
+    let mut accumulator = AccumulatorObject::new(1, "acc", EngineeringUnits::NO_UNITS).unwrap();
     accumulator.set_prescale(BACnetPrescale {
         multiplier: 1,
         modulo_divide: 2,
@@ -328,8 +329,8 @@ fn cov_sample_admission_coordinate_and_size_failure_preserve_entire_context() {
         .error;
         assert!(
             matches!(&error, Error::Structured { class, code, detail }
-                if *class == ErrorClass::PROPERTY.to_raw() as u32
-                    && *code == ErrorCode::NOT_COV_PROPERTY.to_raw() as u32
+                if *class == ErrorClass::PROPERTY
+                    && *code == ErrorCode::NOT_COV_PROPERTY
                     && matches!(**detail, bacnet_types::error::ErrorDetail::FirstFailedSubscription(ref reference)
                         if reference.property_identifier == CUSTOM.to_raw())),
             "{error:?}"
@@ -350,7 +351,7 @@ fn cov_sample_admission_coordinate_and_size_failure_preserve_entire_context() {
         )
         .unwrap_err();
         assert!(
-            matches!(error,Error::Protocol{code,..} if code==ErrorCode::PROPERTY_IS_NOT_AN_ARRAY.to_raw() as u32)
+            matches!(error,Error::Protocol{code,..} if code==ErrorCode::PROPERTY_IS_NOT_AN_ARRAY)
         );
     }
     let error = crate::handlers::handle_subscribe_cov_property(
@@ -360,9 +361,7 @@ fn cov_sample_admission_coordinate_and_size_failure_preserve_entire_context() {
         &single(PropertyIdentifier::from_raw(999), Some(0)),
     )
     .unwrap_err();
-    assert!(
-        matches!(error,Error::Protocol{code,..} if code==ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32)
-    );
+    assert!(matches!(error,Error::Protocol{code,..} if code==ErrorCode::UNKNOWN_PROPERTY));
     *value.lock().unwrap() = PropertyValue::List(vec![PropertyValue::List(vec![]); 1024]);
     let error = crate::handlers::handle_subscribe_cov_property_multiple_request_endpoint(
         &mut table,
@@ -379,8 +378,8 @@ fn cov_sample_admission_coordinate_and_size_failure_preserve_entire_context() {
     .error;
     assert!(
         matches!(&error, Error::Structured { class, code, detail }
-            if *class == ErrorClass::RESOURCES.to_raw() as u32
-                && *code == ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT.to_raw() as u32
+            if *class == ErrorClass::RESOURCES
+                && *code == ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT
                 && matches!(**detail, bacnet_types::error::ErrorDetail::FirstFailedSubscription(ref reference)
                     if reference.property_identifier == VARIABLE.to_raw())),
         "{error:?}"
@@ -392,9 +391,7 @@ fn cov_sample_admission_coordinate_and_size_failure_preserve_entire_context() {
         &single(VARIABLE, None),
     )
     .unwrap_err();
-    assert!(
-        matches!(error,Error::Protocol{class,..} if class==ErrorClass::RESOURCES.to_raw() as u32)
-    );
+    assert!(matches!(error,Error::Protocol{class,..} if class==ErrorClass::RESOURCES));
     assert!(table.is_current(&first));
     assert_eq!(
         table.get_subscription(first.key()).unwrap().expires_at,

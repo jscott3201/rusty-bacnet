@@ -196,8 +196,8 @@ impl<R> AuditFailureQueue<R> {
         let mut state = self.state.lock().unwrap();
         state.prune();
         let denied = || Error::Protocol {
-            class: bacnet_types::enums::ErrorClass::SERVICES.to_raw() as u32,
-            code: bacnet_types::enums::ErrorCode::SERVICE_REQUEST_DENIED.to_raw() as u32,
+            class: bacnet_types::enums::ErrorClass::SERVICES,
+            code: bacnet_types::enums::ErrorCode::SERVICE_REQUEST_DENIED,
         };
         if state.entries.len() + state.reserved >= 8
             || state.entries.iter().any(|entry| entry.epoch == epoch)

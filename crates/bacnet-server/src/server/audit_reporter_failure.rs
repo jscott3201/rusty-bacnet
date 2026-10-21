@@ -20,7 +20,7 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
                 confirmed,
                 peer: route.canonical_peer.clone(),
                 route,
-                max_apdu: self.config.max_apdu_length,
+                max_apdu: u32::from(self.config.device.max_apdu_length()),
             });
         if ticket.is_none() {
             // Checked admission identity exhaustion refuses capture without wrapping.

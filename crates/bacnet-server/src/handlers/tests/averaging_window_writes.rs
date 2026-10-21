@@ -112,8 +112,8 @@ fn empty() -> [Vec<u8>; 5] {
 fn assert_property_error(result: Result<(), Error>, expected: ErrorCode, context: &str) {
     match result {
         Err(Error::Protocol { class, code }) => {
-            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32, "{context}");
-            assert_eq!(code, expected.to_raw() as u32, "{context}");
+            assert_eq!(class, ErrorClass::PROPERTY, "{context}");
+            assert_eq!(code, expected, "{context}");
         }
         other => panic!("{context}: expected PROPERTY/{expected:?}, got {other:?}"),
     }

@@ -1,9 +1,9 @@
 //! Fixed-width command-priority filter used by Audit Reporter objects.
 
-#[cfg(not(feature = "std"))]
+#[cfg(all(feature = "alloc", not(feature = "std")))]
 use alloc::vec::Vec;
 
-use crate::error::{Error, Result};
+use crate::error::{Error, RangeError, Result};
 
 /// `BACnetPriorityFilter` — one bit for each command priority from 1 through 16.
 ///
@@ -56,9 +56,7 @@ impl BACnetPriorityFilter {
     /// An out-of-range priority is rejected before the filter is mutated.
     pub fn set(&mut self, priority: u8, selected: bool) -> Result<()> {
         let Some(mask) = Self::priority_mask(priority) else {
-            return Err(Error::OutOfRange(
-                "BACnetPriorityFilter: priority must be in 1..=16".into(),
-            ));
+            return Err(RangeError::new("BACnetPriorityFilter: priority must be in 1..=16").into());
         };
         if selected {
             self.bits |= mask;
@@ -99,7 +97,9 @@ impl BACnetPriorityFilter {
         })
     }
 
-    /// Encode as the canonical two-octet BACnet BIT STRING payload.
+    /// Encode as the canonical two-octet BACnet BIT STRING payload. Only
+    /// with `alloc`.
+    #[cfg(feature = "alloc")]
     pub fn to_bacnet(self) -> (u8, Vec<u8>) {
         (
             0,
@@ -124,6 +124,7 @@ mod tests {
         assert_eq!(BACnetPriorityFilter::from_bits(raw).bits(), raw);
     }
 
+    #[cfg(feature = "alloc")]
     #[test]
     fn audit_priority_filter_uses_msb_first_priority_positions() {
         for (priority, expected) in [

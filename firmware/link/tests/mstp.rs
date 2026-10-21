@@ -6,8 +6,8 @@
 use core::mem::size_of;
 
 use bacnet_mstp_codec::{StreamDecoder, MAX_STANDARD_FRAME_LENGTH};
-use bacnet_mstp_core::{ActionBuffers, HeaplessQueues, MasterCore};
-use firmware_link::mstp::{run, Actions, Core, Memory, Queues, EXPECTED};
+use bacnet_mstp_core::{ActionBuffers, FixedQueues, MasterCore};
+use firmware_link::mstp::{run, Core, Memory, Queues, Storage, EXPECTED};
 
 /// The whole summary, against the one the emulation build checks too
 /// (`firmware_link::mstp::EXPECTED`, which explains each value).
@@ -25,16 +25,16 @@ fn ram_sizes() {
     let core = size_of::<Core<'static>>();
     let owning = size_of::<MasterCore<'static, Queues>>();
     let queues = size_of::<Queues>();
-    let actions = size_of::<Actions>();
+    let storage = size_of::<Storage>();
     let default_actions = size_of::<ActionBuffers>();
-    let host = size_of::<MasterCore<'static, HeaplessQueues<4, 2>>>();
+    let host = size_of::<MasterCore<'static, FixedQueues<4, 2>>>();
     let decoder = size_of::<StreamDecoder<'static>>();
-    println!("MasterCore<&mut HeaplessQueues<4, 2>> (the image's): {core} octets");
-    println!("MasterCore<HeaplessQueues<4, 2>>: {owning} octets, its queues {queues}");
+    println!("MasterCore<&mut FixedQueues<4, 2>> (the image's): {core} octets");
+    println!("MasterCore<FixedQueues<4, 2>>: {owning} octets, its queues {queues}");
     println!(
-        "ActionBuffers<1> (the image's): {actions} octets; ActionBuffers<8>: {default_actions}"
+        "StandardStorage<4, 2, 1> (the image's): {storage} octets; ActionBuffers<8>: {default_actions}"
     );
-    println!("MasterCore<HeaplessQueues<4, 2>> with ActionBuffers<8>: {host} + {default_actions}");
+    println!("MasterCore<FixedQueues<4, 2>> with ActionBuffers<8>: {host} + {default_actions}");
     println!(
         "StreamDecoder: {decoder} octets, {} with {MAX_STANDARD_FRAME_LENGTH} octets of storage",
         decoder + MAX_STANDARD_FRAME_LENGTH

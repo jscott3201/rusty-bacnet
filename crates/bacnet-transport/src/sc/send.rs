@@ -110,11 +110,10 @@ impl<W: WebSocketPort> ScTransport<W> {
                 ));
             }
             if npdu.len() > c.hub_max_npdu_length as usize {
-                return Err(Error::Encoding(format!(
-                    "BACnet/SC NPDU length {} exceeds peer Max-NPDU-Length {}",
-                    npdu.len(),
-                    c.hub_max_npdu_length
-                )));
+                return Err(Error::SendTooLong {
+                    length: npdu.len(),
+                    limit: usize::from(c.hub_max_npdu_length),
+                });
             }
             let hub_max_bvlc_length = c.hub_max_bvlc_length;
             let msg =
@@ -125,11 +124,10 @@ impl<W: WebSocketPort> ScTransport<W> {
         let mut buf = BytesMut::new();
         encode_sc_message(&mut buf, &msg);
         if buf.len() > hub_max_bvlc_length as usize {
-            return Err(Error::Encoding(format!(
-                "BACnet/SC encoded BVLC length {} exceeds peer Max-BVLC-Length {}",
-                buf.len(),
-                hub_max_bvlc_length
-            )));
+            return Err(Error::SendTooLong {
+                length: buf.len(),
+                limit: usize::from(hub_max_bvlc_length),
+            });
         }
         ws.send(&buf).await
     }

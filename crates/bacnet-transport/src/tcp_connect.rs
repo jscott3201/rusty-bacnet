@@ -20,14 +20,25 @@ use tokio::time::Instant;
 /// value RFC 8305 recommends.
 const CONNECTION_ATTEMPT_DELAY: Duration = Duration::from_millis(250);
 
-/// Connect to `host_port` ("host:port", with an IPv6 literal in brackets).
-///
-/// Resolves the host, orders its addresses by [`interleave`], and races them
-/// with [`race`]. A resolution failure is returned as is, and so is the only
-/// attempt's error when the host has one address.
-pub(crate) async fn connect(host_port: &str) -> io::Result<TcpStream> {
+/// Resolve `host_port` ("host:port", with an IPv6 literal in brackets) and
+/// order its addresses by [`interleave`] for [`connect_resolved`]. The two
+/// steps are apart so a caller can tell a failed lookup from a failed dial;
+/// a name that resolves to no address is a lookup failure.
+pub(crate) async fn resolve(host_port: &str) -> io::Result<Vec<SocketAddr>> {
     let addrs = interleave(tokio::net::lookup_host(host_port).await?);
-    race(&addrs, CONNECTION_ATTEMPT_DELAY, |addr| {
+    if addrs.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("{host_port} resolved to no address"),
+        ));
+    }
+    Ok(addrs)
+}
+
+/// Race the addresses [`resolve`] returned with [`race`]. The only
+/// attempt's error is returned as is when there is one address.
+pub(crate) async fn connect_resolved(addrs: &[SocketAddr]) -> io::Result<TcpStream> {
+    race(addrs, CONNECTION_ATTEMPT_DELAY, |addr| {
         TcpStream::connect(addr)
     })
     .await

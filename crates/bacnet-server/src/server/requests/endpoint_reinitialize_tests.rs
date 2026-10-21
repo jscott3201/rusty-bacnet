@@ -4,7 +4,7 @@ use bacnet_endpoint_core::endpoint_ingress::EndpointIngress;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_services::device_mgmt::ReinitializeDeviceRequest;
 use bacnet_transport::loopback::LoopbackTransport;
-use bacnet_transport::port::TransportProvenance;
+use bacnet_transport::port::{ReceivedNpdu, TransportPort, TransportProvenance};
 use bacnet_types::enums::ReinitializedState;
 
 type Calls = Arc<std::sync::Mutex<Vec<ReinitializeContext>>>;
@@ -14,13 +14,29 @@ type Calls = Arc<std::sync::Mutex<Vec<ReinitializeContext>>>;
 async fn fixture(
     outcome: impl Fn() -> Result<(), Error> + Send + Sync + 'static,
 ) -> (EndpointResponder, EndpointIngress<LoopbackTransport>, Calls) {
-    let (transport, _peer) = LoopbackTransport::pair(vec![1], vec![2]);
+    let (responder, ingress, calls, _peer) = linked(None, move |_| outcome()).await;
+    (responder, ingress, calls)
+}
+
+/// [`fixture`] with `password` required, the link's peer kept and `outcome`
+/// given the context, so a test can register an after-reply hook and watch
+/// the wire.
+async fn linked(
+    password: Option<&str>,
+    outcome: impl Fn(&ReinitializeContext) -> Result<(), Error> + Send + Sync + 'static,
+) -> (
+    EndpointResponder,
+    EndpointIngress<LoopbackTransport>,
+    Calls,
+    LoopbackTransport,
+) {
+    let (transport, peer) = LoopbackTransport::pair(vec![1], vec![2]);
     let mut ingress = EndpointIngress::new(transport, 4);
     let receivers = ingress.start().await.unwrap();
     let mut db = ObjectDatabase::new();
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
-            instance: 123,
+            identity: bacnet_objects::DeviceIdentity::new(123, 0).expect("valid Device identity"),
             ..Default::default()
         })
         .unwrap(),
@@ -31,12 +47,12 @@ async fn fixture(
     let handler: ReinitializeHandler = Arc::new(
         move |context: &ReinitializeContext, _db: &mut ObjectDatabase| {
             recorded.lock().unwrap().push(context.clone());
-            outcome()
+            outcome(context)
         },
     );
     let responder = EndpointResponder::new(Arc::new(RwLock::new(db)), receivers.egress)
-        .with_reinitialize(handler, None);
-    (responder, ingress, calls)
+        .with_reinitialize(handler, password.map(str::to_owned));
+    (responder, ingress, calls, peer)
 }
 
 fn received(service_choice: ConfirmedServiceChoice, service_request: Bytes) -> ReceivedApdu {
@@ -55,6 +71,7 @@ fn received(service_choice: ConfirmedServiceChoice, service_request: Bytes) -> R
     };
     encode_apdu(&mut bytes, &Apdu::ConfirmedRequest(request)).unwrap();
     ReceivedApdu {
+        router_response: None,
         direct_response: None,
         apdu: bytes.freeze(),
         source_mac: MacAddr::from_slice(&[2]),
@@ -176,4 +193,117 @@ async fn endpoint_reinitialize_close_while_waiting_for_database_never_runs_the_h
     assert_services_other(decode_apdu(decode_npdu(rx.await.unwrap()).unwrap().payload).unwrap());
     assert!(calls.lock().unwrap().is_empty());
     ingress.stop().await.unwrap();
+}
+
+/// The link peer's receive half, set once the peer starts.
+type Inbox = Arc<std::sync::Mutex<Option<tokio::sync::mpsc::Receiver<ReceivedNpdu>>>>;
+/// What the peer had received each time an after-reply hook ran.
+type Seen = Arc<std::sync::Mutex<Vec<Vec<Apdu>>>>;
+/// How a test handler answers once it has registered its hook.
+type Answer = fn() -> Result<(), Error>;
+
+/// An outcome that registers a hook recording what the peer has received
+/// by then, before answering with `answer`.
+fn watching(
+    inbox: &Inbox,
+    seen: &Seen,
+    answer: Answer,
+) -> impl Fn(&ReinitializeContext) -> Result<(), Error> + Send + Sync + 'static {
+    let (inbox, seen) = (Arc::clone(inbox), Arc::clone(seen));
+    move |context| {
+        let (inbox, seen) = (Arc::clone(&inbox), Arc::clone(&seen));
+        context.after_reply(move || {
+            let mut frames = Vec::new();
+            if let Some(inbox) = inbox.lock().unwrap().as_mut() {
+                while let Ok(frame) = inbox.try_recv() {
+                    frames.push(decode_apdu(decode_npdu(frame.npdu).unwrap().payload).unwrap());
+                }
+            }
+            seen.lock().unwrap().push(frames);
+        });
+        answer()
+    }
+}
+
+/// The hook runs once the egress has handed the SimpleACK to the link, so
+/// the peer already holds it, for a routed and a direct requester alike.
+#[tokio::test]
+async fn endpoint_after_reply_hook_runs_once_the_ack_is_sent() {
+    for routed in [true, false] {
+        let (inbox, seen) = (Inbox::default(), Seen::default());
+        let (responder, mut ingress, _calls, mut peer) =
+            linked(None, watching(&inbox, &seen, || Ok(()))).await;
+        *inbox.lock().unwrap() = Some(peer.start().await.unwrap());
+        let mut request = reinitialize(ReinitializedState::COLDSTART);
+        if !routed {
+            request.source_network = None;
+        }
+        assert!(responder.handle(request).await.unwrap());
+        let runs = seen.lock().unwrap().clone();
+        assert_eq!(runs.len(), 1, "routed={routed}");
+        assert!(
+            matches!(runs[0].as_slice(), [Apdu::SimpleAck(ack)] if ack.invoke_id == 71),
+            "routed={routed}: the SimpleACK was sent before the hook ran: {runs:?}"
+        );
+        ingress.stop().await.unwrap();
+    }
+}
+
+/// On a reply channel, the handoff to the channel is the send.
+#[tokio::test]
+async fn endpoint_after_reply_hook_follows_the_reply_channel_handoff() {
+    let (tx, rx) = oneshot::channel();
+    let rx = Arc::new(std::sync::Mutex::new(rx));
+    let handed_off = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (seen, waiting) = (Arc::clone(&handed_off), Arc::clone(&rx));
+    let (responder, mut ingress, _calls, _peer) = linked(None, move |context| {
+        let (seen, waiting) = (Arc::clone(&seen), Arc::clone(&waiting));
+        context.after_reply(move || {
+            let reply = waiting.lock().unwrap().try_recv().is_ok();
+            seen.lock().unwrap().push(reply);
+        });
+        Ok(())
+    })
+    .await;
+    let mut request = reinitialize(ReinitializedState::WARMSTART);
+    request.reply_tx = Some(tx);
+    assert!(responder.handle(request).await.unwrap());
+    assert_eq!(*handed_off.lock().unwrap(), [true]);
+    ingress.stop().await.unwrap();
+}
+
+/// A refusal of any kind, or a reply the channel no longer takes, drops the
+/// hook unrun.
+#[tokio::test]
+async fn endpoint_after_reply_hook_never_runs_for_a_refusal() {
+    let refusal = || {
+        Err(Error::Protocol {
+            class: ErrorClass::DEVICE,
+            code: ErrorCode::CONFIGURATION_IN_PROGRESS,
+        })
+    };
+    let cases: [(&str, Option<&str>, Answer); 5] = [
+        ("refusal", None, refusal),
+        ("error", None, || Err(Error::Encoding("disk full".into()))),
+        ("panic", None, || panic!("handler panic after registering")),
+        ("password", Some("required"), || Ok(())),
+        ("closed reply channel", None, || Ok(())),
+    ];
+    for (case, password, answer) in cases {
+        let (inbox, seen) = (Inbox::default(), Seen::default());
+        let (responder, mut ingress, _calls, _peer) =
+            linked(password, watching(&inbox, &seen, answer)).await;
+        let mut request = reinitialize(ReinitializedState::WARMSTART);
+        if case == "closed reply channel" {
+            let (tx, rx) = oneshot::channel();
+            drop(rx);
+            request.reply_tx = Some(tx);
+            assert!(responder.handle(request).await.unwrap());
+        } else {
+            let response = reply(&responder, request).await;
+            assert!(matches!(response, Apdu::Error(_)), "{case}: {response:?}");
+        }
+        assert!(seen.lock().unwrap().is_empty(), "{case}: hook ran");
+        ingress.stop().await.unwrap();
+    }
 }

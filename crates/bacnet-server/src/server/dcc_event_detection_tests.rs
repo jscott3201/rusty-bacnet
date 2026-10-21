@@ -5,7 +5,7 @@ use super::*;
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::traits::BACnetObject;
-use bacnet_types::enums::EventState;
+use bacnet_types::enums::{EngineeringUnits, EventState};
 
 #[tokio::test]
 async fn disable_initiation_preserves_per_write_detection_but_suppresses_distribution() {
@@ -31,7 +31,7 @@ async fn disable_initiation_preserves_per_write_detection_but_suppresses_distrib
 #[tokio::test(start_paused = true)]
 async fn disable_initiation_preserves_delayed_detection_but_suppresses_distribution() {
     let (transport, sent) = recording_transport();
-    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     for (property, value) in [
         (PropertyIdentifier::HIGH_LIMIT, 80.0),
         (PropertyIdentifier::LOW_LIMIT, 20.0),
@@ -81,8 +81,7 @@ async fn disable_initiation_preserves_delayed_detection_but_suppresses_distribut
     db.add(Box::new(ai)).unwrap();
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
-            instance: 1,
-            name: "Dev".into(),
+            identity: bacnet_objects::DeviceIdentity::default().with_name("Dev"),
             ..DeviceConfig::default()
         })
         .unwrap(),

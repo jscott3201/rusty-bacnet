@@ -353,6 +353,7 @@ impl PyScHub {
     /// configuration failures raise `BacnetError`; repair the files and retry
     /// on the same hub.
     fn start<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::logging_bridge::refresh_at_start(py);
         let inner = self.inner.clone();
         let config = self.config.clone();
         let address = self.address.clone();
@@ -490,6 +491,7 @@ impl PyScHub {
     /// Shares the `start()` path (same validated config, same `BacnetError`
     /// mapping). Entering an already-started hub returns it without rebinding.
     fn __aenter__<'py>(slf: Bound<'py, Self>, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::logging_bridge::refresh_at_start(py);
         let self_ref = slf.clone().unbind();
         let inner = slf.borrow().inner.clone();
         let config = slf.borrow().config.clone();

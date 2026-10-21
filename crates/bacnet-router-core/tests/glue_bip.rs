@@ -6,20 +6,32 @@
 mod fixture;
 mod glue;
 
-use bacnet_bip_codec::{BdtEntries, BdtEntry, BvlcFunction, BvlcResultCode, Bvll};
-use bacnet_bip_core::bbmd::{ForwardRefusal, RegistrationLimits, Reservation, Tables, Target};
-use bacnet_bip_core::node::{Cast, Discard, ForBbmd, Mode, Node, Permissive};
-use bacnet_router_core::bip::{
-    group, port_config, BbmdPort, BipPort, HeldBroadcast, Ingress, PortError,
+use bacnet_bip_core::bbmd::{
+    ForwardRefusal, Registered, RegistrationLimits, Reservation, Served, Tables, Target,
 };
-use bacnet_router_core::router::{Group, Limits, Options, PortConfig, Received, SendRefusal};
+use bacnet_bip_core::codec::{BdtEntries, BdtEntry, BvlcFunction, BvlcResultCode, Bvll, FdtEntry};
+use bacnet_bip_core::node::{self, Discard, Mode, Permissive};
+use bacnet_bip_core::port::{BbmdPort, HeldBroadcast, Ingress, NodePort};
+use bacnet_router_core::bip::BipPort;
+use bacnet_router_core::npdu::NpduLimits;
+use bacnet_router_core::router::{
+    Group, GroupClassifier, Options, PortConfig, Received, SendRefusal,
+};
 use bacnet_router_core::Instant;
 
 use fixture::*;
 use glue::*;
 
-fn bip_port(mode: Mode, held: &mut [HeldBroadcast]) -> BipPort<'_> {
-    BipPort::new(BIP_PORT, node(mode, Instant::ZERO), held).unwrap()
+/// The router's B/IP port, 0.
+const BIP: BipPort = BipPort::new(BIP_PORT);
+
+fn bip_port(mode: Mode, held: &mut [HeldBroadcast]) -> NodePort<'_> {
+    NodePort::new(node(mode, Instant::ZERO), held).unwrap()
+}
+
+/// The router's port configuration for `port`'s link, on network 1.
+fn config<const X: usize, const N: usize>(port: &NodePort<'_, X, N>) -> PortConfig {
+    BipPort::config(port.node().link(), 1)
 }
 
 /// The router, with `bip` as port 0 and an MS/TP-like port 1.
@@ -30,23 +42,26 @@ fn router_on(bip: PortConfig) -> TestRouter {
 #[test]
 fn port_config_reads_the_link() {
     let link = link(Mode::Normal);
-    let config = port_config(&link, 1);
+    let config = BipPort::config(&link, 1);
     assert_eq!(config.network, 1);
     assert_eq!(config.mac.as_slice(), mac(OWN));
-    assert_eq!(config.max_npdu, Limits::both(1497));
+    assert_eq!(config.max_npdu, NpduLimits::both(1497));
     // A smaller budget: a unicast's datagram adds the 4-octet header, a
     // broadcast's also the origin a BBMD forwards it with.
     let small = with(link, |link| link.budget = Some(510));
     assert_eq!(
-        port_config(&small, 1).max_npdu,
-        Limits {
+        BipPort::config(&small, 1).max_npdu,
+        NpduLimits {
             unicast: 506,
             broadcast: 500,
         }
     );
     // No budget: B/IP's largest NPDU all the same (Table 6-1).
     let unbounded = with(link, |link| link.budget = None);
-    assert_eq!(port_config(&unbounded, 1).max_npdu, Limits::both(1497));
+    assert_eq!(
+        BipPort::config(&unbounded, 1).max_npdu,
+        NpduLimits::both(1497)
+    );
 }
 
 #[test]
@@ -57,108 +72,29 @@ fn groups_are_local_broadcasts_only_at_the_links_own_port() {
         sock(255, 255, 255, 255, PORT),
         sock(239, 1, 2, 3, PORT),
     ] {
-        assert_eq!(group(&link, &mac(local)), Group::Broadcast, "{local}");
+        assert_eq!(
+            BipPort::config(&link, 1).groups.classify(&mac(local)),
+            Group::Broadcast,
+            "{local}"
+        );
     }
     for elsewhere in [
         sock(192, 0, 2, 255, PORT + 1),
         sock(255, 255, 255, 255, PORT + 1),
     ] {
-        assert_eq!(group(&link, &mac(elsewhere)), Group::Refuse, "{elsewhere}");
+        assert_eq!(
+            BipPort::config(&link, 1).groups.classify(&mac(elsewhere)),
+            Group::Refuse,
+            "{elsewhere}"
+        );
     }
-    assert_eq!(group(&link, &mac(PEER)), Group::No);
-    assert_eq!(group(&link, &[0x05]), Group::No);
-}
-
-#[test]
-fn ports_refuse_storage_that_doesnt_fit_the_node() {
-    let now = Instant::ZERO;
-    let mut none: [HeldBroadcast; 0] = [];
-    let mut one = [HeldBroadcast::EMPTY];
-    let refused =
-        |mode, held: &mut [HeldBroadcast]| BipPort::<4>::new(BIP_PORT, node(mode, now), held).err();
-    assert_eq!(refused(Mode::Bbmd, &mut none), Some(PortError::Mode));
     assert_eq!(
-        refused(foreign(2), &mut one),
-        Some(PortError::HeldStorage {
-            needed: 2,
-            available: 1
-        })
-    );
-    assert_eq!(refused(foreign(1), &mut one), None);
-    assert_eq!(refused(Mode::Normal, &mut none), None);
-    // Without a send budget a held broadcast could be as long as the
-    // largest BVLL message less its header: far past a slot.
-    let unbounded = with(link(foreign(1)), |link| link.budget = None);
-    let unbounded = Node::<4>::new(unbounded, now).unwrap();
-    assert_eq!(
-        BipPort::new(BIP_PORT, unbounded, &mut one).err(),
-        Some(PortError::HeldLength {
-            needed: 65_525,
-            available: 1497
-        })
-    );
-
-    // Slots of N octets take a link whose broadcasts are no longer: a
-    // budget of 510 lets broadcasts of 500 through.
-    let budget = |octets| with(link(foreign(1)), |link| link.budget = Some(octets));
-    assert_eq!(budget(510).max_npdu(Cast::Broadcast), 500);
-    let mut short = [HeldBroadcast::<500>::EMPTY];
-    let port = BipPort::new(
-        BIP_PORT,
-        Node::<4>::new(budget(510), now).unwrap(),
-        &mut short,
-    );
-    assert!(port.is_ok());
-    let mut shorter = [HeldBroadcast::<499>::EMPTY];
-    let port = BipPort::new(
-        BIP_PORT,
-        Node::<4>::new(budget(510), now).unwrap(),
-        &mut shorter,
+        BipPort::config(&link, 1).groups.classify(&mac(PEER)),
+        Group::No
     );
     assert_eq!(
-        port.err(),
-        Some(PortError::HeldLength {
-            needed: 500,
-            available: 499
-        })
-    );
-    // The default budget sends B/IP's largest NPDU.
-    let mut small = [HeldBroadcast::<501>::EMPTY];
-    let port = BipPort::new(BIP_PORT, node(foreign(1), now), &mut small);
-    assert_eq!(
-        port.err(),
-        Some(PortError::HeldLength {
-            needed: 1497,
-            available: 501
-        })
-    );
-    // A normal node holds nothing, so any slots do.
-    assert!(BipPort::new(BIP_PORT, node(Mode::Normal, now), &mut shorter).is_ok());
-
-    let mut tables: Tables<2, 2> = Tables::new(OWN);
-    let mut targets = [Target::UNUSED; 5];
-    assert_eq!(
-        BbmdPort::<2, 2>::new(
-            BIP_PORT,
-            self::node(Mode::Normal, now),
-            &mut tables,
-            &mut targets
-        )
-        .err(),
-        Some(PortError::Mode)
-    );
-    assert_eq!(
-        BbmdPort::<2, 2>::new(
-            BIP_PORT,
-            self::node(Mode::Bbmd, now),
-            &mut tables,
-            &mut targets[..4]
-        )
-        .err(),
-        Some(PortError::TargetStorage {
-            needed: Tables::<2, 2>::MAX_TARGETS,
-            available: 4
-        })
+        BipPort::config(&link, 1).groups.classify(&[0x05]),
+        Group::No
     );
 }
 
@@ -168,7 +104,7 @@ fn ports_refuse_storage_that_doesnt_fit_the_node() {
 fn deliveries_become_frames_and_sends_become_annex_j_messages() {
     let now = Instant::ZERO;
     let mut bip = bip_port(Mode::Normal, &mut []);
-    let mut router = router_on(bip.config(1));
+    let mut router = router_on(config(&bip));
     let (mut out, mut host) = (Wire::default(), Recorder::default());
 
     // An Original-Unicast from the peer, for node 5 on network 2.
@@ -180,9 +116,10 @@ fn deliveries_become_frames_and_sends_become_annex_j_messages() {
         &mut Permissive,
         &mut out,
     );
-    let Ingress::Npdu(arrived) = ingress else {
+    let Ingress::Npdu(delivery) = ingress else {
         panic!("{ingress:?}");
     };
+    let arrived = BIP.arrived(&delivery);
     assert_eq!(
         (arrived.port, arrived.source.as_slice(), arrived.link_group),
         (BIP_PORT, &mac(PEER)[..], false)
@@ -200,7 +137,7 @@ fn deliveries_become_frames_and_sends_become_annex_j_messages() {
     // Node 5 answers: an Original-Unicast to the peer.
     let answer = apdu_to(1, &mac(PEER), CONFIRMED);
     let _ = router.receive(frame(1, &[5], false, &answer), now, &mut host);
-    let results = pump(&mut router, |send| bip.send(send, now, &mut out));
+    let results = pump(&mut router, |send| BIP.send(&mut bip, send, now, &mut out));
     assert_eq!(results, [(0, Ok(()))]);
     let wire = out.take();
     assert_eq!(wire.len(), 1);
@@ -208,7 +145,7 @@ fn deliveries_become_frames_and_sends_become_annex_j_messages() {
         (wire[0].to, wire[0].function),
         (PEER, BvlcFunction::ORIGINAL_UNICAST_NPDU)
     );
-    let relayed = bacnet_router_core::npdu::Npdu::parse(&wire[0].npdu).unwrap();
+    let relayed = bacnet_router_core::npdu::Npdu::decode(&wire[0].npdu).unwrap();
     assert_eq!(relayed.destination, None);
     assert_eq!(
         relayed.source,
@@ -220,7 +157,7 @@ fn deliveries_become_frames_and_sends_become_annex_j_messages() {
 
     // A global broadcast from network 2 is an Original-Broadcast here.
     let _ = router.receive(frame(1, &[5], true, &GLOBAL_WHO_IS), now, &mut host);
-    let results = pump(&mut router, |send| bip.send(send, now, &mut out));
+    let results = pump(&mut router, |send| BIP.send(&mut bip, send, now, &mut out));
     assert_eq!(results, [(0, Ok(()))]);
     let wire = out.take();
     assert_eq!(
@@ -236,9 +173,10 @@ fn deliveries_become_frames_and_sends_become_annex_j_messages() {
         &mut Permissive,
         &mut out,
     );
-    let Ingress::Npdu(arrived) = ingress else {
+    let Ingress::Npdu(delivery) = ingress else {
         panic!("{ingress:?}");
     };
+    let arrived = BIP.arrived(&delivery);
     assert!(arrived.link_group);
     assert!(matches!(
         router.receive(arrived.frame(), now, &mut host),
@@ -254,73 +192,30 @@ fn refusals_map_to_the_routers() {
     let mut host = Recorder::default();
     // A 64-octet budget: the router believes the port carries 1,497.
     let small = with(link(Mode::Normal), |link| link.budget = Some(64));
-    let mut bip = BipPort::<4>::new(
-        BIP_PORT,
-        bacnet_bip_core::node::Node::new(small, now).unwrap(),
-        &mut [],
-    )
-    .unwrap();
-    let mut router = router_on(port_config(&link(Mode::Normal), 1));
+    let mut bip = NodePort::<4>::new(node::Node::new(small, now).unwrap(), &mut []).unwrap();
+    let mut router = router_on(BipPort::config(&link(Mode::Normal), 1));
     let mut out = Wire::default();
 
     // Too long for the budget.
     let long = apdu_to(1, &mac(PEER), &[0x10; 80]);
     let _ = router.receive(frame(1, &[5], false, &long), now, &mut host);
-    let results = pump(&mut router, |send| bip.send(send, now, &mut out));
+    let results = pump(&mut router, |send| BIP.send(&mut bip, send, now, &mut out));
     assert_eq!(results, [(0, Err(SendRefusal::TooLong))]);
     // A DADR that isn't six octets.
     let short = apdu_to(1, &[7], CONFIRMED);
     let _ = router.receive(frame(1, &[5], false, &short), now, &mut host);
-    let results = pump(&mut router, |send| bip.send(send, now, &mut out));
+    let results = pump(&mut router, |send| BIP.send(&mut bip, send, now, &mut out));
     assert_eq!(results, [(0, Err(SendRefusal::Other))]);
     assert_eq!(out.calls, 0, "nothing reached the socket");
     // The socket is full.
-    out.refuse = Some(SendRefusal::Full);
+    out.refuse = Some(node::SendRefusal::SocketFull);
     let fits = apdu_to(1, &mac(PEER), CONFIRMED);
     let _ = router.receive(frame(1, &[5], false, &fits), now, &mut host);
-    let results = pump(&mut router, |send| bip.send(send, now, &mut out));
+    let results = pump(&mut router, |send| BIP.send(&mut bip, send, now, &mut out));
     assert_eq!(results, [(0, Err(SendRefusal::Full))]);
 
     let counts = router.counters();
     assert_eq!((counts.refused, counts.egress_too_long), (3, 1));
-}
-
-/// Requests only a BBMD serves draw their NAK from the port, and a
-/// datagram the node drops goes nowhere.
-#[test]
-fn naks_and_drops_stay_at_the_port() {
-    let now = Instant::ZERO;
-    let mut bip = bip_port(Mode::Normal, &mut []);
-    let mut out = Wire::default();
-    let payload = encode(&Bvll::ReadBroadcastDistributionTable);
-    assert_eq!(
-        bip.receive(
-            &datagram(&payload, PEER, UNICAST),
-            now,
-            &mut Permissive,
-            &mut out
-        ),
-        Ingress::Handled
-    );
-    let nak = BvlcResultCode::READ_BROADCAST_DISTRIBUTION_TABLE_NAK.to_raw();
-    assert_eq!(
-        out.take(),
-        [Out::new(
-            PEER,
-            BvlcFunction::BVLC_RESULT,
-            &nak.to_be_bytes()
-        )]
-    );
-    assert_eq!(
-        bip.receive(
-            &datagram(&[0x81, 0x0A], PEER, UNICAST),
-            now,
-            &mut Permissive,
-            &mut out
-        ),
-        Ingress::Discarded(Discard::TooShort)
-    );
-    assert_eq!(out.calls, 1);
 }
 
 /// A BBMD port with one peer BBMD, reached two-hop, and one registered
@@ -331,14 +226,15 @@ fn bbmd_port_delivers_and_forwards() {
     let now = Instant::from_secs(1);
     let mut tables: Tables<2, 2> = Tables::new(OWN);
     let mut targets = [Target::UNUSED; Tables::<2, 2>::MAX_TARGETS];
-    let mut bbmd = bbmd_port(&mut tables, &mut targets, now);
-    let mut router = router_on(bbmd.config(1));
+    let mut rows = [NO_ROW; 2];
+    let mut bbmd = bbmd_port(&mut tables, &mut targets, &mut rows, now);
+    let mut router = router_on(BipPort::config(bbmd.link(), 1));
     let (mut out, mut host) = (Wire::default(), Recorder::default());
 
     // The router's own broadcast: the subnet, then the peer and the
     // device, as the BBMD's own broadcast.
     let _ = router.receive(frame(1, &[5], true, &GLOBAL_WHO_IS), now, &mut host);
-    let results = pump(&mut router, |send| bbmd.send(send, now, &mut out));
+    let results = pump(&mut router, |send| BIP.send(&mut bbmd, send, now, &mut out));
     assert_eq!(results, [(0, Ok(()))]);
     let relayed = out.take();
     let npdu = relayed[0].npdu.clone();
@@ -441,7 +337,8 @@ fn bbmd_port_delivers_and_forwards() {
         )]
     );
 
-    // A registration is the caller's to serve, through the tables.
+    // The port answers a registration from its tables, and nothing reaches
+    // the router.
     let payload = encode(&Bvll::RegisterForeignDevice { ttl: 30 });
     let ingress = bbmd.receive(
         &datagram(&payload, PEER, UNICAST),
@@ -449,13 +346,20 @@ fn bbmd_port_delivers_and_forwards() {
         &mut Permissive,
         &mut out,
     );
+    let Ingress::Served(Served::Register(outcome)) = ingress else {
+        panic!("{ingress:?}");
+    };
+    assert_eq!(outcome.result, Ok(Registered::New));
+    let success = BvlcResultCode::SUCCESSFUL_COMPLETION.to_raw();
     assert_eq!(
-        ingress,
-        Ingress::Management(ForBbmd::Register {
-            sender: PEER,
-            ttl: 30
-        })
+        out.take(),
+        [Out::new(
+            PEER,
+            BvlcFunction::BVLC_RESULT,
+            &success.to_be_bytes()
+        )]
     );
+    assert!(drain(&mut router).is_empty());
     assert_eq!(bbmd.counters().refused, 0);
 }
 
@@ -463,7 +367,8 @@ fn bbmd_port_delivers_and_forwards() {
 /// always hands over as a link broadcast.
 fn npdu_from(ingress: &Ingress<'_>) -> Option<Vec<u8>> {
     match ingress {
-        Ingress::Npdu(arrived) => {
+        Ingress::Npdu(delivery) => {
+            let arrived = BIP.arrived(delivery);
             assert!(arrived.link_group);
             Some(arrived.source.as_slice().to_vec())
         }
@@ -514,7 +419,7 @@ fn ingress_fails_closed_before_the_router() {
 
 /// Nothing goes to a group address as a unicast: a router send to the
 /// subnet broadcast, the limited broadcast or a multicast address, which a
-/// host that knows no groups lets through, is refused before anything is
+/// deliberately incomplete port configuration lets through, is refused before anything is
 /// encoded or reaches the socket (#1677, decision L19).
 ///
 /// Ported from ACE IoT's bacnet-router-adapters
@@ -525,7 +430,10 @@ fn ingress_fails_closed_before_the_router() {
 fn unicast_group_destinations_are_rejected_before_encoding_or_send() {
     let now = Instant::ZERO;
     let mut bip = bip_port(Mode::Normal, &mut []);
-    let mut router = router_on(bip.config(1));
+    let mut config = config(&bip);
+    // Exercise the link's own guard even when a custom caller loses the rule.
+    config.groups = bacnet_router_core::router::Groups::None;
+    let mut router = router_on(config);
     let (mut out, mut host) = (Wire::default(), Recorder::default());
     for group in [
         SUBNET.broadcast,
@@ -534,18 +442,22 @@ fn unicast_group_destinations_are_rejected_before_encoding_or_send() {
     ] {
         let npdu = apdu_to(1, &mac(group), UNCONFIRMED);
         let _ = router.receive(frame(1, &[5], false, &npdu), now, &mut host);
-        let results = pump(&mut router, |send| bip.send(send, now, &mut out));
+        let results = pump(&mut router, |send| BIP.send(&mut bip, send, now, &mut out));
         assert_eq!(results, [(0, Err(SendRefusal::Other))], "{group}");
     }
     assert_eq!(out.calls, 0);
     assert_eq!(router.counters().refused, 3);
 }
 
+/// An unused row of a Read-Foreign-Device-Table-Ack.
+const NO_ROW: FdtEntry = FdtEntry::new(sock(0, 0, 0, 0, 0), 0, 0);
+
 /// A BBMD port at [`OWN`] with one peer BBMD, reached two-hop, and one
-/// foreign device registered at `now`, over `tables` and `targets`.
+/// foreign device registered at `now`, over `tables`, `targets` and `rows`.
 fn bbmd_port<'t>(
     tables: &'t mut Tables<2, 2>,
     targets: &'t mut [Target],
+    rows: &'t mut [FdtEntry],
     now: Instant,
 ) -> BbmdPort<'t, 2, 2> {
     let peer_row = [BdtEntry::new(BBMD, core::net::Ipv4Addr::BROADCAST)];
@@ -555,7 +467,7 @@ fn bbmd_port<'t>(
         .fdt
         .register(DEVICE, 60, now, &limits, Reservation::Ordinary, || true);
     assert!(registered.result.is_ok());
-    BbmdPort::new(BIP_PORT, node(Mode::Bbmd, now), tables, targets).unwrap()
+    BbmdPort::new(link(Mode::Bbmd), tables, targets, rows).unwrap()
 }
 
 /// The clock rule holds for a BBMD's tables, which keep no clock of their
@@ -567,10 +479,21 @@ fn bbmd_port<'t>(
 fn a_bbmd_port_hands_its_tables_the_latest_time() {
     let mut tables: Tables<2, 2> = Tables::new(OWN);
     let mut targets = [Target::UNUSED; Tables::<2, 2>::MAX_TARGETS];
-    let mut bbmd = bbmd_port(&mut tables, &mut targets, Instant::from_secs(1));
-    let mut router = router_on(bbmd.config(1));
+    let mut rows = [NO_ROW; 2];
+    let mut bbmd = bbmd_port(&mut tables, &mut targets, &mut rows, Instant::from_secs(1));
+    let mut router = router_on(BipPort::config(bbmd.link(), 1));
     let (mut out, mut host) = (Wire::default(), Recorder::default());
-    bbmd.on_deadline(Instant::from_secs(200));
+    // A datagram at 200 s: a BVLC-Result, which answers nothing the port
+    // asked.
+    let result = encode(&Bvll::BvlcResult(BvlcResultCode::SUCCESSFUL_COMPLETION));
+    let late = Instant::from_secs(200);
+    let ingress = bbmd.receive(
+        &datagram(&result, PEER, UNICAST),
+        late,
+        &mut Permissive,
+        &mut out,
+    );
+    assert_eq!(ingress, Ingress::Handled);
     let early = Instant::from_secs(10);
 
     // A broadcast on the subnet, stamped early: on to the peer only.
@@ -587,7 +510,9 @@ fn a_bbmd_port_hands_its_tables_the_latest_time() {
 
     // The router's own broadcast, sent early: the subnet and the peer.
     let _ = router.receive(frame(1, &[5], true, &GLOBAL_WHO_IS), early, &mut host);
-    let results = pump(&mut router, |send| bbmd.send(send, early, &mut out));
+    let results = pump(&mut router, |send| {
+        BIP.send(&mut bbmd, send, early, &mut out)
+    });
     assert_eq!(results, [(0, Ok(()))]);
     let sent = out.take();
     let npdu = sent[0].npdu.clone();
@@ -604,51 +529,6 @@ fn a_bbmd_port_hands_its_tables_the_latest_time() {
     );
 }
 
-/// Each datagram of a BBMD port's own that the socket refuses is counted
-/// once: a NAK, and each forwarded copy.
-#[test]
-fn refused_datagrams_of_a_bbmd_port_are_counted() {
-    let mut out = Wire {
-        refuse: Some(SendRefusal::Full),
-        ..Wire::default()
-    };
-    let now = Instant::from_secs(1);
-    let mut tables: Tables<2, 2> = Tables::new(OWN);
-    let mut targets = [Target::UNUSED; Tables::<2, 2>::MAX_TARGETS];
-    let mut bbmd = bbmd_port(&mut tables, &mut targets, now);
-    let who_is = [0x01, 0x00, 0x10, 0x08];
-    let forwarded = Bvll::ForwardedNpdu {
-        origin: ORIGIN,
-        npdu: &who_is,
-    };
-    for (message, from, to, refused) in [
-        // A subnet broadcast, to the peer and the device.
-        (Bvll::OriginalBroadcastNpdu(&who_is), PEER, TO_BROADCAST, 2),
-        // The peer's forward, to the subnet and the device.
-        (forwarded, BBMD, UNICAST, 4),
-        // A broadcast from a device that isn't registered: its NAK.
-        (
-            Bvll::DistributeBroadcastToNetwork(&who_is),
-            PEER,
-            UNICAST,
-            5,
-        ),
-    ] {
-        let payload = encode(&message);
-        let ingress = bbmd.receive(
-            &datagram(&payload, from, to),
-            now,
-            &mut Permissive,
-            &mut out,
-        );
-        assert!(!matches!(ingress, Ingress::Discarded(_)), "{ingress:?}");
-        assert_eq!(bbmd.counters().refused, refused, "{message:?}");
-    }
-    // Taking the counts starts them again from zero.
-    assert_eq!(bbmd.take_counters().refused, 5);
-    assert_eq!(bbmd.counters().refused, 0);
-}
-
 /// A BBMD port whose socket refuses the router's broadcast on the subnet
 /// forwards it nowhere, and the router hears of the refusal.
 #[test]
@@ -656,15 +536,16 @@ fn a_bbmd_broadcast_the_socket_refuses_goes_nowhere() {
     let now = Instant::from_secs(1);
     let mut tables: Tables<2, 2> = Tables::new(OWN);
     let mut targets = [Target::UNUSED; Tables::<2, 2>::MAX_TARGETS];
-    let mut bbmd = bbmd_port(&mut tables, &mut targets, now);
-    let mut router = router_on(bbmd.config(1));
+    let mut rows = [NO_ROW; 2];
+    let mut bbmd = bbmd_port(&mut tables, &mut targets, &mut rows, now);
+    let mut router = router_on(BipPort::config(bbmd.link(), 1));
     let mut out = Wire {
-        refuse: Some(SendRefusal::Full),
+        refuse: Some(node::SendRefusal::SocketFull),
         ..Wire::default()
     };
     let mut host = Recorder::default();
     let _ = router.receive(frame(1, &[5], true, &GLOBAL_WHO_IS), now, &mut host);
-    let results = pump(&mut router, |send| bbmd.send(send, now, &mut out));
+    let results = pump(&mut router, |send| BIP.send(&mut bbmd, send, now, &mut out));
     assert_eq!(results, [(0, Err(SendRefusal::Full))]);
     assert_eq!(out.calls, 1, "no copy follows the refused broadcast");
     assert_eq!(bbmd.counters().refused, 0, "the router counts it");

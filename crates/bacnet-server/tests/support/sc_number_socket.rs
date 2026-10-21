@@ -162,7 +162,11 @@ pub fn fixture() -> (ScTransport<GateSocket>, Peer, Arc<Observed>) {
         writer: Mutex::new(()),
     };
     (
-        ScTransport::new(socket, [0x20; 6]).with_device_uuid([0x21; 16]),
+        // These tests fill the network-control queue from one peer, so the
+        // per-source control-message rate limit (#518) mustn't bind first.
+        ScTransport::new(socket, [0x20; 6])
+            .with_device_uuid([0x21; 16])
+            .with_control_rate_limit(bacnet_transport::sc::ScControlRateLimit::new(4096, 4096)),
         Peer(peer),
         observed,
     )
@@ -174,8 +178,9 @@ pub fn database() -> bacnet_objects::database::ObjectDatabase {
     let mut db = bacnet_objects::database::ObjectDatabase::new();
     db.add(Box::new(
         bacnet_objects::device::DeviceObject::new(bacnet_objects::device::DeviceConfig {
-            instance: 7,
-            name: "progress".into(),
+            identity: bacnet_objects::DeviceIdentity::new(7, 0)
+                .expect("valid Device identity")
+                .with_name("progress"),
             ..Default::default()
         })
         .unwrap(),

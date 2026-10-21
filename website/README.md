@@ -95,6 +95,58 @@ evidence, not PyPI, general wheel/platform, or physical-network qualification.
 That evidence is for v0.11.0; the lab has not yet run against a later
 release's wheels.
 
+## TUI screenshots
+
+The `tui/` pages show real macOS Terminal screenshots of `bacnet tui`. They are
+WebP files in `src/assets/tui/` (lossy, quality 92: sharp text at about a
+twentieth of a PNG's size), which Astro's image pipeline resizes at build time. `src/assets/tui/manifest.json` lists every shot: its file,
+alt text, terminal size, the command and keys that produced it, and whether it
+is a live capture, an insta snapshot or a placeholder. A unit test checks that
+the pages, the manifest and the capture script name the same shots.
+
+`scripts/tui-screenshots/capture.py` regenerates them. It needs macOS, tmux
+and cwebp (`brew install tmux webp`) and Rust. It shoots its own Terminal
+window; when Terminal is in full screen, that window can't be resized, so the
+script keeps the TUI at the shot's size in the window's top-left corner and
+crops each shot to it.
+From the repository root:
+
+```sh
+python3 website/scripts/tui-screenshots/capture.py --list    # the shot list
+python3 website/scripts/tui-screenshots/capture.py           # build, then every shot
+python3 website/scripts/tui-screenshots/capture.py --reuse --only watch-list,overview-help
+```
+
+The script builds `bacnet` (with `sc-tls` and `serial`) and the loopback lab
+in `scripts/tui-screenshots/lab/`, a standalone crate outside the workspace
+that uses the workspace crates by path. It starts the lab (a BBMD, a router,
+three B/IP devices and a BACnet/SC hub, all on 127.0.0.1) and runs the TUI in
+a tmux pane. It then opens a **new** Terminal window attached to that pane,
+sends the keys through tmux, and photographs only that window with
+`screencapture -l`. The window is closed at the end, also on failure or
+Ctrl-C; your own Terminal windows and tabs are left as they were. Keep the
+screen unlocked while it runs, about five minutes. Grant Terminal or your shell
+the Screen Recording permission if macOS asks.
+
+- **Paths.** `BACNET_CONFIG_DIR` is `/tmp/bacnet-docs`, a link to a fresh
+  directory that is removed at the end, so no shot shows a home directory or
+  user name.
+- **MS/TP.** The script never joins a trunk. Without `--mstp-port`, the MS/TP
+  shots show the TUI's insta snapshots (simulated stations, no colour).
+  `--mstp-port /dev/cu.usbserial-XXXX` adds live monitor shots with
+  `--mstp-monitor ... --passive`, which only listens; the join shots still
+  come from snapshots.
+- **Look.** The window uses Menlo 12 by default (`--font`, `--font-size`) and
+  your default Terminal profile's colours (`--terminal-profile NAME` picks
+  another). Shots are scaled to at most 1440 pixels wide (`--width`).
+- **Checking the driving logic** without a Terminal window:
+  `capture.py --reuse --tmux-only DIR` writes each shot's text to `DIR/NAME.txt`
+  and leaves the PNGs alone.
+
+Rerun it after a TUI change that the pages show, and review the new PNGs before
+committing them. A new shot needs an entry in `SHOTS` in `capture.py`, a step
+in one of its scenarios, and a page that uses it.
+
 ## Retained CI and publication reference
 
 `.github/workflows/docs-pages.yml` validates pull requests targeting `dev` or
@@ -212,6 +264,9 @@ artifact or fetch a mutable branch in the deployment job.
   (`project/upgrading.md` and the lab's recorded evidence may name the previous
   one). It also checks the installation page's asset list against
   `.github/workflows/release.yml`.
+- `tui/`: the terminal UI on the `dev` branch, which ships after the release in
+  `src/lib/site.mjs`. Its screenshots come from `scripts/tui-screenshots/`
+  (see "TUI screenshots" above).
 - `reference/` and `project/`: reference entry points, support scope and the
   upgrade guide from the previous release.
 - `src/data/navigation.json`: sidebar and test route inventory.

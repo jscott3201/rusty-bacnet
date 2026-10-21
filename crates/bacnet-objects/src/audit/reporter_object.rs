@@ -139,8 +139,8 @@ impl BACnetObject for AuditReporterObject {
                 read_property_list_property(&self.property_list(), array_index)
             }
             _ => Err(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+                class: ErrorClass::PROPERTY,
+                code: ErrorCode::UNKNOWN_PROPERTY,
             }),
         }
     }

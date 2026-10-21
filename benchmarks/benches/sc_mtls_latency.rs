@@ -30,6 +30,7 @@ fn bench_sc_mtls_read_property_latency(c: &mut Criterion) {
         let db = bacnet_benchmarks::helpers::make_benchmark_db(6789);
         let server =
             bacnet_server::server::BACnetServer::<ScTransport<TlsWebSocket>>::generic_builder()
+                .device(bacnet_objects::DeviceIdentity::new(6789, 555).unwrap())
                 .transport(server_transport)
                 .database(db)
                 .build()
@@ -99,6 +100,7 @@ fn bench_sc_mtls_write_property_latency(c: &mut Criterion) {
         let db = bacnet_benchmarks::helpers::make_benchmark_db(6789);
         let server =
             bacnet_server::server::BACnetServer::<ScTransport<TlsWebSocket>>::generic_builder()
+                .device(bacnet_objects::DeviceIdentity::new(6789, 555).unwrap())
                 .transport(server_transport)
                 .database(db)
                 .build()
@@ -172,6 +174,7 @@ fn bench_sc_mtls_rpm_latency(c: &mut Criterion) {
         let db = bacnet_benchmarks::helpers::make_benchmark_db(6789);
         let server =
             bacnet_server::server::BACnetServer::<ScTransport<TlsWebSocket>>::generic_builder()
+                .device(bacnet_objects::DeviceIdentity::new(6789, 555).unwrap())
                 .transport(server_transport)
                 .database(db)
                 .build()

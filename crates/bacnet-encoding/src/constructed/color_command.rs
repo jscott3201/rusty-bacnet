@@ -12,7 +12,7 @@
 
 use bacnet_types::constructed::{BACnetColorCommand, BACnetXyColor};
 use bacnet_types::enums::ColorOperation;
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RangeError};
 use bytes::BytesMut;
 
 use super::members::unsigned_field;
@@ -36,7 +36,7 @@ pub fn encode_xy_color(buf: &mut BytesMut, value: &BACnetXyColor) {
 }
 
 /// Read one application-tagged REAL at `offset` for `what`.
-fn app_real(data: &[u8], offset: usize, what: &str) -> Result<(f32, usize), Error> {
+fn app_real(data: &[u8], offset: usize, what: &'static str) -> Result<(f32, usize), Error> {
     let (octets, end) = decode_app_fixed(data, offset, app_tag::REAL, 4, what)?;
     Ok((primitives::decode_real(octets)?, end))
 }
@@ -102,7 +102,7 @@ pub(super) fn decode_fields(data: &[u8], offset: usize) -> Result<Fields, Error>
         offset,
         0,
         WHAT,
-        "operation [0] exceeds 32 bits",
+        "color command operation [0] exceeds 32 bits",
         &mut oversized,
     )?;
     let (target_color, offset) = target_color(data, offset)?;
@@ -112,10 +112,10 @@ pub(super) fn decode_fields(data: &[u8], offset: usize) -> Result<Fields, Error>
         })
     };
     let (target_color_temperature, offset) =
-        unsigned(offset, 2, "target-color-temperature [2] exceeds 32 bits")?;
-    let (fade_time, offset) = unsigned(offset, 3, "fade-time [3] exceeds 32 bits")?;
-    let (ramp_rate, offset) = unsigned(offset, 4, "ramp-rate [4] exceeds 32 bits")?;
-    let (step_increment, offset) = unsigned(offset, 5, "step-increment [5] exceeds 32 bits")?;
+        unsigned(offset, 2, "color command target-color-temperature [2] exceeds 32 bits")?;
+    let (fade_time, offset) = unsigned(offset, 3, "color command fade-time [3] exceeds 32 bits")?;
+    let (ramp_rate, offset) = unsigned(offset, 4, "color command ramp-rate [4] exceeds 32 bits")?;
+    let (step_increment, offset) = unsigned(offset, 5, "color command step-increment [5] exceeds 32 bits")?;
     let command = BACnetColorCommand {
         operation: ColorOperation::from_raw(operation),
         target_color,
@@ -127,9 +127,10 @@ pub(super) fn decode_fields(data: &[u8], offset: usize) -> Result<Fields, Error>
     Ok((command, offset, oversized))
 }
 
-/// The [`Error::OutOfRange`] for a field too wide for its type.
+/// The [`Error::Range`] for a field too wide for its type, named by its
+/// full label.
 fn too_wide(field: &'static str) -> Error {
-    Error::OutOfRange(format!("{WHAT} {field}"))
+    RangeError::new(field).into()
 }
 
 /// Decode one unframed `BACnetColorCommand` SEQUENCE at `offset`.
@@ -151,7 +152,7 @@ fn too_wide(field: &'static str) -> Error {
 ///   or a target colour that isn't two four-octet application REALs closed
 ///   by tag 1, a frame cut off at a tag boundary included): [`Error::Decoding`];
 /// - a well-formed command whose operation or an Unsigned field needs more
-///   than 32 bits: [`Error::OutOfRange`], naming the first such field. A
+///   than 32 bits: [`Error::Range`], naming the first such field. A
 ///   malformed field anywhere takes precedence.
 ///
 /// Up to four contents octets, an Unsigned or ENUMERATED may open with zero
@@ -172,7 +173,7 @@ pub fn decode_color_command(
 ///
 /// Fails as [`decode_color_command`] does, and with [`Error::Decoding`] when
 /// octets follow the last field. A field too wide for its type is
-/// [`Error::OutOfRange`] only when the rest of `data` is one well-formed
+/// [`Error::Range`] only when the rest of `data` is one well-formed
 /// command, so a broken input is always reported as broken.
 pub fn decode_color_command_value(data: &[u8]) -> Result<BACnetColorCommand, Error> {
     let (command, end, oversized) = decode_fields(data, 0)?;

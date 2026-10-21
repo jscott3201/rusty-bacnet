@@ -63,13 +63,13 @@ fn rpm_device_property_metadata_pics_and_database_are_exact() {
         Segmentation::TRANSMIT,
         Segmentation::RECEIVE,
         Segmentation::BOTH,
-        Segmentation::from_raw(64),
     ] {
         let mut db = ObjectDatabase::new();
         let mut object = DeviceObject::new(DeviceConfig {
-            instance: 77,
-            name: "Device metadata".into(),
-            segmentation_supported,
+            identity: bacnet_objects::DeviceIdentity::new(77, 0)
+                .expect("valid Device identity")
+                .with_name("Device metadata")
+                .with_segmentation(segmentation_supported),
             ..DeviceConfig::default()
         })
         .unwrap();
@@ -120,8 +120,8 @@ fn rpm_device_property_metadata_pics_and_database_are_exact() {
                     read.unwrap();
                 } else {
                     assert!(matches!(read, Err(Error::Protocol { class, code })
-                        if class == bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
-                            && code == bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32));
+                        if class == bacnet_types::enums::ErrorClass::PROPERTY
+                            && code == bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY));
                 }
             }
             let PropertyValue::BitString { unused_bits, data } = object

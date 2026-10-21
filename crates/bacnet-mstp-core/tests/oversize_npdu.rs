@@ -1,15 +1,16 @@
 //! An NPDU too long for a standard frame never holds the token: it is
 //! refused at the queue, or dropped and counted when it gets in anyway.
 
-use bacnet_mstp_codec::{decode_frame, Frame, FrameHeader, FrameType, MAX_EXTENDED_MPDU_DATA};
+use bacnet_mstp_codec::{Frame, FrameHeader, FrameType, MAX_EXTENDED_MPDU_DATA};
+use bacnet_mstp_core::npdu::NetworkPriority;
 use bacnet_mstp_core::{
-    Action, DequeuedNpdu, Direction, ExtendedActionBuffers, HeaplessQueues, Instant, MasterCore,
-    MasterState, MstpCoreConfig, NetworkPriority, QueueCounters, QueueItemInfo, QueueKind,
-    QueueRefusal, QueueStorage,
+    Action, DequeuedNpdu, Direction, ExtendedActionBuffers, FixedQueues, Instant, MasterCore,
+    MasterState, MstpCoreConfig, QueueCounters, QueueItemInfo, QueueKind, QueueRefusal,
+    QueueStorage,
 };
 
 /// Queues whose slots hold more than a standard frame's data.
-type BigQueues = HeaplessQueues<4, 4, 1500>;
+type BigQueues = FixedQueues<4, 4, 1500>;
 type Actions = bacnet_mstp_core::ActionBuffers;
 
 fn config() -> MstpCoreConfig {
@@ -23,17 +24,16 @@ fn config() -> MstpCoreConfig {
 fn next_frame_after_token<Q: QueueStorage, const NPDU: usize>(
     core: &mut MasterCore<'_, Q, NPDU>,
 ) -> FrameHeader {
-    core.on_validated_frame(Frame::new(FrameType::TOKEN, 1, 2, &[]), Instant::ZERO)
-        .unwrap();
+    core.on_validated_frame(Frame::new(FrameType::TOKEN, 1, 2, &[]), Instant::ZERO);
     let due = core.next_deadline().unwrap();
     assert!(due > Instant::ZERO, "the next deadline is in the future");
-    core.on_deadline(due).unwrap();
+    core.on_deadline(due);
     assert_eq!(
         core.poll_action(),
         Action::SetDirection(Direction::Transmit)
     );
     match core.poll_action() {
-        Action::Transmit { frame, .. } => decode_frame(frame).unwrap().0.header,
+        Action::Transmit { header, .. } => header,
         other => panic!("expected transmit, got {other:?}"),
     }
 }
@@ -42,7 +42,7 @@ fn next_frame_after_token<Q: QueueStorage, const NPDU: usize>(
 fn enqueue_refuses_an_npdu_longer_than_a_standard_frame() {
     let mut rx = [0; 64];
     let mut actions = Actions::new();
-    let mut core = MasterCore::new(
+    let mut core = MasterCore::from_parts(
         config(),
         BigQueues::new(),
         &mut rx,
@@ -79,7 +79,8 @@ fn an_oversize_npdu_already_queued_is_dropped_and_the_token_moves_on() {
         .unwrap();
     let mut rx = [0; 64];
     let mut actions = Actions::new();
-    let mut core = MasterCore::new(config(), queues, &mut rx, &mut actions, Instant::ZERO).unwrap();
+    let mut core =
+        MasterCore::from_parts(config(), queues, &mut rx, &mut actions, Instant::ZERO).unwrap();
     let header = next_frame_after_token(&mut core);
     assert_eq!(
         (header.frame_type, header.destination),
@@ -95,7 +96,8 @@ fn an_oversize_npdu_already_queued_is_dropped_and_the_token_moves_on() {
         .unwrap();
     let mut rx = [0; 64];
     let mut actions = Actions::new();
-    let mut core = MasterCore::new(config(), queues, &mut rx, &mut actions, Instant::ZERO).unwrap();
+    let mut core =
+        MasterCore::from_parts(config(), queues, &mut rx, &mut actions, Instant::ZERO).unwrap();
     let header = next_frame_after_token(&mut core);
     assert_eq!(header.frame_type, FrameType::POLL_FOR_MASTER);
     assert_eq!(core.state(), MasterState::PollForMaster);
@@ -114,7 +116,8 @@ fn the_queue_counts_an_npdu_longer_than_the_core_takes() {
         let mut rx = [0; 64];
         let mut actions = Actions::new();
         let mut core =
-            MasterCore::new(config(), &mut queues, &mut rx, &mut actions, Instant::ZERO).unwrap();
+            MasterCore::from_parts(config(), &mut queues, &mut rx, &mut actions, Instant::ZERO)
+                .unwrap();
         let header = next_frame_after_token(&mut core);
         assert_eq!(header.frame_type, FrameType::POLL_FOR_MASTER);
         assert_eq!(core.counters().unicast.drops_oversize, 1);
@@ -138,7 +141,7 @@ fn a_core_without_extended_frames_never_sends_a_long_npdu() {
     let mut rx = [0; 64];
     let mut actions = Box::new(ExtendedActionBuffers::<1>::new());
     let mut core: MasterCore<'_, _, MAX_EXTENDED_MPDU_DATA> =
-        MasterCore::new(config(), queues, &mut rx, &mut actions, Instant::ZERO).unwrap();
+        MasterCore::from_parts(config(), queues, &mut rx, &mut actions, Instant::ZERO).unwrap();
     let header = next_frame_after_token(&mut core);
     assert_eq!(header.frame_type, FrameType::POLL_FOR_MASTER);
     assert_eq!(core.counters().unicast.drops_oversize, 1);
@@ -146,7 +149,7 @@ fn a_core_without_extended_frames_never_sends_a_long_npdu() {
 
 /// A queue storage that lends more octets than it was asked for: `L`, from
 /// a buffer of its own, for each item it takes off its queue.
-struct Overstating<const L: usize>(HeaplessQueues<4, 4>, [u8; L]);
+struct Overstating<const L: usize>(FixedQueues<4, 4>, [u8; L]);
 
 impl<const L: usize> QueueStorage for Overstating<L> {
     fn set_starvation_limit(&mut self, limit: u8) {
@@ -212,9 +215,9 @@ impl<const L: usize> QueueStorage for Overstating<L> {
 fn a_queue_overstating_an_npdu_length_cannot_hold_the_token() {
     let mut rx = [0; 64];
     let mut actions = Actions::new();
-    let mut core = MasterCore::new(
+    let mut core = MasterCore::from_parts(
         config(),
-        Overstating(HeaplessQueues::new(), [0; 600]),
+        Overstating(FixedQueues::new(), [0; 600]),
         &mut rx,
         &mut actions,
         Instant::ZERO,
@@ -234,9 +237,9 @@ fn a_queue_overstating_an_npdu_length_cannot_hold_the_token() {
 fn a_queue_lending_more_than_the_core_takes_cannot_hold_the_token() {
     let mut rx = [0; 64];
     let mut actions = bacnet_mstp_core::ActionBuffers::<1, 100>::new();
-    let mut core: MasterCore<'_, _, 100> = MasterCore::new(
+    let mut core: MasterCore<'_, _, 100> = MasterCore::from_parts(
         config(),
-        Overstating(HeaplessQueues::new(), [0; 200]),
+        Overstating(FixedQueues::new(), [0; 200]),
         &mut rx,
         &mut actions,
         Instant::ZERO,

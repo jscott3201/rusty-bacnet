@@ -201,7 +201,7 @@ fn a_missed_generation_slot_comes_round_again_a_cycle_later() {
     assert!(frames[0].generation);
     assert_eq!(frames[0].start, ms(530) + millis(10 * 32));
     let counters = sim.core(3).unwrap().counters();
-    assert!(counters.deadline_misses > 0);
+    assert!(counters.late_deadlines > 0);
     assert_eq!(counters.missed_generation_slots, 1);
     assert_eq!(counters.token_regenerations, 1);
     sim.assert_no_violations();

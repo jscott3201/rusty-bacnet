@@ -1,5 +1,6 @@
 [package]
 name = "bacnet-client"
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,12 +10,21 @@ description = "BACnet async client: TSM, segmentation, discovery, and service AP
 keywords = ["bacnet", "building-automation", "client", "async"]
 categories = ["network-programming"]
 
+[package.metadata.docs.rs]
+no-default-features = true
+features = ["ipv6", "sc-tls"]
+default-target = "x86_64-unknown-linux-gnu"
+targets = []
+rustdoc-args = ["--cfg", "docsrs"]
+
 [dependencies]
+bacnet-npdu = { workspace = true }
 bacnet-types = { workspace = true, features = ["std"] }
 bacnet-encoding = { workspace = true, features = ["std"] }
 bacnet-services = { workspace = true, features = ["std"] }
 bacnet-transport.workspace = true
 bacnet-network.workspace = true
+bacnet-router-core.workspace = true
 bacnet-endpoint-core.workspace = true
 bytes = { workspace = true, features = ["std"] }
 tracing.workspace = true
@@ -27,6 +37,7 @@ ipv6 = ["bacnet-transport/ipv6"]
 sc-tls = ["bacnet-transport/sc-tls", "dep:tokio-rustls"]
 
 [dev-dependencies]
+rcgen.workspace = true
 bacnet-objects.workspace = true
 tokio = { workspace = true, features = ["net", "rt-multi-thread", "sync", "macros", "time", "test-util"] }
 

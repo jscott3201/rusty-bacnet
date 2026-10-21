@@ -13,26 +13,29 @@ use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use bacnet_encoding::npdu::{encode_npdu, Npdu};
+use bacnet_npdu::NetworkMessageType;
+use bacnet_npdu::NpduLimits;
+use bacnet_router_core::router::Options;
 use bacnet_router_core::Instant;
-use bacnet_transport::port::{DataAttribute, NpduLimits, ReceivedNpdu, TransportProvenance};
-use bacnet_types::enums::NetworkMessageType;
+use bacnet_transport::port::{DataAttribute, ReceivedNpdu, TransportProvenance};
 use bacnet_types::MacAddr;
 use bytes::{Bytes, BytesMut};
 use tokio::sync::mpsc;
 
 use super::control_policy::ControlGate;
 use super::dispatch::{Outputs, PortDispatch, Shared};
-use super::engine::{Engine, RouterClock};
-use super::hosted_host::PortGroups;
+use super::engine::{tokio_clock, Engine, OPTIONS};
 use super::local_control::LocalControl;
+use super::port_groups::PortGroups;
+use super::send_queue;
 use super::{RouterTableGuard, SendRequest};
 use crate::layer::{AdmissionReceiver, ReceivedApdu, ReceivedNetworkControl};
-use crate::router_table::{ClaimCounters, Convergence, Mac, PortId};
+use crate::router_table::{ClaimCounters, Convergence, PortId};
+use bacnet_npdu::Mac;
 
 pub(super) fn control_npdu(message_type: NetworkMessageType, payload: &[u8]) -> Npdu {
     Npdu {
-        is_network_message: true,
-        message_type: Some(message_type.to_raw()),
+        message_type: Some(message_type),
         payload: Bytes::copy_from_slice(payload),
         ..Npdu::default()
     }
@@ -76,8 +79,8 @@ pub(super) struct Harness {
     networks: Vec<u16>,
     shared: Arc<Shared>,
     ports: Vec<PortDispatch>,
-    pub(super) txs: Vec<mpsc::Sender<SendRequest>>,
-    pub(super) rxs: Vec<mpsc::Receiver<SendRequest>>,
+    pub(super) txs: Vec<send_queue::Sender>,
+    pub(super) rxs: Vec<send_queue::Receiver>,
     pub(super) gate: Arc<ControlGate>,
     /// The router's local APDU queue.
     pub(super) apdus: AdmissionReceiver<ReceivedApdu>,
@@ -185,12 +188,12 @@ impl Harness {
     pub(super) fn with_limits(networks: &[u16], limits: &[NpduLimits]) -> Self {
         let capacities = vec![16; networks.len()];
         let gate = Arc::new(ControlGate::permissive());
-        Self::build_with(networks, limits, gate, &capacities)
+        Self::build_with(networks, limits, gate, &capacities, OPTIONS)
     }
 
     fn build(networks: &[u16], gate: Arc<ControlGate>, capacities: &[usize]) -> Self {
         let limits = vec![NpduLimits::default(); networks.len()];
-        Self::build_with(networks, &limits, gate, capacities)
+        Self::build_with(networks, &limits, gate, capacities, OPTIONS)
     }
 
     fn build_with(
@@ -198,22 +201,27 @@ impl Harness {
         limits: &[NpduLimits],
         gate: Arc<ControlGate>,
         capacities: &[usize],
+        options: Options,
     ) -> Self {
         let configs: Vec<_> = (0u8..)
             .zip(networks.iter().zip(limits))
             .map(|(index, (&network, &limits))| {
-                Engine::port(network, Mac::from_array([index + 1]), limits)
+                Engine::port(
+                    network,
+                    Mac::from_array([index + 1]),
+                    limits,
+                    PortGroups::default(),
+                )
             })
             .collect();
-        let engine = Engine::new(&configs, RouterClock::start()).unwrap();
+        let engine = Engine::new(&configs, tokio_clock(), options).unwrap();
         let shared = Arc::new(Shared {
             engine,
             gate: Arc::clone(&gate),
-            groups: vec![PortGroups::default(); networks.len()],
             networks: networks.to_vec(),
             warnings: Default::default(),
         });
-        let (txs, rxs) = capacities.iter().map(|&n| mpsc::channel(n)).unzip();
+        let (txs, rxs) = capacities.iter().map(|&n| send_queue::channel(n)).unzip();
         let (local_tx, apdus, counters) = AdmissionReceiver::channel(true);
         let mut harness = Self {
             networks: networks.to_vec(),
@@ -234,6 +242,7 @@ impl Harness {
     /// router's network-control consumer.
     fn connect(&mut self, control: Option<crate::layer::AdmissionSender<ReceivedNetworkControl>>) {
         let outputs = Arc::new(Outputs {
+            replies: Default::default(),
             send_txs: self.txs.clone(),
             local_tx: self.local_tx.clone(),
             local_control: LocalControl::new(control, Arc::new(AtomicU64::new(0))),
@@ -296,8 +305,8 @@ impl Harness {
         }
     }
 
-    /// The engine's counts so far, as the router publishes them.
-    pub(super) fn counters(&self) -> bacnet_router_core::router::Counters {
+    /// The engine's totals so far, as the router publishes them.
+    pub(super) fn counters(&self) -> super::Counters {
         self.shared.engine.counters()
     }
 

@@ -24,6 +24,16 @@ impl Drop for LiveClient {
 
 impl LiveClient {
     pub async fn open(clients: Clients, vmac: Vmac) -> Self {
+        boxed(|| Self::open_with(clients, vmac, Arc::default())).await
+    }
+
+    /// [`Self::open`], served under `admission`, which several connections
+    /// may share as a hub's do.
+    pub async fn open_with(
+        clients: Clients,
+        vmac: Vmac,
+        admission: Arc<super::admission::AdmissionRuntime>,
+    ) -> Self {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         let rcgen::CertifiedKey { cert, signing_key } =
             rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
@@ -89,11 +99,11 @@ impl LiveClient {
             async move {
                 handle_client_observed(
                     peer_addr,
-                    [0x10; 6],
-                    [0x10; 16],
+                    ([0x10; 6], [0x10; 16]),
                     read,
                     sink,
                     clients,
+                    admission,
                     move || {
                         if let Some(hook) = after_ack.lock().unwrap().take() {
                             hook();

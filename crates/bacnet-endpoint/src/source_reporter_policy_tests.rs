@@ -6,12 +6,14 @@ fn object_audit_policy_snapshot_is_forwarded_from_the_original_instance() {
         analog::AnalogValueObject,
         audit::{AuditPriorityPolicy, ObjectAuditPolicy},
     };
+    use bacnet_types::enums::EngineeringUnits;
     let policy = ObjectAuditPolicy {
         level: Some(AuditLevel::NONE),
         operations: Some(AuditOperationFlags::empty()),
         priority_filter: Some(AuditPriorityPolicy::Inherit),
     };
-    let mut value = AnalogValueObject::new(7, "wrapped AV", 62).unwrap();
+    let mut value =
+        AnalogValueObject::new(7, "wrapped AV", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     value.set_audit_policy(policy);
     let mut object: Box<dyn BACnetObject> = Box::new(value);
     let owner = bacnet_objects::database::AuditOwnership::for_source(
@@ -48,7 +50,9 @@ fn object_audit_policy_snapshot_is_forwarded_from_the_original_instance() {
 #[test]
 fn sealed_policy_authority_forwards_assignment_and_dropped_preparation() {
     use bacnet_objects::{analog::AnalogValueObject, audit::ObjectAuditPolicy};
-    let mut value = AnalogValueObject::new(7, "wrapped", 62).unwrap();
+    use bacnet_types::enums::EngineeringUnits;
+    let mut value =
+        AnalogValueObject::new(7, "wrapped", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     value.set_audit_policy(ObjectAuditPolicy {
         level: Some(AuditLevel::NONE),
         ..Default::default()

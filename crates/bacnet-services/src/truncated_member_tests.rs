@@ -103,7 +103,7 @@ fn fixed_size_members_of_the_wrong_length_stay_malformed_when_cut_short() {
     for data in [&object[..], &boolean] {
         let result = SubscribeCOVRequest::decode(data);
         assert!(
-            matches!(result, Err(Error::Decoding { .. })),
+            matches!(result, Err(Error::Decoding(_))),
             "{data:02X?}: {result:?}"
         );
     }
@@ -134,7 +134,7 @@ fn reals_and_times_check_their_length_before_their_contents() {
     ];
     let [wrong, cut] = wrong_and_right_length_cut(&property, 5);
     let wrong = SubscribeCOVPropertyRequest::decode(&wrong);
-    assert!(matches!(wrong, Err(Error::Decoding { .. })), "{wrong:?}");
+    assert!(matches!(wrong, Err(Error::Decoding(_))), "{wrong:?}");
     let cut = SubscribeCOVPropertyRequest::decode(&cut);
     assert!(matches!(cut, Err(Error::BufferTooShort { .. })), "{cut:?}");
 
@@ -145,7 +145,7 @@ fn reals_and_times_check_their_length_before_their_contents() {
     ];
     let [wrong, cut] = wrong_and_right_length_cut(&multiple, 1);
     let wrong = SubscribeCOVPropertyMultipleRequest::decode(&wrong);
-    assert!(matches!(wrong, Err(Error::Decoding { .. })), "{wrong:?}");
+    assert!(matches!(wrong, Err(Error::Decoding(_))), "{wrong:?}");
     let cut = SubscribeCOVPropertyMultipleRequest::decode(&cut);
     assert!(matches!(cut, Err(Error::BufferTooShort { .. })), "{cut:?}");
 
@@ -160,7 +160,7 @@ fn reals_and_times_check_their_length_before_their_contents() {
     let wrong = COVNotificationMultipleRequest::decode(&wrong);
     assert!(
         matches!(wrong, Err(Error::Reject { reason })
-            if reason == RejectReason::INVALID_DATA_ENCODING.to_raw()),
+            if reason == RejectReason::INVALID_DATA_ENCODING),
         "{wrong:?}"
     );
     let cut = COVNotificationMultipleRequest::decode(&cut);
@@ -188,12 +188,12 @@ fn confirmed_cov_notification_rejects_keep_their_reasons() {
             RejectReason::MISSING_REQUIRED_PARAMETER,
             "{data:02X?}"
         );
-        assert!(matches!(error, Error::Decoding { .. }), "{error:?}");
+        assert!(matches!(error, Error::Decoding(_)), "{error:?}");
     }
     // An application tag there is an invalid tag.
     let (wrong, error) = reason(&[0x21, 0x01]);
     assert_eq!(wrong, RejectReason::INVALID_TAG);
-    assert!(matches!(error, Error::Decoding { .. }), "{error:?}");
+    assert!(matches!(error, Error::Decoding(_)), "{error:?}");
     // A process identifier padded with a leading zero is an invalid
     // encoding, and one past u32 is out of range.
     let padded = [0x0A, 0x00, 0x01];

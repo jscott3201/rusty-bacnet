@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# The firmware link test (#1626, #1635, #1664, #1667, #1679): build
+# The firmware link test (#1626, #1635, #1664, #1667, #1679, #1771): build
 # firmware/link's images, one per stack, as bare-metal binaries for each
 # target, and check their sizes against firmware/link/size-budget.toml.
 # mstp (the MS/TP codec and core), mstp-extended (the same with extended
 # frames on), bip (the BVLL codec), node (bacnet-bip-core's foreign-device
-# node), bbmd (its BBMD tables) and router (bacnet-router-core between a
-# BBMD's B/IP port and an MS/TP port with extended frames) have no global
-# allocator; apdu (bacnet-encoding and bacnet-services, no_std with alloc)
+# node), bbmd (its BBMD tables), router (bacnet-router-core between a
+# BBMD's B/IP port and an MS/TP port with extended frames) and device (an
+# MS/TP device answering Who-Is and ReadProperty through the
+# allocation-free profile of bacnet-encoding and bacnet-services) have no
+# global allocator; apdu (bacnet-encoding and bacnet-services, no_std with alloc)
 # has one, over a fixed arena.
 #
 #   check-firmware-link.sh [<triple>...]             check the default targets
@@ -39,7 +41,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 default_targets=(thumbv7m-none-eabi thumbv6m-none-eabi riscv32imc-unknown-none-elf thumbv7em-none-eabihf)
-images=(mstp mstp-extended bip node bbmd router apdu)
+images=(mstp mstp-extended bip node bbmd router device apdu)
 # One cargo run per feature set, as its arguments: every image but apdu
 # without the crate's default `alloc` feature, which would link alloc into
 # them, then the apdu image with it.

@@ -74,7 +74,7 @@ async fn write_priority_invalid_direct_local_routed_and_batch_never_admit_or_sen
                 .await
                 .unwrap()
                 .unwrap_err();
-            assert!(matches!(error, Error::Encoding(message) if message.contains("priority")));
+            assert!(matches!(error, Error::Encode(refused) if refused.label.contains("priority")));
             assert_eq!(client.tsm.lock().await.coordinated_active_count(), 0);
             assert_eq!(client.tsm.lock().await.pending_count(), 0);
             assert!(received.try_recv().is_err());
@@ -92,7 +92,7 @@ async fn write_priority_invalid_direct_local_routed_and_batch_never_admit_or_sen
                 None,
             )
             .await;
-        assert!(matches!(results[0].result, Err(Error::Encoding(_))));
+        assert!(matches!(results[0].result, Err(Error::Encode(_))));
         assert_eq!(results[0].request_index, 0);
     }
     assert!(timeout(Duration::from_millis(25), received.recv())

@@ -15,22 +15,35 @@
 //!   deliver). The `adapter` module documents the details.
 //! - [`MstpConfig`], mapped onto [`MstpCoreConfig`] and validated by the
 //!   core's rules.
+//! - [`MstpExecutionMode`], where the loop runs: on the application's Tokio
+//!   runtime, or on a thread of its own, which on Linux can be given
+//!   `SCHED_FIFO` and CPU affinity ([`MstpThreadConfig`]).
 //! - [`MstpDiagnostics`], the core's counters added up ([`MstpCounters`])
-//!   plus counts kept at the transport boundary.
+//!   plus counts kept at the transport boundary, and the node's place in
+//!   the token ring ([`MstpNodeState`]).
+//! - [`monitor`], a receive-only monitor that listens to a trunk without
+//!   joining it and keeps per-station statistics.
 
 use bacnet_mstp_core::{ConfigError, Duration as CoreDuration, MstpCoreConfig};
 use bacnet_types::error::Error;
-use tokio::sync::oneshot;
 
 pub use bacnet_mstp_codec as codec;
 mod adapter;
 mod diagnostics;
 mod echo;
+mod execution;
+pub mod monitor;
 mod queues;
 mod replies;
 mod totals;
-pub use diagnostics::{MstpDiagnostics, MstpDiagnosticsSnapshot};
-pub use totals::{MstpCounters, QueueCounters};
+pub use bacnet_mstp_core::MasterState;
+pub use diagnostics::{MstpDiagnostics, MstpDiagnosticsSnapshot, MstpNodeState};
+use execution::DedicatedRuntime;
+pub use execution::{
+    MstpExecutionMode, MstpExecutionStatus, MstpThreadConfig, MAX_CPUS, MAX_REALTIME_PRIORITY,
+    MIN_REALTIME_PRIORITY,
+};
+pub use totals::{LatenessHistogram, MstpCounters, QueueCounters};
 
 // ---------------------------------------------------------------------------
 // Serial port abstraction
@@ -157,70 +170,6 @@ pub trait SerialPort: Send + Sync + 'static {
     }
 }
 
-/// Execution placement for an MS/TP transport, independent of master-node settings.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum MstpExecutionMode {
-    /// Spawn the MAC loop on the caller's Tokio runtime (the existing default).
-    #[default]
-    Tokio,
-    /// Poll the same MAC loop on a dedicated OS thread with its own Tokio runtime.
-    /// Blocking drain work uses that runtime's blocking pool, not the application's.
-    /// This does not configure real-time scheduling or guarantee wire timing.
-    DedicatedThread,
-}
-
-/// Owns the isolated reactor. Dropping the shutdown sender also handles cancelled
-/// startup and abort; only `stop` waits for runtime and blocking-I/O completion.
-struct DedicatedRuntime {
-    handle: tokio::runtime::Handle,
-    shutdown: oneshot::Sender<()>,
-    finished: oneshot::Receiver<()>,
-}
-
-impl DedicatedRuntime {
-    async fn new() -> Result<Self, Error> {
-        let (started_tx, started_rx) = oneshot::channel();
-        let (shutdown, shutdown_rx) = oneshot::channel();
-        let (finished_tx, finished) = oneshot::channel();
-        std::thread::Builder::new()
-            .name("bacnet-mstp".into())
-            .spawn(move || {
-                match tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                {
-                    Ok(runtime) => {
-                        if started_tx.send(Ok(runtime.handle().clone())).is_ok() {
-                            let _ = runtime.block_on(shutdown_rx);
-                        }
-                        // Drop on the OS thread, never in the caller's async context.
-                        // This waits for any already-started blocking drain calls.
-                        drop(runtime);
-                    }
-                    Err(error) => {
-                        let _ = started_tx.send(Err(error));
-                    }
-                }
-                let _ = finished_tx.send(());
-            })
-            .map_err(Error::Transport)?;
-        let handle = started_rx
-            .await
-            .map_err(|_| Error::Encoding("MS/TP execution thread failed to start".into()))?
-            .map_err(Error::Transport)?;
-        Ok(Self {
-            handle,
-            shutdown,
-            finished,
-        })
-    }
-
-    async fn stop(self) {
-        drop(self.shutdown);
-        let _ = self.finished.await;
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
@@ -233,6 +182,22 @@ impl DedicatedRuntime {
 /// still arriving. The core times each octet from the read that returned it.
 /// It is [`bacnet_mstp_core::MAX_FRAME_ABORT`], in milliseconds.
 pub const HOST_FRAME_ABORT_MS: u64 = bacnet_mstp_core::MAX_FRAME_ABORT.as_millis();
+
+/// The lateness at which this transport's core counts a serviced deadline
+/// late ([`MstpCounters::late_deadlines`]): 5 ms, where the core's default
+/// is 1 ms.
+///
+/// A Tokio timer wakes about a millisecond late by construction, before the
+/// OS adds anything: it rounds each deadline up to its next millisecond tick
+/// and parks for whole ticks from the current one, floored, so its own
+/// rounding alone comes to up to 2 ms. Hosts measured for #1897 added up to
+/// about 3 ms more of wake-up jitter at the 99th percentile. At 1 ms nearly
+/// every timed wake counted, which said nothing about load. 5 ms clears
+/// both and is half of T_slot (10 ms, Clause 9.5.3), about where lateness
+/// starts to eat into a token-generation slot or a turnaround inside
+/// T_usage_delay. Every wake still counts in the lateness histogram
+/// ([`MstpCounters::deadline_lateness`]).
+pub const HOST_LATE_DEADLINE: std::time::Duration = std::time::Duration::from_millis(5);
 
 /// [`MstpConfig::usage_timeout`]'s default: 35 ms, the longest T_usage_timeout
 /// Clause 9.5.3 allows ([`bacnet_mstp_core::MAX_USAGE_TIMEOUT`]).
@@ -414,6 +379,7 @@ impl MstpConfig {
         config.t_frame_abort = CoreDuration::from_millis(HOST_FRAME_ABORT_MS);
         config.t_usage_timeout = CoreDuration::saturating_from_core(self.usage_timeout);
         config.t_reply_timeout = CoreDuration::saturating_from_core(self.reply_timeout);
+        config.late_deadline = CoreDuration::saturating_from_core(HOST_LATE_DEADLINE);
         if self.extended_frames {
             config = config.with_extended_frames();
         }
@@ -509,3 +475,5 @@ mod reply_tests;
 mod slow_adapter_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod thread_config_tests;

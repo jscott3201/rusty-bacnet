@@ -99,8 +99,9 @@ pub(super) fn database() -> ObjectDatabase {
     let mut db = ObjectDatabase::new();
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
-            instance: DEVICE,
-            name: "DEV".into(),
+            identity: crate::DeviceIdentity::new(DEVICE, 0)
+                .expect("valid Device identity")
+                .with_name("DEV"),
             ..DeviceConfig::default()
         })
         .unwrap(),
@@ -299,8 +300,8 @@ pub(super) fn stub_rights(
 fn assert_unknown_object(result: Result<AccessRightsEvaluation, Error>) {
     match result {
         Err(Error::Protocol { class, code }) => {
-            assert_eq!(class, ErrorClass::OBJECT.to_raw() as u32);
-            assert_eq!(code, ErrorCode::UNKNOWN_OBJECT.to_raw() as u32);
+            assert_eq!(class, ErrorClass::OBJECT);
+            assert_eq!(code, ErrorCode::UNKNOWN_OBJECT);
         }
         other => panic!("expected OBJECT / UNKNOWN_OBJECT, got {other:?}"),
     }

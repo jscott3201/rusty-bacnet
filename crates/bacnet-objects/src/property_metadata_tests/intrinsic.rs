@@ -16,6 +16,7 @@ use crate::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
 use crate::event_log::EventLogObject;
 use crate::trend::{TrendLogMultipleObject, TrendLogObject};
 
+use bacnet_types::enums::EngineeringUnits;
 use PropertyIdentifier as P;
 
 /// The rows every one of these tables requires of an intrinsic reporter.
@@ -67,17 +68,17 @@ fn cases() -> Vec<Case> {
     let delay_normal: &'static [P] = &[P::TIME_DELAY_NORMAL];
     vec![
         case(
-            Box::new(AnalogInputObject::new(1, "AI", 62).unwrap()),
+            Box::new(AnalogInputObject::new(1, "AI", EngineeringUnits::DEGREES_CELSIUS).unwrap()),
             OUT_OF_RANGE,
             delay_normal,
         ),
         case(
-            Box::new(AnalogOutputObject::new(1, "AO", 62).unwrap()),
+            Box::new(AnalogOutputObject::new(1, "AO", EngineeringUnits::DEGREES_CELSIUS).unwrap()),
             OUT_OF_RANGE,
             delay_normal,
         ),
         case(
-            Box::new(AnalogValueObject::new(1, "AV", 62).unwrap()),
+            Box::new(AnalogValueObject::new(1, "AV", EngineeringUnits::DEGREES_CELSIUS).unwrap()),
             OUT_OF_RANGE,
             delay_normal,
         ),

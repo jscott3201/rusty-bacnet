@@ -2,9 +2,9 @@
 //!
 //! Several properties carry a `BitString` whose bits have a fixed, named
 //! meaning defined by the standard. This module models those `BACnetXxx` BIT
-//! STRING productions so a decoded [`crate::primitives::PropertyValue::BitString`]
+//! STRING productions so a decoded `PropertyValue::BitString`
 //! can be promoted from raw `(unused_bits, data)` bytes to named flags, the same
-//! way [`crate::enums::ResolvedEnum`] promotes an `Enumerated`.
+//! way `ResolvedEnum` promotes an `Enumerated`.
 //!
 //! ## Bit order
 //!
@@ -18,11 +18,11 @@
 //! right-aligned representation; it is re-exported and mapped by the resolver as
 //! well.
 
-#[cfg(not(feature = "std"))]
+#[cfg(all(feature = "alloc", not(feature = "std")))]
 use alloc::vec::Vec;
 
 use crate::enums::{AuditOperation, ObjectType, ServiceSupported};
-use crate::error::{Error, Result};
+use crate::error::{DecodeError, DecodingKind, Error, RangeError, Result};
 
 pub use crate::primitives::StatusFlags;
 pub use days_of_week::DaysOfWeek;
@@ -358,9 +358,10 @@ impl AuditOperationFlags {
     #[inline]
     pub fn from_bits(bits: u64) -> Result<Self> {
         if bits & Self::RESERVED_BITS != 0 {
-            return Err(Error::OutOfRange(
-                "BACnetAuditOperationFlags: reserved bits 16-31 must be zero".into(),
-            ));
+            return Err(RangeError::new(
+                "BACnetAuditOperationFlags: reserved bits 16-31 must be zero",
+            )
+            .into());
         }
         Ok(Self { bits })
     }
@@ -432,10 +433,13 @@ impl AuditOperationFlags {
     /// padding in the final octet.
     pub fn from_bacnet(unused_bits: u8, data: &[u8]) -> Result<Self> {
         if unused_bits > 7 {
-            return Err(Error::decoding(
+            return Err(DecodeError::new(
+                DecodingKind::InvalidEncoding,
                 0,
-                format!("BACnetAuditOperationFlags: unused_bits must be 0-7, got {unused_bits}"),
-            ));
+                "BACnetAuditOperationFlags: unused_bits must be 0-7, got {}",
+            )
+            .with_value(u64::from(unused_bits))
+            .into());
         }
         if data.is_empty() {
             if unused_bits != 0 {
@@ -449,12 +453,13 @@ impl AuditOperationFlags {
 
         let meaningful_bits = data.len() * 8 - usize::from(unused_bits);
         if meaningful_bits > 64 {
-            return Err(Error::decoding(
+            return Err(DecodeError::new(
+                DecodingKind::InvalidEncoding,
                 0,
-                format!(
-                    "BACnetAuditOperationFlags: {meaningful_bits} bits exceeds the 64-bit limit"
-                ),
-            ));
+                "BACnetAuditOperationFlags: {} bits exceeds the 64-bit limit",
+            )
+            .with_value(meaningful_bits as u64)
+            .into());
         }
         if unused_bits != 0 {
             let padding_mask = (1u8 << unused_bits) - 1;
@@ -482,7 +487,9 @@ impl AuditOperationFlags {
     /// Encode as a shortest-form Clause 20.2.10 BIT STRING payload.
     ///
     /// The returned `data` excludes the initial unused-bits octet. Bit 0 is
-    /// placed in the most-significant position of the first data octet.
+    /// placed in the most-significant position of the first data octet. Only
+    /// with `alloc`.
+    #[cfg(feature = "alloc")]
     pub fn to_bacnet(self) -> (u8, Vec<u8>) {
         if self.bits == 0 {
             return (0, Vec::new());
@@ -663,6 +670,7 @@ mod tests {
         assert_eq!(format!("{:?}", EventTransitionBits::TO_FAULT), "TO_FAULT");
     }
 
+    #[cfg(feature = "alloc")]
     #[test]
     fn audit_operation_flags_empty_and_named_bits_use_msb_first_wire_order() {
         let empty = AuditOperationFlags::empty();
@@ -684,6 +692,7 @@ mod tests {
         assert_eq!(flags.to_string(), "READ | GENERAL");
     }
 
+    #[cfg(feature = "alloc")]
     #[test]
     fn audit_operation_flags_preserve_proprietary_bit_63() {
         let proprietary_32 = AuditOperation::from_raw(32);

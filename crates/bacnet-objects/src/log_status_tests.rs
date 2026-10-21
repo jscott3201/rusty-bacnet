@@ -338,8 +338,8 @@ fn assert_protocol(error: Error, class: ErrorClass, code: ErrorCode) {
             class: actual_class,
             code: actual_code,
         } => {
-            assert_eq!(actual_class, class.to_raw() as u32);
-            assert_eq!(actual_code, code.to_raw() as u32);
+            assert_eq!(actual_class, class);
+            assert_eq!(actual_code, code);
         }
         other => panic!("expected protocol error, got {other:?}"),
     }

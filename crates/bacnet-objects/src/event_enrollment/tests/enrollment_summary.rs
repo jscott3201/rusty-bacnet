@@ -52,8 +52,11 @@ fn configured_event_enrollment_reports_stored_type_and_shared_commit_coordinate(
     );
 }
 
+/// An enrollment can fault once it monitors something, whatever its
+/// parameters (#1868): an unmodeled Extended one opts in with a reference
+/// and stays out without one. Alert Enrollment never opts in.
 #[test]
-fn unsupported_or_unreferenced_event_enrollment_and_alert_enrollment_opt_out() {
+fn unreferenced_event_enrollment_and_alert_enrollment_opt_out() {
     let mut enrollment = EventEnrollmentObject::new(1, "EE-1", EventType::EXTENDED).unwrap();
     enrollment.set_event_parameters(BACnetEventParameter::Extended {
         vendor_id: 1,
@@ -65,7 +68,13 @@ fn unsupported_or_unreferenced_event_enrollment_and_alert_enrollment_opt_out() {
     enrollment
         .set_object_property_reference(Some(monitored_reference()))
         .unwrap();
-    assert_eq!(enrollment.enrollment_summary_capability_internal(), None);
+    assert_eq!(
+        enrollment
+            .enrollment_summary_capability_internal()
+            .unwrap()
+            .event_type,
+        EventType::EXTENDED
+    );
 
     let alert = AlertEnrollmentObject::new(
         1,
@@ -102,4 +111,56 @@ fn detection_enable_is_separate_from_configured_capability() {
         .expect("handler, not capability, applies detection-enable exclusion");
     assert_eq!(capability.event_type, EventType::OUT_OF_RANGE);
     assert_eq!(capability.last_transition, None);
+}
+
+/// An enrollment whose Event_Parameters were never set serves the `none`
+/// alternative of the CHOICE: context tag 20 with a NULL body, which takes
+/// the extended tag-number form `F8 14`. It evaluates reliability only
+/// (Clause 12.12.7), so with a monitored reference it is listed with
+/// Event_Type NONE (#1868).
+#[test]
+fn unset_event_parameters_serve_the_none_alternative() {
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::OUT_OF_RANGE).unwrap();
+    ee.set_object_property_reference(Some(monitored_reference()))
+        .unwrap();
+    let val = ee
+        .read_property(PropertyIdentifier::EVENT_PARAMETERS, None)
+        .unwrap();
+    assert_eq!(val, PropertyValue::ApplicationData(vec![0xF8, 0x14]));
+    let PropertyValue::ApplicationData(bytes) = &val else {
+        unreachable!()
+    };
+    assert_eq!(
+        bacnet_encoding::constructed::decode_event_parameter(bytes, 0).unwrap(),
+        (
+            BACnetEventParameter::Opaque {
+                tag: 20,
+                data: Vec::new()
+            },
+            2
+        )
+    );
+    assert_eq!(
+        ee.enrollment_summary_capability_internal()
+            .unwrap()
+            .event_type,
+        EventType::NONE
+    );
+    // Without a reference it can't fault, so it stays out.
+    ee.set_object_property_reference(None).unwrap();
+    assert_eq!(ee.enrollment_summary_capability_internal(), None);
+
+    // The served value writes back as itself.
+    ee.write_property(
+        PropertyIdentifier::EVENT_PARAMETERS,
+        None,
+        val.clone(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        ee.read_property(PropertyIdentifier::EVENT_PARAMETERS, None)
+            .unwrap(),
+        val
+    );
 }

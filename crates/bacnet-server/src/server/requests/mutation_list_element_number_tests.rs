@@ -238,8 +238,8 @@ struct Recipients {
 
 fn protocol(class: ErrorClass, code: ErrorCode, element: Option<usize>) -> Error {
     Error::protocol(
-        class.to_raw() as u32,
-        code.to_raw() as u32,
+        class,
+        code,
         element.map(|index| ErrorDetail::FirstFailedElementNumber(index as u32 + 1)),
     )
 }

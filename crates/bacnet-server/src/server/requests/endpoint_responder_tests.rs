@@ -7,6 +7,7 @@ use bacnet_transport::loopback::LoopbackTransport;
 
 use super::*;
 use bacnet_transport::port::TransportProvenance;
+use bacnet_types::enums::EngineeringUnits;
 
 fn read_property_request(invoke_id: u8) -> Bytes {
     let mut service_request = BytesMut::new();
@@ -40,7 +41,8 @@ async fn responder_moves_reply_sender_once_and_preserves_routed_destination() {
     let mut endpoint = EndpointIngress::new(endpoint_transport, 2);
     let ingress = endpoint.start().await.unwrap();
     let mut db = ObjectDatabase::new();
-    let mut analog = AnalogInputObject::new(7, "shared-runtime-input", 0).unwrap();
+    let mut analog =
+        AnalogInputObject::new(7, "shared-runtime-input", EngineeringUnits::SQUARE_METERS).unwrap();
     analog.set_present_value(42.0);
     db.add(Box::new(analog)).unwrap();
     let responder = EndpointResponder::new(Arc::new(RwLock::new(db)), ingress.egress.clone());
@@ -50,6 +52,7 @@ async fn responder_moves_reply_sender_once_and_preserves_routed_destination() {
     };
     let (reply_tx, reply_rx) = oneshot::channel();
     let received = ReceivedApdu {
+        router_response: None,
         direct_response: None,
         apdu: read_property_request(0x31),
         source_mac: MacAddr::from_slice(&[0x02]),
@@ -87,6 +90,7 @@ async fn responder_moves_reply_sender_once_and_preserves_routed_destination() {
     assert!(matches!(
         responder
             .handle(ReceivedApdu {
+                router_response: None,
                 direct_response: None,
                 apdu: read_property_request(0x32),
                 source_mac: MacAddr::from_slice(&[0x02]),
@@ -114,7 +118,8 @@ async fn responder_routes_reply_to_original_source_via_immediate_router() {
     let mut endpoint = EndpointIngress::new(endpoint_transport, 2);
     let ingress = endpoint.start().await.unwrap();
     let mut db = ObjectDatabase::new();
-    let mut analog = AnalogInputObject::new(7, "routed-input", 0).unwrap();
+    let mut analog =
+        AnalogInputObject::new(7, "routed-input", EngineeringUnits::SQUARE_METERS).unwrap();
     analog.set_present_value(42.0);
     db.add(Box::new(analog)).unwrap();
     let responder = EndpointResponder::new(Arc::new(RwLock::new(db)), ingress.egress);
@@ -125,6 +130,7 @@ async fn responder_routes_reply_to_original_source_via_immediate_router() {
 
     assert!(responder
         .handle(ReceivedApdu {
+            router_response: None,
             direct_response: None,
             apdu: read_property_request(0x41),
             source_mac: MacAddr::from_slice(&[0x02]),
@@ -148,7 +154,7 @@ async fn responder_routes_reply_to_original_source_via_immediate_router() {
     let npdu = decode_npdu(sent.npdu).unwrap();
     assert_eq!(npdu.destination, Some(routed_source));
     assert!(!npdu.expecting_reply);
-    assert_eq!(npdu.priority, NetworkPriority::NORMAL);
+    assert_eq!(npdu.priority, NetworkPriority::Normal);
     match decode_apdu(npdu.payload).unwrap() {
         Apdu::ComplexAck(ack) => assert_eq!(ack.invoke_id, 0x41),
         other => panic!("expected ComplexAck, got {other:?}"),
@@ -210,6 +216,7 @@ async fn responder_ignores_write_group_and_leaves_its_channels_alone() {
         let (reply_tx, reply_rx) = oneshot::channel();
         assert!(!responder
             .handle(ReceivedApdu {
+                router_response: None,
                 direct_response: None,
                 apdu: apdu.clone().freeze(),
                 source_mac: MacAddr::from_slice(&[0x02]),

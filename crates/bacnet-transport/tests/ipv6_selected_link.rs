@@ -2,8 +2,19 @@
 //!
 //! Supply `RB_IPV6_TEST_ADDRESS` and `RB_IPV6_TEST_INDEX` from a task-owned
 //! internal Docker bridge. These tests must not discover or use a host LAN.
+// The packet-info oracle (wire.rs) needs nix's decoded IPV6_PKTINFO, which
+// it gives only on these targets.
+#![cfg(all(
+    feature = "ipv6",
+    any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "freebsd",
+        target_vendor = "apple"
+    )
+))]
+#![forbid(unsafe_code)]
 #![allow(clippy::print_stderr)] // opt-in checks report skipped setups outside a test function
-#![cfg(all(feature = "ipv6", unix))]
 
 #[path = "ipv6_selected_link/controls.rs"]
 mod controls;
@@ -11,6 +22,9 @@ mod controls;
 mod foreign;
 #[path = "ipv6_selected_link/lifecycle.rs"]
 mod lifecycle;
+// A closing rebind can lose the freed port to another process (#1419).
+#[path = "../../bacnet-endpoint/tests/support/port_retry.rs"]
+mod port_retry;
 #[path = "ipv6_selected_link/support.rs"]
 mod support;
 use support::*;

@@ -10,7 +10,7 @@ use bacnet_encoding::constructed::{
     decode_audit_log_record_result_at, encode_audit_log_record_result,
 };
 use bacnet_encoding::{primitives, tags};
-use bacnet_types::error::Error;
+use bacnet_types::error::{DecodeError, DecodingKind, Error, RangeError};
 use bytes::BytesMut;
 
 const AUDIT_LOG_TAG: u8 = 0;
@@ -19,10 +19,9 @@ const NO_MORE_ITEMS_TAG: u8 = 2;
 
 pub(super) fn encode(ack: &AuditLogQueryAck, buf: &mut BytesMut) -> Result<(), Error> {
     if ack.records.len() > MAX_DECODED_ITEMS {
-        return Err(Error::OutOfRange(format!(
-            "AuditLogQuery-ACK record count {} exceeds {MAX_DECODED_ITEMS}",
-            ack.records.len()
-        )));
+        return Err(RangeError::new("AuditLogQuery-ACK record count {} exceeds {}")
+            .with_values(ack.records.len() as u64, MAX_DECODED_ITEMS as u64)
+            .into());
     }
 
     let mut encoded = BytesMut::new();
@@ -47,10 +46,13 @@ pub(super) fn decode(data: &[u8]) -> Result<AuditLogQueryAck, Error> {
     let mut record_offset = 0;
     while record_offset < records_body.len() {
         if records.len() >= MAX_DECODED_ITEMS {
-            return Err(Error::overflow(
+            return Err(DecodeError::new(
+                DecodingKind::Overflow,
                 offset + record_offset,
-                format!("AuditLogQuery-ACK record count exceeds {MAX_DECODED_ITEMS}"),
-            ));
+                "AuditLogQuery-ACK record count exceeds {}",
+            )
+            .with_value(MAX_DECODED_ITEMS as u64)
+            .into());
         }
         let (result, next) = decode_audit_log_record_result_at(records_body, record_offset)?;
         if next <= record_offset {

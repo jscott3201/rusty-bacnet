@@ -15,6 +15,8 @@ fn quota() -> usize {
     ScNpduAdmissionPolicy::default().per_origin_limit
 }
 
+const CAPACITY: usize = npdu_admission::SC_NPDU_QUEUE_CAPACITY;
+
 async fn hub_accept(ws_hub: &LoopbackWebSocket) {
     let data = ws_hub.recv().await.unwrap();
     let req = decode_sc_message(&data).unwrap();
@@ -111,21 +113,22 @@ fn payload(origin: u8, seq: u8) -> Vec<u8> {
 
 #[tokio::test]
 async fn bursty_source_capped_while_legitimate_origins_progress() {
-    assert_eq!(quota(), 4);
+    assert_eq!((quota(), CAPACITY), (32, 256));
     let (mut transport, ws_hub, mut rx) = start_transport([0x01; 6]).await;
     // One bursty origin floods first: only the quota survives.
-    for seq in 0..64u16 {
+    for seq in 0..CAPACITY as u16 {
         send_npdu(&ws_hub, BURSTY, None, payload(0xA0, seq as u8), seq).await;
     }
-    // Fifteen legitimate origins fill the rest of the queue.
-    for origin in 1..16u8 {
-        for seq in 0..4u8 {
+    // Seven legitimate origins fill the rest of the queue.
+    let origins = (CAPACITY / quota()) as u8;
+    for origin in 1..origins {
+        for seq in 0..quota() as u8 {
             send_npdu(
                 &ws_hub,
                 [origin; 6],
                 None,
                 payload(origin, seq),
-                u16::from(origin) * 16 + u16::from(seq),
+                0x1000 + u16::from(origin) * 0x100 + u16::from(seq),
             )
             .await;
         }
@@ -135,42 +138,78 @@ async fn bursty_source_capped_while_legitimate_origins_progress() {
     // Over quota AND globally full: fairness takes precedence over Full.
     send_npdu(&ws_hub, BURSTY, None, payload(0xA0, 0xFE), 0x7001).await;
     barrier(&ws_hub, 0x7002).await;
-    // Measured tradeoff: the burst is capped at 4/64 (one quota) while
-    // legitimate origins hold the other 60; the extra burst costs fairness
+    // Measured tradeoff: the burst is capped at 32/256 (one quota) while
+    // legitimate origins hold the other 224; the extra burst costs fairness
     // drops, the fresh origin costs exactly one Full drop.
+    let burst_drops = (CAPACITY - quota() + 1) as u64;
     assert_eq!(
         transport.npdu_drop_counts(),
         ScNpduDropCounts {
-            fairness_drops: 61,
+            fairness_drops: burst_drops,
             full_drops: 1,
             closed_drops: 0,
+            ..Default::default()
         }
     );
     // Draining proves progress per origin: burst first, then each origin.
     let mut seen: std::collections::HashMap<u8, usize> = std::collections::HashMap::new();
-    for _ in 0..64 {
-        let received = rx.try_recv().expect("64 queued NPDUs must drain");
+    for _ in 0..CAPACITY {
+        let received = rx.try_recv().expect("a full queue must drain");
         assert!(received.provenance.is_relayed_origin());
         assert!(received.reply_tx.is_none());
         *seen.entry(received.npdu[2]).or_default() += 1;
     }
-    assert_eq!(seen.get(&0xA0), Some(&4));
-    for origin in 1..16u8 {
-        assert_eq!(seen.get(&origin), Some(&4), "origin {origin:#x} starved");
+    assert_eq!(seen.get(&0xA0), Some(&quota()));
+    for origin in 1..origins {
+        assert_eq!(
+            seen.get(&origin),
+            Some(&quota()),
+            "origin {origin:#x} starved"
+        );
     }
     assert!(rx.try_recv().is_err());
     // Quota released by draining: the previously capped burst progresses.
     send_npdu(&ws_hub, BURSTY, None, payload(0xA0, 9), 0x7100).await;
     barrier(&ws_hub, 0x7101).await;
     assert_eq!(rx.try_recv().unwrap().npdu.as_ref(), &[0x01, 0x00, 0xA0, 9]);
-    assert_eq!(transport.npdu_drop_counts().fairness_drops, 61);
+    assert_eq!(transport.npdu_drop_counts().fairness_drops, burst_drops);
+    transport.stop().await.unwrap();
+}
+
+/// #1712: a client with ten requests in flight to one server gets the ten
+/// replies back to back, and the server gets the ten requests that way. The
+/// receive loop admits frames that arrive together before the network layer
+/// drains any, so the quota must hold a whole burst. At the old 4-of-64,
+/// everything past the fourth was dropped and its request timed out.
+#[tokio::test(start_paused = true)]
+async fn one_origin_burst_of_up_to_32_is_admitted_whole() {
+    let (mut transport, ws_hub, mut rx) = start_transport([0x01; 6]).await;
+    let mut next_id = 0x7700;
+    for burst in [5u8, 10, 25, 32] {
+        for seq in 0..burst {
+            send_npdu(&ws_hub, BURSTY, None, payload(0xA0, seq), next_id).await;
+            next_id += 1;
+        }
+        barrier(&ws_hub, next_id).await;
+        next_id += 1;
+        assert_eq!(
+            transport.npdu_drop_counts(),
+            ScNpduDropCounts::default(),
+            "a burst of {burst} lost NPDUs"
+        );
+        for seq in 0..burst {
+            let received = rx.try_recv().expect("every NPDU of the burst is queued");
+            assert_eq!(received.npdu.as_ref(), &[0x01, 0x00, 0xA0, seq]);
+        }
+        assert!(rx.try_recv().is_err());
+    }
     transport.stop().await.unwrap();
 }
 
 #[tokio::test]
 async fn slow_consumer_keeps_control_progress_while_queue_full() {
     let (mut transport, ws_hub, mut rx) = start_transport([0x01; 6]).await;
-    for seq in 0..70u16 {
+    for seq in 0..(quota() + 66) as u16 {
         send_npdu(&ws_hub, BURSTY, None, payload(0xA0, seq as u8), seq).await;
     }
     barrier(&ws_hub, 0x7200).await;
@@ -205,7 +244,7 @@ async fn slow_consumer_keeps_control_progress_while_queue_full() {
     assert_eq!(transport.npdu_drop_counts().fairness_drops, 66);
     assert_eq!(transport.npdu_drop_counts().full_drops, 0);
     // Queued NPDUs remain drainable.
-    for _ in 0..4 {
+    for _ in 0..quota() {
         rx.try_recv().unwrap();
     }
     transport.stop().await.unwrap();
@@ -216,14 +255,15 @@ async fn segmented_burst_progresses_when_consumer_drains() {
     let (mut transport, ws_hub, mut rx) = start_transport([0x01; 6]).await;
     // A finite multi-NPDU sequence larger than one quota completes as long
     // as the consumer drains: no SC reassembly cache, no deadlock.
-    for chunk in 0..3u8 {
-        for seq in 0..4u8 {
-            let id = u16::from(chunk) * 4 + u16::from(seq);
+    let quota = quota() as u16;
+    for chunk in 0..3u16 {
+        for seq in 0..quota {
+            let id = chunk * quota + seq;
             send_npdu(&ws_hub, BURSTY, None, payload(0xA0, id as u8), id).await;
         }
-        barrier(&ws_hub, 0x7400 + u16::from(chunk)).await;
-        for seq in 0..4u8 {
-            let id = u16::from(chunk) * 4 + u16::from(seq);
+        barrier(&ws_hub, 0x7400 + chunk).await;
+        for seq in 0..quota {
+            let id = chunk * quota + seq;
             let received = rx.try_recv().expect("drained quota must admit more");
             assert_eq!(received.npdu.as_ref(), &[0x01, 0x00, 0xA0, id as u8]);
         }
@@ -270,15 +310,26 @@ async fn unicast_and_control_share_quota_without_charging_control() {
         0x7505,
     )
     .await;
+    // The rest of the quota, unicast-shaped.
+    for seq in 4..quota() as u8 {
+        send_npdu(
+            &ws_hub,
+            origin,
+            None,
+            payload(0x22, seq),
+            0x7580 + u16::from(seq),
+        )
+        .await;
+    }
     barrier(&ws_hub, 0x7506).await;
     assert_eq!(transport.npdu_drop_counts(), ScNpduDropCounts::default());
-    // Fifth NPDU of either shape now exceeds the shared quota.
-    send_npdu(&ws_hub, origin, None, payload(0x22, 4), 0x7507).await;
+    // One more NPDU of either shape now exceeds the shared quota.
+    send_npdu(&ws_hub, origin, None, payload(0x22, 0xF0), 0x7507).await;
     send_npdu(
         &ws_hub,
         origin,
         Some(BROADCAST_VMAC),
-        payload(0x22, 5),
+        payload(0x22, 0xF1),
         0x7508,
     )
     .await;
@@ -290,7 +341,10 @@ async fn unicast_and_control_share_quota_without_charging_control() {
     rx.try_recv().unwrap();
     let third = rx.try_recv().unwrap();
     assert!(third.link_layer_group);
-    rx.try_recv().unwrap();
+    for _ in 3..quota() {
+        rx.try_recv().unwrap();
+    }
+    assert!(rx.try_recv().is_err());
     transport.stop().await.unwrap();
 }
 
@@ -302,7 +356,7 @@ async fn close_and_cancellation_preserve_closed_precedence() {
         .await
         .is_err());
     assert_eq!(transport.npdu_drop_counts(), ScNpduDropCounts::default());
-    for seq in 0..4u16 {
+    for seq in 0..quota() as u16 {
         send_npdu(&ws_hub, BURSTY, None, payload(0xA0, seq as u8), seq).await;
     }
     barrier(&ws_hub, 0x7600).await;
@@ -318,7 +372,7 @@ async fn close_and_cancellation_preserve_closed_precedence() {
         }
     );
     // Draining still works after close; dropping then counts Closed again.
-    for _ in 0..4 {
+    for _ in 0..quota() {
         rx.recv().await.expect("close preserves queued items");
     }
     drop(rx);
@@ -331,7 +385,7 @@ async fn close_and_cancellation_preserve_closed_precedence() {
 
 #[tokio::test]
 async fn invalid_per_origin_limit_rejected_at_start() {
-    for limit in [0, 65, usize::MAX] {
+    for limit in [0, CAPACITY + 1, usize::MAX] {
         let (ws_client, _ws_hub) = LoopbackWebSocket::pair();
         let mut transport = ScTransport::new(ws_client, [0x01; 6])
             .with_device_uuid([1; 16])

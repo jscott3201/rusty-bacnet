@@ -16,7 +16,7 @@ use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::event_enrollment::EventEnrollmentObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetEventParameter};
-use bacnet_types::enums::{EventState, EventType};
+use bacnet_types::enums::{EngineeringUnits, EventState, EventType};
 
 /// Time_Delay=2 on a one-second evaluation interval: the first pass of the
 /// out-of-range condition seeds the countdown, and the transition fires on
@@ -30,7 +30,7 @@ use bacnet_types::enums::{EventState, EventType};
 async fn spawned_task_advances_and_fires_the_time_delay_countdown() {
     let (transport, sent) = recording_transport();
 
-    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ai.set_present_value(85.0); // above the high limit below
     let ai_oid = ai.object_identifier();
 
@@ -54,8 +54,7 @@ async fn spawned_task_advances_and_fires_the_time_delay_countdown() {
     db.add(Box::new(ee)).unwrap();
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
-            instance: 1,
-            name: "Dev".into(),
+            identity: bacnet_objects::DeviceIdentity::default().with_name("Dev"),
             ..DeviceConfig::default()
         })
         .unwrap(),
@@ -131,7 +130,7 @@ async fn default_interval_server(
 ) -> (BACnetServer<TestTransport>, ObjectIdentifier, SendLog) {
     let (transport, sent) = recording_transport();
 
-    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ai.set_present_value(85.0);
     let ai_oid = ai.object_identifier();
 
@@ -155,8 +154,7 @@ async fn default_interval_server(
     db.add(Box::new(ee)).unwrap();
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
-            instance: 1,
-            name: "Dev".into(),
+            identity: bacnet_objects::DeviceIdentity::default().with_name("Dev"),
             ..DeviceConfig::default()
         })
         .unwrap(),

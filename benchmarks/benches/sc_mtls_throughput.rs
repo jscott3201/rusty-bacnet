@@ -27,6 +27,7 @@ fn bench_sc_mtls_read_property_throughput(c: &mut Criterion) {
         let db = bacnet_benchmarks::helpers::make_benchmark_db(7890);
         let server =
             bacnet_server::server::BACnetServer::<ScTransport<TlsWebSocket>>::generic_builder()
+                .device(bacnet_objects::DeviceIdentity::new(7890, 555).unwrap())
                 .transport(server_transport)
                 .database(db)
                 .build()
@@ -100,6 +101,7 @@ fn bench_sc_mtls_write_property_throughput(c: &mut Criterion) {
         let db = bacnet_benchmarks::helpers::make_benchmark_db(7890);
         let server =
             bacnet_server::server::BACnetServer::<ScTransport<TlsWebSocket>>::generic_builder()
+                .device(bacnet_objects::DeviceIdentity::new(7890, 555).unwrap())
                 .transport(server_transport)
                 .database(db)
                 .build()

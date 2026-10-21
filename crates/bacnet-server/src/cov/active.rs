@@ -360,6 +360,7 @@ mod tests {
     use super::*;
     use bacnet_objects::analog::AnalogValueObject;
     use bacnet_objects::binary::BinaryValueObject;
+    use bacnet_types::enums::EngineeringUnits;
     use bacnet_types::enums::ObjectType;
     use std::time::Duration;
 
@@ -447,7 +448,8 @@ mod tests {
     #[test]
     fn active_cov_projection_maps_identity_increment_and_scope() {
         let mut db = ObjectDatabase::new();
-        let mut analog = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+        let mut analog =
+            AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
         analog
             .write_property(
                 PropertyIdentifier::COV_INCREMENT,
@@ -583,8 +585,10 @@ mod tests {
         // admission refuses a direct MAC or routed source past
         // BACnetAddress::MAX_MAC_LEN and every admitted one encodes.
         let mut db = ObjectDatabase::new();
-        db.add(Box::new(AnalogValueObject::new(1, "AV-1", 62).unwrap()))
-            .unwrap();
+        db.add(Box::new(
+            AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+        ))
+        .unwrap();
         let longest = BACnetAddress::MAX_MAC_LEN;
         let mut direct = proposal(1, av(1), None, None);
         direct.subscriber_mac = MacAddr::from_slice(&vec![0xA5; longest]);

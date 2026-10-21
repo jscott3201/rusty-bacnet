@@ -94,7 +94,7 @@ async fn sc_client_builder_rejects_invalid_max_segments_before_connect() {
 
     assert!(matches!(
         result,
-        Err(Error::Encoding(message)) if message.contains("max-segments-accepted")
+        Err(Error::Range(refused)) if refused.label.contains("max-segments-accepted")
     ));
 }
 
@@ -220,5 +220,54 @@ async fn sc_client_test_builder_reconnect_preflight_drops_input_without_io() {
         );
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert_eq!(drops.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+}
+
+#[tokio::test]
+async fn sc_client_builder_npdu_limit_preflight_covers_all_build_paths() {
+    use bacnet_transport::mstp::NoSerial;
+    for limit in [0, 257, usize::MAX] {
+        let builder = || {
+            BACnetClient::sc_builder()
+                .vmac([0x22; 6])
+                .device_uuid([0xAB; 16])
+                .npdu_per_origin_limit(limit)
+        };
+        for error in [
+            builder().build().await.err().unwrap(),
+            builder().build_any::<NoSerial>().await.err().unwrap(),
+        ] {
+            assert!(
+                matches!(error, Error::OutOfRange(message) if message.contains("per-origin limit"))
+            );
+        }
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let drops = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let error = builder()
+            .build_with_websocket_for_test(RejectIoWebSocket {
+                calls: calls.clone(),
+                drops: drops.clone(),
+            })
+            .await
+            .err()
+            .unwrap();
+        assert!(
+            matches!(error, Error::OutOfRange(message) if message.contains("per-origin limit"))
+        );
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(drops.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+    for limit in [1, 32, 256] {
+        let error = BACnetClient::sc_builder()
+            .vmac([0x22; 6])
+            .device_uuid([0xAB; 16])
+            .npdu_per_origin_limit(limit)
+            .build()
+            .await
+            .err()
+            .unwrap();
+        assert!(
+            matches!(error, Error::Encoding(message) if message.contains("tls_config is required"))
+        );
     }
 }

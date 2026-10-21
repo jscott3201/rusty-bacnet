@@ -70,15 +70,15 @@ pub(super) fn select_signed_range(
 
 fn list_item_not_numbered() -> Error {
     Error::Protocol {
-        class: ErrorClass::PROPERTY.to_raw() as u32,
-        code: ErrorCode::LIST_ITEM_NOT_NUMBERED.to_raw() as u32,
+        class: ErrorClass::PROPERTY,
+        code: ErrorCode::LIST_ITEM_NOT_NUMBERED,
     }
 }
 
 fn list_item_not_timestamped() -> Error {
     Error::Protocol {
-        class: ErrorClass::PROPERTY.to_raw() as u32,
-        code: ErrorCode::LIST_ITEM_NOT_TIMESTAMPED.to_raw() as u32,
+        class: ErrorClass::PROPERTY,
+        code: ErrorCode::LIST_ITEM_NOT_TIMESTAMPED,
     }
 }
 
@@ -260,8 +260,8 @@ fn read_range_items(
         // Read the whole property first so an unknown one keeps its error.
         object.read_property(property, None)?;
         return Err(ReadRangeFailure::Service(Error::Protocol {
-            class: ErrorClass::PROPERTY.to_raw() as u32,
-            code: ErrorCode::PROPERTY_IS_NOT_AN_ARRAY.to_raw() as u32,
+            class: ErrorClass::PROPERTY,
+            code: ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
         }));
     }
     let value =
@@ -270,8 +270,8 @@ fn read_range_items(
     // BACnetARRAY of BACnetLIST property.
     if index.is_some() || !object.is_list_property(property) {
         return Err(ReadRangeFailure::Service(Error::Protocol {
-            class: ErrorClass::SERVICES.to_raw() as u32,
-            code: ErrorCode::PROPERTY_IS_NOT_A_LIST.to_raw() as u32,
+            class: ErrorClass::SERVICES,
+            code: ErrorCode::PROPERTY_IS_NOT_A_LIST,
         }));
     }
     Ok(items::list_items(
@@ -293,8 +293,8 @@ fn prepare_read_range<'a>(
     members: Option<GroupMembers>,
 ) -> Result<PreparedReadRange<'a>, ReadRangeFailure> {
     let stored = db.get(&request.object_identifier).ok_or(Error::Protocol {
-        class: ErrorClass::OBJECT.to_raw() as u32,
-        code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
+        class: ErrorClass::OBJECT,
+        code: ErrorCode::UNKNOWN_OBJECT,
     })?;
     let served = view.map(|view| view.object(stored));
     let object: &dyn BACnetObject = served.as_ref().map_or(stored, |served| served);

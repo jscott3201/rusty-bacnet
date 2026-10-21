@@ -1,6 +1,6 @@
 //! Python boundary for `BACnetDeviceObjectPropertyReference` values: the
-//! members of a Channel (#1262) and of a Trend Log Multiple (#1235), and an
-//! access rule's time range (#1316).
+//! members of a Channel (#1262) and of a Trend Log Multiple (#1235), a Trend
+//! Log's reference (#1480), and an access rule's time range (#1316).
 //!
 //! A member list takes, per element, either a tuple naming a property in this
 //! device, `(object, property)` or `(object, property, array_index)`, or a
@@ -39,6 +39,15 @@ pub(crate) fn property_references_from_py(
         .enumerate()
         .map(|(index, item)| tuple_or_mapping(item, &format!("{name}[{index}]")))
         .collect()
+}
+
+/// Read one reference, a tuple or a mapping as each element of
+/// [`property_references_from_py`] is. `name` labels the errors.
+pub(crate) fn property_reference_from_py(
+    value: &Bound<'_, PyAny>,
+    name: &str,
+) -> PyResult<BACnetDeviceObjectPropertyReference> {
+    tuple_or_mapping(value, name)
 }
 
 fn tuple_or_mapping(

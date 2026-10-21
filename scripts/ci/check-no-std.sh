@@ -22,7 +22,11 @@
 # feature and portable-atomic's critical-section backend. Cargo unifies
 # features across all the targets of one run, so that build runs on its own,
 # and bytes on the other targets builds as their firmware would build it.
-# Clippy doesn't link, so nothing implements the critical section.
+# Clippy doesn't link, so nothing implements the critical section. The
+# allocation-free builds of bacnet-types, bacnet-encoding and
+# bacnet-services (`-` below, #1614) have no bytes in their graph, so they
+# need no harness on any target; check_alloc_free fails one that has bytes
+# or smallvec.
 #
 # The graph checks read `cargo tree` for each crate, feature set and target:
 # the crate's own graph, and on ARMv6-M the graph with the harness too. No
@@ -41,6 +45,7 @@ set -euo pipefail
 # `-` for none. Every line builds with --no-default-features.
 checks=(
   "bacnet-time -"
+  "bacnet-npdu -"
   "bacnet-mstp-codec -"
   "bacnet-mstp-codec alloc"
   "bacnet-mstp-codec heapless"
@@ -57,9 +62,14 @@ checks=(
   "bacnet-router-core bip"
   "bacnet-router-core mstp"
   "bacnet-router-core bip,mstp"
+  "bacnet-types -"
   "bacnet-types alloc"
   "bacnet-types serde"
+  "bacnet-encoding -"
+  "bacnet-encoding heapless"
   "bacnet-encoding alloc"
+  "bacnet-encoding alloc,heapless"
+  "bacnet-services -"
   "bacnet-services alloc"
 )
 default_targets=(thumbv6m-none-eabi thumbv7em-none-eabihf riscv32imac-unknown-none-elf)
@@ -68,6 +78,11 @@ default_targets=(thumbv6m-none-eabi thumbv7em-none-eabihf riscv32imac-unknown-no
 host_only=(tracing tracing-core tokio socket2)
 # The firmware stand-in for ARMv6-M builds that use bytes; see above.
 harness=nostd-harness
+# The crates whose builds without `alloc` (or `std` or `serde`, which turn it
+# on) are their allocation-free profile (#1614), and the packages that
+# allocate, which none of those builds' graphs may hold.
+alloc_free=(bacnet-types bacnet-encoding bacnet-services)
+allocating=(bytes smallvec)
 
 # One line per package of the graph for <cargo tree args...>: `name vX.Y.Z
 # [feature,...]`. Proc macros run on the host, so they're left out.
@@ -98,6 +113,25 @@ check_backend() {
   if [ -n "$bad" ]; then
     echo "error: $crate (features: $features; $triple) chooses its atomics: only the firmware may" \
       "bring in portable-atomic or critical-section, or turn on bytes' extra-platforms feature:" >&2
+    sort -u <<<"$bad" >&2
+    return 1
+  fi
+}
+
+# Fails if <tree>, the graph of <crate> with <features> on <target>, is an
+# allocation-free profile's (a crate in `alloc_free` without `alloc`, `std`
+# or `serde`, as `-` and `heapless` are) and holds a package that allocates.
+# Clippy doesn't link, so a dependency that allocates would otherwise
+# compile there unseen.
+check_alloc_free() {
+  local crate=$1 features=$2 triple=$3 tree=$4 bad alloc_re
+  case ",$features," in *,alloc,* | *,std,* | *,serde,*) return 0 ;; esac
+  case " ${alloc_free[*]} " in *" $crate "*) ;; *) return 0 ;; esac
+  alloc_re=$(IFS='|'; echo "${allocating[*]}")
+  bad=$(grep -E "^($alloc_re) v" <<<"$tree" || true)
+  if [ -n "$bad" ]; then
+    echo "error: $crate (features: $features; $triple) is the allocation-free profile," \
+      "but its graph holds a package that allocates:" >&2
     sort -u <<<"$bad" >&2
     return 1
   fi
@@ -155,6 +189,7 @@ for check in "${checks[@]}"; do
     tree=$(graph -p "$crate" "${feature_args[@]}" --target "$triple")
     check_std "$crate" "$features" "$triple" "" "$tree"
     check_backend "$crate" "$features" "$triple" "$tree"
+    check_alloc_free "$crate" "$features" "$triple" "$tree"
     if uses_harness "$triple" "$tree"; then
       tree=$(graph -p "$crate" -p "$harness" "${feature_args[@]}" --target "$triple")
       check_std "$crate" "$features" "$triple" "; with $harness" "$tree"

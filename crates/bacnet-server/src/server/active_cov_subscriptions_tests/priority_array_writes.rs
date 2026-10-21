@@ -2,11 +2,13 @@
 use super::*;
 use bacnet_objects::analog::AnalogOutputObject;
 use bacnet_objects::traits::BACnetObject;
+use bacnet_types::enums::EngineeringUnits;
 
 #[tokio::test]
 async fn priority_array_wire_wp_must_not_ack_direct_slot_write() {
     let mut wire = Wire::start(ServerConfig::default()).await;
-    let object = AnalogOutputObject::new(842, "read-only-array", 62).unwrap();
+    let object =
+        AnalogOutputObject::new(842, "read-only-array", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let oid = object.object_identifier();
     wire.server
         .database()
@@ -45,9 +47,10 @@ const PA: PropertyIdentifier = PropertyIdentifier::PRIORITY_ARRAY;
 
 fn objects() -> Vec<Box<dyn BACnetObject>> {
     use bacnet_objects::{analog::*, binary::*, lighting::*, multistate::*, value_types::*};
+    use bacnet_types::enums::EngineeringUnits;
     vec![
-        Box::new(AnalogOutputObject::new(842, "AO", 62).unwrap()),
-        Box::new(AnalogValueObject::new(842, "AV", 62).unwrap()),
+        Box::new(AnalogOutputObject::new(842, "AO", EngineeringUnits::DEGREES_CELSIUS).unwrap()),
+        Box::new(AnalogValueObject::new(842, "AV", EngineeringUnits::DEGREES_CELSIUS).unwrap()),
         Box::new(BinaryOutputObject::new(842, "BO").unwrap()),
         Box::new(BinaryValueObject::new(842, "BV").unwrap()),
         Box::new(MultiStateOutputObject::new(842, "MSO", 3).unwrap()),
@@ -72,8 +75,8 @@ fn objects() -> Vec<Box<dyn BACnetObject>> {
 fn denied(result: Result<(), Error>) {
     assert!(
         matches!(result, Err(Error::Protocol { class, code })
-        if class == u32::from(ErrorClass::PROPERTY.to_raw())
-        && code == u32::from(ErrorCode::WRITE_ACCESS_DENIED.to_raw())),
+        if class == ErrorClass::PROPERTY
+        && code == ErrorCode::WRITE_ACCESS_DENIED),
         "{result:?}"
     );
 }
@@ -348,8 +351,10 @@ async fn priority_array_wpm_denial_keeps_prefix_and_reports_failed_coordinate() 
 #[tokio::test]
 async fn priority_array_denial_preserves_existing_wire_preflight() {
     use crate::mutation::MutationPolicy;
+    use bacnet_types::enums::EngineeringUnits;
     let mut wire = Wire::start(ServerConfig::default()).await;
-    let object = AnalogOutputObject::new(842, "preflight", 62).unwrap();
+    let object =
+        AnalogOutputObject::new(842, "preflight", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let oid = object.object_identifier();
     wire.server
         .database()

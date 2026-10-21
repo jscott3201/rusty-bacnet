@@ -31,7 +31,7 @@ impl Fixture {
         ))
         .unwrap();
         let config = ServerConfig {
-            segmentation_supported: Segmentation::BOTH,
+            device: bacnet_objects::DeviceIdentity::default().with_segmentation(Segmentation::BOTH),
             ..ServerConfig::default()
         };
         let server = BACnetServer::start(config, db, transport).await.unwrap();

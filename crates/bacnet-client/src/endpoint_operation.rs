@@ -57,7 +57,7 @@ impl PacedEndpointOperation {
             )
             .map_err(|error| Error::Encoding(error.to_string()))?
         };
-        let max_apdu_length = inner.max_apdu_length;
+        let max_apdu_length = max_apdu_header_at_or_below(u32::from(inner.max_apdu_length))?;
         let guard = EndpointRequestGuard {
             inner,
             destination: tsm_mac,
@@ -128,9 +128,7 @@ impl PreparedEndpointOperation {
         let mut attempted = false;
         let result = self.execute_inner(&mut attempted).await.and_then(|bytes| {
             if bytes.len() + 3 > usize::from(self.guard.inner.max_apdu_length) {
-                return Err(Error::Segmentation(
-                    "endpoint operation ACK exceeds configured max APDU".into(),
-                ));
+                return Err(bacnet_types::error::SegmentationError::EndpointAckTooLong.into());
             }
             self.request.decode(&bytes)
         });
@@ -156,7 +154,7 @@ impl PreparedEndpointOperation {
                 self.encoded.clone(),
                 self.destination.clone(),
                 true,
-                NetworkPriority::NORMAL,
+                NetworkPriority::Normal,
                 self.data_attributes.clone(),
             );
             let send_result = match send {

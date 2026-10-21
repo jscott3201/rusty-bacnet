@@ -23,12 +23,13 @@ only when every job under it did (see [Merge evidence](#merge-evidence)).
 | Job | PR to `dev` | PR to `main` | Push to `dev` (merge) | Push to `main`, `v*` tag, weekly, manual |
 | --- | --- | --- | --- | --- |
 | Lint: rustfmt, 700-LOC cap, no-secret scan, script regressions, the `named_codes!` copies, changelog fragments, the [tool pins](#tool-pins), the [fuzz crates' lockfiles](#fuzzing) | ✓ | ✓ | ✓ | ✓ |
-| Clippy and rustdoc, warnings denied: every feature, PyO3 crate, `bacnet-cli` without default features, each published crate with default features for Linux, Windows and macOS, the `no_std` crates on bare-metal targets and their `alloc` tests on the host; the every-feature and PyO3 rustdoc runs include private items. The workspace runs include the [samples](#samples). Also the [firmware link test](#firmware-link-test): the MS/TP and B/IP images built without an allocator, and the APDU image with one, checked against their size budgets | ✓ | ✓ | ✓ | ✓ |
-| Test: Linux, every feature (`LINUX_FEATURES`); also the [`no_std` crates](#no_std-checks)' tests and doctests with `alloc` and without `std` | ✓ | ✓ | ✓ | ✓ |
+| Clippy and rustdoc, warnings denied: every feature, PyO3 crate, `bacnet-cli` without default features, each published crate with default features for Linux, Windows and macOS, the `no_std` crates on bare-metal targets and their `alloc` tests on the host; the every-feature and PyO3 rustdoc runs include private items. The workspace runs include the [samples](#samples). Also the [firmware link test](#firmware-link-test): the MS/TP, B/IP and MS/TP device images built without an allocator, and the APDU image with one, checked against their size budgets | ✓ | ✓ | ✓ | ✓ |
+| Test: Linux, every feature (`LINUX_FEATURES`); also the [`no_std` crates](#no_std-checks)' tests and doctests with `alloc` and without `std`, and their tests without either | ✓ | ✓ | ✓ | ✓ |
 | Python bindings: `maturin develop` (maturin at its [pinned](#tool-pins) version), then `python -m unittest discover -s crates/rusty-bacnet/tests` and the crate's Rust tests (`cargo nextest run -p rusty-bacnet`) | ✓ | ✓ | ✓ | ✓ |
 | MSRV (`RUST_MSRV` in [`.github/ci-pins.env`](../.github/ci-pins.env)), Linux native (`check-msrv.sh --linux-native`), the `no_std` builds included |  | ✓ |  | ✓ |
 | Cargo Audit + Cargo Deny |  | ✓ |  | ✓ |
 | **CI OK**: fails if any job above failed | ✓ | ✓ | ✓ | ✓ |
+| Plan: whether a merge can [skip the Lean jobs](#skipping-identical-merge-runs) |  |  | ✓ |  |
 | Prune caches, after a green run on `dev` ([Caches](#caches)) |  |  | ✓ | weekly, and manual on `dev` |
 
 `CI OK` is the required check. MSRV and Cargo Audit + Deny count as passing
@@ -37,7 +38,9 @@ when their tier skips them; a skipped Lean job fails it.
 (Astro checks, unit tests, production build and Chromium tests) on PRs that
 change `website/**`.
 
-Merge pushes to `dev` run the Lean jobs, for two reasons (#904).
+Merge pushes to `dev` run the Lean jobs, for two reasons (#904), unless
+the merge could have been a fast-forward, so the PR's runs tested its tree
+([Skipping identical merge runs](#skipping-identical-merge-runs)).
 
 - **Caches.** Only runs on `dev` save the Rust caches. A cache saved by a
   `pull_request` run would be scoped to that PR, and a PR run restores from
@@ -81,11 +84,12 @@ CI uses the `ci` profile, and nextest does not run doctests, so a separate
 file says how to refresh that list. The Linux test commands are below, with
 `$LINUX_FEATURES` as set in `ci.yml`: every optional feature that builds on
 Linux, including per-crate ones such as `bacnet-endpoint/sc-tls` and
-`bacnet-cli/pcap` and `bacnet-cli/tui`. Then come the `bacnet-cli`
-tests with default features, because a few exist only when `sc-tls`, `pcap` or
-`tui` is off, and with no default features. `tui` is opt-in until the terminal
-UI ships in 0.14.0 (#975), so the two runs match until then; the second keeps
-the feature-off case covered once `tui` is on by default again. The last steps
+`bacnet-cli/pcap`. Then come the `bacnet-cli` tests with default features,
+because a few exist only when `sc-tls` or `pcap` is off, and with no default
+features, the lean CLI without the TUI (`tui` is a default feature since
+#974), whose own tests cover plain `bacnet` and `bacnet tui` without it.
+Only Linux runs the lean CLI's tests; macOS and Windows lint it with clippy
+in the native-tests workflow (and `local-macos.sh` runs both on a Mac). The last steps
 run the tests and doctests of `bacnet-types`, `bacnet-encoding` and
 `bacnet-services` with `alloc` and without `std`, the code their bare-metal
 builds compile, which the runs before leave out (see
@@ -98,6 +102,8 @@ cargo nextest run -p bacnet-cli --locked --profile ci
 cargo nextest run -p bacnet-cli --no-default-features --locked --profile ci
 cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --features alloc --locked --profile ci
 cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --features alloc --locked
+cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --locked --profile ci
+cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --locked
 ```
 
 The Python job builds the PyO3 extension in debug mode into a fresh venv with
@@ -122,6 +128,58 @@ Use cargo-nextest 0.9.145 or later locally. Older releases on macOS could
 mark unrelated passing tests as leaky (#751), and the configuration warns
 about them.
 
+### Skipping identical merge runs
+
+A PR run tests `refs/pull/<n>/merge`: the head merged with `dev` as `dev`
+stood when the run started. When the PR head already contains `dev`'s
+current tip, so that the `--no-ff` merge could have been a fast-forward,
+every `dev` a PR run used is in the head's history (`dev` only moves
+forward), each of those runs tested exactly the head's tree, and the merge
+has that tree too. So on a push to `dev`, a **Plan** job in each workflow
+([`scripts/ci/plan-skip.sh`](../scripts/ci/plan-skip.sh), #1466) checks out
+the merge with both parents and skips the rest of that workflow when all of
+these hold:
+
+- the commit merges exactly two parents, and its tree equals the second's
+  (the PR head);
+- the first parent, `dev` before the merge, is an ancestor of the PR head
+  (the compare API's `behind_by` is 0). Tree equality alone isn't enough: a
+  commit on `dev` that a PR run merged in and that `dev` then reverted would
+  be in the tested tree but not in the merge's;
+- in the newest `pull_request` run of that same workflow file on the PR head
+  from this repository, the aggregate (`CI OK` in `ci.yml`, `Native OK` in
+  `native-tests.yml`) concluded `success`, its latest attempt counting;
+- nothing that feeds a rust-cache key changed since the first parent: any
+  `Cargo.lock` or `Cargo.toml`, `rust-toolchain` or `rust-toolchain.toml`,
+  `.cargo/config` or `.cargo/config.toml`, anything under `.github/` (the
+  feature lists and other key variables live in the workflows and the pins)
+  and `scripts/ci/local-macos.sh` (the native feature list). This condition
+  is about caches only; the first two make a skip correct. When a key moves,
+  the merge run saves the new caches PRs restore.
+
+The aggregate still runs and passes when Plan skips, so the merge commit
+shows `CI OK` and `Native OK` green, and Prune caches still runs after it. A
+job skipped for any other reason still fails the aggregate. Any other event
+(PRs, `main`, tags, the schedule, manual runs) skips Plan itself and runs
+everything, and so does a merge that was behind `dev`, an octopus merge, a
+red, missing or still running aggregate, or any error in Plan, such as a
+failed API call. Plan's job summary and log give the reason. Its token has
+`actions: read`, `checks: read` and `contents: read` only.
+
+Limits:
+
+- **Evicted caches.** A skipped merge saves no caches. If GitHub evicted
+  `dev`'s entries (the 10 GB cap, or seven days unused), PRs build cold until
+  a merge that runs, or the weekly `ci.yml` run, saves them again;
+  `native-tests.yml` has no scheduled run. The same holds when a runner image
+  update changes the toolchains in the native jobs' key, which no diff sees.
+- **A PR into `main` from the same commit.** GitHub empties a run's
+  `pull_requests` once its PR merges, so Plan can't tell runs by their PR's
+  base. If the PR head was also the head of a PR into `main` and that run is
+  the newer one, its result counts, though it tested a merge with `main`.
+  Release flow PRs into `main` have `dev`'s tip as their head, which is never
+  a later `dev` merge's second parent.
+
 ### Samples
 
 The sample programs in `examples/rust/samples` are workspace members with
@@ -140,20 +198,23 @@ but not `[workspace.lints]`, since samples print to the terminal.
 ### `no_std` checks
 
 `bacnet-types`, `bacnet-encoding` and `bacnet-services` build without `std`
-when `alloc` replaces their default `std` feature, and the MS/TP and B/IP
+when `alloc` replaces their default `std` feature, and without an allocator
+when neither is on (#1614), and the MS/TP and B/IP
 crates (`bacnet-mstp-codec`, `bacnet-mstp-core`, `bacnet-bip-codec` and
-`bacnet-bip-core`), the router core (`bacnet-router-core`) and the cores'
-time type (`bacnet-time`) never use it. A host build always has `std` and an allocator, so no single run
+`bacnet-bip-core`), the router core (`bacnet-router-core`), the cores'
+time type (`bacnet-time`) and the network-layer vocabulary (`bacnet-npdu`)
+never use it. A host build always has `std` and an allocator, so no single run
 proves all of that; each check covers a part.
 
 | Check | Job | What it shows |
 | --- | --- | --- |
 | `scripts/ci/check-no-std.sh` | Clippy, `NO_STD_TARGETS` | Each crate and feature set compiles clean under clippy on `thumbv6m-none-eabi`, `thumbv7em-none-eabihf` and `riscv32imac-unknown-none-elf`, with nothing skipped, and no package in its graph turns `std` on or is `tracing`, `tokio` or `socket2`. Nor does the crate choose atomics for the firmware: its own graph holds no `portable-atomic` or `critical-section`, and no `bytes` with `extra-platforms` |
-| `scripts/ci/check-default-features.sh` | Clippy | Clippy and rustdoc, private items included, for the three `alloc` crates without `std`, on Linux, Windows and macOS |
-| `cargo clippy -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --features alloc --all-targets` | Clippy | The three crates' tests with `alloc` and without `std`, which the Test job runs, are lint-clean too |
+| `scripts/ci/check-default-features.sh` | Clippy | Clippy and rustdoc, private items included, for the three crates with `alloc` and without `std`, and without either, on Linux, Windows and macOS |
+| `cargo clippy -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features [--features alloc] --all-targets` | Clippy | The three crates' tests with `alloc` and without `std`, and without either, which the Test job runs, are lint-clean too |
 | The `alloc` tests and doctests | Test | The three crates' tests and doctests with `alloc` and without `std`: the code a bare-metal build compiles. The tests link `std`; `check-no-std.sh` shows the code needs none |
+| The allocation-free tests | Test | The three crates' tests without `alloc` either, including `bacnet-services/tests/no_alloc_subset.rs`, which runs Who-Is, I-Am and ReadProperty through the APDU header under a counting allocator and finds no allocation, and their doctests, whose examples write to sinks (#1779) |
 | `scripts/ci/check-msrv.sh` | MSRV | The three crates with `alloc` and without `std` build at the MSRV, in a run of their own, since the hosted crates turn `std` back on in the main run |
-| [Firmware link test](#firmware-link-test) | Clippy, `FIRMWARE_TARGETS` | The MS/TP and B/IP stacks link into bare-metal images with no allocator, and `bacnet-encoding` and `bacnet-services` into one with an allocator, each within its size budget |
+| [Firmware link test](#firmware-link-test) | Clippy, `FIRMWARE_TARGETS` | The MS/TP and B/IP stacks, and an MS/TP device with its application layer, link into bare-metal images with no allocator, and `bacnet-encoding` and `bacnet-services` into one with an allocator, each within its size budget |
 
 **ARMv6-M and `bytes`.** `bytes` needs atomic compare-and-swap, which
 `thumbv6m-none-eabi` lacks. With its `extra-platforms` feature it takes that
@@ -195,43 +256,53 @@ bash scripts/ci/check-no-std.sh                       # every default target
 bash scripts/ci/check-no-std.sh thumbv6m-none-eabi    # one
 cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --features alloc --locked
 cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --features alloc --locked
+cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --locked
+cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --locked   # examples on sinks, no allocator (#1779)
 ```
 
 ### Firmware link test
 
 `check-no-std.sh` runs clippy on the `no_std` crates, and clippy never links.
-The firmware link test (#1626, #1635, #1664, #1667, #1679) does.
-`firmware/link` (the `firmware-link` crate, `publish = false`) builds seven
+The firmware link test (#1626, #1635, #1664, #1667, #1679, #1771) does.
+`firmware/link` (the `firmware-link` crate, `publish = false`) builds eight
 `#![no_main]` bare-metal images, one per stack, because code can't be
 credited to a crate reliably within one LTO image:
 
 - `mstp` links `bacnet-mstp-codec` and `bacnet-mstp-core` (default
-  features, with the core's `HeaplessQueues`) and through the core
+  features, with the core's `FixedQueues`) and through the core
   `bacnet-time`, with no global allocator;
 - `mstp-extended` links the same core with extended frames on, and the
   buffers they need: 1516 octets of receive storage, `ExtendedActionBuffers`
-  and `HeaplessQueues<1, 1, 1497>`, with no global allocator;
+  and `FixedQueues<1, 1, 1497>`, with no global allocator;
 - `bip` links `bacnet-bip-codec` (default features, plus its `heapless`
   sink), both its B/IP and its B/IPv6 messages, with no global allocator.
   It links the codec alone, so its budget measures the codec;
-- `node` links `bacnet-bip-core`'s node engine, a foreign-device `Node`
-  with two exchange slots, and through it the codec and `bacnet-time`, with
+- `node` links `bacnet-bip-core`'s port driver over its node engine, a
+  `NodePort` on a foreign-device `Node` with two exchange slots, and
+  through it the codec and `bacnet-time`, with no global allocator;
+- `bbmd` links `bacnet-bip-core`'s port driver on a BBMD, a `BbmdPort`
+  over the receive rules of a `Link` in BBMD mode and the BBMD tables
+  (`Tables<4, 4>`), which answer the management requests themselves, with
   no global allocator;
-- `bbmd` links `bacnet-bip-core`'s BBMD tables (`Tables<4, 4>`) and the
-  receive rules of a `Link` in BBMD mode, with no global allocator;
 - `router` links `bacnet-router-core` with its `bip` and `mstp` glue: a
   `Router` over `Storage<2, 8, 8, 4>` between a B/IP port where the router
-  is also the BBMD (`BbmdPort`, `Tables<2, 2>`) and an MS/TP port with
-  extended frames, which Clause 9.3 asks of a router, and through them the
-  node engine, the MS/TP core and both codecs, with no global allocator. It
+  is also the BBMD (bip-core's `BbmdPort`, `Tables<2, 2>`) and an MS/TP
+  port with extended frames, which Clause 9.3 asks of a router, and through
+  them the receive rules, the MS/TP core and both codecs, with no global
+  allocator. It
   routes and nothing more: a product router also needs a Device object,
   since Clause 6.6 holds a router to the device requirements of Clause
   22.1.5, and the image has no application layer to host one;
+- `device` links an MS/TP device with no global allocator: the MS/TP core
+  over a `StandardStorage<1, 2, 1>`, `bacnet-npdu`'s view, and
+  `bacnet-types`, `bacnet-encoding` and `bacnet-services` without default
+  features, their allocation-free profile (#1614). It answers Who-Is and
+  ReadProperty for a Device object and an Analog Input;
 - `apdu` links `bacnet-encoding` and `bacnet-services` (and through them
   `bacnet-types`) without default features and with `alloc`, the way a
   firmware uses them, with a global allocator over a fixed arena.
 
-A use of `alloc` anywhere in an image but `apdu` fails its build with "no
+A use of `alloc` anywhere in an image but `apdu`, the device's application layer included, fails its build with "no
 global memory allocator found". In any image, a symbol that only a hosted
 target or the firmware provides fails the link: an atomic library call, or
 a critical section that nothing implements. A compare-and-swap on ARMv6-M or
@@ -332,9 +403,23 @@ targets, so a crate that needs one builds only with a backend such as
     records how the library classifies the fault, the Reject reason the
     error maps to. Two of them, a Who-Is and an I-Am, are unconfirmed, so
     no Reject would be sent for them.
+  - `device::run` is station 1 on an MS/TP line where a client, station
+    2, asks for every device and for devices 5000 to 6000, passes the
+    token, and sends thirteen confirmed requests. The device answers the
+    first Who-Is with a global I-Am on its next token and ignores the
+    second. It answers each request in its reply window: reads that
+    succeed, one through the wildcard Device instance and one relayed
+    from network 5, which goes back with that DNET and DADR; the four
+    ReadProperty Errors of Clause 15.5.1.3.1; a Reject for a request with
+    no property identifier and for WriteProperty; and an Abort for a
+    segmented request. Two confirmed requests by broadcast, one in a
+    broadcast frame and one to every network, go unanswered. The client's frames are written by hand from the
+    Clause 6.2 and 20.1 layouts, and so are the answers it expects, whose
+    hashes `device::expected()` holds.
 
   The host tests in `firmware/link/tests/` (`mstp.rs`, `mstp_extended.rs`,
-  `bip.rs`, `node.rs`, `bbmd.rs`, `router.rs` and `apdu.rs`) run them and
+  `bip.rs`, `node.rs`, `bbmd.rs`, `router.rs`, `device.rs` and `apdu.rs`)
+  run them and
   compare each
   whole summary, so the behaviour is checked natively, in every
   `--workspace` test run on Linux, macOS and Windows. Each image's reset
@@ -413,7 +498,11 @@ targets, so a crate that needs one builds only with a backend such as
   default, so host builds, clippy, rustdoc and tests cover them. It links
   `alloc` into the crate's lib, so the other images build with
   `--no-default-features`: a bare-metal build of them with the feature on
-  fails, as it should, with "no global memory allocator found".
+  fails, as it should, with "no global memory allocator found". The device
+  image depends on `bacnet-types`, `bacnet-encoding` and
+  `bacnet-services` without default features; the feature turns on their
+  `alloc` profile for `apdu`, so the device image fails the same way if
+  anything turns it on for them.
 - **The check.** `scripts/ci/check-firmware-link.sh` runs, per target,
   clippy on the images' code (a host build compiles it out) and the
   `firmware`-profile build, once without the `alloc` feature for every
@@ -444,25 +533,25 @@ targets, so a crate that needs one builds only with a backend such as
   `__udivdi3`, `__umoddi3` and similar entry points to it. These targets
   have no 64-bit divide instruction, so a 64-bit division by a runtime
   value costs about 0.9 KB, which the budgets' headroom would otherwise
-  absorb; the MS/TP core divides only in 32 bits (#1618). The apdu image
-  is the exception to both zeros. Its libraries build their error messages
-  with `format!`, which links 15 `core::fmt` functions (about 2.7 KB of
-  `.text` on `thumbv7m-none-eabi`), and on `thumbv6m-none-eabi`, which has
-  no multiply with a 64-bit product, formatting a `u64` divides by a
-  constant through the 64-bit division routine (3 functions). Its budget
-  holds both counts at what it links today, with no headroom, so any new
-  formatting or division function still fails the check. It also fails
+  absorb; the MS/TP core divides only in 32 bits (#1618). Every image,
+  apdu included, holds both counts at 0: the libraries' decoding and
+  encoding errors carry static labels formatted only when displayed
+  (#1646, #1777), which no image does. The apdu image used to build its
+  messages with `format!`, which linked 15 `core::fmt` functions (about
+  2.7 KB of `.text` on `thumbv7m-none-eabi`), and on `thumbv6m-none-eabi`,
+  which has no multiply with a 64-bit product, formatting a `u64` divided
+  by a constant through the 64-bit division routine (3 functions). It also fails
   when the image has no function symbols to look for that code in: the
   images must not be stripped. A size more than 20% under its budget gets a
   notice to tighten it, not a failure, and so does a count under its limit,
-  so a ceiling such as the apdu image's 15 `core::fmt` functions comes
+  so a ceiling such as the apdu image's old 15 `core::fmt` functions comes
   down once the code behind it goes. It fails the same way when an image
   links more memmove routines than its `memmove_functions` allows:
   compiler-builtins' `memmove` and the `memmove`, `__aeabi_memmove`,
   `__aeabi_memmove4` and `__aeabi_memmove8` entry points to it, 0.8 to
   1.4 KB in all. A copy of a whole value that the compiler can't prove
   doesn't overlap its source, or a slice rotation, calls it. The bip,
-  node, bbmd, mstp, mstp-extended and router images link none, and their
+  node, bbmd, mstp, mstp-extended, router and device images link none, and their
   limit of 0 keeps it out. The apdu image links it (2); its limit is that count,
   with no headroom.
   `scripts/ci/test-firmware-size.py` tests the helper on small ELF files
@@ -519,25 +608,34 @@ targets, so a crate that needs one builds only with a backend such as
   measures them; the mstp-extended image's scenario is the exception,
   below. The MS/TP image keeps everything large the core borrows in its
   static, the firmware pattern the core's crate docs describe: receive
-  storage, queues (3,360 octets for `HeaplessQueues<4, 2>`) and
+  storage, queues (3,360 octets for `FixedQueues<4, 2>`) and
   `ActionBuffers<1>` (1,028), 5,544 octets in all with the codec part's
   buffers. The core itself, 520
   octets on these targets, is built on the stack. `.bss` doesn't count the
   stack; the [emulation check](#emulation-manual) measures how deep it goes.
   The mstp-extended image's static holds only what the core borrows,
-  7,712 octets: receive storage of 1,516 octets, `HeaplessQueues<1, 1,
+  7,712 octets: receive storage of 1,516 octets, `FixedQueues<1, 1,
   1497>` and `ExtendedActionBuffers<1>`. Each more queue slot would add
   about 1.5 KB. Its scenario keeps its own NPDUs and frames on the stack,
-  and only while it builds or checks them. The node image's `.bss` is its
-  64-octet datagram buffer, and the bbmd image's its two datagram buffers
-  and what the tables write a decision's destinations and a Read-FDT-Ack's
-  rows into, 240 octets; the node, 752 octets on these targets, and the
-  tables are built on the stack. The router image's static is 15,504
-  octets on these targets:
-  - the router's `Storage<2, 8, 8, 4>`, 3,216: a 1,497-octet output
+  and only while it builds or checks them. The node image's `.bss` is
+  240 octets: its two 64-octet datagram buffers, one received and one
+  sent, since the port sends while the received one is still borrowed,
+  and the two `HeldBroadcast<54>` slots the port holds the node's
+  broadcasts in until its first registration resolves, 56 octets each. A
+  slot is as long as the link's broadcasts may be, so the image gives its
+  link the least budget a link takes, 64 octets, for 54-octet broadcasts;
+  at the hosted transport's budget, 1,507 octets, each slot would take
+  1,500. The bbmd image's is its two datagram buffers and
+  what the port lends the tables for a decision's destinations and a
+  Read-FDT-Ack's rows, 240 octets. The node and its port, 752 octets and
+  a little more on these targets, and the bbmd image's port and tables
+  are built on the stack. The router image's static is 15,536 octets on
+  these targets:
+  - the router's `Storage<2, 8, 8, 4>`, 3,152: a 1,497-octet output
     scratch, a table of 8 routes (120 octets each) and 8 hold-down
-    records, 4 searches, the output queue and the counters;
-  - the MS/TP core's receive storage (1,516), `HeaplessQueues<1, 2, 1497>`
+    records, 4 searches, the output queue and the counters (16 drained
+    `u32`s, which the image takes once, at the end);
+  - the MS/TP core's receive storage (1,516), `FixedQueues<1, 2, 1497>`
     (4,688) and `ExtendedActionBuffers<1>` (3,028). Two broadcast slots,
     since the router queues its startup Network-Number-Is and I-Am-Router
     together; one unicast slot, since each step's sends leave on the next
@@ -545,13 +643,15 @@ targets, so a crate that needs one builds only with a backend such as
   - the B/IP socket's two datagram buffers, 1,507 octets each: the one
     received, which the router reads in place, and the one sent, which
     the port's `Datagrams` encodes into;
-  - where the BBMD writes one decision's destinations, 40.
+  - where the BBMD writes one decision's destinations, 40, and a
+    Read-FDT-Ack's rows, 20.
 
-  The router (88 octets), the MS/TP core (528), the BBMD port with its
-  node (712) and the BBMD's tables (72) are built on the stack. A BBMD
-  port holds no broadcasts, so the image has no `HeldBroadcast` slots; a
-  foreign-device port would need its `hold` of them, each as long as
-  `Link::max_npdu(Cast::Broadcast)`, 1,497 octets at the default budget.
+  The router (88 octets), the MS/TP core (528), the BBMD port and the
+  BBMD's tables (72) are built on the stack; a BBMD port runs no node. A
+  BBMD port holds no broadcasts, so the image has no `HeldBroadcast`
+  slots; a foreign-device port would need its `hold` of them, each as long
+  as `Link::max_npdu(Cast::Broadcast)`, 1,497 octets at the default
+  budget.
   `cargo nextest run -p firmware-link` prints the host sizes from the
   `ram_sizes` tests. The apdu image's
   `.bss` is its 1 KiB arena and the allocator's 32-octet state: what its
@@ -584,12 +684,13 @@ schedule runs it, and no required check depends on it.
 
 - **What runs.** The `emulate` feature of `firmware-link`, with one board
   feature, builds an emulation build of each image (mstp, mstp-extended,
-  bip, node, bbmd, router and apdu). Its reset entry runs the same scenario
+  bip, node, bbmd, router, device and apdu). Its reset entry runs the same scenario
   as the link test's image, with its input still behind `black_box`, then
   checks the summary against the one the host test asserts:
   `firmware_link::mstp::EXPECTED`, `mstp_extended::EXPECTED`,
   `bip::EXPECTED`, `node::expected()`, `bbmd::EXPECTED`,
-  `router::expected()` and `apdu::expected()`, shared by both so they
+  `router::expected()`, `device::expected()` and `apdu::expected()`,
+  shared by both so they
   can't drift. The router image is built for every board but runs only on
   the two with more than 16 KiB of RAM (see Stack, below). It prints the
   summary and a verdict through semihosting and exits with a status QEMU
@@ -646,15 +747,16 @@ schedule runs it, and no required check depends on it.
   measured with Rust 1.99.0 and QEMU 10.0.13 when the mstp-extended, node
   and bbmd images joined (#1664, #1667), the two MS/TP images' again
   when the core stopped copying a queued NPDU onto its stack (#1691), and
-  the router's when it joined (#1679), in octets, and on the two 16 KiB
-  boards the stack's room, all of RAM above the statics:
+  the node, bbmd and router images' again after their ports changed
+  (#1774), in octets, and on the two 16 KiB boards the stack's room, all
+  of RAM above the statics:
 
   | Target (board) | mstp | mstp-extended | bip | node | bbmd | router | apdu |
   | --- | --- | --- | --- | --- | --- | --- | --- |
-  | `thumbv6m-none-eabi` (`microbit`) | 2,040 (10,840) | 3,020 (8,672) | 2,220 (16,252) | 4,716 (16,320) | 2,300 (16,144) | not run (880) | 2,768 (15,328) |
-  | `thumbv7m-none-eabi` (`lm3s6965evb`) | 1,824 | 2,868 | 2,100 | 4,188 | 2,228 | 5,648 | 2,536 |
-  | `thumbv7em-none-eabihf` (`netduinoplus2`) | 1,832 | 2,868 | 2,100 | 4,188 | 2,228 | 5,640 | 2,536 |
-  | `riscv32imc-unknown-none-elf` (`sifive_e`) | 1,712 (10,840) | 2,732 (8,672) | 2,020 (16,252) | 4,008 (16,320) | 2,132 (16,144) | not run (880) | 2,464 (15,328) |
+  | `thumbv6m-none-eabi` (`microbit`) | 2,040 (10,840) | 3,020 (8,672) | 2,220 (16,252) | 5,444 (16,144) | 2,380 (16,144) | not run (880) | 2,768 (15,328) |
+  | `thumbv7m-none-eabi` (`lm3s6965evb`) | 1,824 | 2,868 | 2,100 | 4,972 | 2,260 | 4,456 | 2,536 |
+  | `thumbv7em-none-eabihf` (`netduinoplus2`) | 1,832 | 2,868 | 2,100 | 4,972 | 2,260 | 4,456 | 2,536 |
+  | `riscv32imc-unknown-none-elf` (`sifive_e`) | 1,712 (10,840) | 2,732 (8,672) | 2,020 (16,252) | 4,808 (16,144) | 2,132 (16,144) | not run (880) | 2,464 (15,328) |
 
   So on ARMv6-M the MS/TP image needs about 7.6 KB of RAM: 5,544 octets of
   statics and 2.0 KB of stack. With extended frames on it needs about
@@ -665,20 +767,24 @@ schedule runs it, and no required check depends on it.
   scenario's, taking in the peer's 600-octet reply with about 1.2 KB of
   the scenario's own buffers for it live. Until #1691 the core copied the
   NPDU onto its stack, and the image peaked at 6,136 octets there.
-  The node image's peak is mostly the scenario's own: on ARMv6-M its frame
-  is 2.8 KB, holding the 800-octet summary, the 752-octet node and the
-  result `Node::new` builds it in, and the reset entry keeps the 0.8 KB
-  summary it gets back; the engine's calls go about 1.1 KB deeper.
-  The router image needs about 21 KB: 15,504 octets of statics and 5.6 KB
-  of stack. Its scenario's frame is 3.8 KB on ARMv7-M, holding the
-  704-octet summary, the MS/TP core (528), the BBMD port with its node
-  (712), the router (88) and the BBMD's tables (72); the router's receive
-  and the B/IP port's send go about 1.8 KB deeper. On the 16 KiB boards
+  The node image's peak is mostly the scenario's own. When it joined
+  (#1667), its ARMv6-M frame was 2.8 KB, holding the 800-octet summary,
+  the 752-octet node and the result `Node::new` builds it in, and the
+  reset entry kept the 0.8 KB summary it got back; the engine's calls went
+  about 1.1 KB deeper. Driving the node through a `NodePort` (#1766)
+  made it 0.7-0.8 KB deeper.
+  The router image needs about 20 KB: 15,504 octets of statics and 4.5 KB
+  of stack. When it joined (#1679), its BBMD port held a node, and the
+  image peaked 1.2 KB deeper; the port no longer holds one (#1767). On the 16 KiB boards
   the statics leave 880 octets, so `emulate-firmware.sh` builds the image
   for them and doesn't run it; run anyway, it faults on both as its stack
   reaches the statics. The extended frames Clause 9.3 asks of a router's
   MS/TP port are most of those statics, so no standard-frame router image
   is offered for those boards.
+  The device image, measured when it joined (#1771) with the same
+  toolchain and QEMU, peaked at 2,652 octets on `microbit`, 2,284 on
+  `lm3s6965evb`, 2,292 on `netduinoplus2` and 2,172 on `sifive_e`; its
+  3,496 octets of statics leave the 16 KiB boards 12,888 for the stack.
 - **Stack budgets.** `firmware/link/stack-budget.toml` (#1660) holds a
   budget for each board and image that runs there (the micro:bit and
   SiFive E tables have no router key), in a `[<board>]` table with a key
@@ -741,6 +847,24 @@ bash scripts/emu/emulate-firmware.sh --suggest           # stack budgets as the 
   and about 15 s warm, the twenty-six QEMU runs under a second each.
   Building the Docker image the first time adds about 30 s.
 
+### NAT topology (manual)
+
+`examples/docker/nat/run.sh` checks B/IP across real NAT routers (Annex
+J.7.5, #940, #942): two BBMD sites, each behind an iptables router that
+port-forwards UDP 47809, after the two-site example of the annex; a foreign
+device on the "internet" network; and one behind a router that forwards
+nothing. Each foreign device must hear both sites' devices answer its
+Who-Is. The tests' loopback NAT shim
+(`crates/bacnet-transport/tests/bip_nat`) covers the same rules on every
+CI run; this is the check against a kernel's NAT.
+
+- **Locally:** `bash examples/docker/nat/run.sh` (Docker with Compose v2;
+  Linux, or Docker Desktop). It builds the image, probes, prints the BBMD
+  logs on a failure and tears everything down.
+- **On GitHub:** `.github/workflows/nat-docker.yml`, `workflow_dispatch`
+  only, like the emulation check. Its job is named "NAT (manual): ...", so
+  it never stands in for CI OK or Native OK.
+
 ### Runner
 
 Every Linux job runs on GitHub's `ubuntu-24.04` hosted runner, an x86_64 VM
@@ -780,6 +904,53 @@ whose soft limit on open files was 1024. On the hosted runner they run as
   included, take a few seconds of wall time and read no clock. To widen the
   randomized runs locally, run
   `MSTP_SIM_SEEDS=400 cargo nextest run -p bacnet-mstp-sim -E 'binary(property)'`.
+  Host and mixed-node runs use buffered, timestamped reads, seeded chunk
+  boundaries, serial-drain completion and optional content-matched echo.
+  Paired paused-time fixtures also drive the public `MstpTransport` boundary.
+  Ready application answers wait for drain/echo completion; first-reply
+  timing follows the accepted request's physical end across unrelated traffic.
+  Configurable post-drive holds keep physical ownership after the final data
+  stop, with separate release records, overlap checks and receiver gating.
+  The model uses a conservative maximum of 14 bit times after the stop ends
+  to satisfy the different reference edges in 135-2020 9.2.3 and 9.5.3;
+  core and host completion timestamps keep their final-data/drain semantics.
+  Idle holds do not generate characters or extend the line-activity clock.
+  Default-zero inter-octet gaps capture one schedule per transmission and
+  permit at most 19 bit times after each non-final stop bit; the 20-bit idle
+  limit includes that stop bit. Positive long-frame scenarios explicitly
+  provision local watchdog and queue-age budgets. Octet-mode watchdog expiry
+  truncates the frame and releases its driver; final-stop and later-octet
+  deadline ties have separate regression tests. Host operations retain the
+  production write/drain/echo wait without polling core deadlines. Their
+  recorded start, watchdog, wire-end, completion and notification times
+  distinguish budget overruns without claiming an observed host abort.
+  Buffered hosts also model a captured local self-echo return delay before
+  ordinary read latency. A bounded FIFO preserves physical character/error
+  provenance across completion and new writes, and power loss cancels it.
+  Compact counters expose overflow and cancellation; bounded traces show
+  requested availability and FIFO deferral. This local policy changes no
+  physical bus timing. Bus-generated read sequences are replayed through the
+  public transport for Grace, Residual and Probe boundaries, expired and
+  missing copies, and ordered peer payloads. A separate simulator negative
+  test retains parser-error and missed-receipt diagnostics when delayed local
+  echo interleaves with peer traffic.
+  Opt-in receiver-specific digital contention can capture a contributor,
+  alter UART-clean data or retain framing errors on the same physical grid.
+  Tests preserve global collision/release evidence, check standard and extended
+  winner payloads, independently reject an altered standard CRC, and cover
+  identical simultaneous intents, lifecycle eligibility and delayed actual
+  self-echo. Bounded receipt candidates are correlated with the terminal
+  character through real forwarding and a separate reference codec instance;
+  later valid traffic cannot hide a missing winner. Parser synchronization,
+  unsupported extended input and explicit filter dispositions qualify those
+  checks. Seed replay is independent of scenario/jitter/chunk draws. Mixed
+  adapters at 9600, 38400 and 115200 baud receive exact known traffic after
+  bounded contention; this does not promise universal duplicate-token recovery
+  or model electrical arbitration, UART resynchronization or clock drift.
+  Physical wire checks remain active: randomized fault runs retain and assert
+  diagnosed failures when a host starts before injected activity becomes
+  readable; clean and settled operation must pass the strict checks. These
+  simulations do not qualify physical serial hardware or USB timing.
 - The BACnet/SC hub capacity test needs about 2,100 descriptors and raises its
   own soft limit to that, which needs no privilege below the hard limit. The
   step above logs both limits.
@@ -915,14 +1086,17 @@ runs even when a job failed or was cancelled, so it always reports, like
 reads.
 
 **Trigger.** Every PR to `dev` or `main`, every push to them (merges), and a
-manual dispatch. Tag pushes don't run it.
+manual dispatch. Tag pushes don't run it. A merge to `dev` that could have
+been a fast-forward to a PR head whose run passed `Native OK` skips the four
+jobs as `ci.yml` skips its Lean ones
+([Skipping identical merge runs](#skipping-identical-merge-runs)).
 
 **Steps.** `NATIVE_FEATURES` is the `features=` list in
 [`scripts/ci/local-macos.sh`](../scripts/ci/local-macos.sh), which the
-workflow reads: every optional feature except the Linux-only `serial` and
-`ethernet`, including per-crate ones such as `bacnet-endpoint/sc-tls`. Windows
-also leaves out `bacnet-cli/pcap`, which needs the Npcap SDK. The Tests jobs
-run:
+workflow reads: every optional feature except the Linux-only `serial-gpio`
+and `ethernet`, including per-crate ones such as `bacnet-endpoint/sc-tls`, and
+`serial` (#958) among them. Windows also leaves out `bacnet-cli/pcap`, which
+needs the Npcap SDK. The Tests jobs run:
 
 ```bash
 cargo nextest run --workspace --exclude rusty-bacnet --locked --features "$NATIVE_FEATURES" --profile ci
@@ -938,6 +1112,7 @@ The Lint and Python jobs run:
 ```bash
 cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked --features "$NATIVE_FEATURES" -- -D warnings
 cargo clippy -p rusty-bacnet --all-targets --locked -- -D warnings
+cargo clippy -p bacnet-cli --no-default-features --all-targets --locked -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --exclude rusty-bacnet --no-deps --locked --document-private-items --features "$NATIVE_FEATURES"
 RUSTDOCFLAGS="-D warnings" cargo doc -p rusty-bacnet --no-deps --locked --document-private-items
 cargo nextest run -p bacnet-cli --locked --profile ci   # the CLI's feature-off tests
@@ -1224,8 +1399,8 @@ Postponed handled as an abandoned request within five.
 
 **When.** On a PR to `dev` or `main` that changes
 `crates/bacnet-mstp-codec/**`, `crates/bacnet-bip-codec/**`,
-`crates/bacnet-mstp-core/**` (fuzz crates included) or
-`crates/bacnet-time/**`, the workflow,
+`crates/bacnet-mstp-core/**` (fuzz crates included),
+`crates/bacnet-time/**` or `crates/bacnet-npdu/**`, the workflow,
 `.github/ci-pins.env`, `scripts/ci/fuzz.sh` or
 `scripts/ci/install-tools.sh`, each target runs for 60 seconds. Twice a
 week (Sundays and Wednesdays at 03:41 UTC, on `dev`) and by hand, each runs
@@ -1349,12 +1524,13 @@ bash scripts/ci/local-macos.sh          # lint, clippy, rustdoc, macOS tests
 bash scripts/ci/local-macos.sh --quick  # lint, clippy and rustdoc only
 ```
 
-`serial` and `ethernet` are Linux-only features, so macOS uses every other
-optional feature. The native-tests workflow reads the same list from the
-script. That includes per-crate features such as
-`bacnet-endpoint/sc-tls` and `bacnet-cli/{sc-tls,pcap}`, which nothing else in
+`serial-gpio` and `ethernet` are Linux-only features, so macOS uses every
+other optional feature, `serial` included (#958): the serial port crates build
+on all three systems, and its pseudo-terminal tests run on macOS too. The
+native-tests workflow reads the same list from the script. That includes
+per-crate features such as `bacnet-endpoint/sc-tls` and `bacnet-cli/{sc-tls,pcap,serial}`, which nothing else in
 the workspace turns on, so a transport-only list never built them (#906). CI's
-`LINUX_FEATURES` is the same list plus `bacnet-transport/{serial,serial-gpio,ethernet}`
+`LINUX_FEATURES` is the same list plus `bacnet-transport/{serial-gpio,ethernet}`
 and `bacnet-integration-tests/ethernet`.
 
 The script also runs the PyO3 crate's Rust tests. pyo3 links the libpython of
@@ -1368,12 +1544,12 @@ Clippy runs six ways:
 
 - the workspace with every feature;
 - the PyO3 crate on its own;
-- `bacnet-cli` with no default features (without the TUI);
-- the `no_std` crates (`bacnet-time`, `bacnet-mstp-codec`,
+- `bacnet-cli` with no default features (without the TUI), on Linux, macOS and Windows;
+- the `no_std` crates (`bacnet-time`, `bacnet-npdu`, `bacnet-mstp-codec`,
   `bacnet-mstp-core`, `bacnet-bip-codec`, `bacnet-bip-core`,
   `bacnet-router-core`, and `bacnet-types`,
   `bacnet-encoding` and `bacnet-services` with `alloc` in place of their
-  default `std`) on
+  default `std`, and with neither) on
   bare-metal targets, once per feature set
   (`scripts/ci/check-no-std.sh`). A host build always has `std` and an
   allocator, so only a target without them shows that a crate needs neither.
@@ -1386,8 +1562,8 @@ Clippy runs six ways:
   `tokio` or `socket2`: a dependency whose std leaks in through feature
   unification is caught even where it would still compile;
 - `bacnet-types`, `bacnet-encoding` and `bacnet-services` with `alloc` in
-  place of `std` and `--all-targets`, on the host, so the tests the Test job
-  runs without `std` are linted too;
+  place of `std`, and with neither, and `--all-targets`, on the host, so the
+  tests the Test job runs without `std` are linted too;
 - each published crate alone with default features, plus the `no_std` builds
   of `bacnet-types`, `bacnet-encoding` and `bacnet-services`
   (`scripts/ci/check-default-features.sh`). This also runs rustdoc, which is
@@ -1420,7 +1596,7 @@ that exist only in one feature configuration are covered; the run takes about
 2 s longer on the host.
 
 The individual gates are also runnable anywhere. `FEATURES` is
-`LINUX_FEATURES` from `ci.yml`, without the serial and ethernet entries on macOS:
+`LINUX_FEATURES` from `ci.yml`, without the serial-gpio and ethernet entries on macOS:
 
 ```bash
 FEATURES=$(sed -n 's/^  LINUX_FEATURES: //p' .github/workflows/ci.yml)
@@ -1430,6 +1606,7 @@ cargo clippy -p rusty-bacnet --all-targets --locked -- -D warnings
 cargo clippy -p bacnet-cli --no-default-features --all-targets --locked -- -D warnings
 bash scripts/ci/check-default-features.sh   # the host; or pass target triples, as CI does
 cargo clippy -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --features alloc --all-targets --locked -- -D warnings
+cargo clippy -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --all-targets --locked -- -D warnings
 bash scripts/ci/check-no-std.sh             # needs the bare-metal targets (rustup target add)
 bash scripts/ci/check-firmware-link.sh      # likewise; see "Firmware link test"
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --exclude rusty-bacnet --no-deps --locked --document-private-items --features "$FEATURES"
@@ -1438,9 +1615,12 @@ cargo nextest run -p bacnet-cli --locked   # the CLI's feature-off tests
 cargo nextest run -p bacnet-cli --no-default-features --locked   # without the TUI
 cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --features alloc --locked   # no_std code, alloc
 cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --features alloc --locked
+cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --locked   # no_std code, no allocator
+cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --locked
 cargo nextest run -p rusty-bacnet --locked # the PyO3 crate's Rust tests
 bash scripts/ci/check-file-size.sh
 bash scripts/ci/test-check-no-secrets.sh && bash scripts/ci/check-no-secrets.sh
+bash scripts/ci/test-plan-skip.sh          # the merge-run skip (#1466)
 python3 scripts/ci/test-check-msrv.py
 python3 scripts/ci/test-firmware-size.py
 python3 scripts/ci/check-named-codes.py     # the named_codes! copies match
@@ -1461,9 +1641,9 @@ a suspected path locally with `printf '%s' "$path" | git hash-object --stdin`.
 Run the file-size gate in its default strict mode, without `CHECK_FILE_SIZE_WARN=1`.
 
 `bacnet-bip-codec` (`src/function.rs`), `bacnet-mstp-codec` (`src/frame.rs`)
-and `bacnet-router-core` (`src/message/codes.rs`) each keep a private copy of
+and `bacnet-npdu` (`src/codes.rs`) each keep a private copy of
 the `named_codes!` macro, which builds their open wire-code types
-(`BvlcFunction`, `FrameType`, `MessageType` and the rest): none of them
+(`BvlcFunction`, `FrameType`, `NetworkMessageType` and the rest): none of them
 depends on another for it (#1684). `check-named-codes.py` compares each
 `macro_rules!` definition, from that line to the closing brace, with the
 first, and fails with a diff when one differs, so a change to one is made to
@@ -1540,7 +1720,10 @@ To release:
    environment `release`, then remove the one that names `ci.yml`. The
    [PyPI trusted publishing](#secrets-and-environment) job stops a release
    before crates.io if this isn't done.
-1. Set the workspace version, update the fuzz crates' lockfiles for it (see
+1. Set the workspace version, and bump `bacnet-time` (its own `version` and
+   the workspace dependency's) when its API changed since its last release:
+   it versions on its own (#1768), and the release skips a name and version
+   already on crates.io. Update the fuzz crates' lockfiles (see
    [Fuzzing](#fuzzing)), assemble the version's `CHANGELOG.md` section from
    the fragments, add release highlights by hand under the new heading if the
    release has any, and merge:
@@ -1548,10 +1731,10 @@ To release:
    ```bash
    bash scripts/ci/fuzz.sh lock                # the fuzz crates' Cargo.lock files
    python3 scripts/changelog.py preview        # what the section will hold
-   python3 scripts/changelog.py assemble --version 0.13.0 [--date 2026-10-13]
+   python3 scripts/changelog.py assemble --version 0.14.0 [--date 2026-10-21]
    ```
 
-   `assemble` adds `## [0.13.0] - <date>` below `[Unreleased]`, with the
+   `assemble` adds `## [0.14.0] - <date>` below `[Unreleased]`, with the
    entries grouped by heading and ordered by issue number, and deletes the
    fragments it used. Each entry ends with a link to the GitHub commit that
    brought its fragment into dev, found along the first-parent history, so run
@@ -1563,8 +1746,8 @@ To release:
    not one inside a merged branch), once its CI has passed:
 
    ```bash
-   git tag -a v0.13.0 -m "Rusty BACnet 0.13.0"
-   git push origin v0.13.0
+   git tag -a v0.14.0 -m "Rusty BACnet 0.14.0"
+   git push origin v0.14.0
    ```
 
 The tag push also starts CI's heavy jobs on the tagged commit, and the release
@@ -1574,7 +1757,7 @@ waits for them (see [CI gate](#ci-gate)).
 
 | Job | What it does |
 | --- | --- |
-| Validate | Runs the release script tests (`scripts/release/test_*.py`, `scripts/test_changelog.py`). Checks that every publishable crate has the workspace version and, for a tag, that the tag is `v<version>` and the commit is on `dev`'s or `main`'s first-parent history (`git rev-list --first-parent`), so a commit inside a merged PR's branch doesn't qualify. For a tag, checks that no `changelog.d/` fragment is left unassembled. Extracts the notes with `changelog_notes.py` and writes `THIRD-PARTY-NOTICES`. |
+| Validate | Runs the release script tests (`scripts/release/test_*.py`, `scripts/test_changelog.py`). Checks, with `release_version.py`, that every publishable crate has the workspace version, except `bacnet-time`, which versions on its own, and, for a tag, that the tag is `v<version>` and the commit is on `dev`'s or `main`'s first-parent history (`git rev-list --first-parent`), so a commit inside a merged PR's branch doesn't qualify. For a tag, checks that no `changelog.d/` fragment is left unassembled. Extracts the notes with `changelog_notes.py` and writes `THIRD-PARTY-NOTICES`. |
 | CI gate | `ci_gate.py` on the release commit (a PR's head on a PR's dry run). On a tag it waits for the CI run the tag's push started; a dry run checks once and only warns. See [CI gate](#ci-gate). |
 | Crates and sdist | `cargo publish --workspace --dry-run --locked`, which packages every publishable crate and builds each against the others as published. Then `cargo package` for the `crates` artifact, and `maturin sdist`. |
 | Build (linux-x86_64, linux-aarch64, macos-x86_64, macos-arm64, windows-x86_64) | The wheels for CPython 3.11 to 3.14 (`PYTHONS`) and the CLI, on each platform's own runner. See [Builds](#builds). |
@@ -1865,7 +2048,9 @@ mounted. In the image it:
   `--compatibility manylinux2014` tags them `manylinux_2_17`, and
   `--auditwheel check` fails the build on a symbol or library outside that
   policy instead of copying a library into the wheel;
-- builds the CLI with `--features sc-tls,pcap`.
+- builds the CLI with `--features sc-tls,pcap,serial`. MS/TP (`serial`) is in
+  the Linux CLI only, until a USB RS-485 adapter has been tested on macOS and
+  Windows (#969).
 
 AWS-LC (`aws-lc-sys`, for BACnet/SC) builds with the image's GCC 10 through
 its default builder, which needs no CMake. Its build checks the compiler for
@@ -1919,6 +2104,59 @@ x86_64), from `https://pypi.org/pypi/maturin/<version>/json`.
 `SOURCE_DATE_EPOCH`, the commit time, pins the sdist's and the wheels'
 timestamps.
 
+#### Release profile
+
+Both build scripts build the wheels and the CLI with `--profile dist`
+(#973), which the root `Cargo.toml` defines as `release` plus
+whole-program LTO (`lto = "fat"`) and one codegen unit. It keeps the
+symbol table (`strip = "debuginfo"`, which is also what `release` does by
+default), so a panic run with `RUST_BACKTRACE=1` still names its
+functions; with `strip = "symbols"` the backtrace comes out empty and only
+the panic's file and line remain. `release` itself is unchanged, so
+`cargo build --release`, the benchmark suites (the `bench` profile inherits
+`release`) and `maturin develop --release` build as fast as before and the
+numbers in `Benchmarks.md` still hold. `dist` lands in `target/<triple>/dist/`.
+
+Measured on an Apple Silicon Mac (10 cores) with the pinned toolchain,
+for the CLI with the release workflow's macOS features (`--features
+sc-tls`, plus the default `tui`) and for one CPython wheel. A clean build is
+from an empty profile directory, dependencies included; a rebuild is after
+touching `crates/bacnet-cli/src/main.rs`. Another build shared the machine,
+so build times vary by about a third between runs; sizes are exact. MB is
+10⁶ bytes.
+
+| Artifact | Profile | Size | Clean build | Rebuild |
+| --- | --- | --- | --- | --- |
+| CLI, macOS arm64 | `release` (before #973) | 18.9 MB | 48–60 s | 21–24 s |
+| | `release` + `strip = true` | 15.5 MB (−18%) | 50–77 s | 24–27 s |
+| | `release` + `strip = true` + `lto = "thin"` | 15.8 MB (−16%) | 46–58 s | 23–24 s |
+| | `release` + `lto = "thin"` | 19.1 MB (+1%) | 47 s | 22 s |
+| | **`dist`** (fat LTO, one codegen unit) | **12.4 MB (−34%)** | 114 s | 64 s |
+| | `dist` + `strip = true` | 10.6 MB (−44%) | 87 s | 62 s |
+| CLI, macOS x86_64 (built on arm64) | `release` (before #973) | 20.6 MB | 45 s | 20 s |
+| | `release` + `strip = true` | 17.2 MB (−17%) | 71 s | 25 s |
+| | `release` + `strip = true` + `lto = "thin"` | 17.5 MB (−15%) | 53 s | 29 s |
+| | **`dist`** | **14.5 MB (−30%)** | 83 s | 63 s |
+| Wheel, macOS arm64 (`.whl`; its `.so`) | `release` (before #973) | 10.4 MB; 34.1 MB | 69 s | |
+| | **`dist`** | **7.4 MB (−29%); 20.0 MB** | 149 s | |
+| | `dist` + `strip = true` | 6.8 MB; 15.7 MB | 142 s | |
+
+Thin LTO doesn't pay here: cargo's default for `release` already runs
+thin LTO within each crate, and across crates it made the binary slightly
+larger. Fat LTO with one codegen unit is what shrinks it, at about twice the
+build time. On the release runners that is a few minutes more per build job,
+well inside its 60-minute timeout. Each job's `ls -l dist out` prints the
+sizes for Linux and Windows.
+
+- **Code signature.** Apple's linker signs the arm64 binaries ad hoc after
+  LTO, and `strip`, if used, re-signs them: every arm64 binary above passed
+  `codesign -v`. The x86_64 ones carry no signature, which macOS doesn't
+  require there and the artifact check doesn't ask for.
+- **The TUI's share.** With `release`, the arm64 CLI was 13.4 MB on dev just
+  before #974 made `tui` a default feature (09c332ce7) and 18.9 MB after.
+  On today's dev, `--no-default-features` gives 12.7 MB under `release`
+  and 8.9 MB under `dist`, so `tui` adds 6.2 MB and 3.5 MB respectively.
+
 ### Third-party notices
 
 `scripts/release/third_party_notices.py` writes `THIRD-PARTY-NOTICES`: Rusty
@@ -1926,7 +2164,7 @@ BACnet's own licence, then every third-party component in the release
 binaries with the licence files it ships, identical texts printed once.
 
 - The crates come from `cargo tree --locked --offline -e normal,no-proc-macro`
-  for the CLI (`-p bacnet-cli --features sc-tls,pcap` on Linux, `--features
+  for the CLI (`-p bacnet-cli --features sc-tls,pcap,serial` on Linux, `--features
   sc-tls` on macOS and Windows) and the Python extension (`-p rusty-bacnet`) on
   each of the five release targets, so build scripts, proc-macros,
   dev-dependencies and crates for other platforms, which no release binary
@@ -1947,10 +2185,10 @@ binaries with the licence files it ships, identical texts printed once.
   `MIT-0`, `Unlicense` and `WTFPL`, whose terms don't ask for the notice in a
   binary (so MIT, BSD-*, ISC, Apache-2.0, MPL-2.0 and unknown ones all count),
   unless `ALLOW_NO_LICENSE_FILE` in the script names it with the reason. The
-  list is empty: every such crate ships a licence file. One crate ships none
-  and is listed at the end with its reason: `clipboard-win` (BSL-1.0, in the
-  Windows CLI through rustyline), whose licence exempts machine-executable
-  object code.
+  list is empty: every such crate ships a licence file. A crate under one of
+  those exempt licences that ships none would be listed at the end with its
+  reason; none does since the shell and rustyline went (#974), which took
+  `clipboard-win` (BSL-1.0) with them.
 - libpcap's licence and version come from the pinned tarball, which Validate
   fetches with `libpcap.sh`, as the Linux builds do.
 - The file depends only on `Cargo.lock`, the crate sources and libpcap, so a

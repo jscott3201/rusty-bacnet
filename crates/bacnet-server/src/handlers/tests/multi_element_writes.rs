@@ -8,6 +8,7 @@
 use super::*;
 use bacnet_objects::loop_obj::LoopObject;
 use bacnet_objects::traits::BACnetObject;
+use bacnet_types::enums::EngineeringUnits;
 
 fn encode_value(value: PropertyValue) -> Vec<u8> {
     let mut buf = BytesMut::new();
@@ -79,16 +80,8 @@ fn assert_refused(
 ) {
     match write_raw(db, oid, property, None, raw_value).expect_err(context) {
         Error::Protocol { class, code } => {
-            assert_eq!(
-                class,
-                ErrorClass::PROPERTY.to_raw() as u32,
-                "{context}: wrong error class"
-            );
-            assert_eq!(
-                code,
-                expected_code.to_raw() as u32,
-                "{context}: wrong error code"
-            );
+            assert_eq!(class, ErrorClass::PROPERTY, "{context}: wrong error class");
+            assert_eq!(code, expected_code, "{context}: wrong error code");
         }
         other => panic!("{context}: expected PROPERTY/{expected_code:?}, got {other:?}"),
     }
@@ -113,7 +106,7 @@ fn assert_refused(
 #[test]
 fn scalar_write_with_undecodable_trailing_element_is_refused_and_preserves() {
     let mut db = ObjectDatabase::new();
-    let lo = LoopObject::new(1, "LOOP-1", 62).unwrap();
+    let lo = LoopObject::new(1, "LOOP-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let oid = lo.object_identifier();
     db.add(Box::new(lo)).unwrap();
 
@@ -214,7 +207,7 @@ fn list_write_with_tlv_truncated_tail_is_refused_before_the_value_decode() {
 #[test]
 fn well_formed_trailing_element_reaches_scalar_arm_as_list_and_is_refused() {
     let mut db = ObjectDatabase::new();
-    let lo = LoopObject::new(1, "LOOP-1", 62).unwrap();
+    let lo = LoopObject::new(1, "LOOP-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let oid = lo.object_identifier();
     db.add(Box::new(lo)).unwrap();
 
@@ -311,7 +304,7 @@ fn datetime_value_present_value_and_priority_array_over_the_wire() {
     )
     .unwrap_err();
     assert!(
-        matches!(error, Error::Protocol { class, code } if class == u32::from(ErrorClass::PROPERTY.to_raw()) && code == u32::from(ErrorCode::WRITE_ACCESS_DENIED.to_raw()))
+        matches!(error, Error::Protocol { class, code } if class == ErrorClass::PROPERTY && code == ErrorCode::WRITE_ACCESS_DENIED)
     );
     assert_eq!(
         read_prop(&db, oid, PropertyIdentifier::PRESENT_VALUE),

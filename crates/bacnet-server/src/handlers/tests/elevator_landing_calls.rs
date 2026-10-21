@@ -74,8 +74,8 @@ fn control(db: &ObjectDatabase, oid: ObjectIdentifier) -> BACnetLandingCallStatu
 fn assert_property_error(result: Result<(), Error>, expected: ErrorCode, context: &str) {
     match result.expect_err(context) {
         Error::Protocol { class, code } => {
-            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32, "{context}");
-            assert_eq!(code, expected.to_raw() as u32, "{context}: {expected:?}");
+            assert_eq!(class, ErrorClass::PROPERTY, "{context}");
+            assert_eq!(code, expected, "{context}: {expected:?}");
         }
         other => panic!("{context}: expected PROPERTY/{expected:?}, got {other:?}"),
     }

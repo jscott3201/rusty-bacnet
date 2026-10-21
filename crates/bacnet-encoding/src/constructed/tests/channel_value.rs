@@ -117,7 +117,7 @@ fn malformed_colour_alternatives_are_refused() {
         assert!(
             matches!(
                 channel_value_end(value, 0),
-                Err(bacnet_types::error::Error::Decoding { .. })
+                Err(bacnet_types::error::Error::Decoding(_))
             ),
             "{value:02X?}"
         );
@@ -163,7 +163,7 @@ fn malformed_lighting_commands_are_refused() {
         assert!(
             matches!(
                 channel_value_end(value, 0),
-                Err(bacnet_types::error::Error::Decoding { .. })
+                Err(bacnet_types::error::Error::Decoding(_))
             ),
             "{value:02X?}"
         );
@@ -193,12 +193,10 @@ fn a_level_of_the_wrong_length_is_malformed_even_when_cut_short() {
     // The target level [1] says three octets and holds two: the length is
     // wrong before the missing octet matters (#1303).
     match channel_value_end(&[0x0E, 0x09, 0x01, 0x1B, 0x42, 0x48], 0) {
-        Err(bacnet_types::error::Error::Decoding {
-            offset, message, ..
-        }) => {
-            assert_eq!(offset, 3);
+        Err(bacnet_types::error::Error::Decoding(error)) => {
+            assert_eq!(error.offset, 3);
             assert_eq!(
-                message,
+                error.message().to_string(),
                 "lighting command: [1] REAL has 3 contents octets, expected 4"
             );
         }

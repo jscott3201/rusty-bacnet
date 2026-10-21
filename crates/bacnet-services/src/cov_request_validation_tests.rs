@@ -17,7 +17,7 @@ fn subscribe_cov_lifetime_only_encode_is_transactional_and_decode_is_structural(
         let mut buffer = BytesMut::from(&b"prefix"[..]);
         assert!(matches!(
             request.encode(&mut buffer),
-            Err(Error::Encoding(_))
+            Err(Error::Encode(_))
         ));
         assert_eq!(&buffer[..], b"prefix");
         let mut raw = BytesMut::from(&[0x09, 1, 0x1c, 0, 0, 0, 3][..]);

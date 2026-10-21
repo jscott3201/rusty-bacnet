@@ -90,8 +90,8 @@ impl FramedElement {
 
 fn unsplittable() -> Error {
     Error::Protocol {
-        class: ErrorClass::SERVICES.to_raw() as u32,
-        code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+        class: ErrorClass::SERVICES,
+        code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
     }
 }
 

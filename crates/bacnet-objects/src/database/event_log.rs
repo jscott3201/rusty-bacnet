@@ -202,8 +202,8 @@ fn reports_an_event_log_buffer(notification: &EventNotificationRequest) -> bool 
 /// record insertion.
 fn is_unsupported(error: &Error) -> bool {
     matches!(error, Error::Protocol { class, code }
-        if *class == ErrorClass::OBJECT.to_raw() as u32
-            && *code == ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32)
+        if *class == ErrorClass::OBJECT
+            && *code == ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED)
 }
 
 #[cfg(test)]

@@ -48,11 +48,7 @@ async fn list_element_semantics_and_change_list_errors_reach_the_client() {
             code,
             detail,
         }) => match *detail {
-            ErrorDetail::FirstFailedElementNumber(element) => (
-                ErrorClass::from_raw(class as u16),
-                ErrorCode::from_raw(code as u16),
-                element,
-            ),
+            ErrorDetail::FirstFailedElementNumber(element) => (class, code, element),
             other => panic!("expected an element number, got {other:?}"),
         },
         other => panic!("expected a ChangeList-Error, got {other:?}"),

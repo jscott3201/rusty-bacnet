@@ -3,12 +3,15 @@
 //! Tracks in-flight confirmed requests. Each request gets a unique invoke_id
 //! (0-255) scoped per destination MAC. Responses are delivered via oneshot channels.
 
-use bacnet_types::enums::{AbortReason, ConfirmedServiceChoice};
+use bacnet_types::enums::{
+    AbortReason, ConfirmedServiceChoice, ErrorClass, ErrorCode, RejectReason,
+};
+use bacnet_types::map_hash::BuildMapHasher;
 use bacnet_types::MacAddr;
 use bytes::Bytes;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{oneshot, watch};
+use tokio::sync::oneshot;
 
 mod final_segment;
 #[cfg(test)]
@@ -18,10 +21,13 @@ mod segmented_response;
 pub(crate) use segmented_response::SegmentedResponseAdmission;
 mod completion;
 mod coordinated;
+mod progress;
 pub(crate) use coordinated::{
     CoordinatedCompletion, CoordinatedTerminalPhase, SegmentedAckArrival,
 };
 use coordinated::{PendingLease, PendingRelease};
+use progress::TransactionShared;
+pub(crate) use progress::{ProgressReceiver, TransactionProgress};
 
 /// TSM configuration.
 #[derive(Debug, Clone)]
@@ -60,10 +66,10 @@ pub enum TsmResponse {
     },
     /// Error PDU.
     Error {
-        /// Raw BACnetErrorClass enumeration value.
-        class: u32,
-        /// Raw BACnetErrorCode enumeration value.
-        code: u32,
+        /// Error class the PDU reports.
+        class: ErrorClass,
+        /// Error code the PDU reports.
+        code: ErrorCode,
         /// What the PDU's structured Clause 21 body adds to the class and
         /// code (ChangeList-Error, CreateObject-Error, WPM-Error and the
         /// others); `None` for a plain error.
@@ -71,13 +77,13 @@ pub enum TsmResponse {
     },
     /// Reject PDU.
     Reject {
-        /// Raw BACnetRejectReason value.
-        reason: u8,
+        /// Reject reason the PDU reports.
+        reason: RejectReason,
     },
     /// Abort PDU.
     Abort {
-        /// Raw BACnetAbortReason value.
-        reason: u8,
+        /// Abort reason the PDU reports.
+        reason: AbortReason,
     },
     /// A router rejected the active message as too long for its routed path.
     NetworkPathTooLong {
@@ -92,8 +98,8 @@ impl TsmResponse {
     /// WritePropertyMultiple's first failed write attempt.
     pub(crate) fn from_error_pdu(pdu: &bacnet_encoding::apdu::ErrorPdu) -> Self {
         Self::Error {
-            class: pdu.error_class.to_raw() as u32,
-            code: pdu.error_code.to_raw() as u32,
+            class: pdu.error_class,
+            code: pdu.error_code,
             detail: bacnet_services::structured_error::detail(pdu),
         }
     }
@@ -168,16 +174,9 @@ pub(crate) enum SegmentAckPhase {
     Idle,
 }
 
-/// Request-side timer state delivered to the task waiting for a response.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TransactionProgress {
-    AwaitingResponse,
-    SegmentedResponse { generation: u64 },
-}
-
 pub(crate) struct TransactionRegistration {
     pub(crate) response: oneshot::Receiver<TsmResponse>,
-    pub(crate) progress: watch::Receiver<TransactionProgress>,
+    pub(crate) progress: ProgressReceiver,
     pub(crate) owner: TransactionOwner,
 }
 
@@ -186,12 +185,15 @@ pub(crate) struct TransactionRegistration {
 /// Pointer identity is stable while delayed work retains a clone. The
 /// allocation therefore cannot be reused for a replacement transaction until
 /// every stale owner reference has gone away.
+///
+/// The same allocation carries the request-side timer progress (#1727), so
+/// a transaction costs one shared allocation rather than two.
 #[derive(Clone, Debug)]
-pub(crate) struct TransactionOwner(Arc<()>);
+pub(crate) struct TransactionOwner(Arc<TransactionShared>);
 
 impl TransactionOwner {
     fn new() -> Self {
-        Self(Arc::new(()))
+        Self(Arc::new(TransactionShared::new()))
     }
 
     pub(crate) fn same_as(&self, other: &Self) -> bool {
@@ -225,7 +227,7 @@ enum TransactionPhase {
 /// A confirmed request awaiting its response.
 struct PendingTransaction {
     responder: oneshot::Sender<TsmResponse>,
-    progress: watch::Sender<TransactionProgress>,
+    /// Also publishes this transaction's timer progress.
     owner: TransactionOwner,
     phase: TransactionPhase,
     final_segment_issue: Option<FinalSegmentIssue>,
@@ -247,8 +249,9 @@ struct PendingTransaction {
 /// asked for.
 pub struct Tsm {
     config: TsmConfig,
-    allocators: HashMap<MacAddr, InvokeIdAllocator>,
-    pending: HashMap<(MacAddr, u8), PendingTransaction>,
+    // Only this client inserts: see bacnet_types::map_hash (#1713).
+    allocators: HashMap<MacAddr, InvokeIdAllocator, BuildMapHasher>,
+    pending: HashMap<(MacAddr, u8), PendingTransaction, BuildMapHasher>,
     coordinator: Option<Arc<bacnet_endpoint_core::coordinator::OutboundTransactionCoordinator>>,
 }
 
@@ -257,8 +260,8 @@ impl Tsm {
     pub fn new(config: TsmConfig) -> Self {
         Self {
             config,
-            allocators: HashMap::new(),
-            pending: HashMap::new(),
+            allocators: HashMap::default(),
+            pending: HashMap::default(),
             coordinator: None,
         }
     }
@@ -369,14 +372,12 @@ impl Tsm {
         lease: PendingLease,
     ) -> (PendingTransaction, TransactionRegistration) {
         let (tx, rx) = oneshot::channel();
-        let (progress_tx, progress_rx) = watch::channel(TransactionProgress::AwaitingResponse);
         let owner = TransactionOwner::new();
         let final_segment_issue =
             matches!(phase, TransactionPhase::SegmentedRequest { .. }).then(FinalSegmentIssue::new);
         (
             PendingTransaction {
                 responder: tx,
-                progress: progress_tx,
                 owner: owner.clone(),
                 phase,
                 final_segment_issue,
@@ -386,7 +387,7 @@ impl Tsm {
             },
             TransactionRegistration {
                 response: rx,
-                progress: progress_rx,
+                progress: ProgressReceiver::new(owner.clone()),
                 owner,
             },
         )
@@ -475,8 +476,8 @@ impl Tsm {
         }
         pending.phase = TransactionPhase::AwaitingResponse;
         pending
-            .progress
-            .send_replace(TransactionProgress::AwaitingResponse);
+            .owner
+            .publish_progress(TransactionProgress::AwaitingResponse);
         true
     }
 
@@ -553,8 +554,8 @@ impl Tsm {
         pending.phase = TransactionPhase::SegmentedResponse;
         let generation = pending.segment_generation;
         pending
-            .progress
-            .send_replace(TransactionProgress::SegmentedResponse { generation });
+            .owner
+            .publish_progress(TransactionProgress::SegmentedResponse { generation });
         Some(generation)
     }
 
@@ -573,8 +574,8 @@ impl Tsm {
         pending.segment_generation = pending.segment_generation.wrapping_add(1);
         let generation = pending.segment_generation;
         pending
-            .progress
-            .send_replace(TransactionProgress::SegmentedResponse { generation });
+            .owner
+            .publish_progress(TransactionProgress::SegmentedResponse { generation });
         Some(generation)
     }
 
@@ -595,8 +596,8 @@ impl Tsm {
         }
         pending.phase = TransactionPhase::AwaitingResponse;
         pending
-            .progress
-            .send_replace(TransactionProgress::AwaitingResponse);
+            .owner
+            .publish_progress(TransactionProgress::AwaitingResponse);
         true
     }
 
@@ -704,7 +705,7 @@ impl Tsm {
             owner,
             None,
             TsmResponse::Abort {
-                reason: AbortReason::INVALID_APDU_IN_THIS_STATE.to_raw(),
+                reason: AbortReason::INVALID_APDU_IN_THIS_STATE,
             },
         );
     }

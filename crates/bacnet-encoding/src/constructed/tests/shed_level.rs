@@ -81,7 +81,7 @@ fn shed_level_rejects_other_tags_and_malformed_contents() {
     ];
     for (name, bytes) in malformed {
         assert!(
-            matches!(decode_shed_level(bytes, 0), Err(Error::Decoding { .. })),
+            matches!(decode_shed_level(bytes, 0), Err(Error::Decoding(_))),
             "{name}: {:?}",
             decode_shed_level(bytes, 0)
         );

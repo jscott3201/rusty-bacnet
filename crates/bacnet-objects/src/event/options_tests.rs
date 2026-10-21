@@ -10,8 +10,8 @@ use bytes::BytesMut;
 fn code(result: Option<Result<(), Error>>) -> ErrorCode {
     match result {
         Some(Err(Error::Protocol { class, code })) => {
-            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
-            ErrorCode::from_raw(code as u16)
+            assert_eq!(class, ErrorClass::PROPERTY);
+            code
         }
         other => panic!("expected a PROPERTY refusal, got {other:?}"),
     }

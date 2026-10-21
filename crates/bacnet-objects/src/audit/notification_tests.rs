@@ -483,8 +483,8 @@ fn commit_and_clock_failures_leave_memory_and_durable_snapshot_unchanged() {
             )
             .unwrap_err();
         assert!(matches!(error, Error::Protocol { class, code }
-            if class == bacnet_types::enums::ErrorClass::DEVICE.to_raw() as u32
-                && code == bacnet_types::enums::ErrorCode::OPERATIONAL_PROBLEM.to_raw() as u32));
+            if class == bacnet_types::enums::ErrorClass::DEVICE
+                && code == bacnet_types::enums::ErrorCode::OPERATIONAL_PROBLEM));
         assert_eq!(log.total_record_count(), 0);
         assert_eq!(*persistence.snapshot.lock().unwrap(), durable);
     }
@@ -505,8 +505,8 @@ fn disabled_sink_denies_before_clock_or_persistence_change() {
         .store_notifications(&[notification(None, None)], 2_000)
         .unwrap_err();
     assert!(matches!(error, Error::Protocol { class, code }
-        if class == bacnet_types::enums::ErrorClass::SERVICES.to_raw() as u32
-            && code == bacnet_types::enums::ErrorCode::SERVICE_REQUEST_DENIED.to_raw() as u32));
+        if class == bacnet_types::enums::ErrorClass::SERVICES
+            && code == bacnet_types::enums::ErrorCode::SERVICE_REQUEST_DENIED));
     assert_eq!(log.generation(), generation);
     assert_eq!(
         persistence

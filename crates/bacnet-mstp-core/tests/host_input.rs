@@ -6,7 +6,7 @@
 mod support;
 
 use bacnet_mstp_codec::{FrameType, BROADCAST_MAC};
-use bacnet_mstp_core::{Action, CoreError, Direction, Duration, Instant, MasterState};
+use bacnet_mstp_core::{Action, Direction, Duration, Instant, MasterState, TransmitError};
 
 use support::*;
 
@@ -100,18 +100,18 @@ fn an_invalid_frame_only_delays_a_waiting_frame() {
     let mut core = new_core(&mut rx, &mut actions);
     poll_waiting(&mut core);
     let found = ms(10) + us(2_000);
-    core.on_invalid_frame(found).unwrap();
+    core.on_invalid_frame(found);
     assert_eq!(core.state(), MasterState::PollForMaster);
     assert_eq!(core.next_deadline(), Some(found + turnaround(&core)));
     let handed = core.next_deadline().unwrap();
-    core.on_deadline(handed).unwrap();
+    core.on_deadline(handed);
     let (id, header) = handed_over(&mut core);
     assert!(is(header, FrameType::POLL_FOR_MASTER, PEER));
     let again = handed + us(300);
-    core.on_invalid_frame(again).unwrap();
+    core.on_invalid_frame(again);
     assert_eq!(
         core.on_transmit_started(id, again + us(300)),
-        Err(CoreError::TransmitDeferred)
+        Err(TransmitError::Deferred)
     );
     assert_eq!(core.next_deadline(), Some(again + turnaround(&core)));
     let counters = core.counters();
@@ -131,8 +131,8 @@ fn host_events_count_toward_saw_token_user() {
         let mut core = new_core(&mut rx, &mut actions);
         let (handed, id) = retry_handed_over(&mut core);
         let heard = handed + us(500);
-        core.on_host_activity(octets, heard).unwrap();
-        core.on_invalid_frame(heard).unwrap();
+        core.on_host_activity(octets, heard);
+        core.on_invalid_frame(heard);
         let counters = core.counters();
         assert_eq!(counters.cancelled_sends, u32::from(dropped), "{octets}");
         if dropped {
@@ -142,7 +142,7 @@ fn host_events_count_toward_saw_token_user() {
             assert_eq!(core.state(), MasterState::PassToken);
             assert_eq!(
                 core.on_transmit_started(id, heard + us(100)),
-                Err(CoreError::TransmitDeferred)
+                Err(TransmitError::Deferred)
             );
             assert_eq!(core.next_deadline(), Some(heard + turnaround(&core)));
         }
@@ -159,7 +159,7 @@ fn host_input_after_the_confirmed_start_is_echo() {
     let mut core = new_core(&mut rx, &mut actions);
     pass_waiting(&mut core);
     let due = core.next_deadline().unwrap();
-    core.on_deadline(due).unwrap();
+    core.on_deadline(due);
     let (id, header) = handed_over(&mut core);
     assert!(is(header, FrameType::TOKEN, PEER));
     core.on_transmit_started(id, due).unwrap();
@@ -168,14 +168,14 @@ fn host_input_after_the_confirmed_start_is_echo() {
     let echo = due + Duration::from_millis(1);
     validated(&mut core, FrameType::TOKEN, PEER, STATION, &[], echo);
     validated(&mut core, FrameType::TOKEN, STATION, PEER, &[], echo);
-    core.on_invalid_frame(echo).unwrap();
-    core.on_host_activity(8, echo).unwrap();
+    core.on_invalid_frame(echo);
+    core.on_host_activity(8, echo);
     assert_eq!(core.counters(), before);
     assert_eq!(core.next_deadline(), deadline);
     assert_eq!(core.state(), MasterState::PassToken);
     assert_eq!(core.poll_action(), Action::Idle);
     let done = echo + us(100);
-    core.on_transmit_complete(id, done).unwrap();
+    core.on_transmit_complete(id, done);
     assert_eq!(core.poll_action(), Action::SetDirection(Direction::Receive));
     assert_eq!(
         core.counters().frames_transmitted,

@@ -228,8 +228,8 @@ fn averaging_null_reference_write_is_another_datatype() {
         .unwrap_err();
     assert!(
         matches!(err, Error::Protocol { class, code }
-            if class == bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
-                && code == bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE.to_raw() as u32),
+            if class == bacnet_types::enums::ErrorClass::PROPERTY
+                && code == bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE),
         "{err:?}"
     );
     assert_eq!(
@@ -334,8 +334,8 @@ fn averaging_reference_write_refuses_the_flat_list_forms() {
             .unwrap_err();
         assert!(
             matches!(err, Error::Protocol { class, code }
-                if class == bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
-                    && code == bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE.to_raw() as u32),
+                if class == bacnet_types::enums::ErrorClass::PROPERTY
+                    && code == bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE),
             "{members:?}: {err:?}"
         );
         assert_eq!(
@@ -458,10 +458,10 @@ fn averaging_reference_write_rejects_bad_shapes_and_preserves_state() {
             Error::Protocol { class, code } => {
                 assert_eq!(
                     class,
-                    bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32,
+                    bacnet_types::enums::ErrorClass::PROPERTY,
                     "{label}: wrong class"
                 );
-                assert_eq!(code, expected_code.to_raw() as u32, "{label}: wrong code");
+                assert_eq!(code, expected_code, "{label}: wrong code");
             }
             other => panic!("{label}: expected Property error, got {other:?}"),
         }

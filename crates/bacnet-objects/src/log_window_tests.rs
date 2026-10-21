@@ -55,7 +55,7 @@ fn datetime((date, time): (Date, Time)) -> PropertyValue {
 fn assert_refused(result: Result<(), Error>, code: ErrorCode) {
     assert!(
         matches!(result, Err(Error::Protocol { class, code: c })
-            if class == ErrorClass::PROPERTY.to_raw() as u32 && c == code.to_raw() as u32),
+            if class == ErrorClass::PROPERTY && c == code),
         "expected PROPERTY / {code:?}, got {result:?}"
     );
 }

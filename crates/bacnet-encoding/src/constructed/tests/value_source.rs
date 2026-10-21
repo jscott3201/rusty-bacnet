@@ -177,12 +177,12 @@ fn value_source_rejects_malformed_choices_members_and_framing() {
     for data in malformed {
         let error = decode_value_source(data, 0).expect_err(&format!("{data:x?}"));
         assert!(
-            matches!(error, Error::Decoding { .. } | Error::BufferTooShort { .. }),
+            error.decode_fault().is_some() || matches!(error, Error::BufferTooShort { .. }),
             "{error:?}"
         );
     }
     let error = decode_value_source(&[0xff, 0xff, 0x00], 2).unwrap_err();
-    assert!(matches!(error, Error::Decoding { offset: 2, .. }));
+    assert_eq!(error.decode_fault().map(|(offset, _)| offset), Some(2));
 }
 
 #[test]
@@ -211,16 +211,16 @@ fn value_source_address_mac_holds_to_the_bacnet_address_bound() {
     );
     for len in [longest + 1, 255] {
         assert!(
-            matches!(
-                decode_value_source(&wire(len), 0),
-                Err(Error::Decoding { offset: 3, .. })
-            ),
+            decode_value_source(&wire(len), 0)
+                .unwrap_err()
+                .decode_fault()
+                .is_some_and(|(offset, _)| offset == 3),
             "{len}-octet MAC"
         );
         let mut encoded = BytesMut::from(&[0xaa][..]);
         assert!(matches!(
             encode_value_source(&mut encoded, &address(len)),
-            Err(Error::Encoding(_))
+            Err(Error::Encode(_))
         ));
         assert_eq!(&encoded[..], &[0xaa], "{len}-octet MAC left output behind");
     }

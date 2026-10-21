@@ -1,0 +1,28 @@
+---
+source: crates/bacnet-cli/src/tui/tests/sc_profiles.rs
+expression: text
+---
+" [1 Devices] 2 3 7 | BIP | disconnected | READ-ONLY | COV 0 | drop 0     ? help "
+"┌ ┌ Connection profiles ─────────────────────────────────────────────────────┐─┐"
+"│ │ Create a BACnet/SC profile; Enter saves it without connecting.           │ │"
+"│ │   Name          hub-west                                                 │ │"
+"│ │   Hub URL       wss://hub.site.example:443/bacnet                        │ │"
+"│ │   Failover URL  wss://hub2.site.example:443/bacnet                       │ │"
+"│ │   CA file                                                                │ │"
+"│ │   Cert file                                                              │ │"
+"│ │   Key file                                                               │ │"
+"│ │   VMAC                                                                   │ │"
+"│ │   Device UUID                                                            │ │"
+"│ │   Timeout ms    6000                                                     │ │"
+"│ │   Pacing ms     0                                                        │ │"
+"│ │   Connect ms    10000                                                    │ │"
+"│ │ > Reconnect     off_                                                     │ │"
+"│ │   Writes        session                                                  │ │"
+"│ │   Dangerous     false                                                    │ │"
+"│ │ Tab/Shift-Tab fields | Backspace erase | Enter save                      │ │"
+"│ │ Hub URLs are wss://. Files are PEM paths; only the paths are saved.      │ │"
+"│ │ Reconnect on/off: redial a lost hub; a failover hub needs it on.         │ │"
+"│ │ Blank VMAC / UUID: generated once on save, then kept.                    │ │"
+"│ │ Writes: never or session (W arms). Dangerous: allows priority 6.         │ │"
+"└─│ Failover URL needs reconnect on: failover happens by reconnecting        │─┘"
+"  └ Esc discard / back | READ-ONLY ──────────────────────────────────────────┘  "

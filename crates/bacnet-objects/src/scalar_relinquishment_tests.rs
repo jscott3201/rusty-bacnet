@@ -6,7 +6,7 @@ use crate::multistate::{MultiStateInputObject, MultiStateOutputObject, MultiStat
 use crate::network_port::NetworkPortObject;
 use crate::schedule::ScheduleObject;
 use crate::traits::BACnetObject;
-use bacnet_types::enums::{ErrorCode, PropertyIdentifier as P, Reliability};
+use bacnet_types::enums::{EngineeringUnits, ErrorCode, PropertyIdentifier as P, Reliability};
 use bacnet_types::primitives::PropertyValue as V;
 
 fn read(object: &dyn BACnetObject, property: P) -> V {
@@ -36,9 +36,9 @@ fn snapshot(object: &dyn BACnetObject) -> Vec<V> {
 
 fn intrinsic_objects() -> Vec<Box<dyn BACnetObject>> {
     vec![
-        Box::new(AnalogInputObject::new(1, "AI", 62).unwrap()),
-        Box::new(AnalogOutputObject::new(1, "AO", 62).unwrap()),
-        Box::new(AnalogValueObject::new(1, "AV", 62).unwrap()),
+        Box::new(AnalogInputObject::new(1, "AI", EngineeringUnits::DEGREES_CELSIUS).unwrap()),
+        Box::new(AnalogOutputObject::new(1, "AO", EngineeringUnits::DEGREES_CELSIUS).unwrap()),
+        Box::new(AnalogValueObject::new(1, "AV", EngineeringUnits::DEGREES_CELSIUS).unwrap()),
         Box::new(BinaryInputObject::new(1, "BI").unwrap()),
         Box::new(BinaryOutputObject::new(1, "BO").unwrap()),
         Box::new(BinaryValueObject::new(1, "BV").unwrap()),
@@ -81,7 +81,7 @@ fn scalar_null_relinquishment_preserves_common_description_and_oos_state() {
                 (P::OUT_OF_SERVICE, V::CharacterString("invalid".into())),
             ] {
                 assert!(
-                    matches!(object.write_property_from(property,None,value,None, &crate::command_source::test_origin()),Err(bacnet_types::error::Error::Protocol{code,..}) if code == ErrorCode::INVALID_DATA_TYPE.to_raw() as u32)
+                    matches!(object.write_property_from(property,None,value,None, &crate::command_source::test_origin()),Err(bacnet_types::error::Error::Protocol{code,..}) if code == ErrorCode::INVALID_DATA_TYPE)
                 );
                 assert_eq!(snapshot(&*object), before);
             }
@@ -93,7 +93,8 @@ fn scalar_null_relinquishment_preserves_common_description_and_oos_state() {
 fn scalar_null_relinquishment_preserves_saved_reliability_and_client_override() {
     let mut objects = intrinsic_objects();
     objects.extend([
-        Box::new(LoopObject::new(1, "Loop", 62).unwrap()) as Box<dyn BACnetObject>,
+        Box::new(LoopObject::new(1, "Loop", EngineeringUnits::DEGREES_CELSIUS).unwrap())
+            as Box<dyn BACnetObject>,
         Box::new(ScheduleObject::new(1, "Schedule", V::Real(1.0)).unwrap()),
     ]);
     for mut object in objects {
@@ -180,7 +181,8 @@ fn scalar_null_relinquishment_skips_multistate_reevaluation_but_boolean_write_ke
 
 #[test]
 fn scalar_null_does_not_replace_commandable_or_nullable_property_semantics() {
-    let mut object = AnalogOutputObject::new(1, "commandable", 62).unwrap();
+    let mut object =
+        AnalogOutputObject::new(1, "commandable", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     object
         .write_property_from(
             P::PRESENT_VALUE,

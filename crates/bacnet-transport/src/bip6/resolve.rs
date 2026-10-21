@@ -24,6 +24,7 @@ use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddrV6;
 use std::time::Duration;
 
+use bacnet_time::earliest;
 use bytes::Bytes;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
@@ -392,9 +393,9 @@ impl Neighbours {
                         Some(addr) if !pending.resolving => due.revalidations.push(addr),
                         _ => due.resolutions.push(*vmac),
                     }
-                    due.next = earliest(due.next, schedule_next(pending.started, pending.sent));
+                    due.next = earliest([due.next, schedule_next(pending.started, pending.sent)]);
                 }
-                Step::Until(at) => due.next = earliest(due.next, Some(at)),
+                Step::Until(at) => due.next = earliest([due.next, Some(at)]),
             }
         }
         for vmac in failed {
@@ -414,9 +415,9 @@ impl Neighbours {
                 Step::Send => {
                     lookup.sent += 1;
                     due.virtual_resolutions.push(lookup.peer);
-                    due.next = earliest(due.next, schedule_next(lookup.started, lookup.sent));
+                    due.next = earliest([due.next, schedule_next(lookup.started, lookup.sent)]);
                 }
-                Step::Until(at) => due.next = earliest(due.next, Some(at)),
+                Step::Until(at) => due.next = earliest([due.next, Some(at)]),
             }
             index += 1;
         }
@@ -483,13 +484,6 @@ fn schedule_next(started: Instant, sent: u32) -> Option<Instant> {
     } else {
         started + RESOLUTION_TIMEOUT
     })
-}
-
-fn earliest(a: Option<Instant>, b: Option<Instant>) -> Option<Instant> {
-    match (a, b) {
-        (Some(a), Some(b)) => Some(a.min(b)),
-        (a, b) => a.or(b),
-    }
 }
 
 /// Whether two addresses name the same peer: the same IP address and port.

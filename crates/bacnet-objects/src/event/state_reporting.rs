@@ -208,8 +208,8 @@ impl ChangeOfStateReporting {
     ) -> Result<Option<EventStateChange>, Error> {
         if !self.event_detection_enable {
             return Err(Error::Protocol {
-                class: ErrorClass::OBJECT.to_raw() as u32,
-                code: ErrorCode::NO_ALARM_CONFIGURED.to_raw() as u32,
+                class: ErrorClass::OBJECT,
+                code: ErrorCode::NO_ALARM_CONFIGURED,
             });
         }
         self.event_history.acknowledge_correlated_detailed(
@@ -282,8 +282,8 @@ pub(crate) fn enumerated_list(
 ) -> Result<Vec<u32>, Error> {
     if array_index.is_some() {
         return Err(Error::Protocol {
-            class: ErrorClass::PROPERTY.to_raw() as u32,
-            code: ErrorCode::PROPERTY_IS_NOT_AN_ARRAY.to_raw() as u32,
+            class: ErrorClass::PROPERTY,
+            code: ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
         });
     }
     let items = match value {
@@ -293,8 +293,8 @@ pub(crate) fn enumerated_list(
     let cap = crate::multistate::MAX_ALARM_VALUES;
     if items.len() > cap {
         let full = Error::Protocol {
-            class: ErrorClass::RESOURCES.to_raw() as u32,
-            code: ErrorCode::NO_SPACE_TO_WRITE_PROPERTY.to_raw() as u32,
+            class: ErrorClass::RESOURCES,
+            code: ErrorCode::NO_SPACE_TO_WRITE_PROPERTY,
         };
         return Err(common::at_list_element(full, cap));
     }

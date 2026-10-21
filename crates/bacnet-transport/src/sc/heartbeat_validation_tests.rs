@@ -23,10 +23,21 @@ pub(super) async fn start_timed() -> (
     mpsc::Receiver<ReceivedNpdu>,
     LoopbackWebSocket,
 ) {
+    start_timed_with_timeout(1000).await
+}
+
+/// Like [`start_timed`], with the liveness timeout in milliseconds.
+pub(super) async fn start_timed_with_timeout(
+    timeout_ms: u64,
+) -> (
+    ScTransport<LoopbackWebSocket>,
+    mpsc::Receiver<ReceivedNpdu>,
+    LoopbackWebSocket,
+) {
     let (client, ws) = LoopbackWebSocket::pair();
     let mut transport = ScTransport::new(client, [0x01; 6])
         .with_device_uuid([1; 16])
-        .with_test_heartbeat_timing_ms(100, 1000);
+        .with_test_heartbeat_timing_ms(100, timeout_ms);
     let (rx, ()) = tokio::join!(transport.start(), hub_accept(&ws, [0x10; 6]));
     (transport, rx.unwrap(), ws)
 }
@@ -45,7 +56,9 @@ async fn rejection_barrier(ws: &LoopbackWebSocket) {
 
 #[tokio::test]
 async fn heartbeat_unsupported_ack_does_not_clear_pending_probe() {
-    let (mut transport, _rx, ws) = start_timed().await;
+    // Real time: a loaded runner can take over a second for the cases below,
+    // so the liveness timeout must sit well past that or the node disconnects.
+    let (mut transport, _rx, ws) = start_timed_with_timeout(5000).await;
     let probe = recv(&ws).await;
     assert_eq!(probe[0], 0x0A);
     ws.send(&[0x0B, 2, probe[2], probe[3], 0x5E]).await.unwrap();

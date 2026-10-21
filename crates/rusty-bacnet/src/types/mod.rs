@@ -3,11 +3,10 @@
 #![allow(non_snake_case)]
 
 use std::net::Ipv4Addr;
-use std::sync::Arc;
 use std::time::Instant;
 
 use bytes::BytesMut;
-use pyo3::exceptions::{PyStopAsyncIteration, PyValueError};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
 use pyo3::Py;
@@ -36,12 +35,15 @@ mod date;
 mod destination;
 mod device;
 mod enums;
+mod event_parameter_py;
 mod mapping;
 mod object_identifier;
+mod object_profile;
 mod property_reference;
 mod property_value;
 mod read_value;
 mod rpm_wpm;
+mod schedule;
 mod timestamp;
 
 pub(crate) use access_rule::{access_rules_from_py, device_object_reference};
@@ -59,14 +61,18 @@ pub use device::PyDiscoveredDevice;
 pub use enums::*;
 pub(crate) use mapping::scale as scale_from_py;
 pub use object_identifier::PyObjectIdentifier;
+pub(crate) use object_profile::object_profile_from_py;
 pub(crate) use property_reference::{
-    check_device, local_device, localize, property_references_from_py,
+    check_device, local_device, localize, property_reference_from_py, property_references_from_py,
 };
 pub use property_value::PyPropertyValue;
 pub(crate) use read_value::{decode_read_ack, decode_read_value};
 pub(crate) use rpm_wpm::{
     py_to_rpm_specs, py_to_wpm_specs, rpm_ack_to_py, PyDeviceWrite, PyPropertyWrite,
     PyReadAccessSpec, PyWriteAccessSpec,
+};
+pub(crate) use schedule::{
+    calendar_entries_from_py, date_range_from_py, special_events_from_py, weekly_schedule_from_py,
 };
 pub use timestamp::PyBACnetTimeStamp;
 pub(crate) use timestamp::{date_time_tuple, time_value};

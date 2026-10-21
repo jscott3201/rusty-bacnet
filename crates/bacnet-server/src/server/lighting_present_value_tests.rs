@@ -86,8 +86,8 @@ async fn lighting_output_local_write_below_one_percent_is_stored_and_reported_as
     for level in [-1.5, 100.5, f32::NAN] {
         match write_local(&h, Real(level)).await {
             Err(Error::Protocol { class, code }) => {
-                assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
-                assert_eq!(code, ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32);
+                assert_eq!(class, ErrorClass::PROPERTY);
+                assert_eq!(code, ErrorCode::VALUE_OUT_OF_RANGE);
             }
             other => panic!("{level:e}: expected VALUE_OUT_OF_RANGE, got {other:?}"),
         }

@@ -8,6 +8,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
 use bytes::BytesMut;
 
+pub use super::reference_sinks::encode_device_object_reference_to_sink;
 use super::tagged::{decode_ctx_object_id, decode_optional_ctx};
 use crate::primitives;
 
@@ -65,10 +66,8 @@ pub fn decode_stage_limit_value(
 
 /// Encode one unframed `BACnetDeviceObjectReference` SEQUENCE.
 pub fn encode_device_object_reference(buf: &mut BytesMut, reference: &BACnetDeviceObjectReference) {
-    if let Some(device) = &reference.device_identifier {
-        primitives::encode_ctx_object_id(buf, 0, device);
-    }
-    primitives::encode_ctx_object_id(buf, 1, &reference.object_identifier);
+    encode_device_object_reference_to_sink(buf, reference)
+        .expect("BytesMut accepts each reference");
 }
 
 /// Decode one unframed `BACnetDeviceObjectReference` SEQUENCE at `offset`.

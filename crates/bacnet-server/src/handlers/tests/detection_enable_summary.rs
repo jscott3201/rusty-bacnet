@@ -53,9 +53,9 @@ impl BACnetObject for DisabledAlarmingObject {
             p if p == PropertyIdentifier::EVENT_DETECTION_ENABLE => self
                 .detection_enable
                 .map(PropertyValue::Boolean)
-                .ok_or_else(|| Error::Protocol {
-                    class: bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32,
-                    code: bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+                .ok_or(Error::Protocol {
+                    class: bacnet_types::enums::ErrorClass::PROPERTY,
+                    code: bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY,
                 }),
             p if p == PropertyIdentifier::EVENT_TYPE => Ok(PropertyValue::Enumerated(
                 bacnet_types::enums::EventType::OUT_OF_RANGE.to_raw(),
@@ -76,8 +76,8 @@ impl BACnetObject for DisabledAlarmingObject {
                 PropertyValue::Unsigned(0),
             ])),
             _ => Err(Error::Protocol {
-                class: bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32,
-                code: bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+                class: bacnet_types::enums::ErrorClass::PROPERTY,
+                code: bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY,
             }),
         }
     }
@@ -89,8 +89,8 @@ impl BACnetObject for DisabledAlarmingObject {
         _priority: Option<u8>,
     ) -> Result<(), Error> {
         Err(Error::Protocol {
-            class: bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32,
-            code: bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
+            class: bacnet_types::enums::ErrorClass::PROPERTY,
+            code: bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED,
         })
     }
     fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {

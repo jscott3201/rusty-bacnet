@@ -3,6 +3,7 @@
 //! Parses a comma-separated port spec and starts a router connecting them.
 //! Format: `bip:<ip>:<port>:<broadcast>:<network>,bip:<ip>:<port>:<broadcast>:<network>`
 #![allow(clippy::print_stdout, clippy::print_stderr)] // benchmark binaries report progress and results on the console
+#![forbid(unsafe_code)]
 
 use std::net::Ipv4Addr;
 
@@ -58,7 +59,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut router_ports = Vec::new();
     for spec in &specs {
-        let transport = BipTransport::new(spec.interface, spec.port, spec.broadcast);
+        let mut transport = BipTransport::new(spec.interface, spec.port, spec.broadcast);
+        // Every port uses the same UDP port on its own address: bind each
+        // address, or on Linux one wildcard socket gets every port's
+        // unicast and the router can't tell the networks apart.
+        transport.set_share_port_by_address(true);
         router_ports.push(RouterPort {
             transport,
             network_number: spec.network,

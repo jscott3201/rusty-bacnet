@@ -30,8 +30,10 @@ on:
       - crates/bacnet-mstp-codec/**
       - crates/bacnet-bip-codec/**
       - crates/bacnet-mstp-core/**
-      # The master core's time type, which its fuzz crate builds.
+      # The master core's time type and network-layer vocabulary, which its
+      # fuzz crate builds.
       - crates/bacnet-time/**
+      - crates/bacnet-npdu/**
       - .github/workflows/fuzz.yml
       - .github/ci-pins.env
       - scripts/ci/fuzz.sh

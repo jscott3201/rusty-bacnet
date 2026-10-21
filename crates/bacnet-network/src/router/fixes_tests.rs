@@ -4,7 +4,7 @@
 //! tests hold each one against the clause.
 
 use bacnet_encoding::npdu::{decode_npdu, Npdu, NpduAddress};
-use bacnet_transport::port::NpduLimits;
+use bacnet_npdu::{NetworkMessageType, NpduLimits};
 use bacnet_types::MacAddr;
 use bytes::Bytes;
 
@@ -40,7 +40,7 @@ fn reject_on(h: &mut Harness, port: usize) -> (u8, u16, MacAddr) {
         panic!("expected one reject on port {port}, got {sent:?}");
     };
     let npdu = decode_npdu(npdu.clone()).unwrap();
-    assert_eq!(npdu.message_type, Some(0x03));
+    assert_eq!(npdu.message_type, Some(NetworkMessageType::from_raw(0x03)));
     let [reason, high, low] = npdu.payload[..] else {
         panic!("a reject's data is three octets");
     };
@@ -151,8 +151,7 @@ async fn r2_a_reason_4_reject_is_passed_on_and_keeps_the_route() {
     h.learned(3000, 1, &[9]);
     let before = h.table().lookup(3000);
     let reject = Npdu {
-        is_network_message: true,
-        message_type: Some(0x03),
+        message_type: Some(NetworkMessageType::from_raw(0x03)),
         destination: Some(address(1000, &SENDER)),
         hop_count: 255,
         payload: Bytes::from_static(&[4, 0x0B, 0xB8]),
@@ -200,8 +199,7 @@ async fn r4_the_unscoped_answer_leaves_out_unreachable_networks() {
         table.mark_busy(2500, busy_until);
     }
     let who_is_all = Npdu {
-        is_network_message: true,
-        message_type: Some(0x00),
+        message_type: Some(NetworkMessageType::from_raw(0x00)),
         ..Npdu::default()
     };
     h.dispatch(h.ctx(0, &SENDER, who_is_all)).await;
@@ -221,8 +219,7 @@ async fn r4_the_unscoped_answer_leaves_out_unreachable_networks() {
 /// A Who-Is-Router naming `network`, from the link with no source fields.
 fn who_is(network: u16) -> Npdu {
     Npdu {
-        is_network_message: true,
-        message_type: Some(0x00),
+        message_type: Some(NetworkMessageType::from_raw(0x00)),
         payload: Bytes::copy_from_slice(&network.to_be_bytes()),
         ..Npdu::default()
     }

@@ -4,7 +4,9 @@
 //! changes nothing, while none, or a Device, is taken.
 
 use bacnet_types::constructed::{BACnetActionCommand, BACnetActionList, BACnetStageLimitValue};
-use bacnet_types::enums::{ErrorClass, EventType, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{
+    EngineeringUnits, ErrorClass, EventType, ObjectType, PropertyIdentifier,
+};
 
 use super::*;
 use crate::access_control::{
@@ -105,7 +107,7 @@ fn staging_config(device: Option<ObjectIdentifier>) -> StagingConfig {
     StagingConfig {
         present_value: 5.0,
         min_present_value: -1.0,
-        units: 62,
+        units: EngineeringUnits::DEGREES_CELSIUS,
         priority_for_writing: 8,
         stages: vec![stage(10.0, false), stage(20.0, true)],
         target_references: vec![object_reference(ObjectType::BINARY_OUTPUT, device)],
@@ -333,7 +335,7 @@ const SETTERS: [Setter; 18] = [
 fn assert_property_code(result: &Result<(), Error>, code: ErrorCode, context: &str) {
     assert!(
         matches!(result, Err(Error::Protocol { class, code: c })
-            if *class == ErrorClass::PROPERTY.to_raw() as u32 && *c == code.to_raw() as u32),
+            if *class == ErrorClass::PROPERTY && *c == code),
         "{context}: expected PROPERTY / {code:?}, got {result:?}"
     );
 }

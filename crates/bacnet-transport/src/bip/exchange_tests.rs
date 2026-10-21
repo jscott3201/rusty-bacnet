@@ -60,7 +60,7 @@ async fn requests_to_different_peers_or_operations_run_at_the_same_time() {
     assert!(bdt_a.unwrap().is_empty());
     assert!(fdt_a.unwrap().is_empty());
     assert!(bdt_b.unwrap().is_empty());
-    assert_eq!(registered.unwrap(), BvlcResultCode::SUCCESSFUL_COMPLETION);
+    registered.unwrap();
     let snapshot = transport.bvlc_client_snapshot();
     assert_eq!(
         (snapshot.read_bdt.sent, snapshot.read_bdt.acknowledgements),

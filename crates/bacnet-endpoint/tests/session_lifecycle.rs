@@ -14,7 +14,9 @@ use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::TransportProvenance;
-use bacnet_types::enums::{ConfirmedServiceChoice, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{
+    ConfirmedServiceChoice, EngineeringUnits, ObjectType, PropertyIdentifier,
+};
 use bacnet_types::MacAddr;
 use bytes::{Bytes, BytesMut};
 use tokio::sync::oneshot;
@@ -33,7 +35,9 @@ fn session_config() -> SessionConfig {
 
 fn database_with_analog(instance: u32, value: f32) -> ObjectDatabase {
     let mut db = ObjectDatabase::new();
-    let mut analog = AnalogInputObject::new(instance, "lifecycle-input", 0).unwrap();
+    let mut analog =
+        AnalogInputObject::new(instance, "lifecycle-input", EngineeringUnits::SQUARE_METERS)
+            .unwrap();
     analog.set_present_value(value);
     db.add(Box::new(analog)).unwrap();
     db
@@ -179,7 +183,7 @@ async fn shutdown_with_pending_segmented_response_cleans_up() {
         &encoded,
         &[0x01],
         false,
-        bacnet_types::enums::NetworkPriority::NORMAL,
+        bacnet_npdu::NetworkPriority::Normal,
     )
     .await
     .unwrap();
@@ -211,6 +215,7 @@ async fn reply_sender_is_single_consumer_one_use() {
     // exactly once via `.take()`.
     let (reply_tx, reply_rx) = oneshot::channel();
     let received = ReceivedApdu {
+        router_response: None,
         direct_response: None,
         apdu: Bytes::from_static(&[0x10, 0x08]),
         source_mac: MacAddr::from_slice(&[0x02]),
@@ -238,6 +243,7 @@ async fn reply_sender_is_single_consumer_one_use() {
     // Routed + group + provenance envelope still clones without authority.
     let (reply_tx, _rx) = oneshot::channel();
     let routed = ReceivedApdu {
+        router_response: None,
         direct_response: None,
         apdu: Bytes::from_static(&[0x10, 0x08]),
         source_mac: MacAddr::from_slice(&[0x02]),

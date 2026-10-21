@@ -81,6 +81,7 @@ async fn ordinary_trend_poll_uses_synchronized_offset_and_dst_frame() {
     use bacnet_objects::traits::BACnetObject;
     use bacnet_objects::trend::TrendLogObject;
     use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
+    use bacnet_types::enums::EngineeringUnits;
     use bacnet_types::enums::PropertyIdentifier;
     use bacnet_types::primitives::PropertyValue;
     use std::sync::Arc;
@@ -119,7 +120,7 @@ async fn ordinary_trend_poll_uses_synchronized_offset_and_dst_frame() {
         )
         .unwrap();
     let mut db = ObjectDatabase::new();
-    let target = AnalogValueObject::new(1, "AV", 95).unwrap();
+    let target = AnalogValueObject::new(1, "AV", EngineeringUnits::NO_UNITS).unwrap();
     let mut trend = TrendLogObject::new(1, "Trend", 8).unwrap();
     trend
         .set_log_device_object_property(Some(BACnetDeviceObjectPropertyReference {

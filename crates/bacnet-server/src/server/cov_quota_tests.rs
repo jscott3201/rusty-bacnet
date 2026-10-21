@@ -10,7 +10,9 @@ use bacnet_services::cov_multiple::{
     COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
 };
 use bacnet_types::constructed::PropertyReference;
-use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{
+    EngineeringUnits, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier,
+};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::MacAddr;
@@ -28,15 +30,20 @@ fn ai(instance: u32) -> ObjectIdentifier {
 fn create_database_with_ais(count: u32) -> ObjectDatabase {
     let mut db = ObjectDatabase::new();
     let dev = DeviceObject::new(DeviceConfig {
-        instance: 100,
-        name: "Device-100".to_string(),
+        identity: bacnet_objects::DeviceIdentity::new(100, 0)
+            .expect("valid Device identity")
+            .with_name("Device-100".to_string()),
         ..Default::default()
     })
     .unwrap();
     db.add(Box::new(dev)).unwrap();
     for i in 1..=count {
-        let ai_obj =
-            bacnet_objects::analog::AnalogInputObject::new(i, format!("AI-{}", i), 95).unwrap();
+        let ai_obj = bacnet_objects::analog::AnalogInputObject::new(
+            i,
+            format!("AI-{}", i),
+            EngineeringUnits::NO_UNITS,
+        )
+        .unwrap();
         db.add(Box::new(ai_obj)).unwrap();
     }
     db
@@ -56,6 +63,7 @@ async fn peer_quota_isolation() {
     };
 
     let server = BACnetServer::generic_builder()
+        .device(bacnet_objects::DeviceIdentity::new(100, 0).unwrap())
         .database(db)
         .transport(recording_transport().0)
         .cov_policy(policy)
@@ -96,11 +104,8 @@ async fn peer_quota_isolation() {
         let err = handle_subscribe_cov(&mut table, &db, &peer_a, &buf).unwrap_err();
         match err {
             Error::Protocol { class, code } => {
-                assert_eq!(class, ErrorClass::RESOURCES.to_raw() as u32);
-                assert_eq!(
-                    code,
-                    ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT.to_raw() as u32
-                );
+                assert_eq!(class, ErrorClass::RESOURCES);
+                assert_eq!(code, ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT);
             }
             other => panic!("expected RESOURCES / NO_SPACE_TO_ADD_LIST_ELEMENT, got {other:?}"),
         }
@@ -146,6 +151,7 @@ async fn reserved_capacity_preservation() {
     };
 
     let server = BACnetServer::generic_builder()
+        .device(bacnet_objects::DeviceIdentity::new(100, 0).unwrap())
         .database(db)
         .transport(recording_transport().0)
         .cov_policy(policy)
@@ -185,11 +191,8 @@ async fn reserved_capacity_preservation() {
         let err = handle_subscribe_cov(&mut table, &db, &unreserved_peer, &buf).unwrap_err();
         match err {
             Error::Protocol { class, code } => {
-                assert_eq!(class, ErrorClass::RESOURCES.to_raw() as u32);
-                assert_eq!(
-                    code,
-                    ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT.to_raw() as u32
-                );
+                assert_eq!(class, ErrorClass::RESOURCES);
+                assert_eq!(code, ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT);
             }
             other => panic!("expected RESOURCES / NO_SPACE_TO_ADD_LIST_ELEMENT, got {other:?}"),
         }
@@ -227,11 +230,8 @@ async fn reserved_capacity_preservation() {
         let err = handle_subscribe_cov(&mut table, &db, reserved_mac.as_slice(), &buf).unwrap_err();
         match err {
             Error::Protocol { class, code } => {
-                assert_eq!(class, ErrorClass::RESOURCES.to_raw() as u32);
-                assert_eq!(
-                    code,
-                    ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT.to_raw() as u32
-                );
+                assert_eq!(class, ErrorClass::RESOURCES);
+                assert_eq!(code, ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT);
             }
             other => panic!("expected RESOURCES / NO_SPACE_TO_ADD_LIST_ELEMENT, got {other:?}"),
         }
@@ -251,6 +251,7 @@ async fn indefinite_subscription_policy() {
     };
 
     let server = BACnetServer::generic_builder()
+        .device(bacnet_objects::DeviceIdentity::new(100, 0).unwrap())
         .database(db)
         .transport(recording_transport().0)
         .cov_policy(policy)
@@ -275,11 +276,8 @@ async fn indefinite_subscription_policy() {
         let err = handle_subscribe_cov(&mut table, &db, &peer, &buf).unwrap_err();
         match err {
             Error::Protocol { class, code } => {
-                assert_eq!(class, ErrorClass::SERVICES.to_raw() as u32);
-                assert_eq!(
-                    code,
-                    ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32
-                );
+                assert_eq!(class, ErrorClass::SERVICES);
+                assert_eq!(code, ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED);
             }
             other => {
                 panic!("expected SERVICES / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, got {other:?}")
@@ -312,6 +310,7 @@ async fn indefinite_subscription_policy() {
         ..Default::default()
     };
     let server2 = BACnetServer::generic_builder()
+        .device(bacnet_objects::DeviceIdentity::new(100, 0).unwrap())
         .database(db2)
         .transport(recording_transport().0)
         .cov_policy(policy2)
@@ -349,11 +348,8 @@ async fn indefinite_subscription_policy() {
         let err = handle_subscribe_cov(&mut table, &db, &peer, &buf).unwrap_err();
         match err {
             Error::Protocol { class, code } => {
-                assert_eq!(class, ErrorClass::RESOURCES.to_raw() as u32);
-                assert_eq!(
-                    code,
-                    ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT.to_raw() as u32
-                );
+                assert_eq!(class, ErrorClass::RESOURCES);
+                assert_eq!(code, ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT);
             }
             other => panic!("expected RESOURCES / NO_SPACE_TO_ADD_LIST_ELEMENT, got {other:?}"),
         }
@@ -373,6 +369,7 @@ async fn disconnect_and_expiry_cleanup_releases_quota() {
     };
 
     let server = BACnetServer::generic_builder()
+        .device(bacnet_objects::DeviceIdentity::new(100, 0).unwrap())
         .database(db)
         .transport(recording_transport().0)
         .cov_policy(policy)
@@ -539,6 +536,7 @@ async fn fanout_and_work_budgets_enforced() {
     };
 
     let server = BACnetServer::generic_builder()
+        .device(bacnet_objects::DeviceIdentity::new(100, 0).unwrap())
         .database(db)
         .transport(recording_transport().0)
         .cov_policy(policy)
@@ -605,6 +603,7 @@ async fn in_flight_confirmed_per_peer_throttled() {
     };
 
     let server = BACnetServer::generic_builder()
+        .device(bacnet_objects::DeviceIdentity::new(100, 0).unwrap())
         .database(db)
         .transport(recording_transport().0)
         .cov_policy(policy)
@@ -670,6 +669,7 @@ async fn subscribe_cov_property_multiple_quota_names_the_overflowing_reference()
     };
 
     let server = BACnetServer::generic_builder()
+        .device(bacnet_objects::DeviceIdentity::new(100, 0).unwrap())
         .database(db)
         .transport(recording_transport().0)
         .cov_policy(policy)
@@ -748,11 +748,8 @@ async fn subscribe_cov_property_multiple_quota_names_the_overflowing_reference()
             code,
             detail,
         } => {
-            assert_eq!(class, ErrorClass::RESOURCES.to_raw() as u32);
-            assert_eq!(
-                code,
-                ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT.to_raw() as u32
-            );
+            assert_eq!(class, ErrorClass::RESOURCES);
+            assert_eq!(code, ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT);
             assert_eq!(
                 *detail,
                 bacnet_types::error::ErrorDetail::FirstFailedSubscription(

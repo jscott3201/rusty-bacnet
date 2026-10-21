@@ -68,10 +68,18 @@ pub(super) async fn relay(
             match tokio::time::timeout(relay_send_budget, send).await {
                 Ok(Ok(())) => {}
                 Ok(Err(error)) => {
-                    warn!("Hub: opaque relay failed to {:02x?}: {error}", sink.vmac);
+                    crate::warn_throttled!(
+                        clients.relay_warning,
+                        "Hub: opaque relay failed to {:02x?}: {error}",
+                        sink.vmac
+                    );
                 }
                 Err(_) => {
-                    warn!("Hub: opaque relay timed out to {:02x?}", sink.vmac);
+                    crate::warn_throttled!(
+                        clients.relay_warning,
+                        "Hub: opaque relay timed out to {:02x?}",
+                        sink.vmac
+                    );
                 }
             }
         }

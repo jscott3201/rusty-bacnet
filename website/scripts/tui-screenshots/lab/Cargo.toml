@@ -1,0 +1,31 @@
+# The loopback lab behind the TUI screenshots in the docs site (see
+# website/README.md, "TUI screenshots"). It runs a BBMD, a router, three
+# B/IP devices and a BACnet/SC hub with a device, every socket on 127.0.0.1.
+#
+# Standalone on purpose: not a member of the rusty-bacnet workspace, so a
+# workspace build, test or clippy run never builds it. It uses the workspace
+# crates by path. capture.py copies the workspace's Cargo.lock in before it
+# builds, so the lab resolves the same dependency versions.
+[package]
+name = "tui-lab"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "tui-lab"
+path = "src/main.rs"
+
+[workspace]
+
+[dependencies]
+bacnet-types = { path = "../../../../crates/bacnet-types", features = ["std"] }
+bacnet-objects = { path = "../../../../crates/bacnet-objects" }
+bacnet-server = { path = "../../../../crates/bacnet-server" }
+bacnet-network = { path = "../../../../crates/bacnet-network" }
+bacnet-transport = { path = "../../../../crates/bacnet-transport", features = ["sc-tls"] }
+tokio = { version = "1", features = ["full"] }
+rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem"] }
+rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs", "logging", "std"] }
+time = "0.3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

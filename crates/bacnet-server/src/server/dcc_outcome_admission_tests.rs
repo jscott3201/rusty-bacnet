@@ -204,10 +204,12 @@ async fn disable_initiation_still_admits_life_safety_operations_and_answers_over
                 confirmed_recovery_reserve: 0,
                 ..Default::default()
             },
-            life_safety_operation_authorizer: Some(Arc::new(move |_| {
-                counted.fetch_add(1, Ordering::Relaxed);
-                true
-            })),
+            policy: Some(Arc::new(crate::FnPolicy::new().life_safety_operation(
+                move |_| {
+                    counted.fetch_add(1, Ordering::Relaxed);
+                    true
+                },
+            ))),
             ..ServerConfig::default()
         },
     )

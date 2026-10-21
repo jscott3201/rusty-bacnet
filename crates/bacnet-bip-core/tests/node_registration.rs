@@ -8,7 +8,7 @@ mod node_support;
 use bacnet_bip_codec::{BdtEntries, BvlcResultCode, Bvll};
 use bacnet_bip_core::node::{
     Action, Admission, AttemptOutcome, ExchangeId, ExchangeRefusal, Foreign, Inbound, LocalFailure,
-    Mode, Node, Permissive, Received, RegistrationEvent, Retry, SendRefusal,
+    Mode, Node, NodeCounters, Permissive, Received, RegistrationEvent, Retry, SendRefusal,
 };
 use bacnet_bip_core::{Duration, Instant};
 use node_support::*;
@@ -83,7 +83,12 @@ fn success_registers() {
     assert_eq!(view.lease_remaining, Some(ms(59_990)));
     assert_eq!(view.next_attempt, Some(at(30_000)));
     assert_eq!(view.last_outcome, Some(AttemptOutcome::Accepted));
+    // A look takes nothing; the take drains.
+    let looked = node.counters();
+    assert_eq!(node.counters(), looked);
     let counters = node.take_counters();
+    assert_eq!(counters, looked);
+    assert_eq!(node.counters(), NodeCounters::default());
     assert_eq!(counters.registration_attempts, 1);
     assert_eq!(counters.registrations_accepted, 1);
     let attempt = counters.last_registration_attempt.unwrap();

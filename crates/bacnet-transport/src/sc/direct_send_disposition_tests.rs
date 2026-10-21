@@ -100,3 +100,58 @@ async fn uncertain_started_direct_write_is_not_redialed_or_replayed_through_hub(
     );
     transport.stop().await.unwrap();
 }
+
+#[tokio::test]
+async fn direct_length_refusals_never_write_to_peer_or_fall_back_to_hub() {
+    let (mut transport, _rx, hub, attempted, mut peers) = start_direct(500).await;
+    let (sent, ()) = tokio::join!(transport.send_unicast(NPDU, &TARGET), async {
+        let ar = decode_sc_message(&hub_recv(&hub).await).unwrap();
+        hub.send(&ack_for(ar.message_id, b"wss://peer.example/sc"))
+            .await
+            .unwrap();
+    });
+    sent.unwrap();
+    let peer = peers.recv().await.unwrap();
+    assert_eq!(
+        decode_sc_message(&peer.recv().await.unwrap())
+            .unwrap()
+            .payload
+            .as_ref(),
+        NPDU
+    );
+    for attributes_only in [false, true] {
+        let npdu = if attributes_only {
+            NPDU.to_vec()
+        } else {
+            vec![0x10; 1477]
+        };
+        let attributes = if attributes_only {
+            vec![crate::port::DataAttribute {
+                option_type: 31,
+                must_understand: false,
+                data: vec![0x55; 1476],
+            }]
+        } else {
+            Vec::new()
+        };
+        let error = transport
+            .send_unicast_with_data_attributes(&npdu, &TARGET, &attributes)
+            .await
+            .unwrap_err();
+        assert!(matches!(error, Error::SendTooLong { length, limit: 1476 } if length > 1476));
+        // A subsequent fitting write is an ordered barrier on this route.
+        transport.send_unicast(NPDU, &TARGET).await.unwrap();
+        let actual = decode_sc_message(&peer.recv().await.unwrap()).unwrap();
+        assert_eq!(actual.payload.as_ref(), NPDU);
+        assert!(actual.data_options.is_empty());
+    }
+    assert_eq!(
+        attempted.lock().await.as_slice(),
+        &["wss://peer.example/sc"]
+    );
+    assert!(
+        hub_try_recv(&hub).await.is_none(),
+        "no length refusal is replayed through Hub"
+    );
+    transport.stop().await.unwrap();
+}

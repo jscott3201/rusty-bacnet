@@ -1,4 +1,6 @@
-//! BACnet server: APDU dispatch and service handlers.
+#![doc = include_str!("../README.md")]
+#![cfg_attr(docsrs, feature(doc_cfg))]
+#![forbid(unsafe_code)]
 
 pub mod audit_notification;
 mod command_lists;
@@ -17,6 +19,8 @@ pub mod mutation;
 #[doc(hidden)]
 pub mod network_number;
 pub mod pics;
+pub mod policy;
+pub use policy::{FnPolicy, ServerPolicy};
 mod runtime_clock;
 pub mod schedule;
 pub mod server;

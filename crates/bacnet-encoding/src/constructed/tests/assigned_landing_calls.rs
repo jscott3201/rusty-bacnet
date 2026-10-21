@@ -116,7 +116,7 @@ fn assigned_landing_calls_reject_malformed_values() {
     ] {
         let error = decode_assigned_landing_calls(wire, 0).unwrap_err();
         assert!(
-            !matches!(error, Error::OutOfRange(_)),
+            !matches!(error, Error::Range(_)),
             "{context}: {wire:02X?} is malformed, not out of range: {error:?}"
         );
     }
@@ -148,18 +148,19 @@ fn assigned_landing_calls_report_oversized_members_as_range_errors() {
     ];
     for &(context, wire, member) in cases {
         match decode_assigned_landing_calls(wire, 0) {
-            Err(Error::OutOfRange(message)) => {
+            Err(Error::Range(refused)) => {
+                let message = refused.label;
                 assert!(message.contains(member), "{context}: {message}");
                 assert!(message.contains("assigned landing calls"), "{context}");
             }
-            other => panic!("{context}: expected OutOfRange, got {other:?}"),
+            other => panic!("{context}: expected a range error, got {other:?}"),
         }
     }
     // A malformed member anywhere takes precedence over an oversized one.
     let error =
         decode_assigned_landing_calls(&[0x0E, 0x0A, 0x01, 0x00, 0x19, 0x03, 0x09, 0x01, 0x0F], 0)
             .unwrap_err();
-    assert!(!matches!(error, Error::OutOfRange(_)), "{error:?}");
+    assert!(!matches!(error, Error::Range(_)), "{error:?}");
 }
 
 #[test]
@@ -171,7 +172,7 @@ fn assigned_landing_calls_reject_more_than_the_item_limit() {
     wire.push(0x0F);
     assert!(matches!(
         decode_assigned_landing_calls(&wire, 0),
-        Err(Error::Decoding { .. })
+        Err(Error::Decoding(_))
     ));
 }
 

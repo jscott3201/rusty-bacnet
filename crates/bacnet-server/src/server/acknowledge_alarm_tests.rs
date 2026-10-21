@@ -11,7 +11,7 @@ use bacnet_objects::multistate::{
 };
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::alarm_event::AcknowledgeAlarmRequest;
-use bacnet_types::enums::EventState;
+use bacnet_types::enums::{EngineeringUnits, EventState};
 use bacnet_types::primitives::BACnetTimeStamp;
 
 fn request(oid: ObjectIdentifier, state: EventState) -> AcknowledgeAlarmRequest {
@@ -164,7 +164,7 @@ async fn binary_and_multistate_families_return_simple_ack() {
 
 #[tokio::test]
 async fn post_issuance_reused_and_new_invoke_ids_are_idempotent_success() {
-    let mut ai = AnalogInputObject::new(1, "AI-ack", 62).unwrap();
+    let mut ai = AnalogInputObject::new(1, "AI-ack", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let oid = ai.object_identifier();
     ai.commit_event_transition_internal(EventTransitionCommit {
         change: EventStateChange {

@@ -73,7 +73,7 @@ fn assert_cases(
                 assert!(result.property_value.is_none());
                 assert_eq!(result.error, Some((ErrorClass::PROPERTY, expected)));
                 assert!(matches!(rp, Err(Error::Protocol { class, code })
-                    if class == ErrorClass::PROPERTY.to_raw() as u32 && code == expected.to_raw() as u32));
+                    if class == ErrorClass::PROPERTY && code == expected));
                 assert!(response.is_empty());
             }
         }
@@ -137,7 +137,7 @@ fn write_common(object: &mut dyn BACnetObject, configured: bool) {
 #[test]
 fn rpm_accumulator_indexed_reads_and_bytes_are_unchanged() {
     for configured in [false, true] {
-        let mut object = AccumulatorObject::new(7, "ACC-7", 95).unwrap();
+        let mut object = AccumulatorObject::new(7, "ACC-7", EngineeringUnits::NO_UNITS).unwrap();
         if configured {
             // Application-level count plus the three routed Unsigned/Real arms.
             object.set_present_value(42);
@@ -343,7 +343,8 @@ fn rpm_accumulator_indexed_reads_and_bytes_are_unchanged() {
 #[test]
 fn rpm_pulse_converter_indexed_reads_and_bytes_are_unchanged() {
     for configured in [false, true] {
-        let mut object = PulseConverterObject::new(7, "PC-7", 62).unwrap();
+        let mut object =
+            PulseConverterObject::new(7, "PC-7", EngineeringUnits::DEGREES_CELSIUS).unwrap();
         write_common(&mut object, configured);
         if configured {
             // The Present_Value gate needs Out_Of_Service TRUE first.

@@ -49,12 +49,8 @@ fn expect_protocol(
 ) {
     match result {
         Err(Error::Protocol { class, code }) => {
-            assert_eq!(
-                class,
-                ErrorClass::PROPERTY.to_raw() as u32,
-                "{context}: wrong error class"
-            );
-            assert_eq!(code, expected_code.to_raw() as u32, "{context}: wrong code");
+            assert_eq!(class, ErrorClass::PROPERTY, "{context}: wrong error class");
+            assert_eq!(code, expected_code, "{context}: wrong code");
         }
         other => panic!("{context}: expected PROPERTY/{expected_code:?}, got {other:?}"),
     }

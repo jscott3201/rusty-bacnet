@@ -2,7 +2,7 @@
 source: crates/bacnet-cli/src/tui/tests/frames.rs
 expression: "screen(&mut app, w, h)"
 ---
-" bacnet | BIP | choose an interface | READ-ONLY | drop 0                 ? help "
+" [1 Devices] 2 3 7 | BIP | choose an interface | READ-ONLY | drop 0      ? help "
 "┌ Devices (0) | sort: instance ↑ ──────────────────────────────────────────────┐"
 "│                                                                              │"
 "│                                                                              │"

@@ -31,11 +31,10 @@ async fn bbmd_fdt_purge_task_clears_expired_entry_without_bvlc_request() {
     let mut client_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     let _client_rx = client_transport.start().await.unwrap();
 
-    let result = client_transport
+    client_transport
         .register_foreign_device_bvlc(&bbmd_mac, 60)
         .await
         .unwrap();
-    assert_eq!(result, BvlcResultCode::SUCCESSFUL_COMPLETION);
     let (fd_ip, fd_port) = decode_bip_mac(client_transport.local_mac()).unwrap();
     wait_for_fdt_len(&bbmd_transport, 1).await;
 
@@ -100,11 +99,14 @@ async fn bbmd_without_foreign_device_policy_naks_bvlc_registration() {
     let mut client_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     let _client_rx = client_transport.start().await.unwrap();
 
-    let result = client_transport
-        .register_foreign_device_bvlc(&bbmd_mac, 60)
-        .await
-        .unwrap();
-    assert_eq!(result, BvlcResultCode::REGISTER_FOREIGN_DEVICE_NAK);
+    assert_eq!(
+        client_transport
+            .register_foreign_device_bvlc(&bbmd_mac, 60)
+            .await
+            .unwrap_err()
+            .nak(),
+        Some(BvlcResultCode::REGISTER_FOREIGN_DEVICE_NAK)
+    );
 
     let counters = bbmd_transport.fdt_counters().unwrap();
     assert_eq!(counters.registrations_rejected, 1);

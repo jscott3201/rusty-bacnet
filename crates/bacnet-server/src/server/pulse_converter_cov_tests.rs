@@ -10,7 +10,7 @@ use bacnet_objects::accumulator::PulseConverterObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::cov::{COVNotificationRequest, SubscribeCOVRequest};
 use bacnet_services::write_property::WritePropertyRequest;
-use bacnet_types::enums::ObjectType;
+use bacnet_types::enums::{EngineeringUnits, ObjectType};
 use std::sync::Mutex as StdMutex;
 
 fn pc1() -> ObjectIdentifier {
@@ -35,7 +35,8 @@ fn update_time() -> Vec<u8> {
 #[tokio::test(start_paused = true)]
 async fn pulse_converter_cov_notification_reports_update_time() {
     let mut h = Harness::start_with(ServerConfig::default(), |db| {
-        let mut object = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+        let mut object =
+            PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
         // Accumulate under a clock reading 15:00:07 so Update_Time is set.
         let clock = SharedClock(Arc::new(StdMutex::new(at(7))));
         object.bind_clock_internal(Some(Arc::new(clock)));
@@ -95,7 +96,8 @@ async fn pulse_converter_cov_notification_reports_update_time() {
 /// PC-1 reporting Present_Value moves of at least 10, whose Count took 4
 /// pulses at 15:00:07 and `more` at 15:00:09.
 fn counted(more: u64) -> Box<dyn BACnetObject> {
-    let mut object = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+    let mut object =
+        PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     object
         .write_property(
             PropertyIdentifier::COV_INCREMENT,

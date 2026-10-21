@@ -37,15 +37,21 @@ fn levels_at_8(object: &LightingOutputObject) -> [u32; 3] {
 
 fn command(object: &mut LightingOutputObject, value: PropertyValue, priority: u8) {
     object
-        .write_property(PV, None, value, Some(priority))
+        .write_property_from(
+            PV,
+            None,
+            value,
+            Some(priority),
+            &crate::command_source::test_origin(),
+        )
         .unwrap();
 }
 
 fn assert_out_of_range(result: Result<(), Error>) {
     match result {
         Err(Error::Protocol { class, code }) => {
-            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
-            assert_eq!(code, ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32);
+            assert_eq!(class, ErrorClass::PROPERTY);
+            assert_eq!(code, ErrorCode::VALUE_OUT_OF_RANGE);
         }
         other => panic!("expected PROPERTY / VALUE_OUT_OF_RANGE, got {other:?}"),
     }
@@ -116,7 +122,13 @@ fn lighting_output_present_value_outside_the_range_is_refused_and_changes_nothin
         f32::INFINITY,
         f32::NEG_INFINITY,
     ] {
-        assert_out_of_range(lo.write_property(PV, None, PropertyValue::Real(level), Some(8)));
+        assert_out_of_range(lo.write_property_from(
+            PV,
+            None,
+            PropertyValue::Real(level),
+            Some(8),
+            &crate::command_source::test_origin(),
+        ));
         assert_eq!(levels_at_8(&lo), [1.0f32.to_bits(); 3], "{level:e}");
     }
 }

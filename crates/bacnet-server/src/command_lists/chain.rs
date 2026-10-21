@@ -80,8 +80,8 @@ pub(crate) async fn admit<H: RunHost>(
     }
     end_refused(host, refused).await;
     Err(Error::Protocol {
-        class: ErrorClass::OBJECT.to_raw() as u32,
-        code: ErrorCode::BUSY.to_raw() as u32,
+        class: ErrorClass::OBJECT,
+        code: ErrorCode::BUSY,
     })
 }
 

@@ -7,7 +7,7 @@
 //! record codecs by hand.
 
 #[cfg(not(feature = "std"))]
-use alloc::{string::ToString, vec::Vec};
+use alloc::vec::Vec;
 
 use core::fmt;
 
@@ -19,7 +19,7 @@ use bacnet_types::constructed::{
     BACnetAuditLogRecord, BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord,
 };
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
-use bacnet_types::error::{DecodingKind, Error};
+use bacnet_types::error::Error;
 
 use super::ReadRangeAck;
 
@@ -138,15 +138,15 @@ impl<C> fmt::Display for LogRecordsError<C> {
 impl<C: fmt::Debug> core::error::Error for LogRecordsError<C> {}
 
 impl<C> From<LogRecordsError<C>> for Error {
-    /// A [`Error::Decoding`] at the failing record's offset, keeping the
-    /// inner fault's kind.
+    /// A [`Error::Decoding`] at the failing record's offset, naming the
+    /// record by its index and keeping the inner fault's kind and label
+    /// (see [`Error::to_decode_error`]).
     fn from(error: LogRecordsError<C>) -> Self {
-        let kind = match &error.error {
-            Error::Decoding { kind, .. } => *kind,
-            Error::BufferTooShort { .. } => DecodingKind::Missing,
-            _ => DecodingKind::InvalidEncoding,
-        };
-        Error::decoding_kind(kind, error.offset, error.to_string())
+        let refused = error.error.to_decode_error(error.offset).within("log record");
+        match u16::try_from(error.index) {
+            Ok(index) => refused.at_item(index).into(),
+            Err(_) => refused.into(),
+        }
     }
 }
 

@@ -121,7 +121,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let segments = match split_payload(service_ack_data, max_seg_size) {
             Ok(segments) => segments,
             Err(e) => {
-                warn!(error = %e, "Response requires too many segments, aborting");
+                warn_throttled!(
+                    seg_ack_senders.warning,
+                    error = %e,
+                    "Response requires too many segments, aborting"
+                );
                 let abort = Apdu::Abort(AbortPdu {
                     sent_by_server: true,
                     invoke_id,
@@ -145,9 +149,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
         if let Some(max_segments) = client_max_segments {
             if total_segments > max_segments as usize {
-                warn!(
+                warn_throttled!(
+                    seg_ack_senders.warning,
                     total_segments,
-                    max_segments, "Response exceeds client's max-segments-accepted, aborting"
+                    max_segments,
+                    "Response exceeds client's max-segments-accepted, aborting"
                 );
                 let abort = Apdu::Abort(AbortPdu {
                     sent_by_server: true,
@@ -170,7 +176,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         }
 
         if total_segments > 256 {
-            warn!(
+            warn_throttled!(
+                seg_ack_senders.warning,
                 total_segments,
                 "Response requires too many segments, aborting"
             );
@@ -196,7 +203,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let _sender_permit = match Arc::clone(seg_send_permits).try_acquire_owned() {
             Ok(permit) => permit,
             Err(_) => {
-                warn!(
+                warn_throttled!(
+                    seg_ack_senders.warning,
                     invoke_id,
                     limit = MAX_SEG_SENDERS,
                     "Too many live segmented ComplexAck senders, aborting"
@@ -249,7 +257,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let replaced = match insert_result {
             Ok(replaced) => replaced,
             Err(()) => {
-                warn!(
+                warn_throttled!(
+                    seg_ack_senders.warning,
                     invoke_id,
                     limit = MAX_SEG_SENDERS,
                     "Too many active segmented ComplexAck senders, aborting"
@@ -280,7 +289,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             _permit: _sender_permit,
         };
         if let Some(replaced) = replaced {
-            warn!(
+            warn_throttled!(
+                seg_ack_senders.warning,
                 invoke_id,
                 "Replacing active segmented ComplexAck sender for peer/invoke-id"
             );
@@ -332,14 +342,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 if send_handle.closed.load(Ordering::Acquire) {
                     match control_rx.borrow_and_update().clone() {
                         Some(SegmentedSendControlEvent::Abort(abort)) => {
-                            warn!(
+                            warn_throttled!(
+                                seg_ack_senders.warning,
                                 invoke_id = abort.invoke_id,
                                 reason = ?abort.abort_reason,
                                 "Client aborted segmented ComplexAck send"
                             );
                         }
                         Some(SegmentedSendControlEvent::Cancel) | None => {
-                            warn!(
+                            warn_throttled!(
+                                seg_ack_senders.warning,
                                 invoke_id,
                                 "Segmented ComplexAck send cancelled by newer same-peer transaction"
                             );
@@ -390,7 +402,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         );
 
                         if ack.sent_by_server {
-                            tracing::warn!(
+                            warn_throttled!(
+                                seg_ack_senders.warning,
                                 seq = ack.sequence_number,
                                 negative = ack.negative_ack,
                                 "Ignoring SegmentAck with server bit set for server ComplexAck send"
@@ -401,7 +414,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         let Some(disposition) =
                             segment_ack_disposition(&ack, seg_idx, total_segments)
                         else {
-                            tracing::warn!(
+                            warn_throttled!(
+                                seg_ack_senders.warning,
                                 seq = ack.sequence_number,
                                 negative = ack.negative_ack,
                                 current = seg_idx,
@@ -413,7 +427,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
                         if disposition == SegmentAckDisposition::Retransmit {
                             if retransmission_retries >= options.max_retries {
-                                warn!(
+                                warn_throttled!(
+                                    seg_ack_senders.warning,
                                     invoke_id,
                                     retries = retransmission_retries,
                                     "Too many negative SegmentAck retries, aborting segmented send"
@@ -451,7 +466,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         continue 'send_segments;
                     }
                     SegmentedSendWaitResult::Abort(abort) => {
-                        warn!(
+                        warn_throttled!(
+                            seg_ack_senders.warning,
                             invoke_id = abort.invoke_id,
                             reason = ?abort.abort_reason,
                             "Client aborted segmented ComplexAck send"
@@ -459,7 +475,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         break 'send_segments;
                     }
                     SegmentedSendWaitResult::Cancel => {
-                        warn!(
+                        warn_throttled!(
+                            seg_ack_senders.warning,
                             invoke_id,
                             "Segmented ComplexAck send cancelled by newer same-peer transaction"
                         );
@@ -472,7 +489,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     SegmentedSendWaitResult::Timeout => {
                         if retransmission_retries < options.max_retries {
                             retransmission_retries += 1;
-                            warn!(
+                            warn_throttled!(
+                                seg_ack_senders.warning,
                                 seq = seg_idx,
                                 retries = retransmission_retries,
                                 "Timeout waiting for SegmentAck, retransmitting segment"
@@ -480,7 +498,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             continue 'send_segments;
                         }
 
-                        warn!(
+                        warn_throttled!(
+                            seg_ack_senders.warning,
                             seq = seg_idx,
                             retries = retransmission_retries,
                             "SegmentAck retry budget exhausted, ending segmented send"

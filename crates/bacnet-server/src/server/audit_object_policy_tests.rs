@@ -35,6 +35,7 @@ use bacnet_objects::{
     binary::BinaryValueObject,
 };
 use bacnet_services::common::BACnetPropertyValue;
+use bacnet_types::enums::EngineeringUnits;
 
 fn flags(operations: &[AuditOperation]) -> AuditOperationFlags {
     let mut flags = AuditOperationFlags::empty();
@@ -50,7 +51,8 @@ fn encoded(value: &PropertyValue) -> Vec<u8> {
 }
 async fn install(f: &Fixture, policy: ObjectAuditPolicy) {
     let mut db = f.server.db.write().await;
-    let mut av = AnalogValueObject::new(11, "policy av", 62).unwrap();
+    let mut av =
+        AnalogValueObject::new(11, "policy av", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     av.set_audit_policy(policy);
     let mut bv = BinaryValueObject::new(11, "policy bv").unwrap();
     bv.set_audit_policy(policy);

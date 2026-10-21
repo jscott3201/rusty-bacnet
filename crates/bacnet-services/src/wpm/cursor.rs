@@ -1,7 +1,7 @@
 //! Incremental WritePropertyMultiple request grammar.
 
 #[cfg(not(feature = "std"))]
-use alloc::{string::String, string::ToString, vec::Vec};
+use alloc::vec::Vec;
 
 use bacnet_encoding::constructed::tagged::misplaced_kind;
 use bacnet_encoding::constructed::{
@@ -11,7 +11,7 @@ use bacnet_encoding::constructed::{
 use bacnet_encoding::tags;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::enums::RejectReason;
-use bacnet_types::error::Error;
+use bacnet_types::error::{DecodeError, Error};
 use bacnet_types::primitives::ObjectIdentifier;
 
 use crate::common::MAX_DECODED_ITEMS;
@@ -37,6 +37,22 @@ pub enum WritePropertyMultipleDecodeStage {
     ItemLimit,
 }
 
+impl WritePropertyMultipleDecodeStage {
+    /// The stage's name in a refusal's text, such as `"WPM Value"`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::ObjectIdentifier => "WPM ObjectIdentifier",
+            Self::PropertyList => "WPM PropertyList",
+            Self::PropertyIdentifier => "WPM PropertyIdentifier",
+            Self::ArrayIndex => "WPM ArrayIndex",
+            Self::Value => "WPM Value",
+            Self::Priority => "WPM Priority",
+            Self::PropertyListEnd => "WPM PropertyListEnd",
+            Self::ItemLimit => "WPM ItemLimit",
+        }
+    }
+}
+
 /// Classification retained independently of the number of writes executed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WritePropertyMultipleFailureKind {
@@ -57,8 +73,11 @@ pub struct WritePropertyMultipleCursorError {
     pub kind: WritePropertyMultipleFailureKind,
     /// Complete failed coordinate, present only after every member decoded.
     pub first_failed_write_attempt: Option<BACnetObjectPropertyReference>,
-    /// Human-readable local diagnostic; not encoded on the wire.
-    pub message: String,
+    /// The refusal as a static decoding error, never encoded on the wire:
+    /// this failure's offset and the [`DecodingKind`](bacnet_types::error::DecodingKind)
+    /// its kind draws, with the stage's [`name`](WritePropertyMultipleDecodeStage::name)
+    /// as its context (#1776).
+    pub error: DecodeError,
 }
 
 /// One complete write attempt in request wire order.
@@ -164,7 +183,7 @@ impl<'a> WritePropertyMultipleCursor<'a> {
                             WritePropertyMultipleDecodeStage::PropertyIdentifier,
                             tag_reason(&error),
                             None,
-                            error.to_string(),
+                            described(&error),
                         ));
                     }
                 };
@@ -223,7 +242,7 @@ impl<'a> WritePropertyMultipleCursor<'a> {
                 WritePropertyMultipleDecodeStage::ObjectIdentifier,
                 tag_reason(&error),
                 None,
-                error.to_string(),
+                described(&error),
             )
         })?;
         if !tag.is_context(0) {
@@ -262,7 +281,7 @@ impl<'a> WritePropertyMultipleCursor<'a> {
                 WritePropertyMultipleDecodeStage::ObjectIdentifier,
                 RejectReason::INVALID_DATA_ENCODING,
                 None,
-                error.to_string(),
+                described(&error),
             )
         })?;
         self.offset = end;
@@ -286,7 +305,7 @@ impl<'a> WritePropertyMultipleCursor<'a> {
                 WritePropertyMultipleDecodeStage::PropertyList,
                 tag_reason(&error),
                 None,
-                error.to_string(),
+                described(&error),
             )
         })?;
         if !tag.is_opening_tag(1) {
@@ -325,30 +344,31 @@ impl<'a> WritePropertyMultipleCursor<'a> {
                     .to_raw(),
                 property_array_index: error.property_array_index,
             });
-        WritePropertyMultipleCursorError {
-            offset: error.offset,
+        let kind = match error.kind {
+            PropertyValueDecodeFailure::Syntax(reason) => {
+                WritePropertyMultipleFailureKind::Syntax(reason)
+            }
+            PropertyValueDecodeFailure::PriorityOutOfRange => {
+                WritePropertyMultipleFailureKind::PriorityOutOfRange
+            }
+        };
+        cursor_error(
+            error.offset,
             stage,
-            kind: match error.kind {
-                PropertyValueDecodeFailure::Syntax(reason) => {
-                    WritePropertyMultipleFailureKind::Syntax(reason)
-                }
-                PropertyValueDecodeFailure::PriorityOutOfRange => {
-                    WritePropertyMultipleFailureKind::PriorityOutOfRange
-                }
-            },
-            first_failed_write_attempt: reference,
-            message: error.error.to_string(),
-        }
+            kind,
+            reference,
+            described(&error.error),
+        )
     }
 
-    fn limit_error(&self, message: &str) -> WritePropertyMultipleCursorError {
+    fn limit_error(&self, label: &'static str) -> WritePropertyMultipleCursorError {
         // An item limit is a buffer capacity, as for every decoder (#1446).
         self.syntax_error(
             self.offset,
             WritePropertyMultipleDecodeStage::ItemLimit,
             RejectReason::BUFFER_OVERFLOW,
             None,
-            message,
+            label,
         )
     }
 
@@ -358,15 +378,15 @@ impl<'a> WritePropertyMultipleCursor<'a> {
         stage: WritePropertyMultipleDecodeStage,
         reject_reason: RejectReason,
         first_failed_write_attempt: Option<BACnetObjectPropertyReference>,
-        message: impl Into<String>,
+        described: impl Into<Described>,
     ) -> WritePropertyMultipleCursorError {
-        WritePropertyMultipleCursorError {
+        cursor_error(
             offset,
             stage,
-            kind: WritePropertyMultipleFailureKind::Syntax(reject_reason),
+            WritePropertyMultipleFailureKind::Syntax(reject_reason),
             first_failed_write_attempt,
-            message: message.into(),
-        }
+            described.into(),
+        )
     }
 
     fn fail<T>(
@@ -375,6 +395,41 @@ impl<'a> WritePropertyMultipleCursor<'a> {
     ) -> Result<T, WritePropertyMultipleCursorError> {
         self.state = State::Failed;
         Err(error)
+    }
+}
+
+/// A refusal's static label and the numbers its placeholders stand for.
+struct Described(&'static str, [u64; 2]);
+
+impl From<&'static str> for Described {
+    fn from(label: &'static str) -> Self {
+        Self(label, [0; 2])
+    }
+}
+
+/// How a decoder's `error` reads, without formatting it: the label and
+/// numbers [`Error::to_decode_error`] gives it.
+fn described(error: &Error) -> Described {
+    let refused = error.to_decode_error(0);
+    Described(refused.label, refused.values)
+}
+
+/// The cursor's refusal at `offset`, its static error built from `described`.
+fn cursor_error(
+    offset: usize,
+    stage: WritePropertyMultipleDecodeStage,
+    kind: WritePropertyMultipleFailureKind,
+    first_failed_write_attempt: Option<BACnetObjectPropertyReference>,
+    Described(label, values): Described,
+) -> WritePropertyMultipleCursorError {
+    let mut error = DecodeError::new(super::failure_kind(kind), offset, label).within(stage.name());
+    error.values = values;
+    WritePropertyMultipleCursorError {
+        offset,
+        stage,
+        kind,
+        first_failed_write_attempt,
+        error,
     }
 }
 

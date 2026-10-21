@@ -7,7 +7,7 @@ use super::*;
 use crate::accumulator::{AccumulatorObject, PulseConverterObject};
 use crate::analog::AnalogInputObject;
 use crate::value_types::IntegerValueObject;
-use bacnet_types::enums::Reliability;
+use bacnet_types::enums::{EngineeringUnits, Reliability};
 use bacnet_types::primitives::StatusFlags;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -55,7 +55,7 @@ fn fault(db: &ObjectDatabase, oid: ObjectIdentifier) -> bool {
 
 /// A Pulse Converter named PC-1 whose Input_Reference is `reference`.
 fn converter(reference: Option<BACnetObjectPropertyReference>) -> Box<PulseConverterObject> {
-    let mut pc = PulseConverterObject::new(1, "PC-1", 95).unwrap();
+    let mut pc = PulseConverterObject::new(1, "PC-1", EngineeringUnits::NO_UNITS).unwrap();
     if let Some(reference) = reference {
         pc.set_input_reference(reference);
     }
@@ -83,8 +83,10 @@ fn a_missing_object_faults_the_converter_until_it_is_added() {
 
     // An Accumulator's Present_Value is an Unsigned: the fault clears when
     // it arrives, and the converter is owed a COV pass.
-    db.add(Box::new(AccumulatorObject::new(1, "ACC-1", 95).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AccumulatorObject::new(1, "ACC-1", EngineeringUnits::NO_UNITS).unwrap(),
+    ))
+    .unwrap();
     assert_eq!(reliability(&db, pc1()), Reliability::NO_FAULT_DETECTED);
     assert!(!fault(&db, pc1()));
     assert_eq!(db.take_membership_work_internal().changed, [pc1()]);
@@ -100,10 +102,14 @@ fn a_missing_object_faults_the_converter_until_it_is_added() {
 fn only_unsigned_and_integer_properties_are_inputs() {
     let mut db = ObjectDatabase::new();
     db.add(converter(None)).unwrap();
-    db.add(Box::new(AccumulatorObject::new(1, "ACC-1", 95).unwrap()))
-        .unwrap();
-    db.add(Box::new(AnalogInputObject::new(1, "AI-1", 95).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AccumulatorObject::new(1, "ACC-1", EngineeringUnits::NO_UNITS).unwrap(),
+    ))
+    .unwrap();
+    db.add(Box::new(
+        AnalogInputObject::new(1, "AI-1", EngineeringUnits::NO_UNITS).unwrap(),
+    ))
+    .unwrap();
     db.add(Box::new(IntegerValueObject::new(1, "IV-1").unwrap()))
         .unwrap();
     assert_eq!(reliability(&db, pc1()), Reliability::NO_FAULT_DETECTED);
@@ -209,7 +215,12 @@ fn count(db: &ObjectDatabase) -> PropertyValue {
 /// Accumulator `instance` with `value` as its Present_Value and 99 as its
 /// Max_Pres_Value.
 fn accumulator(instance: u32, value: u64) -> Box<AccumulatorObject> {
-    let mut object = AccumulatorObject::new(instance, format!("ACC-{instance}"), 95).unwrap();
+    let mut object = AccumulatorObject::new(
+        instance,
+        format!("ACC-{instance}"),
+        EngineeringUnits::NO_UNITS,
+    )
+    .unwrap();
     object
         .write_property(P::MAX_PRES_VALUE, None, PropertyValue::Unsigned(99), None)
         .unwrap();
@@ -318,8 +329,10 @@ fn a_priority_array_slot_is_judged_by_the_commanded_datatype() {
 fn the_counting_pass_judges_a_reference_changed_past_the_server() {
     let mut db = ObjectDatabase::new();
     db.add(accumulator(1, 0)).unwrap();
-    db.add(Box::new(AnalogInputObject::new(1, "AI-1", 95).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AnalogInputObject::new(1, "AI-1", EngineeringUnits::NO_UNITS).unwrap(),
+    ))
+    .unwrap();
     db.add(converter(Some(present_value(acc1())))).unwrap();
     assert_eq!(reliability(&db, pc1()), Reliability::NO_FAULT_DETECTED);
     // Written on the object directly, so nothing judged it as it committed.
@@ -372,16 +385,22 @@ fn a_changed_converter_wakes_the_server_once_per_queued_change() {
     })));
     db.add(converter(Some(present_value(acc1())))).unwrap();
     // Unrelated adds queue nothing and wake nobody.
-    db.add(Box::new(AnalogInputObject::new(1, "AI-1", 95).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AnalogInputObject::new(1, "AI-1", EngineeringUnits::NO_UNITS).unwrap(),
+    ))
+    .unwrap();
     assert_eq!(wakes.load(Ordering::SeqCst), 0);
-    db.add(Box::new(AccumulatorObject::new(1, "ACC-1", 95).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AccumulatorObject::new(1, "ACC-1", EngineeringUnits::NO_UNITS).unwrap(),
+    ))
+    .unwrap();
     assert_eq!(wakes.load(Ordering::SeqCst), 1);
     // Replacing the target judges again; a verdict that stands changes
     // nothing, so it queues nothing.
-    db.add(Box::new(AccumulatorObject::new(1, "ACC-1", 95).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AccumulatorObject::new(1, "ACC-1", EngineeringUnits::NO_UNITS).unwrap(),
+    ))
+    .unwrap();
     assert_eq!(wakes.load(Ordering::SeqCst), 1);
     assert_eq!(db.take_membership_work_internal().changed, [pc1()]);
 }

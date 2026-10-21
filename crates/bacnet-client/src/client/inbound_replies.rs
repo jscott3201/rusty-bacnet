@@ -2,20 +2,13 @@
 use super::*;
 use bacnet_network::layer::IssuedApdu;
 use bacnet_network::response_route::ResponseRoute;
-use bacnet_transport::port::DirectResponse;
 
 pub(super) struct InboundReply {
-    route: Option<ResponseRoute>,
+    route: ResponseRoute,
     reply_tx: Option<oneshot::Sender<Bytes>>,
 }
 impl InboundReply {
-    pub(super) fn new(
-        provenance: TransportProvenance,
-        direct: Option<DirectResponse>,
-        reply_tx: Option<oneshot::Sender<Bytes>>,
-    ) -> Self {
-        let route = (provenance.is_direct_peer() || direct.is_some())
-            .then(|| ResponseRoute::new(provenance, direct));
+    pub(super) fn new(route: ResponseRoute, reply_tx: Option<oneshot::Sender<Bytes>>) -> Self {
         Self { route, reply_tx }
     }
 }
@@ -110,46 +103,41 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         reply_network: &Option<NpduAddress>,
         reply: InboundReply,
     ) -> Result<(), Error> {
-        if let Some(route) = reply.route {
-            // Classify authority before the prompt reply channel. A mixed or
-            // invalid envelope must never bypass checked original-socket send.
-            drop(reply.reply_tx);
+        let route = reply.route;
+        let destination = reply_network
+            .as_ref()
+            .filter(|address| !address.mac_address.is_empty());
+        if !route.requires_direct_response() {
+            if let Some(reply_tx) = reply.reply_tx {
+                let npdu = network.encode_response_for_handoff(
+                    IssuedApdu {
+                        apdu: buf,
+                        next_hop: reply_mac,
+                        destination,
+                        expecting_reply: false,
+                        priority: NetworkPriority::Normal,
+                    },
+                    &route,
+                )?;
+                if reply_tx.send(npdu.freeze()).is_ok() {
+                    return Ok(());
+                }
+            }
+        }
+        if route.requires_original_route() {
             return network
                 .send_response_apdu_on_issuance(
                     IssuedApdu {
                         apdu: buf,
                         next_hop: reply_mac,
-                        destination: reply_network
-                            .as_ref()
-                            .filter(|address| !address.mac_address.is_empty()),
+                        destination,
                         expecting_reply: false,
-                        priority: NetworkPriority::NORMAL,
+                        priority: NetworkPriority::Normal,
                     },
                     &route,
                     || {},
                 )
                 .await;
-        }
-        if let Some(reply_tx) = reply.reply_tx {
-            let apdu = Bytes::copy_from_slice(buf);
-            let mut npdu_buf = BytesMut::with_capacity(8 + apdu.len());
-            encode_npdu(
-                &mut npdu_buf,
-                &Npdu {
-                    is_network_message: false,
-                    expecting_reply: false,
-                    priority: NetworkPriority::NORMAL,
-                    destination: reply_network
-                        .clone()
-                        .filter(|address| !address.mac_address.is_empty()),
-                    source: None,
-                    payload: apdu,
-                    ..Npdu::default()
-                },
-            )?;
-            if reply_tx.send(npdu_buf.freeze()).is_ok() {
-                return Ok(());
-            }
         }
 
         Self::send_reply_apdu(network, buf, reply_mac, reply_network).await

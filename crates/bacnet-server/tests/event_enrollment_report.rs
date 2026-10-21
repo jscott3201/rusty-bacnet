@@ -88,6 +88,7 @@ fn unavailable_observation_is_not_an_ordinary_no_transition() {
     use bacnet_objects::traits::BACnetObject;
     use bacnet_types::constructed::FaultParameters;
     use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetEventParameter};
+    use bacnet_types::enums::EngineeringUnits;
     use bacnet_types::enums::PropertyIdentifier;
 
     let mut db = ObjectDatabase::new();
@@ -155,7 +156,8 @@ fn unavailable_observation_is_not_an_ordinary_no_transition() {
     );
 
     // Restoring a valid in-range observation is an ordinary no-transition pass.
-    let mut target = AnalogInputObject::new(999, "restored", 62).unwrap();
+    let mut target =
+        AnalogInputObject::new(999, "restored", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     target.set_present_value(5.0);
     db.add(Box::new(target)).unwrap();
     let restored = bacnet_server::event_enrollment::evaluate_event_enrollments_report(&mut db, 1);

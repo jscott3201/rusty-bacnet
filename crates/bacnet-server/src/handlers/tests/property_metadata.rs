@@ -348,6 +348,7 @@ fn rpm_metadata_selectors_are_exact_for_audit_reporter() {
 fn rpm_metadata_analog_required_optional_and_budgeted_bytes_agree() {
     use bacnet_objects::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
     use bacnet_objects::traits::BACnetObject;
+    use bacnet_types::enums::EngineeringUnits;
     use PropertyIdentifier as P;
 
     let required = vec![
@@ -387,9 +388,9 @@ fn rpm_metadata_analog_required_optional_and_budgeted_bytes_agree() {
         P::EVENT_ALGORITHM_INHIBIT,
     ];
     for configuration in 0..8 {
-        let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
-        let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
-        let mut ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
+        let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
+        let mut av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
+        let mut ao = AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
         if configuration & 1 != 0 {
             ai.configure_fault_out_of_range(-10.0, 100.0).unwrap();
             av.configure_fault_out_of_range(-10.0, 100.0).unwrap();

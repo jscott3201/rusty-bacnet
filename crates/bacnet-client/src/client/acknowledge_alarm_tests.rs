@@ -103,7 +103,7 @@ async fn canonical_acknowledge_alarm_preserves_every_caller_supplied_field() {
             )
             .unwrap();
             remote_network
-                .send_apdu(&ack, &received.source_mac, false, NetworkPriority::NORMAL)
+                .send_apdu(&ack, &received.source_mac, false, NetworkPriority::Normal)
                 .await
                 .unwrap();
         }

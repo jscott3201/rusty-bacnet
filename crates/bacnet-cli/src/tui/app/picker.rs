@@ -1,6 +1,6 @@
 //! The interface picker: which IPv4 interface BACnet/IP binds to when `-i`
-//! is omitted. The TUI shows it as a dialog instead of the shell's stderr
-//! prompt, which would corrupt the screen in raw mode.
+//! is omitted, as a dialog: a stderr prompt would corrupt the screen in raw
+//! mode.
 
 use crate::core::interfaces::Ipv4Interface;
 

@@ -175,7 +175,7 @@ async fn segmented_worker_blocked_send_does_not_block_inline_ack_or_abort() {
     let (mut server, tx, mut started) = fixture_with_config(
         &"x".repeat(100),
         ServerConfig {
-            segmentation_supported: Segmentation::BOTH,
+            device: bacnet_objects::DeviceIdentity::default().with_segmentation(Segmentation::BOTH),
             request_admission_policy: RequestAdmissionPolicy {
                 max_confirmed_in_flight_per_peer: 64,
                 confirmed_recovery_reserve: 0,

@@ -1,10 +1,9 @@
+use super::ingress::{ApduReceiver, Ingress};
 use super::*;
-use bacnet_encoding::npdu::{decode_npdu, NpduDecodeError};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::task::Poll;
 use tokio::sync::mpsc;
-use tracing::{debug, warn};
 
 const QUEUE_CAPACITY: usize = 256;
 const APDU_SOURCE_CAPACITY: usize = 16;
@@ -146,9 +145,10 @@ impl QueueAdmissionCounters {
 /// High-water/drop totals survive through an owned [`Self::counters`] handle.
 ///
 /// This wrapper deliberately does not expose the underlying receiver: all
-/// dequeues must update the snapshot. Use [`NetworkLayer::start`], or a router
-/// started without [`RouterOptions::track_admission`](crate::router::RouterOptions::track_admission),
-/// when a plain `mpsc::Receiver` is required instead, or
+/// dequeues must update the snapshot. Use [`NetworkLayer::start`] for the
+/// raw [`ApduReceiver`], a router started without
+/// [`RouterOptions::track_admission`](crate::router::RouterOptions::track_admission)
+/// for a plain `mpsc::Receiver`, or
 /// [`NetworkLayer::enable_network_control_receiver`] for raw controls.
 #[derive(Debug)]
 pub struct AdmissionReceiver<T> {
@@ -332,6 +332,25 @@ impl<T> AdmissionSender<T> {
         item: T,
         source: Option<AdmissionSource>,
     ) -> Result<(), mpsc::error::TrySendError<T>> {
+        if !self.track_depth {
+            // A raw receiver dequeues without accounting and has no quota, so
+            // only a refusal is counted, and only a refusal takes the lock: an
+            // admitted item costs the channel alone (#1713).
+            let result = self.tx.try_send(item);
+            if let Err(error) = &result {
+                let mut state = self
+                    .counters
+                    .0
+                    .lock()
+                    .expect("queue admission counters poisoned");
+                let drops = match error {
+                    mpsc::error::TrySendError::Full(_) => &mut state.snapshot.full_drops,
+                    mpsc::error::TrySendError::Closed(_) => &mut state.snapshot.closed_drops,
+                };
+                *drops = drops.saturating_add(1);
+            }
+            return result;
+        }
         // Serialize the admission and dequeue accounting, not asynchronous
         // waiting. Each queue has its own short critical section, and no lock
         // survives a poll/try operation. Closed keeps its lifecycle semantics;
@@ -397,7 +416,9 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     ///
     /// Call before either [`Self::start`] or [`Self::start_with_admission`], at
     /// most once across the two control-enable alternatives. Returns an encoding
-    /// error if dispatch has started or a control receiver is already enabled.
+    /// error if the layer has started or a control receiver is already enabled.
+    /// With [`Self::start`], controls arrive only while its [`ApduReceiver`] is
+    /// polled; with [`Self::start_with_admission`], whenever they arrive.
     /// The separate 256-item control queue has no per-source quota: Closed takes
     /// precedence over Full, with Full/Closed counted internally but no snapshot
     /// or depth/high-water tracking. Failed admission drops the control and its
@@ -447,7 +468,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         ),
         Error,
     > {
-        if self.dispatch_task.is_some() {
+        if self.started {
             return Err(Error::Encoding(
                 "network-control receiver must be enabled before NetworkLayer::start".into(),
             ));
@@ -463,30 +484,47 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         Ok((rx, counters))
     }
 
-    /// Start the network layer. Returns a receiver for incoming APDUs.
+    /// Start the network layer. Returns the receiver for incoming APDUs.
     ///
-    /// This starts the underlying transport and spawns a dispatch task that
-    /// decodes incoming NPDUs and extracts APDUs. The queue holds 256 items;
-    /// failed admission drops the arriving APDU with its payload, metadata and reply
-    /// sender without waiting for the consumer, sending reply bytes or generating
-    /// a wire rejection. Control capacity is independent. This raw receiver has
-    /// no per-source quota, admission snapshot or depth/high-water tracking;
-    /// Full/Closed drops are counted internally, with Closed > Full precedence.
+    /// This starts the underlying transport. The [`ApduReceiver`] decodes the
+    /// transport's NPDUs in the task that polls it, with no dispatch task or
+    /// second queue between them (#1713): the transport's queue is the only
+    /// buffer and bounds memory under overload, and the transport counts what
+    /// it drops. Network messages reach an opted-in control receiver only
+    /// while the APDU receiver is polled. Receive is cancel safe.
     ///
-    /// Close retains queued APDUs; drop discards them. Either ends dispatch on
-    /// the next APDU admission attempt, also ending control delivery.
-    /// [`Self::stop`] after start leaves queued items drainable. Use
-    /// [`Self::start_with_admission`] for snapshots and per-source fairness; see
-    /// the [receive-queue contract](crate::layer#receive-queue-admission) for the
-    /// raw/tracked matrix and ownership/lifecycle details.
-    pub async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedApdu>, Error> {
-        self.start_dispatch(false).await.map(|(rx, _)| rx)
+    /// Close retains the transport's queued NPDUs for draining; drop discards
+    /// them. [`Self::stop`] after start leaves them drainable too. Use
+    /// [`Self::start_with_admission`] for a tracked queue with snapshots and
+    /// per-source fairness, whose controls flow independently; see the
+    /// [receive-queue contract](crate::layer#receive-queue-admission).
+    pub async fn start(&mut self) -> Result<ApduReceiver, Error> {
+        if self.started {
+            return Err(Error::Encoding("NetworkLayer is already started".into()));
+        }
+        let npdu_rx = self.transport.start().await?;
+        self.started = true;
+        // Taken once the transport knows its own addresses.
+        self.local_broadcasts = self.transport.local_broadcast_destinations();
+        let npdu_rx = Arc::new(Mutex::new(npdu_rx));
+        self.receiver_queue = Arc::downgrade(&npdu_rx);
+        Ok(ApduReceiver::new(npdu_rx, self.ingress()))
+    }
+
+    /// The receive state for this layer's start: its totals and controls.
+    fn ingress(&mut self) -> Ingress {
+        Ingress::new(
+            Arc::clone(&self.node_totals),
+            self.network_control_tx.take(),
+            Arc::clone(&self.network_control_ingress_sequence),
+        )
     }
 
     /// Start with an APDU receiver that also exposes admission snapshots.
     ///
-    /// This is an alternative to [`Self::start`], with the same transport and
-    /// dispatch lifecycle. [`Self::stop`] closes admission but leaves
+    /// This is an alternative to [`Self::start`]. It runs a dispatch task that
+    /// decodes into its own queue, so controls flow whether or not this
+    /// receiver is polled. [`Self::stop`] closes admission but leaves
     /// queued items available to drain. Dropping the receiver discards those
     /// items and releases their reply channels without sending reply bytes.
     ///
@@ -521,110 +559,32 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     /// # Ok(()) }
     /// ```
     pub async fn start_with_admission(&mut self) -> Result<AdmissionReceiver<ReceivedApdu>, Error> {
-        let (rx, counters) = self.start_dispatch(true).await?;
+        let (rx, counters) = self.start_dispatch().await?;
         Ok(AdmissionReceiver::from_apdu_parts(rx, counters))
     }
 
     async fn start_dispatch(
         &mut self,
-        track_depth: bool,
     ) -> Result<(mpsc::Receiver<ReceivedApdu>, QueueAdmissionCounters), Error> {
+        if self.started {
+            return Err(Error::Encoding("NetworkLayer is already started".into()));
+        }
         let mut npdu_rx = self.transport.start().await?;
+        self.started = true;
         // Taken once the transport knows its own addresses.
         self.local_broadcasts = self.transport.local_broadcast_destinations();
-        let mut network_control_tx = self.network_control_tx.take();
-        let network_control_ingress_sequence = Arc::clone(&self.network_control_ingress_sequence);
-        let address_length_drops = Arc::clone(&self.address_length_drops);
-        let global_broadcast_dadr_drops = Arc::clone(&self.global_broadcast_dadr_drops);
-        let broadcast_pdu_type_drops = Arc::clone(&self.broadcast_pdu_type_drops);
-        let (apdu_tx, apdu_rx) = AdmissionSender::channel(track_depth);
+        let mut ingress = self.ingress();
+        let (apdu_tx, apdu_rx) = AdmissionSender::channel(true);
         let counters = apdu_tx.counters.clone();
 
         let dispatch_task = tokio::spawn(async move {
             while let Some(received) = npdu_rx.recv().await {
-                if !link_source_fits(&received.source_mac, &address_length_drops) {
+                let Some(apdu) = ingress.take(received) else {
                     continue;
-                }
-                match decode_npdu(received.npdu.clone()) {
-                    Ok(npdu) => {
-                        if !destination_is_coherent(
-                            npdu.destination.as_ref(),
-                            &global_broadcast_dadr_drops,
-                        ) || !broadcast_carries_unconfirmed(&npdu, &broadcast_pdu_type_drops)
-                        {
-                            continue;
-                        }
-                        if npdu.is_network_message {
-                            if let Some(tx) = network_control_tx.as_ref() {
-                                let ingress_sequence = next_ingress_sequence(
-                                    network_control_ingress_sequence.as_ref(),
-                                );
-                                let control = ReceivedNetworkControl {
-                                    npdu,
-                                    source_mac: received.source_mac,
-                                    link_layer_group: received.link_layer_group,
-                                    data_attributes: received.data_attributes,
-                                    provenance: received.provenance,
-                                    ingress_sequence,
-                                };
-                                match tx.try_send(control) {
-                                    Ok(()) | Err(mpsc::error::TrySendError::Full(_)) => {}
-                                    Err(mpsc::error::TrySendError::Closed(_)) => {
-                                        network_control_tx = None;
-                                        debug!("Network-control receiver closed; resuming discard behavior");
-                                    }
-                                }
-                            } else {
-                                debug!(
-                                    message_type = npdu.message_type,
-                                    "Ignoring network layer message (non-router mode)"
-                                );
-                            }
-                            continue;
-                        }
-
-                        // Non-routing node: discard messages with a specific DNET.
-                        if let Some(ref dest) = npdu.destination {
-                            if dest.network != 0xFFFF {
-                                debug!(
-                                    dnet = dest.network,
-                                    "Discarding routed message (non-router)"
-                                );
-                                continue;
-                            }
-                        }
-
-                        let source_network = npdu.source.clone();
-                        let is_group =
-                            is_group_delivery(received.link_layer_group, npdu.destination.as_ref());
-                        let global_broadcast = is_global_broadcast(npdu.destination.as_ref());
-                        let apdu = ReceivedApdu {
-                            direct_response: received.direct_response.clone(),
-                            apdu: npdu.payload,
-                            source_mac: received.source_mac,
-                            ingress_network: None,
-                            source_network,
-                            link_layer_group: received.link_layer_group,
-                            is_group,
-                            global_broadcast,
-                            data_attributes: received.data_attributes,
-                            provenance: received.provenance,
-                            reply_tx: received.reply_tx,
-                        };
-
-                        match apdu_tx.try_send_apdu(apdu) {
-                            Ok(()) | Err(mpsc::error::TrySendError::Full(_)) => {}
-                            Err(mpsc::error::TrySendError::Closed(_)) => break,
-                        }
-                    }
-                    Err(e @ NpduDecodeError::AddressTooLong { .. }) => {
-                        // A non-router has no reject to send (Clause 6.6.3.5).
-                        count_drop(&address_length_drops);
-                        warn!(error = %e, "Dropping NPDU with an over-long address");
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "Failed to decode NPDU");
-                    }
+                };
+                match apdu_tx.try_send_apdu(apdu) {
+                    Ok(()) | Err(mpsc::error::TrySendError::Full(_)) => {}
+                    Err(mpsc::error::TrySendError::Closed(_)) => break,
                 }
             }
         });
@@ -632,84 +592,6 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         self.dispatch_task = Some(dispatch_task);
         Ok((apdu_rx, counters))
     }
-}
-
-/// Whether a frame's link-layer source MAC fits [`NpduAddress::MAX_MAC_LEN`]
-/// (#1198). [`NetworkLayer`] asks before decoding anything else in the
-/// frame, and the router's engine (`bacnet-router-core`) applies the same
-/// bound. A longer MAC is counted in `drops` and its frame goes no
-/// further, so neither an APDU consumer nor the routing table ever learns an
-/// address that a `BACnetAddress` cannot hold. No built-in transport makes
-/// one: B/IP, BACnet/SC and Ethernet MACs are 6 octets, B/IPv6 VMACs 3 and
-/// MS/TP 1; only a custom [`TransportPort`] can.
-pub(crate) fn link_source_fits(source_mac: &[u8], drops: &AtomicU64) -> bool {
-    if source_mac.len() <= NpduAddress::MAX_MAC_LEN {
-        return true;
-    }
-    count_drop(drops);
-    warn!(
-        octets = source_mac.len(),
-        limit = NpduAddress::MAX_MAC_LEN,
-        "Dropping a frame whose link-layer source MAC is over the limit"
-    );
-    false
-}
-
-/// Whether a decoded NPDU's destination can be acted on: anything but DNET
-/// 0xFFFF with a DADR (#1379). That DNET already names every device on every
-/// network (Clauses 6.2.2 and 6.3.2), so a DADR beside it names one device as
-/// well and the NPDU contradicts itself. [`NetworkLayer`] asks right after
-/// decoding, before it looks at what the NPDU carries, so this one check
-/// covers APDUs and network messages; the router's engine applies the same
-/// rule at the same point. A
-/// contradictory NPDU is counted in `drops` and goes no further: it is not
-/// delivered, forwarded, answered, rejected or learned from.
-pub(crate) fn destination_is_coherent(
-    destination: Option<&NpduAddress>,
-    drops: &AtomicU64,
-) -> bool {
-    let Some(destination) = destination else {
-        return true;
-    };
-    if destination.network != 0xFFFF || destination.mac_address.is_empty() {
-        return true;
-    }
-    count_drop(drops);
-    warn!(
-        dlen = destination.mac_address.len(),
-        "Dropping a global broadcast NPDU that also names a DADR"
-    );
-    false
-}
-
-/// Whether a decoded NPDU may go on: anything but an APDU sent to a broadcast
-/// network address, global (DNET 0xFFFF) or remote (a DNET with no DADR),
-/// whose PDU type isn't Unconfirmed-Request (#1491). Only that type may use
-/// a broadcast network address (Clause 6.3); any other belongs to one peer's
-/// transaction, so every device reached would get a request or an answer
-/// that names no one. The type is the high nibble of the APDU's first octet
-/// (Clause 20.1), so nothing is decoded, and an empty APDU names no type.
-/// Network messages pass. [`NetworkLayer`] asks right after
-/// [`destination_is_coherent`], as the router's engine does: a refused NPDU is counted in `drops`
-/// and is not delivered, forwarded, answered or rejected.
-pub(crate) fn broadcast_carries_unconfirmed(npdu: &Npdu, drops: &AtomicU64) -> bool {
-    let Some(destination) = npdu.destination.as_ref() else {
-        return true;
-    };
-    let broadcast = destination.network == 0xFFFF || destination.mac_address.is_empty();
-    let unconfirmed = npdu
-        .payload
-        .first()
-        .is_some_and(|&first| PduType::from_raw(first >> 4) == PduType::UNCONFIRMED_REQUEST);
-    if npdu.is_network_message || !broadcast || unconfirmed {
-        return true;
-    }
-    count_drop(drops);
-    warn!(
-        dnet = destination.network,
-        "Dropping a broadcast NPDU whose APDU isn't an Unconfirmed-Request"
-    );
-    false
 }
 
 #[cfg(test)]

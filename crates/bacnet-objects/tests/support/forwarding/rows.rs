@@ -237,6 +237,9 @@ pub const QUERIES: &[(&str, Query)] = &[
     ("logs_received_event_notifications_internal", |o| {
         o.logs_received_event_notifications_internal().to_string()
     }),
+    ("log_collecting_internal", |o| {
+        o.log_collecting_internal().to_string()
+    }),
     ("buffer_ready_report_internal", |o| {
         format!("{:?}", o.buffer_ready_report_internal())
     }),
@@ -319,6 +322,9 @@ pub const COMMANDS: &[(&str, Command)] = &[
     }),
     ("bind_deadline_waker_internal", |o| {
         format!("{:?}", o.bind_deadline_waker_internal(Some(waker())))
+    }),
+    ("start_output_internal", |o| {
+        format!("{:?}", o.start_output_internal())
     }),
     ("advance_monotonic_time_internal", |o| {
         o.advance_monotonic_time_internal(Duration::from_secs(33))

@@ -2,10 +2,11 @@
 pub mod bbmd;
 pub mod clients;
 pub mod cov;
+pub mod device_scan;
 pub mod harness;
 pub mod mixed;
+pub mod mstp;
 pub mod objects;
 pub mod output;
 pub mod router;
 pub mod segmentation;
-pub mod whois;

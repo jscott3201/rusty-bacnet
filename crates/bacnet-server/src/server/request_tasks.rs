@@ -3,8 +3,36 @@ use super::{RequestAdmissionCounters, RequestAdmissionPolicy};
 use crate::command_lists::Unfinished;
 use bacnet_types::primitives::ObjectIdentifier;
 use std::future::{poll_fn, Future};
+use std::pin::Pin;
 use std::sync::{Arc, Mutex, Weak};
+use std::time::Duration;
 use tokio::task::{JoinError, JoinSet};
+use tokio::time::{Instant, Sleep};
+
+/// The longest a finished handler waits to be joined while no datagram turns
+/// the dispatch loop (#1713).
+const REAP_IDLE: Duration = Duration::from_millis(100);
+
+/// Paces the dispatch loop's joins while ingress is open (#1713). The loop
+/// joins finished handlers at the top of each turn with
+/// [`RequestTasks::reap_finished`] instead of awaiting the JoinSet: awaiting
+/// it makes the loop the set's waker, so every finished request woke the loop
+/// once more, a thread hand-off per request. This timer turns an idle loop
+/// within [`REAP_IDLE`], so a finished handler is still joined without one.
+pub(super) struct IdleReap(Pin<Box<Sleep>>);
+
+impl IdleReap {
+    pub(super) fn new() -> Self {
+        Self(Box::pin(tokio::time::sleep(REAP_IDLE)))
+    }
+
+    /// Ready [`REAP_IDLE`] after the last time it was. Cancel-safe: the poll
+    /// that finds the timer done also re-arms it.
+    pub(super) async fn tick(&mut self) {
+        self.0.as_mut().await;
+        self.0.as_mut().reset(Instant::now() + REAP_IDLE);
+    }
+}
 
 /// Owns inbound request handlers, their independent segmented responses and
 /// the Command object runs a write starts (#1150), not timers or notification
@@ -126,6 +154,10 @@ impl RequestTasks {
 
     /// Acquire and register synchronously with close; construct the future only
     /// on success. The guard lives in that future, including before its first poll.
+    ///
+    /// The handler's future is boxed as it is made (#1713): it is several
+    /// kilobytes, and tokio's spawn path and task stages otherwise copy all of
+    /// it many times over for every request.
     pub(super) fn try_spawn<F: Future<Output = ()> + Send + 'static>(
         &self,
         class: Class,
@@ -134,7 +166,7 @@ impl RequestTasks {
     ) -> Result<(), Rejection> {
         let mut state = self.0.lock().unwrap();
         let guard = self.1.try_enter(class, peer, state.closed)?;
-        let task = make();
+        let task = Box::pin(make());
         let owner = state.audit_owner.as_ref().and_then(Weak::upgrade);
         state.tasks.spawn(async move {
             let _owner = owner;
@@ -192,6 +224,18 @@ impl RequestTasks {
 
     pub(super) fn is_empty(&self) -> bool {
         self.0.lock().unwrap().tasks.is_empty()
+    }
+
+    /// Join every handler that has finished, without waiting and without
+    /// registering a waker, so a completion doesn't wake the dispatch loop
+    /// (see [`IdleReap`]).
+    pub(super) fn reap_finished(&self) {
+        loop {
+            let Some(result) = self.0.lock().unwrap().tasks.try_join_next() else {
+                return;
+            };
+            Self::observe(Some(result));
+        }
     }
 
     /// One join consumer at a time: dispatch while running, stop after dispatch

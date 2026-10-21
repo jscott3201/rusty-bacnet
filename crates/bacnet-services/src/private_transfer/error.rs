@@ -108,8 +108,8 @@ impl TryFrom<&ErrorPdu> for PrivateTransferError {
 impl From<PrivateTransferError> for Error {
     fn from(error: PrivateTransferError) -> Self {
         Error::protocol(
-            error.error_class.to_raw() as u32,
-            error.error_code.to_raw() as u32,
+            error.error_class,
+            error.error_code,
             Some(ErrorDetail::PrivateTransfer {
                 vendor_id: error.vendor_id,
                 service_number: error.service_number,
@@ -167,7 +167,7 @@ mod tests {
     fn private_transfer_error_projects_vendor_service_and_parameters() {
         assert!(matches!(
             Error::from(sample(Some(vec![0x21, 1]))),
-            Error::Structured { class: 5, code: 45, detail }
+            Error::Structured { class: ErrorClass::SERVICES, code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, detail }
                 if *detail == ErrorDetail::PrivateTransfer {
                     vendor_id: 555,
                     service_number: 7,

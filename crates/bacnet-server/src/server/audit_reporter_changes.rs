@@ -14,8 +14,8 @@ use bacnet_types::{
 
 fn denied() -> Error {
     Error::Protocol {
-        class: ErrorClass::SERVICES.to_raw() as u32,
-        code: ErrorCode::SERVICE_REQUEST_DENIED.to_raw() as u32,
+        class: ErrorClass::SERVICES,
+        code: ErrorCode::SERVICE_REQUEST_DENIED,
     }
 }
 

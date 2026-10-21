@@ -1,7 +1,7 @@
 //! Line events: octets going out, characters arriving, transmissions ending.
 
 use bacnet_mstp_codec::{DecodeEvent, FrameHeader};
-use bacnet_mstp_core::Instant;
+use bacnet_mstp_core::{Duration, Instant};
 
 use super::master::Input;
 use super::{describe, tie_of, Event, NodeKind, Sim, TxMeta};
@@ -32,6 +32,8 @@ impl Sim {
         octets: Vec<u8>,
         corruption: Option<(usize, Corruption)>,
         dispatch: Option<(Instant, bool)>,
+        post_drive: Duration,
+        inter_octet_gap: Duration,
     ) -> TxId {
         let now = self.now;
         self.note(who(driver), TraceKind::FrameStart(describe(&octets)));
@@ -41,10 +43,21 @@ impl Sim {
             self.listening_masters(driver)
         };
         let cut_after = self.take_cut_off(driver);
-        let tx = self.line.begin(driver, octets, now, corruption);
+        let timing = self.timing_of(driver);
+        let tx = self.line.begin(
+            timing,
+            driver,
+            octets,
+            now,
+            corruption,
+            post_drive,
+            inter_octet_gap,
+        );
         self.meta.insert(
             tx,
             TxMeta {
+                echo_profile: None,
+                transmit_id: None,
                 dispatched: dispatch.map(|(at, _)| at),
                 generation: dispatch.is_some_and(|(_, generation)| generation),
                 corrupted: corruption.is_some(),
@@ -57,6 +70,22 @@ impl Sim {
             self.perturb("an injected corruption");
         }
         tx
+    }
+
+    /// The character grid `driver` sends on: a master's UART at its own
+    /// rate error, anything else at the line's nominal rate.
+    fn timing_of(&self, driver: Driver) -> crate::WireTiming {
+        let Driver::Station(station) = driver else {
+            return self.timing;
+        };
+        self.nodes
+            .iter()
+            .find(|node| node.station == station)
+            .and_then(|node| match &node.kind {
+                NodeKind::Master(master) => Some(master.spec.skew.baud_ppm),
+                NodeKind::Scripted(_) => None,
+            })
+            .map_or(self.timing, |ppm| self.timing.with_rate_error(ppm))
     }
 
     /// Masters other than the driver with their receivers on, and how many
@@ -133,27 +162,50 @@ impl Sim {
             self.note(Who::Line, TraceKind::Garbled);
         }
         for node in 0..self.nodes.len() {
-            let character = match self.nodes[node].listening_since {
+            let own = self.nodes[node].driving.filter(|tx| {
+                if self.nodes[node].receiver.policy == crate::ContentionPolicy::FramingError {
+                    outcome.opener.is_some_and(|(opener, _)| opener == *tx)
+                } else {
+                    outcome.contributors.iter().any(|c| c.tx == *tx)
+                }
+            });
+            let eligible = match self.nodes[node].listening_since {
                 // A receiver switched on part way through hears a fragment.
-                Some(since) if since > outcome.start => Character::Garbled,
-                Some(_) => outcome.character,
+                Some(since) => since <= outcome.start,
                 None => {
                     let echo = matches!(&self.nodes[node].kind, NodeKind::Master(master)
                         if master.spec.adapter.echo && master.core.is_some());
-                    let own = outcome.opener == Some(Driver::Station(self.nodes[node].station));
-                    if !(echo && own && self.nodes[node].driving.is_some()) {
+                    if !(echo && own.is_some()) {
                         continue;
                     }
-                    outcome.character
+                    outcome
+                        .contributors
+                        .iter()
+                        .any(|c| Some(c.tx) == own && c.aligned)
                 }
             };
+            let receiver = &mut self.nodes[node].receiver;
+            let (character, contributor) = if eligible {
+                crate::contention::resolve(receiver.policy, &outcome, &mut receiver.rng)
+            } else {
+                (Character::Garbled, None)
+            };
+            self.observe_contention(node, &outcome, character, contributor);
             match &self.nodes[node].kind {
+                NodeKind::Master(master) if master.host.is_some() => {
+                    if self.nodes[node].listening_since.is_none() {
+                        let tx = own.expect("an own echo observation");
+                        self.host_local_echo(node, tx, character);
+                    } else {
+                        self.host_character(node, character);
+                    }
+                }
                 NodeKind::Master(_) => {
                     let input = match character {
                         Character::Clean(byte) => Input::Octet(byte),
                         Character::Garbled => Input::Garbled,
                     };
-                    let _ = self.master_input(node, input);
+                    let _ = self.receiver_input(node, input, now);
                 }
                 NodeKind::Scripted(_) => self.scripted_receive(node, character),
             }
@@ -167,10 +219,19 @@ impl Sim {
         };
         let driver = transmission.driver;
         self.record_frame(tx, transmission);
+        let release = self.line.owner(tx).expect("a physical driver").release;
+        if release == self.now {
+            self.release_driver(tx, crate::DriverReleaseCause::Completed);
+        } else {
+            self.push(
+                release,
+                Class::DriverRelease,
+                tie_of(driver),
+                Event::DriverRelease { tx },
+            );
+        }
         if let Driver::Station(station) = driver {
             let node = self.index_of(station);
-            self.nodes[node].driving = None;
-            self.nodes[node].listening_since = Some(self.now);
             self.master_tx_done(node);
         }
     }
@@ -178,7 +239,7 @@ impl Sim {
     /// Log a finished or cut-off transmission and check it.
     pub(super) fn record_frame(&mut self, tx: TxId, transmission: Transmission) {
         let now = self.now;
-        let meta = self.meta.remove(&tx).unwrap_or_default();
+        let meta = self.meta.get(&tx).cloned().unwrap_or_default();
         let decoded = super::decode_whole(&transmission.octets);
         let frame = WireFrame {
             driver: transmission.driver,
@@ -264,6 +325,8 @@ impl Sim {
 
     /// A scripted station puts its octets on the line.
     pub(super) fn script_send(&mut self, node: usize, send: ScriptSend) {
+        self.timing.validate_post_drive(send.post_drive);
+        self.timing.validate_inter_octet_gap(send.inter_octet_gap);
         let station = self.nodes[node].station;
         if self.nodes[node].listening_since.is_none() {
             self.note(
@@ -275,7 +338,14 @@ impl Sim {
         if send.malformed {
             self.perturb("a deliberately malformed scripted frame");
         }
-        let tx = self.begin_transmission(Driver::Station(station), send.octets, None, None);
+        let tx = self.begin_transmission(
+            Driver::Station(station),
+            send.octets,
+            None,
+            None,
+            send.post_drive,
+            send.inter_octet_gap,
+        );
         self.nodes[node].driving = Some(tx);
         self.nodes[node].listening_since = None;
         self.octet_start(tx, 0);
@@ -288,7 +358,14 @@ impl Sim {
         }
         self.perturb("injected noise");
         self.noise_bursts += 1;
-        let tx = self.begin_transmission(Driver::Noise(self.noise_bursts), octets, None, None);
+        let tx = self.begin_transmission(
+            Driver::Noise(self.noise_bursts),
+            octets,
+            None,
+            None,
+            Duration::ZERO,
+            Duration::ZERO,
+        );
         self.octet_start(tx, 0);
     }
 

@@ -1,11 +1,13 @@
-//! The BBMD image's scenario (#1667).
+//! The BBMD image's scenario (#1667, #1766).
 //!
-//! [`run`] serves as a BBMD the way firmware would: a [`Link`] in
-//! [`Mode::Bbmd`] applies the receive rules to each datagram and hands over
-//! the BBMD's share, which `bacnet-bip-core`'s [`Tables`] (four BDT rows and
-//! four FDT entries) decide on, and the BBMD sends what they say through
-//! `bacnet-bip-codec`. Time is a fixed timeline of `bacnet-time` instants,
-//! which the bip-core re-exports. It returns a [`Summary`] of what it saw.
+//! [`run`] serves as a BBMD the way firmware would: `bacnet-bip-core`'s
+//! [`BbmdPort`], over a [`Link`] in [`Mode::Bbmd`] and [`Tables`] (four BDT
+//! rows and four FDT entries), takes each datagram, forwards what the
+//! tables say, and answers each management request from them itself. Every
+//! datagram leaves through the scenario's socket, a [`Datagrams`] that
+//! encodes it with `bacnet-bip-codec`. Time is a fixed timeline of
+//! `bacnet-time` instants, which the bip-core re-exports. It returns a
+//! [`Summary`] of what it saw.
 //!
 //! Its BDT lists two peers ([`PEERS`]), one reached by one-hop
 //! distribution and one by two-hop; the table appends this BBMD's own row.
@@ -22,6 +24,8 @@
 //!   delivered and forwarded to the subnet and both peers; an unregistered
 //!   sender's draws the NAK.
 //! - **A Read-BDT:** the table, its own row included.
+//! - **A Delete-FDT-Entry:** the foreign device's registration is deleted,
+//!   with success; a second request for it draws the Delete NAK.
 //!
 //! `tests/bbmd.rs` runs it natively and compares the whole summary with
 //! [`EXPECTED`]; the `bbmd` image (`src/bin/bbmd.rs`) links it, and its
@@ -37,10 +41,11 @@ use bacnet_bip_codec::{
     decode, BdtEntries, BdtEntry, BvlcResultCode, Bvll, Entries, FdtEntry, TableEntry,
 };
 use bacnet_bip_core::bbmd::{
-    Context, Fanout, ForwardRefusal, Registered, RegistrationLimits, RegistrationRefusal,
-    Reservation, Tables, Target, Via, TWO_HOP_MASK,
+    DeleteRefusal, ForwardRefusal, Registered, RegistrationRefusal, Served, Tables, Target,
+    TWO_HOP_MASK,
 };
-use bacnet_bip_core::node::{Addressed, Datagram, ForBbmd, Link, Mode, Permissive, Received};
+use bacnet_bip_core::node::{Addressed, Datagram, Link, Mode, Permissive, SendRefusal};
+use bacnet_bip_core::port::{BbmdPort, Datagrams, Ingress};
 use bacnet_bip_core::{Instant, LocalSubnet};
 
 use crate::tally::Sent;
@@ -56,45 +61,8 @@ pub type BbmdTables = Tables<BDT_ROWS, FDT_ENTRIES>;
 /// The most destinations one forwarding decision writes.
 pub const MAX_TARGETS: usize = BbmdTables::MAX_TARGETS;
 
-/// Where one forwarded message went, in order.
-pub type Fan = [Option<Target>; MAX_TARGETS];
-
-/// A [`Fan`] as [`EXPECTED`] gives it: each [`Target`]'s destination and
-/// kind. `Target` is `#[non_exhaustive]`, so `EXPECTED` can't build one.
-pub type ExpectedFan = [Option<(SocketAddrV4, Via)>; MAX_TARGETS];
-
-/// What a good run's [`Summary`] holds, as [`EXPECTED`] gives it: the
-/// summary, its three fans as [`ExpectedFan`]s. A summary is compared with
-/// it fan by fan there and whole everywhere else. The comparison happens
-/// outside [`run`], so the image links none of it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Expected {
-    /// The summary, with nothing in its three fans.
-    pub summary: Summary,
-    /// [`Summary::original`].
-    pub original: ExpectedFan,
-    /// [`Summary::forwarded`].
-    pub forwarded: ExpectedFan,
-    /// [`Summary::distributed`].
-    pub distributed: ExpectedFan,
-}
-
-impl PartialEq<Expected> for Summary {
-    fn eq(&self, expected: &Expected) -> bool {
-        let pairs = |fan: Fan| fan.map(|slot| slot.map(|target| (target.destination, target.via)));
-        let mut rest = *self;
-        rest.original = [None; MAX_TARGETS];
-        rest.forwarded = [None; MAX_TARGETS];
-        rest.distributed = [None; MAX_TARGETS];
-        rest == expected.summary
-            && pairs(self.original) == expected.original
-            && pairs(self.forwarded) == expected.forwarded
-            && pairs(self.distributed) == expected.distributed
-    }
-}
-
-/// The most foreign devices one message goes to.
-const FDT_FANOUT: usize = FDT_ENTRIES;
+/// Where the Forwarded-NPDUs of one step went, in order.
+pub type Fan = [Option<SocketAddrV4>; MAX_TARGETS];
 
 /// This BBMD.
 pub const OWN: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 1), 0xBAC0);
@@ -146,7 +114,7 @@ pub struct Step {
 }
 
 /// The datagrams the BBMD receives, in order.
-pub const STEPS: [Step; 8] = [
+pub const STEPS: [Step; 10] = [
     step(1_000, FOREIGN, Bvll::RegisterForeignDevice { ttl: TTL }),
     step(2_000, LOCAL, Bvll::ReadForeignDeviceTable),
     Step {
@@ -158,6 +126,8 @@ pub const STEPS: [Step; 8] = [
     step(5_000, FOREIGN, Bvll::DistributeBroadcastToNetwork(&WHO_IS)),
     step(5_000, STRANGER, Bvll::DistributeBroadcastToNetwork(&WHO_IS)),
     step(6_000, LOCAL, Bvll::ReadBroadcastDistributionTable),
+    step(7_000, LOCAL, Bvll::DeleteForeignDeviceTableEntry(FOREIGN)),
+    step(7_000, LOCAL, Bvll::DeleteForeignDeviceTableEntry(FOREIGN)),
 ];
 
 /// The two-hop peer's forwarded broadcast, and the stranger's copy of it.
@@ -186,9 +156,9 @@ const NO_ROW: FdtEntry = FdtEntry::new(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 
 
 /// Storage the scenario works in besides its stack: a buffer for the
 /// datagram coming in, which the BBMD's decisions borrow, one for the
-/// datagram going out, and the storage the tables write a decision's
-/// destinations and a Read-FDT-Ack's rows into. The tables themselves, a
-/// few hundred octets, are built on the stack.
+/// datagram going out, and the storage the port lends the tables for a
+/// decision's destinations and a Read-FDT-Ack's rows. The tables
+/// themselves, a few hundred octets, are built on the stack.
 ///
 /// [`Memory::new`] is all zero bits, so the image keeps it in a static that
 /// the linker places in `.bss`.
@@ -223,6 +193,8 @@ impl Default for Memory {
 
 /// Room for the NPDUs the BBMD delivers to its own network layer.
 pub const DELIVERIES: usize = 4;
+/// Room for the BVLC-Results it sends.
+pub const RESULTS: usize = 4;
 
 /// What [`run`] saw. Every field is plain data, so the host test can
 /// compare the whole summary at once.
@@ -241,16 +213,19 @@ pub struct Summary {
     /// Where the foreign device's Distribute-Broadcast-To-Network was
     /// forwarded.
     pub distributed: Fan,
-    /// The NAK the unregistered sender's Distribute-Broadcast-To-Network
-    /// drew.
-    pub not_registered: Option<BvlcResultCode>,
     /// The BDT, as the Read-BDT-Ack the BBMD sent decodes.
     pub bdt: [Option<BdtEntry>; BDT_ROWS],
+    /// What the two Delete-FDT-Entry requests came to.
+    pub deleted: [Option<Result<(), DeleteRefusal>>; 2],
+    /// Each BVLC-Result the BBMD sent, in order: where, and its code.
+    pub results: [Option<(SocketAddrV4, BvlcResultCode)>; RESULTS],
     /// The source of each NPDU the BBMD delivered to its own network layer,
     /// in order.
     pub delivered: [Option<SocketAddrV4>; DELIVERIES],
     /// Every datagram the BBMD sent.
     pub sent: Sent,
+    /// Datagrams of the port's own its socket refused.
+    pub refused: u32,
     /// Calls that failed or answered otherwise than the scenario expects.
     /// Zero in a good run.
     pub errors: u8,
@@ -265,10 +240,12 @@ impl Summary {
             forwarded: [None; MAX_TARGETS],
             not_from_peer: None,
             distributed: [None; MAX_TARGETS],
-            not_registered: None,
             bdt: [None; BDT_ROWS],
+            deleted: [None; 2],
+            results: [None; RESULTS],
             delivered: [None; DELIVERIES],
             sent: Sent::new(),
+            refused: 0,
             errors: 0,
         }
     }
@@ -300,20 +277,22 @@ pub fn run(memory: &mut Memory) -> Summary {
     if tables.bdt.set(BdtEntries::from_entries(&PEERS)).is_err() {
         summary.error();
     }
-    let mut bbmd = Bbmd {
-        tables,
+    let Ok(mut port) = BbmdPort::new(link, &mut tables, targets, rows) else {
+        summary.error();
+        return summary;
+    };
+    let mut socket = Socket {
         tx,
-        targets,
-        rows,
-        summary,
+        summary: &mut summary,
+        fan: [None; MAX_TARGETS],
     };
     for step in &STEPS {
         let Ok(length) = step.message.encode_into(rx) else {
-            bbmd.summary.error();
+            socket.summary.error();
             continue;
         };
         let Some(payload) = rx.get(..length) else {
-            bbmd.summary.error();
+            socket.summary.error();
             continue;
         };
         let to = Addressed {
@@ -321,133 +300,74 @@ pub fn run(memory: &mut Memory) -> Summary {
             broadcast: step.broadcast,
         };
         let datagram = Datagram::new(payload, step.source, Some(to));
-        match link.receive(&datagram, step.at, &mut Permissive) {
-            Received::Bbmd(share) => bbmd.serve(share, step.at),
-            _ => bbmd.summary.error(),
-        }
+        socket.fan = [None; MAX_TARGETS];
+        let ingress = port.receive(&datagram, step.at, &mut Permissive, &mut socket);
+        note(socket.summary, step, ingress, socket.fan);
     }
-    bbmd.summary
+    socket.summary.refused = port.take_counters().refused;
+    summary
 }
 
-/// The BBMD: its tables, and the storage it writes into.
-struct Bbmd<'m> {
-    tables: BbmdTables,
-    tx: &'m mut [u8],
-    targets: &'m mut [Target],
-    rows: &'m mut [FdtEntry],
-    summary: Summary,
-}
-
-impl Bbmd<'_> {
-    /// Act on the BBMD's share of a message, as firmware would: the tables
-    /// decide, and the BBMD delivers, forwards and answers as they say.
-    fn serve(&mut self, share: ForBbmd<'_>, now: Instant) {
-        let Self {
-            tables,
-            tx,
-            targets,
-            rows,
-            summary,
-        } = self;
-        let cx = Context::new(now, FDT_FANOUT);
-        match share {
-            ForBbmd::Register { sender, ttl } => {
-                let limits = RegistrationLimits::default();
-                let outcome =
-                    tables
-                        .fdt
-                        .register(sender, ttl, now, &limits, Reservation::Ordinary, || true);
-                summary.registration = Some(outcome.result);
-                let code = match outcome.result {
-                    Ok(_) => BvlcResultCode::SUCCESSFUL_COMPLETION,
-                    Err(refusal) => refusal.result_code(),
-                };
-                send(tx, summary, sender, &Bvll::BvlcResult(code));
-            }
-            ForBbmd::ReadFdt { sender } => {
-                let Ok(entries) = tables.fdt.wire_entries(now, rows) else {
+/// Note what the port made of `step`: what it delivered, and where it
+/// forwarded the step's broadcast, or what it answered.
+fn note(summary: &mut Summary, step: &Step, ingress: Ingress<'_>, fan: Fan) {
+    match ingress {
+        Ingress::Npdu(delivery) => {
+            deliver(summary, delivery.source, delivery.npdu);
+            let slot = match step.message {
+                Bvll::OriginalBroadcastNpdu(_) => &mut summary.original,
+                Bvll::ForwardedNpdu { .. } => &mut summary.forwarded,
+                Bvll::DistributeBroadcastToNetwork(_) => &mut summary.distributed,
+                _ => {
                     summary.error();
                     return;
-                };
-                let ack = Bvll::ReadForeignDeviceTableAck(entries);
-                match send(tx, summary, sender, &ack).map(decode) {
-                    Some(Ok(Bvll::ReadForeignDeviceTableAck(sent))) => {
-                        summary.fdt = rows_of(sent, &mut summary.errors);
-                    }
-                    _ => summary.error(),
                 }
-            }
-            ForBbmd::ReadBdt { sender } => {
-                let ack = Bvll::ReadBroadcastDistributionTableAck(tables.bdt.entries());
-                match send(tx, summary, sender, &ack).map(decode) {
-                    Some(Ok(Bvll::ReadBroadcastDistributionTableAck(sent))) => {
-                        summary.bdt = rows_of(sent, &mut summary.errors);
-                    }
-                    _ => summary.error(),
-                }
-            }
-            ForBbmd::OriginalBroadcast(delivery) => {
-                deliver(summary, delivery.source, delivery.npdu);
-                let distribution =
-                    tables.original_broadcast(&cx, delivery.source, delivery.npdu, targets);
-                summary.original = fan(&distribution.fanout, &mut summary.errors);
-                for (to, message) in distribution.transmissions() {
-                    send(tx, summary, to, &message);
-                }
-            }
-            ForBbmd::Forwarded {
-                sender,
-                arrival,
-                origin,
-                npdu,
-            } => match tables.forwarded_npdu(&cx, &SUBNET, sender, arrival, origin, targets) {
-                Ok(fanout) => {
-                    // Sent on unchanged: its origin, not this BBMD, is the
-                    // NPDU's source.
-                    deliver(summary, origin, npdu);
-                    summary.forwarded = fan(&fanout, &mut summary.errors);
-                    let message = Bvll::ForwardedNpdu { origin, npdu };
-                    for target in fanout.targets {
-                        send(tx, summary, target.destination, &message);
-                    }
-                }
-                // Nothing answers a refused Forwarded-NPDU.
-                Err(refusal) => summary.not_from_peer = Some(refusal),
-            },
-            ForBbmd::Distribute { sender, npdu } => {
-                match tables.distribute_broadcast(&cx, &SUBNET, sender, npdu, targets) {
-                    Ok(distribution) => {
-                        deliver(summary, sender, npdu);
-                        summary.distributed = fan(&distribution.fanout, &mut summary.errors);
-                        for (to, message) in distribution.transmissions() {
-                            send(tx, summary, to, &message);
-                        }
-                    }
-                    Err(refusal) => {
-                        let code = refusal.result_code();
-                        summary.not_registered = Some(code);
-                        send(tx, summary, sender, &Bvll::BvlcResult(code));
-                    }
-                }
-            }
-            ForBbmd::DeleteFdtEntry { .. } => summary.error(),
+            };
+            *slot = fan;
         }
+        // Nothing answers a refused Forwarded-NPDU.
+        Ingress::NotForwarded(refusal) => summary.not_from_peer = Some(refusal),
+        Ingress::Served(Served::Register(outcome)) => summary.registration = Some(outcome.result),
+        Ingress::Served(Served::DeleteFdtEntry(deleted)) => {
+            record(&mut summary.deleted, deleted, &mut summary.errors);
+        }
+        // The socket notes the table ACKs and the NAK.
+        Ingress::Served(Served::ReadBdt | Served::ReadFdt(Ok(_))) | Ingress::Handled => {}
+        _ => summary.error(),
     }
 }
 
-/// Encode `message` into `tx` and send it to `to`; the datagram, or `None`
-/// and an error counted when `tx` can't hold it.
-fn send<'w>(
-    tx: &'w mut [u8],
-    summary: &mut Summary,
-    to: SocketAddrV4,
-    message: &Bvll<'_>,
-) -> Option<&'w [u8]> {
-    let datagram = summary.sent.send(tx, to, message);
-    if datagram.is_none() {
-        summary.error();
+/// The BBMD's socket: it encodes each datagram into `tx`, keeps the
+/// summary's tally of it, and decodes it again for the summary.
+struct Socket<'m> {
+    tx: &'m mut [u8],
+    summary: &'m mut Summary,
+    /// Where this step's Forwarded-NPDUs went.
+    fan: Fan,
+}
+
+impl Datagrams for Socket<'_> {
+    fn send(&mut self, to: SocketAddrV4, message: &Bvll<'_>) -> Result<(), SendRefusal> {
+        let summary = &mut *self.summary;
+        let Some(datagram) = summary.sent.send(self.tx, to, message) else {
+            summary.error();
+            return Err(SendRefusal::SocketError);
+        };
+        match decode(datagram) {
+            Ok(Bvll::ForwardedNpdu { .. }) => record(&mut self.fan, to, &mut summary.errors),
+            Ok(Bvll::BvlcResult(code)) => {
+                record(&mut summary.results, (to, code), &mut summary.errors)
+            }
+            Ok(Bvll::ReadForeignDeviceTableAck(sent)) => {
+                summary.fdt = rows_of(sent, &mut summary.errors);
+            }
+            Ok(Bvll::ReadBroadcastDistributionTableAck(sent)) => {
+                summary.bdt = rows_of(sent, &mut summary.errors);
+            }
+            _ => summary.error(),
+        }
+        Ok(())
     }
-    datagram
 }
 
 /// Hand `npdu`, from `source`, to the BBMD's own network layer.
@@ -455,24 +375,16 @@ fn deliver(summary: &mut Summary, source: SocketAddrV4, npdu: &[u8]) {
     if npdu != WHO_IS {
         summary.error();
     }
-    match summary.delivered.iter_mut().find(|slot| slot.is_none()) {
-        Some(slot) => *slot = Some(source),
-        None => summary.error(),
-    }
+    record(&mut summary.delivered, source, &mut summary.errors);
 }
 
-/// A decision's destinations. Every one of them is counted as an error
-/// unless the list is whole: nothing left out as a repeat, cut by the
-/// fan-out limit, or dropped for want of room.
-fn fan(fanout: &Fanout<'_>, errors: &mut u8) -> Fan {
-    if fanout.deduplicated != 0 || fanout.fanout_capped || fanout.dropped != 0 {
-        *errors = errors.saturating_add(1);
+/// Put `value` in the first free slot of `slots`, or count an error when
+/// none is free.
+fn record<T: Copy>(slots: &mut [Option<T>], value: T, errors: &mut u8) {
+    match slots.iter_mut().find(|slot| slot.is_none()) {
+        Some(slot) => *slot = Some(value),
+        None => *errors = errors.saturating_add(1),
     }
-    let mut fan = [None; MAX_TARGETS];
-    for (slot, target) in fan.iter_mut().zip(fanout.targets) {
-        *slot = Some(*target);
-    }
-    fan
 }
 
 /// A table's rows, from the front; an error when there are more than `N`.

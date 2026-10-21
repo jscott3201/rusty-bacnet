@@ -36,6 +36,7 @@ use crate::server::ServerConfig;
 #[test]
 fn is_writable_property_matches_write_property_on_all_core_types() {
     use bacnet_types::bitstring::LimitEnable;
+    use bacnet_types::enums::EngineeringUnits;
 
     // A read-only property every type rejects — used as a universal negative.
     const READ_ONLY: PropertyIdentifier = PropertyIdentifier::STATUS_FLAGS;
@@ -109,7 +110,7 @@ fn is_writable_property_matches_write_property_on_all_core_types() {
     }
 
     // AnalogInput — PRESENT_VALUE needs out-of-service.
-    let mut ai = AnalogInputObject::new(1, "ai", 95).unwrap();
+    let mut ai = AnalogInputObject::new(1, "ai", EngineeringUnits::NO_UNITS).unwrap();
     ai.write_property(
         PropertyIdentifier::OUT_OF_SERVICE,
         None,
@@ -147,7 +148,7 @@ fn is_writable_property_matches_write_property_on_all_core_types() {
     assert_rejects(&mut ai, READ_ONLY, "AI");
 
     // AnalogOutput — commandable Present_Value with a read-only Priority_Array.
-    let mut ao = AnalogOutputObject::new(1, "ao", 95).unwrap();
+    let mut ao = AnalogOutputObject::new(1, "ao", EngineeringUnits::NO_UNITS).unwrap();
     ao.write_property(
         PropertyIdentifier::OUT_OF_SERVICE,
         None,
@@ -183,7 +184,7 @@ fn is_writable_property_matches_write_property_on_all_core_types() {
     assert_rejects(&mut ao, READ_ONLY, "AO");
 
     // AnalogValue — same writable set as AnalogOutput.
-    let mut av = AnalogValueObject::new(1, "av", 95).unwrap();
+    let mut av = AnalogValueObject::new(1, "av", EngineeringUnits::NO_UNITS).unwrap();
     av.write_property(
         PropertyIdentifier::OUT_OF_SERVICE,
         None,
@@ -398,6 +399,7 @@ fn is_writable_property_matches_write_property_on_pulse_converter_and_averaging(
     use bacnet_objects::accumulator::PulseConverterObject;
     use bacnet_objects::averaging::AveragingObject;
     use bacnet_objects::database::ObjectDatabase;
+    use bacnet_types::enums::EngineeringUnits;
     use bacnet_types::enums::ObjectType;
 
     fn assert_exactly(
@@ -446,7 +448,7 @@ fn is_writable_property_matches_write_property_on_pulse_converter_and_averaging(
     let reference_value =
         PropertyValue::ApplicationData(vec![0x0C, 0x00, 0x00, 0x00, 0x05, 0x19, 0x55]);
 
-    let mut pc = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+    let mut pc = PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     // Count must cover the adjustment below: 2.0 / 1.5 takes one pulse off.
     pc.add_pulses(1).unwrap();
     assert_exactly(
@@ -606,6 +608,9 @@ fn pics_log_family_writability_comes_from_runtime_routes() {
                 PropertyIdentifier::ALIGN_INTERVALS,
                 PropertyIdentifier::INTERVAL_OFFSET,
                 PropertyIdentifier::TRIGGER,
+                // The COV rows (#1480).
+                PropertyIdentifier::COV_RESUBSCRIPTION_INTERVAL,
+                PropertyIdentifier::CLIENT_COV_INCREMENT,
             ][..],
         ),
         (
@@ -711,6 +716,9 @@ fn pics_log_family_writability_comes_from_runtime_routes() {
                 "{object_type:?} {property:?}"
             );
         }
+        // The Trend Log's two COV rows (#1480) are writable above; that
+        // Table 12-29 only permits them is pinned with the RPM rows in
+        // handlers/tests/property_metadata/log.rs.
         let texts = PropertyIdentifier::EVENT_MESSAGE_TEXTS;
         for property in options.iter().chain([&texts]) {
             assert_eq!(optional(*property), Some(true), "{object_type:?}");

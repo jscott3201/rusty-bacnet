@@ -6,7 +6,7 @@ use bacnet_objects::file::{
 use bacnet_services::file::{
     AtomicReadFileAck, AtomicReadFileRequest, FileAccessMethod, FileReadAckMethod,
 };
-use bacnet_types::enums::{AbortReason, FileAccessMethod as Method};
+use bacnet_types::enums::{AbortReason, EngineeringUnits, FileAccessMethod as Method};
 use std::{
     borrow::Cow,
     sync::{
@@ -93,8 +93,8 @@ impl FileStorage for Probe {
 }
 fn storage_error() -> Error {
     Error::Protocol {
-        class: ErrorClass::SERVICES.to_raw() as u32,
-        code: ErrorCode::FILE_ACCESS_DENIED.to_raw() as u32,
+        class: ErrorClass::SERVICES,
+        code: ErrorCode::FILE_ACCESS_DENIED,
     }
 }
 fn probe(record: bool) -> Probe {
@@ -135,7 +135,7 @@ fn wire(record: bool, start: i32, count: u32) -> BytesMut {
     wire
 }
 fn abort(result: Result<(), Error>, reason: AbortReason) {
-    assert!(matches!(result, Err(Error::Abort { reason: actual }) if actual == reason.to_raw()));
+    assert!(matches!(result, Err(Error::Abort { reason: actual }) if actual == reason));
 }
 fn call(
     db: &ObjectDatabase,
@@ -147,9 +147,7 @@ fn call(
         handle_atomic_read_file_budgeted(db, request, &mut out, cap).map_err(
             |failure| match failure {
                 AtomicReadFileFailure::Service(error) => error,
-                AtomicReadFileFailure::Budget(reason) => Error::Abort {
-                    reason: reason.to_raw(),
-                },
+                AtomicReadFileFailure::Budget(reason) => Error::Abort { reason },
             },
         );
     if result.is_err() {
@@ -229,8 +227,11 @@ fn atomic_read_file_validation_precedes_budget_and_preserves_output() {
             decoded.encode(&mut request);
             for mut db in [ObjectDatabase::new(), make_db_with_ai()] {
                 if object_type == ObjectType::ANALOG_INPUT {
-                    db.add(Box::new(AnalogInputObject::new(2, "AI-2", 62).unwrap()))
-                        .unwrap();
+                    db.add(Box::new(
+                        AnalogInputObject::new(2, "AI-2", EngineeringUnits::DEGREES_CELSIUS)
+                            .unwrap(),
+                    ))
+                    .unwrap();
                 }
                 let expected =
                     handle_atomic_read_file(&db, &request, &mut BytesMut::new()).unwrap_err();

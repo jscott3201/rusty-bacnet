@@ -87,20 +87,26 @@ async fn invalid_local_files_never_reach_live_listener() {
             path.display()
         );
     }
+    // The pre-dial credential lint (#968) explains what the TLS
+    // configuration would otherwise refuse with a terser error.
     for (name, contents, diagnostic) in [
-        ("operational é.pem", "".to_owned(), "TLS config error"),
+        (
+            "operational é.pem",
+            "".to_owned(),
+            "SC credential check could not complete: input identity (empty_certificates)",
+        ),
         ("operational é.pem", malformed.to_owned(), "cert PEM"),
         (
             "operational é.pem",
             invalid_der.to_owned(),
-            "TLS config error",
+            "SC credential check refused the dial before connecting: Operational certificate [0]",
         ),
         ("operational é.key", "".to_owned(), "key PEM"),
         ("operational é.key", "not a key".to_owned(), "key PEM"),
         (
             "operational é.key",
             KeyPair::generate().unwrap().serialize_pem(),
-            "TLS config error",
+            "Key file: The private key does not match the identity leaf",
         ),
     ] {
         let mut cmd = cli(&files, &url, &leaf);
@@ -126,6 +132,65 @@ async fn invalid_local_files_never_reach_live_listener() {
         })
     );
     failure(&output, "TLS handshake");
+}
+
+/// The pre-dial lint (#968): an expired or not-yet-valid leaf is a hard
+/// failure, refused with its reason before any TCP connection. The dates are
+/// decades from any plausible clock, so the verdict does not depend on it.
+#[tokio::test]
+async fn expired_and_future_leaves_are_refused_before_any_dial() {
+    let site = Site::new();
+    let files = Files::new();
+    let ca = files.write("site.pem", site.ca.pem());
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let url = format!("wss://{}", listener.local_addr().unwrap());
+    for dates in [(2000, 2001), (4090, 4091)] {
+        let leaf = site.leaf("cli", ExtendedKeyUsagePurpose::ClientAuth, Some(dates));
+        let mut cmd = cli(&files, &url, &leaf);
+        cmd.arg("--sc-ca").arg(&ca);
+        let output = Process::spawn(read(&mut cmd)).output().await;
+        failure(
+            &output,
+            "SC credential check refused the dial before connecting: Operational certificate [0]: \
+             The identity leaf has expired, is not valid yet",
+        );
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock,
+            "a {dates:?} leaf reached TCP"
+        );
+    }
+}
+
+/// A CA file past the lint's inspection limits (here 65 CAs) is one the
+/// TLS configuration accepts: the lint warns that it did not assess it and
+/// the command still dials (#968).
+#[tokio::test]
+async fn a_ca_file_past_the_lint_limits_still_dials() {
+    let site = Site::new();
+    let leaf = site.leaf("cli", ExtendedKeyUsagePurpose::ClientAuth, None);
+    let files = Files::new();
+    let mut bundle = site.ca.pem();
+    for _ in 0..64 {
+        bundle.push_str(&Site::new().ca.pem());
+    }
+    let ca = files.write("big bundle.pem", bundle);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("wss://{}", listener.local_addr().unwrap());
+    let mut cmd = cli(&files, &url, &leaf);
+    cmd.arg("--sc-ca").arg(ca);
+    let (output, ()) = tokio::join!(
+        Process::spawn(read(&mut cmd)).output(),
+        bounded(async {
+            drop(listener.accept().await.unwrap());
+        })
+    );
+    failure(&output, "TLS handshake");
+    failure(
+        &output,
+        "not assessed; the files exceed the inspection limits",
+    );
 }
 
 #[tokio::test]

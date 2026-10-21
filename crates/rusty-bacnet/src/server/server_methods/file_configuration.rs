@@ -192,9 +192,11 @@ mod tests {
             broadcast_address: "255.255.255.255".into(),
             share_port_by_address: false,
             bip_mode: Default::default(),
+            multicast: None,
             sc_hub: None,
             sc_vmac: None,
             sc_device_uuid: [0; 16],
+            sc_npdu_admission_policy: Default::default(),
             sc_ca_cert: None,
             sc_client_cert: None,
             sc_client_key: None,
@@ -218,6 +220,7 @@ mod tests {
             dcc_source_restriction: None,
             dcc_disable_rate_limit: None,
             reinit_password: None,
+            reinitialize: None,
             request_admission_policy: server::RequestAdmissionPolicy::default(),
             read_property_multiple_budget: server::ReadPropertyMultipleBudget::default(),
             get_alarm_summary_budget: server::GetAlarmSummaryBudget::default(),
@@ -370,7 +373,7 @@ mod tests {
                     .unwrap()
                     .extract::<u32>()
                     .unwrap(),
-                ErrorClass::SERVICES.to_raw() as u32
+                u32::from(ErrorClass::SERVICES.to_raw())
             );
             assert_eq!(
                 mismatch
@@ -379,7 +382,7 @@ mod tests {
                     .unwrap()
                     .extract::<u32>()
                     .unwrap(),
-                ErrorCode::INVALID_FILE_ACCESS_METHOD.to_raw() as u32
+                u32::from(ErrorCode::INVALID_FILE_ACCESS_METHOD.to_raw())
             );
             assert_eq!(
                 server

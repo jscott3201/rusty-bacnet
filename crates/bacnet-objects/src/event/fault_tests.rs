@@ -720,10 +720,12 @@ fn writing_reliability_on_an_object_drives_event_state_to_fault() {
     // all — a local or network write of Reliability.
     use crate::analog::AnalogInputObject;
     use crate::traits::BACnetObject;
+    use bacnet_types::enums::EngineeringUnits;
     use bacnet_types::enums::PropertyIdentifier;
     use bacnet_types::primitives::PropertyValue;
 
-    let mut ai = AnalogInputObject::new(1, "ai-1", 62).expect("construct");
+    let mut ai =
+        AnalogInputObject::new(1, "ai-1", EngineeringUnits::DEGREES_CELSIUS).expect("construct");
     assert!(
         ai.evaluate_intrinsic_reporting().is_none(),
         "healthy object has no transition to report"
@@ -759,10 +761,12 @@ fn ticking_an_object_uses_reliability_for_fault_and_recovery() {
     // The running server drives this periodic macro arm.
     use crate::analog::AnalogInputObject;
     use crate::traits::BACnetObject;
+    use bacnet_types::enums::EngineeringUnits;
     use bacnet_types::enums::PropertyIdentifier;
     use bacnet_types::primitives::PropertyValue;
 
-    let mut ai = AnalogInputObject::new(3, "ai-3", 62).expect("construct");
+    let mut ai =
+        AnalogInputObject::new(3, "ai-3", EngineeringUnits::DEGREES_CELSIUS).expect("construct");
     ai.write_property(
         PropertyIdentifier::OUT_OF_SERVICE,
         None,
@@ -808,10 +812,12 @@ fn faulted_object_reports_both_fault_and_in_alarm_status_flags() {
     // Event_State.
     use crate::analog::AnalogInputObject;
     use crate::traits::BACnetObject;
+    use bacnet_types::enums::EngineeringUnits;
     use bacnet_types::enums::PropertyIdentifier;
     use bacnet_types::primitives::{PropertyValue, StatusFlags};
 
-    let mut ai = AnalogInputObject::new(2, "ai-2", 62).expect("construct");
+    let mut ai =
+        AnalogInputObject::new(2, "ai-2", EngineeringUnits::DEGREES_CELSIUS).expect("construct");
     ai.set_reliability_internal(OVER_RANGE)
         .expect("in-service reliability evaluation is supported");
     let proposal = ai

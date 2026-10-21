@@ -2,6 +2,7 @@
 //!
 //! Binds UDP/47808 on the chosen NIC so subnet I-Am broadcasts are received
 //! (required for rusty-bacnet devices that reply with broadcast I-Am).
+#![forbid(unsafe_code)]
 
 use std::net::Ipv4Addr;
 use std::process;

@@ -11,12 +11,12 @@ Suites:
   bip                    Criterion BIP latency and throughput suites
   bip-latency            Criterion BIP latency suite
   bip-throughput         Criterion BIP throughput suite
-  bbmd                   Stress BBMD foreign-device suite
+  bbmd                   Stress BBMD forwarding-capacity suite
   router                 Stress router forwarding suite
   segmentation           Stress segmentation suite
   clients                Stress concurrent-client suite
   objects                Stress object-scale suite
-  whois                  Stress Who-Is/device-scan suite
+  device-scan            Stress device-scan suite (no Who-Is)
 
 Options:
   --repo <path>          Repository checkout to run in (default: current repo)
@@ -144,8 +144,11 @@ case "$suite" in
   objects)
     run_stress objects "100,500,1000,2500,5000"
     ;;
-  whois)
-    run_stress whois "3,10,25"
+  device-scan)
+    # One pass over the devices per step: no duration.
+    selected_steps="${steps:-3,10,25}"
+    run_cargo run --release -p bacnet-benchmarks --bin stress-test -- device-scan \
+      --steps "$selected_steps"
     ;;
   *)
     echo "unknown benchmark suite: $suite" >&2

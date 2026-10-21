@@ -32,6 +32,7 @@ use super::reference_reliability_tests::{
 use super::tests::SettableClock;
 use super::*;
 
+use bacnet_types::enums::EngineeringUnits;
 use PropertyIdentifier as P;
 
 fn msv(instance: u32) -> ObjectIdentifier {
@@ -82,7 +83,12 @@ fn command_and_channel() -> Arc<RwLock<ObjectDatabase>> {
     .unwrap();
     for instance in [1, 2] {
         db.add(Box::new(
-            AnalogOutputObject::new(instance, format!("AO-{instance}"), 62).unwrap(),
+            AnalogOutputObject::new(
+                instance,
+                format!("AO-{instance}"),
+                EngineeringUnits::DEGREES_CELSIUS,
+            )
+            .unwrap(),
         ))
         .unwrap();
     }

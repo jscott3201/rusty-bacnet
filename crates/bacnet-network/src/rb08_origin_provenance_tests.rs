@@ -10,9 +10,9 @@
 
 use super::layer::NetworkLayer;
 use bacnet_encoding::npdu::{encode_npdu, Npdu};
+use bacnet_npdu::NetworkPriority;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::TransportPort;
-use bacnet_types::enums::NetworkPriority;
 use bytes::{Bytes, BytesMut};
 use tokio::time::{timeout, Duration};
 
@@ -23,9 +23,8 @@ async fn legacy_loopback_traffic_reaches_apdu_as_unverified() {
     let mut rx = network.start().await.unwrap();
 
     let npdu = Npdu {
-        is_network_message: false,
         expecting_reply: false,
-        priority: NetworkPriority::NORMAL,
+        priority: NetworkPriority::Normal,
         destination: None,
         source: None,
         hop_count: 255,

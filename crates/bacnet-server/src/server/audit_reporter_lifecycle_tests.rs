@@ -209,7 +209,7 @@ async fn audit_reporter_create_late_initial_value_decode_failure_is_silent_and_r
                 &decoded.list_of_initial_values[1].value,
                 0
             ),
-            Err(Error::Decoding { .. })
+            Err(Error::Decoding(_))
         ));
         let response = dispatch(&fixture.server, ConfirmedServiceChoice::CREATE_OBJECT, data).await;
         let Apdu::Error(error) = response else {
@@ -521,7 +521,8 @@ async fn audit_reporter_lifecycle_denials_and_decode_failures_are_silent() {
         if policy_denial {
             fixture.server.config_mut().mutation_policy = MutationPolicy::DenyAll;
         } else {
-            fixture.server.config_mut().mutation_authorizer = Some(Arc::new(|_| false));
+            fixture.server.config_mut().policy =
+                Some(Arc::new(crate::FnPolicy::new().mutation(|_| false)));
         }
         for (service, request) in [
             (
@@ -540,7 +541,7 @@ async fn audit_reporter_lifecycle_denials_and_decode_failures_are_silent() {
             assert_eq!(error.error_code, ErrorCode::SERVICE_REQUEST_DENIED);
         }
         fixture.server.config_mut().mutation_policy = MutationPolicy::Permissive;
-        fixture.server.config_mut().mutation_authorizer = None;
+        fixture.server.config_mut().policy = None;
         for service in [
             ConfirmedServiceChoice::CREATE_OBJECT,
             ConfirmedServiceChoice::DELETE_OBJECT,

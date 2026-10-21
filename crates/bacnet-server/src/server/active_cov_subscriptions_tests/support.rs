@@ -21,6 +21,7 @@ pub(super) use bacnet_types::constructed::{
     BACnetRecipientProcess,
 };
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
+use bacnet_types::enums::EngineeringUnits;
 
 const DEVICE_INSTANCE: u32 = 813;
 pub(super) const ACTIVE: PropertyIdentifier = PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS;
@@ -258,23 +259,33 @@ impl Wire {
         for &instance in instances {
             db.add(Box::new(
                 DeviceObject::new(DeviceConfig {
-                    instance,
-                    name: format!("Active COV Device {instance}"),
+                    identity: bacnet_objects::DeviceIdentity::new(instance, 0)
+                        .expect("valid Device identity")
+                        .with_name(format!("Active COV Device {instance}")),
                     ..DeviceConfig::default()
                 })
                 .unwrap(),
             ))
             .unwrap();
         }
-        let mut first = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+        let mut first =
+            AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
         first.set_relinquish_default(20.0).unwrap();
         db.add(Box::new(first)).unwrap();
-        db.add(Box::new(AnalogValueObject::new(2, "AV-2", 62).unwrap()))
-            .unwrap();
+        db.add(Box::new(
+            AnalogValueObject::new(2, "AV-2", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+        ))
+        .unwrap();
         Self::start_with_database(config, db).await
     }
 
-    pub(super) async fn start_with_database(config: ServerConfig, db: ObjectDatabase) -> Self {
+    pub(super) async fn start_with_database(mut config: ServerConfig, db: ObjectDatabase) -> Self {
+        config.device = bacnet_objects::DeviceIdentity::new(
+            db.selected_device()
+                .map_or(DEVICE_INSTANCE, |oid| oid.instance_number()),
+            0,
+        )
+        .unwrap();
         let (tx, rx) = mpsc::channel(16);
         let transport = TestTransport::builder()
             .local_mac(&[0x0A, 0, 0, 2, 0xBA, 0xC0])

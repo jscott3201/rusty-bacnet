@@ -9,6 +9,7 @@ use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::command_source::{CommandOrigin, ValueSourceTracking};
 use crate::common::{self, read_common_properties, read_priority_array};
 use crate::object_profile::{ObjectProfile, ProfileState, TagsPersistence};
 use crate::traits::{BACnetObject, DeadlineWaker, MonotonicClock};
@@ -37,6 +38,13 @@ use crate::traits::{BACnetObject, DeadlineWaker, MonotonicClock};
 /// Color_Reference, Color_Override and Override_Color_Reference are absent
 /// until [`set_color_link`](Self::set_color_link) links the output to its
 /// colour objects (#1527).
+///
+/// Value_Source, Value_Source_Array and Last_Command_Time follow each
+/// command's writer per priority (Clause 19.5, #1866), as on the other
+/// commandable objects. A Present_Value or Lighting_Command write must name
+/// its writer (`write_property_from`); one without is WRITE_ACCESS_DENIED.
+/// [`set_lighting_command`](Self::set_lighting_command) names none, so the
+/// slot it acts on reads source NONE.
 ///
 /// High_End_Trim, Low_End_Trim and Trim_Fade_Time are absent until set
 /// (#1528; see [`set_high_end_trim`](Self::set_high_end_trim)). Once set,
@@ -84,6 +92,8 @@ pub struct LightingOutputObject {
     reliability: Reliability,
     priority_array: [Option<f32>; 16],
     relinquish_default: f32,
+    /// Value_Source, Value_Source_Array and Last_Command_Time (#1866).
+    value_source: ValueSourceTracking,
     /// High_End_Trim, Low_End_Trim and Trim_Fade_Time, and a trim change
     /// under way.
     trims: trim::Trims,
@@ -123,6 +133,7 @@ impl LightingOutputObject {
             reliability: Reliability::NO_FAULT_DETECTED,
             priority_array: [None; 16],
             relinquish_default: 0.0,
+            value_source: ValueSourceTracking::default(),
             trims: trim::Trims::NONE,
             color_link: None,
             profile: ProfileState::default(),
@@ -186,17 +197,66 @@ impl LightingOutputObject {
     /// (Clause 12.54.4), so a FADE_TO 0.5 fades to 1.0 while Lighting_Command
     /// still reads 0.5. A proprietary operation is stored and does nothing
     /// else.
+    ///
+    /// The command names no writer, so a slot it acts on reads Value_Source
+    /// NONE, which no one may correct. An application that wants its
+    /// commands sourced (Clause 19.5.1.3) writes Lighting_Command through
+    /// `BACnetServer::write_local` with a `LocalCommandSource` instead.
     pub fn set_lighting_command(&mut self, command: BACnetLightingCommand) -> Result<(), Error> {
         command::check(&command)?;
-        self.take_lighting_command(command);
+        let priority = self.command_priority(&command);
+        self.sourced(priority, None, |object| {
+            object.take_lighting_command(command)
+        });
         Ok(())
     }
 
-    /// Store a checked command and carry it out now.
-    fn take_lighting_command(&mut self, command: BACnetLightingCommand) {
+    /// Store a checked command and carry it out now; `true` when it acted
+    /// on its slot.
+    fn take_lighting_command(&mut self, command: BACnetLightingCommand) -> bool {
         self.lighting_command = command;
         let now = self.now();
-        self.execute(&command, now);
+        self.execute(&command, now)
+    }
+
+    /// Run `act`, a command at `priority`, keeping the sources: when it acts
+    /// on the slot, `origin` becomes the slot's writer (none for an
+    /// application command), and Last_Command_Time moves on when the
+    /// effective value, the active slot or the published source changed.
+    fn sourced(
+        &mut self,
+        priority: u8,
+        origin: Option<&CommandOrigin>,
+        act: impl FnOnce(&mut Self) -> bool,
+    ) {
+        let before = self
+            .value_source
+            .effect(&self.priority_array, self.relinquish_default);
+        if act(self) {
+            let index = usize::from(priority - 1);
+            match origin {
+                Some(origin) => self.value_source.record(index, origin),
+                None => self.value_source.record_unsourced(index),
+            }
+        }
+        let after = self
+            .value_source
+            .effect(&self.priority_array, self.relinquish_default);
+        self.value_source.settle(before, after);
+    }
+
+    /// Advance the engine to `now`. An egress that runs out there finishes
+    /// its command, so Last_Command_Time moves on if that changed the value.
+    fn advance_sourced(&mut self, now: Duration) -> bool {
+        let before = self
+            .value_source
+            .effect(&self.priority_array, self.relinquish_default);
+        let changed = self.advance_to(now);
+        let after = self
+            .value_source
+            .effect(&self.priority_array, self.relinquish_default);
+        self.value_source.settle(before, after);
+        changed
     }
 
     /// Link the output to the colour objects that set its colour, or take
@@ -335,6 +395,12 @@ impl BACnetObject for LightingOutputObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        if let Some(result) = self
+            .value_source
+            .read(property, array_index, &self.priority_array)
+        {
+            return result;
+        }
         if let Some(result) = read_common_properties!(self, property, array_index) {
             return result;
         }
@@ -397,13 +463,24 @@ impl BACnetObject for LightingOutputObject {
         }
     }
 
-    fn write_property(
+    fn write_property_from(
         &mut self,
         property: PropertyIdentifier,
         array_index: Option<u32>,
         value: PropertyValue,
         priority: Option<u8>,
+        origin: &CommandOrigin,
     ) -> Result<(), Error> {
+        if matches!(
+            property,
+            PropertyIdentifier::PRESENT_VALUE | PropertyIdentifier::VALUE_SOURCE
+        ) && array_index.is_some()
+        {
+            return Err(common::property_is_not_an_array_error());
+        }
+        if property == PropertyIdentifier::VALUE_SOURCE {
+            return self.value_source.correct(value, priority, origin);
+        }
         // A level is normalized before it reaches the slot, so the slot,
         // Present_Value, Tracking_Value and a COV report all see 1.0 for a
         // write between 0.0 and 1.0. -1.0, -2.0 and -3.0 are the warn
@@ -414,17 +491,42 @@ impl BACnetObject for LightingOutputObject {
                 return Err(common::value_out_of_range_error());
             }
             let write = engine::PresentValueWrite::decode(value)?;
+            ValueSourceTracking::admit(Some(priority), origin)?;
             let now = self.now();
-            self.write_present_value(priority, write, now);
+            self.sourced(priority, Some(origin), |object| {
+                object.write_present_value(priority, write, now)
+            });
             return Ok(());
         }
-
         // LIGHTING_COMMAND: a BACnetLightingCommand, checked against its
-        // operation, then carried out.
+        // operation, then carried out at its priority by its writer.
         if property == PropertyIdentifier::LIGHTING_COMMAND {
             let command = command::decode_write(value)?;
-            self.take_lighting_command(command);
+            let priority = self.command_priority(&command);
+            ValueSourceTracking::admit(Some(priority), origin)?;
+            self.sourced(priority, Some(origin), |object| {
+                object.take_lighting_command(command)
+            });
             return Ok(());
+        }
+        self.write_property(property, array_index, value, priority)
+    }
+
+    fn write_property(
+        &mut self,
+        property: PropertyIdentifier,
+        array_index: Option<u32>,
+        value: PropertyValue,
+        _priority: Option<u8>,
+    ) -> Result<(), Error> {
+        // The commands need their writer (`write_property_from`, #1866).
+        if matches!(
+            property,
+            PropertyIdentifier::PRESENT_VALUE
+                | PropertyIdentifier::LIGHTING_COMMAND
+                | PropertyIdentifier::VALUE_SOURCE
+        ) {
+            return Err(common::write_access_denied_error());
         }
 
         // LIGHTING_COMMAND_DEFAULT_PRIORITY: 1 to 16, but not 6. Clause
@@ -543,7 +645,7 @@ impl BACnetObject for LightingOutputObject {
 
     fn advance_time_internal(&mut self, elapsed: Duration) -> bool {
         self.logical_now = self.logical_now.saturating_add(elapsed);
-        self.advance_to(self.logical_now)
+        self.advance_sourced(self.logical_now)
     }
 
     fn bind_monotonic_clock_internal(&mut self, clock: Option<Arc<MonotonicClock>>) {
@@ -556,7 +658,7 @@ impl BACnetObject for LightingOutputObject {
 
     fn advance_monotonic_time_internal(&mut self, now: Duration) -> bool {
         self.profile.expire(now);
-        self.advance_to(now)
+        self.advance_sourced(now)
     }
 
     fn next_monotonic_deadline_internal(&self) -> Option<Duration> {
@@ -619,3 +721,6 @@ mod trim_tests;
 
 #[cfg(test)]
 mod color_link_tests;
+
+#[cfg(test)]
+mod value_source_tests;

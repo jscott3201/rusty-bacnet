@@ -189,6 +189,25 @@ impl BufferReadyReporting {
         self.count_restarted_at = total;
     }
 
+    /// Last_Notify_Record, and the Total_Record_Count
+    /// Records_Since_Notification counts from, as a durable log saves them.
+    pub(crate) fn counts(&self) -> (u32, u32) {
+        (self.last_notify_record, self.count_restarted_at)
+    }
+
+    /// Notification_Threshold, which a durable log saves with the counts.
+    pub(crate) fn notification_threshold(&self) -> u32 {
+        self.notification_threshold
+    }
+
+    /// Take back the two counts [`counts`](Self::counts) gave, as a log
+    /// reopened from storage does (#1541), so BUFFER_READY carries on from
+    /// the saved Last_Notify_Record.
+    pub(crate) fn resume(&mut self, last_notify_record: u32, count_restarted_at: u32) {
+        self.last_notify_record = last_notify_record;
+        self.count_restarted_at = count_restarted_at;
+    }
+
     /// Serve one of the event rows for a log whose Total_Record_Count is
     /// `total`, or `None` for any other property.
     pub(crate) fn read(

@@ -15,7 +15,10 @@ async fn endpoint_device_wildcard_accepts_bundled_server_concrete_ack() {
         .build_database()
         .unwrap();
     let mut server = BACnetServer::start_clockless(
-        ServerConfig::default(),
+        ServerConfig {
+            device: bacnet_objects::DeviceIdentity::new(10, 42).unwrap(),
+            ..Default::default()
+        },
         database,
         BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST),
     )
@@ -248,7 +251,7 @@ async fn correlation_matrix(endpoint: bool, routed: bool) {
             assert_eq!(ack.property_value, [0x21, 42]);
         } else {
             assert!(
-                matches!(result, Err(Error::Decoding { .. })),
+                matches!(result, Err(Error::Decoding(_))),
                 "case{i}: {result:?}"
             );
         }

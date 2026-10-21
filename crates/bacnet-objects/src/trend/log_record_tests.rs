@@ -64,8 +64,8 @@ fn trend_logs_refuse_read_property_of_log_buffer() {
     for object in [&trend as &dyn BACnetObject, &multiple] {
         match object.read_property(PropertyIdentifier::LOG_BUFFER, None) {
             Err(Error::Protocol { class, code }) => {
-                assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
-                assert_eq!(code, ErrorCode::READ_ACCESS_DENIED.to_raw() as u32);
+                assert_eq!(class, ErrorClass::PROPERTY);
+                assert_eq!(code, ErrorCode::READ_ACCESS_DENIED);
             }
             other => panic!("expected READ_ACCESS_DENIED, got {other:?}"),
         }
@@ -130,8 +130,8 @@ fn trend_multiple_serves_each_record_framed() {
         vec![
             LogValue::RealValue(10.0),
             LogValue::Failure {
-                error_class: 2,
-                error_code: 32,
+                error_class: ErrorClass::PROPERTY,
+                error_code: ErrorCode::UNKNOWN_PROPERTY,
             },
         ],
     );

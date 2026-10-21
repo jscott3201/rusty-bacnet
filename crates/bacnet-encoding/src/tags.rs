@@ -6,8 +6,12 @@
 //!
 //! Tags also support opening/closing markers for constructed (nested) values.
 
-use bacnet_types::error::Error;
-use bytes::{BufMut, BytesMut};
+use bacnet_types::error::{DecodeError, DecodingKind, Error};
+mod encode;
+
+#[cfg(feature = "alloc")]
+pub use encode::{encode_closing_tag, encode_opening_tag, encode_tag};
+pub use encode::{encode_closing_tag_to_sink, encode_opening_tag_to_sink, encode_tag_to_sink};
 
 /// Tag class: application (datatype) or context (field identifier).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -94,72 +98,6 @@ impl Tag {
 }
 
 // ---------------------------------------------------------------------------
-// Encoding
-// ---------------------------------------------------------------------------
-
-/// Encode a tag header into the buffer.
-///
-/// For application tags, `tag_number` identifies the datatype (0-12).
-/// For context tags, `tag_number` is the field identifier (0-254).
-pub fn encode_tag(buf: &mut BytesMut, tag_number: u8, class: TagClass, length: u32) {
-    let cls_bit = (class as u8) << 3;
-
-    if tag_number <= 14 && length <= 4 {
-        buf.put_u8((tag_number << 4) | cls_bit | (length as u8));
-        return;
-    }
-
-    let tag_nibble = if tag_number <= 14 {
-        tag_number << 4
-    } else {
-        0xF0
-    };
-
-    if length <= 4 {
-        buf.put_u8(tag_nibble | cls_bit | (length as u8));
-        if tag_number > 14 {
-            buf.put_u8(tag_number);
-        }
-        return;
-    }
-
-    buf.put_u8(tag_nibble | cls_bit | 5);
-    if tag_number > 14 {
-        buf.put_u8(tag_number);
-    }
-
-    if length <= 253 {
-        buf.put_u8(length as u8);
-    } else if length <= 65535 {
-        buf.put_u8(254);
-        buf.put_u16(length as u16);
-    } else {
-        buf.put_u8(255);
-        buf.put_u32(length);
-    }
-}
-
-/// Encode a context-specific opening tag.
-pub fn encode_opening_tag(buf: &mut BytesMut, tag_number: u8) {
-    if tag_number <= 14 {
-        buf.put_u8((tag_number << 4) | 0x0E);
-    } else {
-        buf.put_u8(0xFE);
-        buf.put_u8(tag_number);
-    }
-}
-
-/// Encode a context-specific closing tag.
-pub fn encode_closing_tag(buf: &mut BytesMut, tag_number: u8) {
-    if tag_number <= 14 {
-        buf.put_u8((tag_number << 4) | 0x0F);
-    } else {
-        buf.put_u8(0xFF);
-        buf.put_u8(tag_number);
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Decoding
 // ---------------------------------------------------------------------------
 
@@ -207,9 +145,10 @@ pub fn decode_tag(data: &[u8], offset: usize) -> Result<(Tag, usize), Error> {
         }
         tag_number = data[pos];
         if !(15..=254).contains(&tag_number) {
-            return Err(Error::invalid_tag(
+            return Err(header_fault(
                 pos,
-                format!("invalid extended tag number {tag_number}"),
+                "invalid extended tag number {}",
+                tag_number.into(),
             ));
         }
         pos += 1;
@@ -253,9 +192,10 @@ pub fn decode_tag(data: &[u8], offset: usize) -> Result<(Tag, usize), Error> {
 
         match ext {
             0..=4 => {
-                return Err(Error::invalid_tag(
+                return Err(header_fault(
                     pos - 1,
-                    format!("non-canonical extended tag length {ext}"),
+                    "non-canonical extended tag length {}",
+                    ext.into(),
                 ));
             }
             5..=253 => ext as u32,
@@ -265,9 +205,10 @@ pub fn decode_tag(data: &[u8], offset: usize) -> Result<(Tag, usize), Error> {
                 }
                 let len = u16::from_be_bytes([data[pos], data[pos + 1]]) as u32;
                 if len < 254 {
-                    return Err(Error::invalid_tag(
+                    return Err(header_fault(
                         pos,
-                        format!("non-canonical 2-byte extended tag length {len}"),
+                        "non-canonical 2-byte extended tag length {}",
+                        len.into(),
                     ));
                 }
                 pos += 2;
@@ -280,9 +221,10 @@ pub fn decode_tag(data: &[u8], offset: usize) -> Result<(Tag, usize), Error> {
                 let len =
                     u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
                 if len < 65_536 {
-                    return Err(Error::invalid_tag(
+                    return Err(header_fault(
                         pos,
-                        format!("non-canonical 4-byte extended tag length {len}"),
+                        "non-canonical 4-byte extended tag length {}",
+                        len.into(),
                     ));
                 }
                 pos += 4;
@@ -292,10 +234,13 @@ pub fn decode_tag(data: &[u8], offset: usize) -> Result<(Tag, usize), Error> {
     };
 
     if length > MAX_TAG_LENGTH {
-        return Err(Error::overflow(
+        return Err(DecodeError::new(
+            DecodingKind::Overflow,
             offset,
-            format!("tag length ({length}) exceeds sanity limit ({MAX_TAG_LENGTH})"),
-        ));
+            "tag length ({}) exceeds sanity limit ({})",
+        )
+        .with_values(length.into(), MAX_TAG_LENGTH.into())
+        .into());
     }
 
     Ok((
@@ -308,6 +253,24 @@ pub fn decode_tag(data: &[u8], offset: usize) -> Result<(Tag, usize), Error> {
         },
         pos,
     ))
+}
+
+/// A malformed tag header at `offset`, [`DecodingKind::InvalidTag`], naming
+/// the octet's `value`.
+#[cold]
+fn header_fault(offset: usize, label: &'static str, value: u64) -> Error {
+    DecodeError::new(DecodingKind::InvalidTag, offset, label)
+        .with_value(value)
+        .into()
+}
+
+/// No closing tag `tag_number` before the data ends, for the frame whose
+/// contents start at `offset`.
+#[cold]
+fn unclosed(offset: usize, tag_number: u8) -> Error {
+    DecodeError::new(DecodingKind::Missing, offset, "missing closing tag {}")
+        .with_value(tag_number.into())
+        .into()
 }
 
 /// Extract raw bytes enclosed by a context opening/closing tag pair.
@@ -341,12 +304,13 @@ pub fn extract_context_value(
 
         if tag.is_opening {
             if depth == MAX_CONTEXT_NESTING_DEPTH {
-                return Err(Error::invalid_tag(
+                return Err(DecodeError::new(
+                    DecodingKind::InvalidTag,
                     pos,
-                    format!(
-                        "context tag nesting depth exceeds maximum ({MAX_CONTEXT_NESTING_DEPTH})"
-                    ),
-                ));
+                    "context tag nesting depth exceeds maximum ({})",
+                )
+                .with_value(MAX_CONTEXT_NESTING_DEPTH as u64)
+                .into());
             }
             open_tags[depth] = tag.number;
             depth += 1;
@@ -354,13 +318,13 @@ pub fn extract_context_value(
         } else if tag.is_closing {
             let expected = open_tags[depth - 1];
             if tag.number != expected {
-                return Err(Error::invalid_tag(
+                return Err(DecodeError::new(
+                    DecodingKind::InvalidTag,
                     pos,
-                    format!(
-                        "closing tag {} does not match opening tag {expected}",
-                        tag.number
-                    ),
-                ));
+                    "closing tag {} does not match opening tag {}",
+                )
+                .with_values(tag.number.into(), expected.into())
+                .into());
             }
             depth -= 1;
             if depth == 0 {
@@ -381,10 +345,7 @@ pub fn extract_context_value(
         }
     }
 
-    Err(Error::missing(
-        offset,
-        format!("missing closing tag {tag_number}"),
-    ))
+    Err(unclosed(offset, tag_number))
 }
 
 /// Extract raw bytes enclosed by a context opening/closing tag pair WITHOUT
@@ -435,19 +396,18 @@ pub fn extract_raw_context(
         pos += 1;
     }
 
-    Err(Error::missing(
-        value_start,
-        format!("missing closing tag {tag_number}"),
-    ))
+    Err(unclosed(value_start, tag_number))
 }
 
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
-#[cfg(test)]
+// The tests encode with the BytesMut encoders, which need alloc.
+#[cfg(all(test, feature = "alloc"))]
 mod tests {
     use super::*;
+    use bytes::BytesMut;
 
     fn encode_to_vec(tag_number: u8, class: TagClass, length: u32) -> Vec<u8> {
         let mut buf = BytesMut::with_capacity(8);

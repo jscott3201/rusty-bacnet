@@ -176,7 +176,7 @@ impl ForwardBatch {
                     match (&route.local_target, &route.remote) {
                         (Some(mac), None) => {
                             network
-                                .send_apdu(&bytes, mac, true, NetworkPriority::NORMAL)
+                                .send_apdu(&bytes, mac, true, NetworkPriority::Normal)
                                 .await
                         }
                         (None, Some((net, mac, Some(router)))) => {
@@ -187,7 +187,7 @@ impl ForwardBatch {
                                     mac,
                                     router,
                                     true,
-                                    NetworkPriority::NORMAL,
+                                    NetworkPriority::Normal,
                                 )
                                 .await
                         }

@@ -75,8 +75,8 @@ impl BACnetObject for ListObject {
             Ok(PropertyValue::List(self.items.clone()))
         } else {
             Err(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+                class: ErrorClass::PROPERTY,
+                code: ErrorCode::UNKNOWN_PROPERTY,
             })
         }
     }
@@ -89,8 +89,8 @@ impl BACnetObject for ListObject {
         _priority: Option<u8>,
     ) -> Result<(), Error> {
         Err(Error::Protocol {
-            class: ErrorClass::PROPERTY.to_raw() as u32,
-            code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
+            class: ErrorClass::PROPERTY,
+            code: ErrorCode::WRITE_ACCESS_DENIED,
         })
     }
 
@@ -383,8 +383,8 @@ fn by_sequence_rejects_unnumbered_properties_and_misalignment() {
         assert!(matches!(
             error,
             Error::Protocol { class, code }
-                if class == ErrorClass::PROPERTY.to_raw() as u32
-                    && code == ErrorCode::LIST_ITEM_NOT_NUMBERED.to_raw() as u32
+                if class == ErrorClass::PROPERTY
+                    && code == ErrorCode::LIST_ITEM_NOT_NUMBERED
         ));
     }
 }

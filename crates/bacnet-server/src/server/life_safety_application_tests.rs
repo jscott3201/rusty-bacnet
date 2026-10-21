@@ -14,7 +14,7 @@ use bacnet_objects::life_safety::{LifeSafetyPointObject, LifeSafetyZoneObject};
 use bacnet_services::cov::{
     COVNotificationRequest, SubscribeCOVPropertyRequest, SubscribeCOVRequest,
 };
-use bacnet_types::enums::{LifeSafetyState, ObjectType};
+use bacnet_types::enums::{EngineeringUnits, LifeSafetyState, ObjectType};
 use std::collections::BTreeMap;
 
 const TV: PropertyIdentifier = PropertyIdentifier::TRACKING_VALUE;
@@ -37,8 +37,10 @@ async fn start() -> Harness {
             .unwrap();
         db.add(Box::new(LifeSafetyZoneObject::new(1, "LSZ-1").unwrap()))
             .unwrap();
-        db.add(Box::new(AnalogInputObject::new(1, "AI-1", 62).unwrap()))
-            .unwrap();
+        db.add(Box::new(
+            AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+        ))
+        .unwrap();
     })
     .await
 }
@@ -170,7 +172,7 @@ async fn set_out_of_service(h: &Harness, object: ObjectIdentifier, out_of_servic
 fn assert_error(error: Error, class: ErrorClass, code: ErrorCode) {
     assert!(
         matches!(error, Error::Protocol { class: c, code: e }
-            if c == class.to_raw() as u32 && e == code.to_raw() as u32),
+            if c == class && e == code),
         "expected {class:?}/{code:?}, got {error:?}"
     );
 }

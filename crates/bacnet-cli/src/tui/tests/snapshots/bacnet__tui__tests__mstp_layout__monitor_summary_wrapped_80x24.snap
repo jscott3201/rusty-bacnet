@@ -1,0 +1,28 @@
+---
+source: crates/bacnet-cli/src/tui/tests/mstp_layout.rs
+expression: text
+---
+" 1 2 3 [6 MS/TP] 7 | MSTP | listen only | PASSIVE | COV 0 | drop 0       ? help "
+"┌ MS/TP monitor: listen only ──────────────────────────────────────────────────┐"
+"│ /dev/cu.usbserial-B0037OSC  38400 baud  up 10 s  24 stations                 │"
+"│ timestamps ±16 ms  PAUSED                                                    │"
+"│ [Stations]  Token ring   Findings   Errors  Tab: next view                   │"
+"│ Masters   0-31  .MMMMMMMMMMMM...................                             │"
+"│          32-63  ................................                             │"
+"│          64-95  ................................                             │"
+"│          96-127 .....SSSSSSSSSSSS...............                             │"
+"│ Slaves  128-159 ................................                             │"
+"│         160-191 ................................                             │"
+"│         192-223 ................................                             │"
+"│         224-254 ...............................                              │"
+"│ M master  S slave  R router  x silent  . nothing heard                       │"
+"│                                                                              │"
+"│ MAC Role   Device Frames Last heard                                          │"
+"│   1 master      -    132 12 ms ago                                           │"
+"│   2 master      -    132 0 ms ago                                            │"
+"│   3 master      -    130 152 ms ago                                          │"
+"│   4 master      -    130 140 ms ago                                          │"
+"│   5 master      -    130 129 ms ago                                          │"
+"│ +19 more                                                                     │"
+"└──────────────────────────────────────────────────────────────────────────────┘"
+" Tab view  J safe join  z clear  Space pause  x stop  Esc back  ? help  q quit  "

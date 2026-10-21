@@ -1,7 +1,6 @@
 //! IPv4 interface listing for picking the BACnet/IP bind address.
 //!
-//! The shell prompts on stderr and the TUI shows a dialog; both choose from
-//! this list.
+//! The TUI's interface dialog chooses from this list.
 
 use std::net::Ipv4Addr;
 

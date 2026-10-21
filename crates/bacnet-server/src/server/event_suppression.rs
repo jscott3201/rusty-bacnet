@@ -170,22 +170,28 @@ impl EventSuppression {
 
 /// The server's shared storage behind [`EventNotificationCounters`].
 #[derive(Debug, Default)]
-pub(crate) struct EventSuppressions([AtomicU64; 15]);
+pub(crate) struct EventSuppressions {
+    counts: [AtomicU64; 15],
+    /// The throttle on the warning for a notification that reached the
+    /// forwarding cap, one per server (#1950).
+    pub(crate) cap_warning: bacnet_transport::warn_throttle::WarnThrottle,
+}
 
 impl EventSuppressions {
     pub(crate) fn record(&self, suppression: EventSuppression) {
         // Relaxed and independent, like the other server counters: no
         // ordering with the send path is promised.
         #[allow(deprecated, reason = "try_update needs Rust 1.95; the MSRV is 1.93")]
-        let _ =
-            self.0[suppression as usize].fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
-                Some(n.saturating_add(1))
-            });
+        let _ = self.counts[suppression as usize].fetch_update(
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+            |n| Some(n.saturating_add(1)),
+        );
     }
 
     pub(crate) fn snapshot(&self) -> EventNotificationCounters {
         let [notification_class_missing, recipient_list_unavailable, recipient_list_invalid, recipient_list_too_long, device_recipient_unbound, recipient_unroutable, confirmed_broadcast_recipient, confirmed_no_invoke_id, confirmed_rejected, confirmed_unanswered, unconfirmed_send_failed, apdu_too_large, received_not_forwarded, forwarding_cap_dropped, received_not_logged] =
-            self.0.each_ref().map(|n| n.load(Ordering::Relaxed));
+            self.counts.each_ref().map(|n| n.load(Ordering::Relaxed));
         EventNotificationCounters {
             notification_class_missing,
             recipient_list_unavailable,
@@ -270,7 +276,7 @@ mod tests {
     #[test]
     fn counters_saturate_at_u64_max() {
         let counters = EventSuppressions::default();
-        for counter in &counters.0 {
+        for counter in &counters.counts {
             counter.store(u64::MAX - 1, Ordering::Relaxed);
         }
         for _ in 0..3 {
@@ -279,7 +285,7 @@ mod tests {
             }
         }
         assert!(counters
-            .0
+            .counts
             .iter()
             .all(|counter| counter.load(Ordering::Relaxed) == u64::MAX));
     }

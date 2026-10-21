@@ -13,7 +13,9 @@ use crate::loop_obj::LoopObject;
 use crate::schedule::{CalendarObject, ScheduleObject};
 use crate::traits::BACnetObject;
 use crate::trend::{TrendLogMultipleObject, TrendLogObject};
-use bacnet_types::enums::{ErrorClass, ErrorCode, EventState, PropertyIdentifier, Reliability};
+use bacnet_types::enums::{
+    EngineeringUnits, ErrorClass, ErrorCode, EventState, PropertyIdentifier, Reliability,
+};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{PropertyValue, StatusFlags};
 
@@ -141,7 +143,9 @@ fn assert_simulation_and_evaluation_drive_flags(object: &mut dyn BACnetObject) {
 
 #[test]
 fn loop_status_flags_follow_reliability_and_out_of_service() {
-    assert_simulation_and_evaluation_drive_flags(&mut LoopObject::new(1, "LOOP-1", 62).unwrap());
+    assert_simulation_and_evaluation_drive_flags(
+        &mut LoopObject::new(1, "LOOP-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+    );
 }
 
 #[test]
@@ -204,8 +208,8 @@ fn calendar_has_no_status_flags_to_compute() {
             matches!(
                 calendar.read_property(property, None),
                 Err(Error::Protocol { class, code })
-                    if class == ErrorClass::PROPERTY.to_raw() as u32
-                        && code == ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32
+                    if class == ErrorClass::PROPERTY
+                        && code == ErrorCode::UNKNOWN_PROPERTY
             ),
             "Calendar must not serve {property:?}"
         );

@@ -131,7 +131,7 @@ mod tests {
     fn assert_error(error: Error, expected: ErrorCode) {
         assert!(
             matches!(error, Error::Protocol { class, code }
-            if class == ErrorClass::PROPERTY.to_raw() as u32 && code == expected.to_raw() as u32),
+            if class == ErrorClass::PROPERTY && code == expected),
             "expected {expected:?}, got {error:?}"
         );
     }
@@ -541,7 +541,7 @@ mod tests {
                     ),
                     None => assert!(
                         matches!(result, Err(Error::Protocol { class: actual_class, code: actual_code })
-                        if actual_class == u32::from(class.to_raw()) && actual_code == u32::from(code.to_raw()))
+                        if actual_class == class && actual_code == code)
                     ),
                 }
                 assert_eq!(object.read_property(P::ALARM_VALUES, None).unwrap(), at_cap);

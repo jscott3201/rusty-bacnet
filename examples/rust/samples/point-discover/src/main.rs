@@ -1,6 +1,7 @@
 //! Discover a BACnet device (default instance 5007), read its object-list,
 //! fetch point names and present-values, scan priority arrays on commandable
 //! points, print, exit.
+#![forbid(unsafe_code)]
 
 use std::net::Ipv4Addr;
 use std::ops::RangeInclusive;

@@ -93,7 +93,7 @@ async fn delayed_target_audit_apdu_split_preserves_order_and_complete_limit() {
     for frame in f.transport.sent.lock().unwrap().iter() {
         assert!(
             decode_npdu(frame.clone()).unwrap().payload.len()
-                <= f.server.config.max_apdu_length as usize
+                <= u32::from(f.server.config.device.max_apdu_length()) as usize
         );
     }
     f.server.stop().await.unwrap();

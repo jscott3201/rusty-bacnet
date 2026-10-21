@@ -5,8 +5,8 @@
 //! the scenario's buffers in a static; the tables are built on the stack.
 //! Its input and its summary pass through [`core::hint::black_box`], so
 //! none of the work can be optimized away, and then it loops. CI never runs
-//! it: building it proves that `bacnet-bip-core`'s BBMD tables and receive
-//! rules link without `std` or an allocator, and
+//! it: building it proves that `bacnet-bip-core`'s BBMD port, its tables and
+//! its receive rules link without `std` or an allocator, and
 //! `scripts/ci/check-firmware-link.sh` checks its sizes. On a host the
 //! binary is a stub; `tests/bbmd.rs` runs the scenario there.
 //!

@@ -28,7 +28,7 @@ fn select(
     local: &[Ipv4Addr],
     route: Option<Ipv4Addr>,
 ) -> Result<Ipv4Addr, Error> {
-    select_wildcard_bbmd_ip(rows, PORT, local, route, BdtSource::Configured)
+    select_wildcard_bbmd_ip(rows, PORT, local, route, BdtSource::Configured, false)
 }
 
 /// A UDP port that was free a moment ago.
@@ -66,7 +66,7 @@ async fn start_on_free_port(
         let port = free_port();
         let mut transport = build(port);
         let started = transport.start().await;
-        if let Some(path) = &transport.bdt_persist_path {
+        if let Some(path) = transport.bdt_persist_path() {
             let _ = std::fs::remove_file(path);
         }
         match started {
@@ -198,7 +198,7 @@ async fn wildcard_bbmd_uses_its_own_bdt_row_as_origin_and_local_mac() {
     assert_eq!(bbmd.local_mac(), encode_bip_mac(own.0, own.1));
     {
         let state = bbmd.bbmd_state().unwrap().lock().unwrap();
-        assert_eq!(state.local_address(), own);
+        assert_eq!(state.local_pair(), own);
         assert_eq!(state.bdt().len(), 2, "no second self row");
     }
 
@@ -380,7 +380,7 @@ async fn wildcard_bbmd_does_not_fall_back_when_the_persisted_bdt_cannot_choose()
     let text = started.unwrap_err().to_string();
     let expected = format!(
         "the persisted BDT {} has rows for several local IPv4 addresses",
-        bbmd.bdt_persist_path.as_ref().unwrap().display()
+        bbmd.bdt_persist_path().unwrap().display()
     );
     assert!(text.contains(&expected), "{text}");
     assert!(bbmd.socket.is_none() && bbmd.bbmd.is_none());
@@ -440,7 +440,7 @@ async fn restart_chooses_the_bbmd_address_again_and_drops_the_stale_self_row() {
         assert_eq!(bbmd.local_mac(), encode_bip_mac(own.0, own.1));
         {
             let mut state = bbmd.bbmd_state().unwrap().lock().unwrap();
-            assert_eq!(state.local_address(), own);
+            assert_eq!(state.local_pair(), own);
             // The self row appended for LAN is gone, not left behind as a peer.
             assert_eq!(state.bdt(), &[peer_row, loopback_row]);
             assert_eq!(state.fdt().len(), 1, "the FDT survives the restart");
@@ -481,7 +481,7 @@ async fn failed_restart_keeps_the_bbmd_state_and_bdt() {
                 state.register_foreign_device([127, 0, 0, 1], 47809, 60),
                 BvlcResultCode::SUCCESSFUL_COMPLETION
             );
-            (state.local_address(), state.bdt().to_vec())
+            (state.local_pair(), state.bdt().to_vec())
         };
         assert_eq!(own, (LAN.octets(), port));
         bbmd.stop().await.unwrap();
@@ -500,7 +500,7 @@ async fn failed_restart_keeps_the_bbmd_state_and_bdt() {
         assert!(bbmd.socket.is_none() && bbmd.recv_task.is_none());
         {
             let mut state = bbmd.bbmd_state().unwrap().lock().unwrap();
-            assert_eq!(state.local_address(), own);
+            assert_eq!(state.local_pair(), own);
             assert_eq!(state.bdt(), bdt.as_slice());
             assert_eq!(state.fdt().len(), 1);
         }
@@ -514,7 +514,7 @@ async fn failed_restart_keeps_the_bbmd_state_and_bdt() {
         let _rx = started.unwrap();
         {
             let state = bbmd.bbmd_state().unwrap().lock().unwrap();
-            assert_eq!(state.local_address(), (Ipv4Addr::LOCALHOST.octets(), port));
+            assert_eq!(state.local_pair(), (Ipv4Addr::LOCALHOST.octets(), port));
             assert_eq!(state.bdt(), listed.as_slice());
         }
         bbmd.stop().await.unwrap();
@@ -561,7 +561,7 @@ async fn restart_that_would_overflow_the_bdt_fails_with_context_and_keeps_the_st
         );
         assert!(bbmd.socket.is_none());
         let state = bbmd.bbmd_state().unwrap().lock().unwrap();
-        assert_eq!(state.local_address(), (LAN.octets(), port));
+        assert_eq!(state.local_pair(), (LAN.octets(), port));
         assert_eq!(state.bdt(), full.as_slice());
         return;
     }
@@ -585,7 +585,7 @@ async fn explicit_interface_restart_keeps_the_bbmd_address_without_locking_the_s
         let (release, released) = std::sync::mpsc::channel::<()>();
         let holder = std::thread::spawn(move || {
             let guard = state.lock().unwrap();
-            locked_tx.send(guard.local_address()).unwrap();
+            locked_tx.send(guard.local_pair()).unwrap();
             let _ = released.recv();
         });
         let held_address = locked.recv().unwrap();

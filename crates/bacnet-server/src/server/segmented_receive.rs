@@ -1,6 +1,28 @@
 use super::*;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
+    /// Retire a request whose later segment targets a different local endpoint.
+    pub(super) async fn accept_segment_route(
+        network: &Arc<NetworkLayer<T>>,
+        receivers: &mut HashMap<SegRecvKey, SegmentedRequestState>,
+        key: &SegRecvKey,
+        incoming: &bacnet_network::response_route::ResponseRoute,
+    ) -> bool {
+        let Err(opening) = check_opening_response_route(receivers, key, incoming) else {
+            return true;
+        };
+        Self::send_server_abort(
+            network,
+            &opening.source_mac,
+            opening.source_network.as_ref(),
+            &opening.route,
+            key.2,
+            AbortReason::INVALID_APDU_IN_THIS_STATE,
+        )
+        .await;
+        false
+    }
+
     pub(super) async fn reap_expired_requests(
         network: &Arc<NetworkLayer<T>>,
         receivers: &mut HashMap<SegRecvKey, SegmentedRequestState>,
@@ -113,14 +135,14 @@ impl RequestPayload {
             || self.receiver.received_count() >= MAX_REQUEST_SEGMENTS
             || !payload_fits(aggregate, data.len())
         {
-            return Err(Error::Segmentation(
-                "request payload capacity exceeded".into(),
-            ));
+            return Err(bacnet_types::error::SegmentationError::PayloadCapacityExceeded.into());
         }
         let charged = self
             .saved_payload_bytes
             .checked_add(data.len())
-            .ok_or_else(|| Error::Segmentation("request payload accounting overflow".into()))?;
+            .ok_or_else(|| {
+                Error::from(bacnet_types::error::SegmentationError::PayloadAccountingOverflow)
+            })?;
         // Authoritative per-segment validation happens BEFORE copying. Insert
         // the original transiently, then replace the SAME key synchronously
         // with detached bytes of the validated length. No extra charge/save.
@@ -226,23 +248,11 @@ pub(super) fn remove_matching_reassemblies(
 }
 
 /// Validate the active timing/declaration contract before starting network I/O.
-pub(super) fn validate_segment_timeout(
-    config: &ServerConfig,
-    db: &ObjectDatabase,
-) -> Result<Duration, Error> {
-    if config.segmentation_supported.to_raw() > Segmentation::NONE.to_raw() {
-        return Err(Error::Encoding(
-            "invalid server segmentation support".into(),
-        ));
-    }
-    let active = config.segmentation_supported != Segmentation::NONE;
-    if active && config.apdu_segment_timeout_ms == 0 {
-        return Err(Error::Encoding(
-            "APDU segment timeout must be positive".into(),
-        ));
-    }
+pub(super) fn validate_segment_timeout(config: &ServerConfig) -> Result<Duration, Error> {
+    config.device.validate()?;
     let milliseconds = config
-        .apdu_segment_timeout_ms
+        .device
+        .apdu_segment_timeout_ms()
         .checked_mul(4)
         .ok_or_else(|| Error::Encoding("receive segment timeout overflows milliseconds".into()))?;
     let receive_timeout = Duration::from_millis(milliseconds);
@@ -250,24 +260,6 @@ pub(super) fn validate_segment_timeout(
         .checked_add(receive_timeout)
         .and_then(|deadline| deadline.checked_add(Duration::from_nanos(1)))
         .ok_or_else(|| Error::Encoding("receive segment deadline is not representable".into()))?;
-    if let Some(oid) = db.selected_device() {
-        let device = db.get(&oid).expect("selected under same database guard");
-        let declared = device.read_property(PropertyIdentifier::SEGMENTATION_SUPPORTED, None)?;
-        if declared != PropertyValue::Enumerated(u32::from(config.segmentation_supported.to_raw()))
-        {
-            return Err(Error::Encoding(
-                "selected Device Segmentation_Supported must match server configuration".into(),
-            ));
-        }
-        if active
-            && device.read_property(PropertyIdentifier::APDU_SEGMENT_TIMEOUT, None)?
-                != PropertyValue::Unsigned(config.apdu_segment_timeout_ms)
-        {
-            return Err(Error::Encoding(
-                "selected Device APDU_Segment_Timeout must match server configuration".into(),
-            ));
-        }
-    }
     Ok(receive_timeout)
 }
 
@@ -297,10 +289,7 @@ pub(super) fn expire_segmented_requests(
             expired.push(ExpiredRequest {
                 source_mac: state.source_mac.clone(),
                 source_network: state.source_network.clone(),
-                route: bacnet_network::response_route::ResponseRoute::new(
-                    state.provenance,
-                    state.direct_response.clone(),
-                ),
+                route: state.route.clone(),
                 invoke_id: key.2,
             });
             return false;
@@ -361,10 +350,12 @@ pub(super) fn reassembled_confirmed_request(
 }
 
 /// Apply the Clause 5.4.5.2 duplicate or out-of-order receive transition.
+/// Its warnings go through `warning`, the server's segment throttle (#1950).
 pub(super) fn classify_non_next_segment(
     state: &mut SegmentedRequestState,
     invoke_id: u8,
     sequence_number: u8,
+    warning: &WarnThrottle,
 ) -> Option<SegmentAckPdu> {
     let is_duplicate = duplicate_in_window(
         sequence_number,
@@ -383,13 +374,15 @@ pub(super) fn classify_non_next_segment(
     }
 
     if is_duplicate {
-        warn!(
+        warn_throttled!(
+            warning,
             invoke_id,
             seq = sequence_number,
             "Duplicate allowance exhausted, sending negative SegmentAck"
         );
     } else {
-        warn!(
+        warn_throttled!(
+            warning,
             invoke_id,
             expected = state.expected_seq,
             received = sequence_number,
@@ -410,8 +403,7 @@ pub(super) fn classify_non_next_segment(
 /// Segment zero owns the immutable authorization and response snapshots.
 pub(super) fn initial_state(
     payload: RequestPayload,
-    provenance: bacnet_transport::port::TransportProvenance,
-    direct_response: Option<bacnet_transport::port::DirectResponse>,
+    route: bacnet_network::response_route::ResponseRoute,
     source_mac: MacAddr,
     source_network: Option<NpduAddress>,
     request: &ConfirmedRequestPdu,
@@ -423,8 +415,8 @@ pub(super) fn initial_state(
         source_mac,
         source_network,
         payload,
-        provenance,
-        direct_response,
+        provenance: route.provenance(),
+        route,
         last_activity: now,
         last_progress: now,
         expected_seq: 1,
@@ -445,6 +437,26 @@ pub(super) fn initial_state(
     (state, ack)
 }
 
+/// Check a segment against its opening endpoint before any ACK, Abort, or
+/// payload mutation. A conflict retires and returns the opening context for
+/// its terminal Abort. Immediate replies still check the current direct
+/// capability; completion and expiry use the complete saved opening route.
+pub(super) fn check_opening_response_route(
+    receivers: &mut HashMap<SegRecvKey, SegmentedRequestState>,
+    key: &SegRecvKey,
+    incoming: &bacnet_network::response_route::ResponseRoute,
+) -> Result<(), Box<SegmentedRequestState>> {
+    let Some(opening) = receivers.get(key) else {
+        return Ok(());
+    };
+    if opening.route.same_origin(incoming) {
+        return Ok(());
+    }
+    Err(Box::new(
+        receivers.remove(key).expect("opening session exists"),
+    ))
+}
+
 /// A client Abort retires only its matching active reassembly.
 pub(super) fn remove_peer_aborted_request(
     receivers: &mut HashMap<SegRecvKey, SegmentedRequestState>,
@@ -461,5 +473,24 @@ pub(super) fn remove_peer_aborted_request(
             );
             remove_matching_reassemblies(receivers, &key);
         }
+    }
+}
+
+/// Defensive fallback only: carries neither an original route nor DER authority.
+pub(super) fn empty_reassembled_envelope() -> bacnet_network::layer::ReceivedApdu {
+    warn!("received consumed twice - using empty fallback");
+    bacnet_network::layer::ReceivedApdu {
+        router_response: None,
+        direct_response: None,
+        apdu: Bytes::new(),
+        source_mac: MacAddr::new(),
+        ingress_network: None,
+        source_network: None,
+        link_layer_group: false,
+        is_group: false,
+        global_broadcast: false,
+        data_attributes: Vec::new(),
+        provenance: bacnet_transport::port::TransportProvenance::unverified(),
+        reply_tx: None,
     }
 }

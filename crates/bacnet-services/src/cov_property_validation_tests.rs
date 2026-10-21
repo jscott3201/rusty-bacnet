@@ -61,7 +61,7 @@ fn subscribe_cov_property_outbound_pair_validation_is_transactional() {
         let mut output = BytesMut::from(&b"prefix"[..]);
         assert!(matches!(
             request(confirmed, lifetime).encode(&mut output),
-            Err(Error::Encoding(_))
+            Err(Error::Encode(_))
         ));
         assert_eq!(&output[..], b"prefix");
     }

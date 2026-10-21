@@ -7,15 +7,12 @@ use bytes::BytesMut;
 use pyo3::exceptions::{PyDeprecationWarning, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
-use tokio::sync::Mutex;
 
 use bacnet_client::client;
 use bacnet_client::client::WriteGroupDestination;
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_services::alarm_event::AcknowledgeAlarmRequest;
 use bacnet_services::alarm_summary::GetAlarmSummaryAck;
-type ClientInner =
-    Arc<Mutex<Option<Arc<client::BACnetClient<AnyTransport<crate::mstp_py::PySerial>>>>>>;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::cov_multiple::{
     COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
@@ -36,8 +33,6 @@ use bacnet_services::who_has::WhoHasObject;
 use bacnet_services::who_is::DeviceInstanceRange;
 use bacnet_services::write_group::{GroupChannelValue, WriteGroupRequest};
 use bacnet_transport::any::AnyTransport;
-use bacnet_transport::bip::BipTransport;
-use bacnet_transport::bip6::Bip6Transport;
 use bacnet_types::enums::{AcknowledgmentFilter, ConfirmedServiceChoice, UnconfirmedServiceChoice};
 use bacnet_types::primitives::BACnetTimeStamp;
 
@@ -51,6 +46,10 @@ use crate::types::{
     PyObjectType, PyPropertyIdentifier, PyPropertyValue, PyPropertyWrite, PyReadAccessSpec,
     PyReinitializedState, PyWriteAccessSpec,
 };
+use state::started;
+
+type CoreClient = client::BACnetClient<AnyTransport<crate::mstp_py::PySerial>>;
+type ClientInner = Arc<state::ClientState>;
 
 fn validate_write_priority(priority: Option<u8>) -> PyResult<()> {
     bacnet_services::write_property::validate_priority(priority)
@@ -81,6 +80,9 @@ fn device_range(
 ) -> PyResult<Option<DeviceInstanceRange>> {
     DeviceInstanceRange::from_limits(low_limit, high_limit).map_err(|error| match error {
         bacnet_types::error::Error::OutOfRange(message) => PyValueError::new_err(message),
+        bacnet_types::error::Error::Range(refused) => {
+            PyValueError::new_err(refused.message().to_string())
+        }
         other => PyValueError::new_err(other.to_string()),
     })
 }
@@ -117,16 +119,24 @@ pub struct BACnetClient {
     share_port_by_address: bool,
     /// The B/IP mode `bbmd=` or `foreign_device=` asked for (#938).
     bip_mode: bacnet_transport::bip::BipMode,
+    /// The B/IP multicast group `multicast=` asked for (#941).
+    multicast: Option<bacnet_transport::bip::BipMulticast>,
     apdu_timeout_ms: u64,
     // SC config
     sc_hub: Option<String>,
     sc_vmac: Option<Vec<u8>>,
     sc_device_uuid: [u8; 16],
+    sc_npdu_admission_policy: bacnet_transport::sc::ScNpduAdmissionPolicy,
     sc_ca_cert: Option<String>,
     sc_client_cert: Option<String>,
     sc_client_key: Option<String>,
     sc_heartbeat_interval_ms: Option<u64>,
     sc_heartbeat_timeout_ms: Option<u64>,
+    reconnect: Option<bacnet_transport::sc::ScReconnectConfig>,
+    /// The failover hub's URL (#1829); requires `reconnect`.
+    sc_failover_hub: Option<String>,
+    /// The bound on each hub dial and Connect-Request (#1829).
+    sc_connect_timeout_ms: Option<u64>,
     // IPv6 config
     ipv6_interface: Option<String>,
     /// The device instance whose VMAC an ipv6 client uses (H.7.2); `None`
@@ -139,7 +149,9 @@ pub struct BACnetClient {
 }
 
 mod client_methods {
+    mod bbmd_management;
     mod cov_discovery;
+    mod discovery_streams;
     mod enrollment_alarm_covmulti_who_writegroup;
     mod file_list_private_text_life;
     mod foreign_registration;
@@ -147,8 +159,10 @@ mod client_methods {
     mod log_read;
     mod object_device_alarm;
     mod read_write;
+    mod sc_peer;
     mod vt_audit_time_directed;
 }
+mod state;
 
 // ---------------------------------------------------------------------------
 // Helpers

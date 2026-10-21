@@ -22,6 +22,7 @@ use bacnet_objects::value_types::CharacterStringValueObject;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::wpm::WriteAccessSpecification;
 use bacnet_types::constructed::{BACnetDeviceObjectReference, BACnetStageLimitValue};
+use bacnet_types::enums::EngineeringUnits;
 
 fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(object_type, instance).unwrap()
@@ -34,7 +35,7 @@ fn staging(instance: u32, name: &str) -> StagingObject {
         StagingConfig {
             present_value: 0.0,
             min_present_value: -1.0,
-            units: 62,
+            units: EngineeringUnits::DEGREES_CELSIUS,
             priority_for_writing: 8,
             stages: vec![
                 BACnetStageLimitValue {
@@ -68,8 +69,7 @@ fn gating_db() -> ObjectDatabase {
     let mut db = ObjectDatabase::new();
 
     let mut device = DeviceObject::new(DeviceConfig {
-        instance: 1,
-        name: "GateDevice".into(),
+        identity: bacnet_objects::DeviceIdentity::default().with_name("GateDevice"),
         ..Default::default()
     })
     .unwrap();
@@ -80,10 +80,14 @@ fn gating_db() -> ObjectDatabase {
     ]);
     db.add(Box::new(device)).unwrap();
 
-    db.add(Box::new(AnalogInputObject::new(1, "AI-1", 62).unwrap()))
-        .unwrap();
-    db.add(Box::new(AnalogOutputObject::new(1, "AO-1", 62).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+    ))
+    .unwrap();
+    db.add(Box::new(
+        AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+    ))
+    .unwrap();
     db.add(Box::new(MultiStateInputObject::new(1, "MSI-1", 3).unwrap()))
         .unwrap();
     db.add(Box::new(CalendarObject::new(1, "CAL-1").unwrap()))
@@ -173,14 +177,10 @@ fn read_indexed(
 fn assert_not_an_array(result: Result<(), Error>, context: &str) {
     match result {
         Err(Error::Protocol { class, code }) => {
-            assert_eq!(
-                class,
-                ErrorClass::PROPERTY.to_raw() as u32,
-                "{context}: wrong error class"
-            );
+            assert_eq!(class, ErrorClass::PROPERTY, "{context}: wrong error class");
             assert_eq!(
                 code,
-                ErrorCode::PROPERTY_IS_NOT_AN_ARRAY.to_raw() as u32,
+                ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
                 "{context}: wrong error code"
             );
         }
@@ -191,16 +191,8 @@ fn assert_not_an_array(result: Result<(), Error>, context: &str) {
 fn assert_protocol_error(result: Result<(), Error>, expected_code: ErrorCode, context: &str) {
     match result {
         Err(Error::Protocol { class, code }) => {
-            assert_eq!(
-                class,
-                ErrorClass::PROPERTY.to_raw() as u32,
-                "{context}: wrong error class"
-            );
-            assert_eq!(
-                code,
-                expected_code.to_raw() as u32,
-                "{context}: wrong error code"
-            );
+            assert_eq!(class, ErrorClass::PROPERTY, "{context}: wrong error class");
+            assert_eq!(code, expected_code, "{context}: wrong error code");
         }
         other => panic!("{context}: expected PROPERTY/{expected_code:?}, got {other:?}"),
     }
@@ -537,6 +529,7 @@ fn object_level_classification_matrix() {
     // Classification truth source: identifier-stable arrays (Table 12-17/…),
     // identifier-stable lists, and the type-dependent identifiers.
     use bacnet_objects::traits::BACnetObject;
+    use bacnet_types::enums::EngineeringUnits;
 
     let nc = NotificationClass::new(9, "NC-9").unwrap();
     // PRIORITY is BACnetARRAY[3] on Notification Class (Table 12-24).
@@ -569,7 +562,7 @@ fn object_level_classification_matrix() {
     assert!(sv.is_array_property(PropertyIdentifier::SUBORDINATE_LIST));
     assert!(sv.is_array_property(PropertyIdentifier::SUBORDINATE_ANNOTATIONS));
 
-    let ai = AnalogInputObject::new(9, "AI-9", 62).unwrap();
+    let ai = AnalogInputObject::new(9, "AI-9", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     assert!(!ai.is_array_property(PropertyIdentifier::PRESENT_VALUE));
     assert!(ai.is_array_property(PropertyIdentifier::PROPERTY_LIST));
 
@@ -578,7 +571,7 @@ fn object_level_classification_matrix() {
     assert!(csv.is_array_property(PropertyIdentifier::FAULT_VALUES));
     assert!(csv.is_array_property(PropertyIdentifier::PRIORITY_ARRAY));
 
-    let ao = AnalogOutputObject::new(9, "AO-9", 62).unwrap();
+    let ao = AnalogOutputObject::new(9, "AO-9", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     assert!(ao.is_array_property(PropertyIdentifier::PRIORITY_ARRAY));
     assert!(!ao.is_array_property(PropertyIdentifier::PRESENT_VALUE));
 
@@ -779,12 +772,17 @@ fn reference_properties_reject_indexed_read_property() {
     use bacnet_objects::accumulator::PulseConverterObject;
     use bacnet_objects::averaging::AveragingObject;
     use bacnet_objects::loop_obj::LoopObject;
+    use bacnet_types::enums::EngineeringUnits;
 
     let mut db = ObjectDatabase::new();
-    db.add(Box::new(LoopObject::new(1, "LOOP-1", 62).unwrap()))
-        .unwrap();
-    db.add(Box::new(PulseConverterObject::new(1, "PC-1", 62).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        LoopObject::new(1, "LOOP-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+    ))
+    .unwrap();
+    db.add(Box::new(
+        PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+    ))
+    .unwrap();
     db.add(Box::new(AveragingObject::new(1, "AVG-1").unwrap()))
         .unwrap();
 

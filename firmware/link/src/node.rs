@@ -1,17 +1,23 @@
-//! The node image's scenario (#1667).
+//! The node image's scenario (#1667, #1766).
 //!
-//! [`run`] drives a foreign device, a [`Node`] with two exchange slots from
-//! `bacnet-bip-core`, set up as the hosted B/IP transport sets one up
-//! ([`LINK`]): failed attempts retried sooner, backing off; broadcasts held
-//! until the first registration attempt resolves (two here, where the
-//! transport holds 16); Forwarded-NPDUs taken only from its own BBMD, by
-//! unicast; and a send budget that carries B/IP's largest NPDU, 1497
-//! octets. Every datagram goes through `bacnet-bip-codec`, and time is a
-//! fixed timeline of `bacnet-time` instants, which the bip-core re-exports.
-//! It returns a [`Summary`] of what it saw.
+//! [`run`] drives a foreign device through `bacnet-bip-core`'s port driver,
+//! a [`NodePort`] over a [`Node`] with two exchange slots, set up as the
+//! hosted B/IP transport sets one up ([`LINK`]): failed attempts retried
+//! sooner, backing off; broadcasts held until the first registration
+//! attempt resolves (two here, where the transport holds 16, in
+//! [`HeldBroadcast`] slots the port borrows); Forwarded-NPDUs taken only
+//! from its own BBMD, by unicast. Its send budget is sized to what it
+//! sends, the least a link takes ([`BUDGET`]), where the hosted transport
+//! sends B/IP's largest NPDU, 1497 octets: the held slots are only as long
+//! as the link's broadcasts may be, so the budget is the knob that sizes
+//! them ([`HELD_LENGTH`]). The port carries out what the node asks, and
+//! every datagram leaves through the scenario's socket, a [`Datagrams`]
+//! that encodes it with `bacnet-bip-codec`. Time is a fixed timeline of
+//! `bacnet-time` instants, which the bip-core re-exports. It returns a
+//! [`Summary`] of what it saw.
 //!
 //! - **The NAK matrix:** a peer sends each of the six requests only a BBMD
-//!   serves ([`REQUESTS`]); each draws its own NAK, which the node sends
+//!   serves ([`REQUESTS`]); each draws its own NAK, which the port sends
 //!   back.
 //! - **Held broadcasts:** while the first registration attempt is
 //!   outstanding, two broadcasts are held and a third is refused. The
@@ -50,12 +56,13 @@ pub use expected::expected;
 
 use core::net::{Ipv4Addr, SocketAddrV4};
 
-use bacnet_bip_codec::{BdtEntries, BdtEntry, BvlcResultCode, Bvll};
+use bacnet_bip_codec::{BdtEntries, BdtEntry, BvlcResultCode, Bvll, HEADER_LENGTH};
 use bacnet_bip_core::node::{
-    Action, Addressed, Admission, AttemptOutcome, Cast, Datagram, Discard, Foreign, ForwardedTrust,
-    Inbound, Link, Mode, Node, NodeCounters, Permissive, RegisterAttempt, RegistrationEvent,
-    RegistrationSnapshot, Retry, SendRefusal,
+    Addressed, Admission, AttemptOutcome, Cast, Datagram, Discard, Foreign, ForwardedTrust, Link,
+    Mode, Node, NodeCounters, Permissive, RegisterAttempt, RegistrationSnapshot, Retry,
+    SendRefusal, MIN_BUDGET,
 };
+use bacnet_bip_core::port::{Datagrams, HeldBroadcast, Ingress, NodePort};
 use bacnet_bip_core::{Duration, Instant, LocalSubnet};
 
 use crate::tally::Sent;
@@ -65,6 +72,23 @@ pub const EXCHANGES: usize = 2;
 
 /// The node as the image builds it.
 pub type ForeignNode = Node<EXCHANGES>;
+
+/// The node's datagram budget: the least a link takes, 64 octets, ample
+/// for the scenario's 8-octet Who-Is. The hosted transport's links send
+/// B/IP's largest datagram, 1507 octets, with NPDUs of up to 1497; firmware
+/// sizes its budget to the NPDUs it sends.
+pub const BUDGET: u16 = MIN_BUDGET;
+
+/// The longest broadcast the link sends, so the length of a held slot: the
+/// budget less the 4-octet header and the 6-octet originating address a
+/// BBMD adds when it forwards the broadcast ([`Link::max_npdu`] for
+/// [`Cast::Broadcast`]), 54 octets. [`NodePort::new`] refuses slots shorter
+/// than that.
+pub const HELD_LENGTH: usize = BUDGET as usize - HEADER_LENGTH - 6;
+
+/// The port over the node, holding broadcasts in slots of [`HELD_LENGTH`]
+/// octets.
+pub type ForeignPort<'m> = NodePort<'m, EXCHANGES, HELD_LENGTH>;
 
 /// The broadcasts the node holds until its first registration attempt
 /// resolves: two, where the hosted transport holds 16, since firmware keeps
@@ -101,12 +125,16 @@ pub const FOREIGN: Foreign = {
     foreign
 };
 
-/// The node's link, with [`Link::new`]'s send budget, B/IP's largest
-/// datagram ([`MAX_DATAGRAM`](bacnet_bip_core::node::MAX_DATAGRAM)), so
-/// NPDUs of up to 1497 octets go out, unicast or broadcast. It is checked
-/// when the image is built.
+/// The node's link, with a send budget of [`BUDGET`] octets in place of
+/// [`Link::new`]'s, B/IP's largest datagram
+/// ([`MAX_DATAGRAM`](bacnet_bip_core::node::MAX_DATAGRAM)), which the hosted
+/// transport keeps. It is checked when the image is built, and again by
+/// [`Node::new`].
 pub const LINK: Link = match Link::new(OWN, SUBNET, Mode::Foreign(FOREIGN)) {
-    Ok(link) => link,
+    Ok(mut link) => {
+        link.budget = Some(BUDGET);
+        link
+    }
     Err(_) => panic!("the scenario's link is invalid"),
 };
 
@@ -132,21 +160,31 @@ pub const REQUESTS: [Bvll<'static>; 6] = [
 /// Forwarded-NPDU, takes 18.
 const WIRE_LENGTH: usize = 64;
 
-/// Storage the scenario works in besides its stack: one buffer for the
-/// datagram on its way in or out. The node itself, a few hundred octets, is
-/// built on the stack.
+/// Storage the scenario works in besides its stack: a buffer for the
+/// datagram received, which the port reads in place, one for the datagram
+/// sent, which the socket encodes into, and the slots the port holds
+/// broadcasts in, one for each the node holds ([`HOLD`]), each as long as
+/// the link's broadcasts may be. The node and its port, a few hundred
+/// octets, are built on the stack.
 ///
-/// The image keeps it in a static, so the linker counts it in `.bss`.
+/// [`Memory::new`] is all zero bits, so the image keeps it in a static that
+/// the linker places in `.bss`.
 pub struct Memory {
-    /// The datagram being received or sent.
-    wire: [u8; WIRE_LENGTH],
+    /// The datagram received.
+    rx: [u8; WIRE_LENGTH],
+    /// The datagram sent.
+    tx: [u8; WIRE_LENGTH],
+    /// The broadcasts held for the first registration.
+    held: [HeldBroadcast<HELD_LENGTH>; HOLD as usize],
 }
 
 impl Memory {
     /// Empty storage.
     pub const fn new() -> Self {
         Self {
-            wire: [0; WIRE_LENGTH],
+            rx: [0; WIRE_LENGTH],
+            tx: [0; WIRE_LENGTH],
+            held: [HeldBroadcast::EMPTY; HOLD as usize],
         }
     }
 }
@@ -159,8 +197,8 @@ impl Default for Memory {
 
 /// Room for the registration attempts the scenario makes.
 pub const ATTEMPTS: usize = 8;
-/// Room for the registration events it sees.
-pub const EVENTS: usize = 10;
+/// Room for the leases the BBMD's successes prove.
+pub const LEASES: usize = 6;
 /// Room for the broadcasts it asks to send.
 pub const ADMISSIONS: usize = 4;
 
@@ -172,29 +210,28 @@ pub struct Summary {
     pub max_npdu: [usize; 2],
     /// For each of [`REQUESTS`], where its NAK went and its code.
     pub naks: [Option<(SocketAddrV4, BvlcResultCode)>; REQUESTS.len()],
-    /// What the node said to each broadcast the scenario asked to send.
+    /// What the port said to each broadcast the scenario asked to send.
     pub admissions: [Option<Result<Admission, SendRefusal>>; ADMISSIONS],
-    /// Held broadcasts sent when the node released them.
+    /// Held broadcasts the port sent when the node released them.
     pub released: u8,
     /// The BBMD's Forwarded-NPDU: the source it was delivered from, and
     /// whether as a broadcast.
     pub forwarded: Option<(SocketAddrV4, bool)>,
     /// Why the other sender's Forwarded-NPDU was dropped.
     pub untrusted: Option<Discard>,
-    /// What the node made of the Distribute-Broadcast-To-Network NAK: the
-    /// code of a result that answers none of its exchanges, and whether it
-    /// came just after one ended.
-    pub hint: Option<(Option<BvlcResultCode>, bool)>,
-    /// When each registration attempt started, in order.
+    /// When each registration attempt went out, in order.
     pub attempts: [Option<Instant>; ATTEMPTS],
-    /// Each registration event, in order.
-    pub events: [Option<RegistrationEvent>; EVENTS],
+    /// The lease, as its start and end, after each success the BBMD
+    /// answered with, in order.
+    pub leases: [Option<(Instant, Instant)>; LEASES],
     /// The registration at the end.
     pub registration: Option<RegistrationSnapshot>,
     /// Everything the node counted, taken once, at the end.
     pub counters: NodeCounters,
-    /// Every datagram the node sent.
+    /// Every datagram the port sent.
     pub sent: Sent,
+    /// Datagrams of the port's own its socket refused.
+    pub refused: u32,
     /// Calls that failed or answered otherwise than the scenario expects.
     /// Zero in a good run.
     pub errors: u8,
@@ -209,12 +246,12 @@ impl Summary {
             released: 0,
             forwarded: None,
             untrusted: None,
-            hint: None,
             attempts: [None; ATTEMPTS],
-            events: [None; EVENTS],
+            leases: [None; LEASES],
             registration: None,
             counters: NodeCounters::default(),
             sent: Sent::new(),
+            refused: 0,
             errors: 0,
         }
     }
@@ -334,283 +371,274 @@ const ROUND_TRIP: Duration = Duration::from_millis(10);
 /// The success the BBMD answers a registration with.
 const SUCCESS: BvlcResultCode = BvlcResultCode::SUCCESSFUL_COMPLETION;
 
-/// The most actions one call may queue before the scenario counts an error
-/// and moves on, so a runaway node can't hang it.
-const MAX_ACTIONS: usize = 8;
-
 /// The most deadlines the scenario waits through for the lease to lapse.
 const MAX_WAITS: usize = 16;
 
-/// Run the whole scenario in `memory`. The node is built on this function's
-/// stack.
+/// Run the whole scenario in `memory`. The node and its port are built on
+/// this function's stack.
 ///
 /// It never panics on a failed call: it counts the failure in
 /// [`Summary::errors`] and carries on, or returns early when it can't.
 pub fn run(memory: &mut Memory) -> Summary {
+    let Memory { rx, tx, held } = memory;
     let mut summary = Summary::new();
     summary.max_npdu = [LINK.max_npdu(Cast::Unicast), LINK.max_npdu(Cast::Broadcast)];
-    match ForeignNode::new(LINK, at(0)) {
-        Ok(mut node) => Device {
-            node: &mut node,
-            wire: &mut memory.wire,
+    let Ok(node) = ForeignNode::new(LINK, at(0)) else {
+        summary.error();
+        return summary;
+    };
+    let Ok(mut port) = ForeignPort::new(node, held) else {
+        summary.error();
+        return summary;
+    };
+    Device {
+        port: &mut port,
+        rx,
+        socket: Socket {
+            tx,
             now: at(0),
-            held: 0,
+            result: None,
             summary: &mut summary,
-        }
-        .run(),
-        Err(_) => summary.error(),
+        },
     }
+    .run();
     summary
 }
 
 /// What became of a received datagram, without its borrow of the buffer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Seen {
-    /// A NAK to send.
+    /// The port sent this NAK.
     Nak(SocketAddrV4, BvlcResultCode),
     /// An NPDU delivered, from this source, as a broadcast or not.
     Delivered(SocketAddrV4, bool),
     /// Dropped.
     Discarded(Discard),
-    /// The answer to an exchange, which it ended.
-    Settled,
-    /// A result that answers no exchange: its code, and whether it came
-    /// just after one ended.
-    Unmatched(Option<BvlcResultCode>, bool),
-    /// Anything else.
-    Other,
+    /// Handled at the port, with no answer: a response the node took.
+    Handled,
 }
 
-/// The device around the node: it sends what the node asks, keeps the held
-/// broadcasts, and keeps the time.
-struct Device<'m> {
-    node: &'m mut ForeignNode,
-    wire: &'m mut [u8],
+/// The node's socket: it encodes each datagram into `tx`, keeps the
+/// summary's tally of it, and notes what it was.
+struct Socket<'m> {
+    tx: &'m mut [u8],
+    /// The scenario's clock, for the attempts it notes.
     now: Instant,
-    /// Broadcasts the device keeps until the node releases them.
-    held: u8,
+    /// The NAK the port sent during the call, if any.
+    result: Option<(SocketAddrV4, BvlcResultCode)>,
     summary: &'m mut Summary,
 }
 
-impl Device<'_> {
+impl Datagrams for Socket<'_> {
+    fn send(&mut self, to: SocketAddrV4, message: &Bvll<'_>) -> Result<(), SendRefusal> {
+        let summary = &mut *self.summary;
+        if summary.sent.send(self.tx, to, message).is_none() {
+            summary.error();
+            return Err(SendRefusal::SocketError);
+        }
+        match *message {
+            Bvll::RegisterForeignDevice { ttl: TTL } if to == BBMD => {
+                record(&mut summary.attempts, self.now, &mut summary.errors);
+            }
+            Bvll::BvlcResult(code) => self.result = Some((to, code)),
+            // Every broadcast is the one Who-Is, to the BBMD.
+            Bvll::DistributeBroadcastToNetwork(npdu) if npdu == WHO_IS && to == BBMD => {}
+            _ => summary.error(),
+        }
+        Ok(())
+    }
+}
+
+/// The device around the port: it plays the network, and keeps the time.
+struct Device<'d, 'm> {
+    port: &'d mut ForeignPort<'m>,
+    rx: &'d mut [u8],
+    socket: Socket<'d>,
+}
+
+impl Device<'_, '_> {
     fn run(&mut self) {
         // The first registration attempt is due at once.
-        self.drain();
+        self.port.start(self.socket.now, &mut self.socket);
 
         // The NAK matrix, from a peer on the subnet.
-        self.now = at(1);
+        self.at(1);
         for (index, request) in REQUESTS.iter().enumerate() {
             let nak = match self.receive(request, PEER) {
-                Seen::Nak(to, code) => {
-                    self.send(to, &Bvll::BvlcResult(code));
-                    Some((to, code))
-                }
+                Seen::Nak(to, code) => Some((to, code)),
                 _ => None,
             };
-            if let Some(slot) = self.summary.naks.get_mut(index) {
+            if let Some(slot) = self.socket.summary.naks.get_mut(index) {
                 *slot = nak;
             }
         }
 
         // Three broadcasts before the BBMD answers: two held, one refused.
         for millis in [2, 3, 4] {
-            self.now = at(millis);
+            self.at(millis);
             self.broadcast();
         }
         // The BBMD's success registers the node and releases the two.
-        self.now = at(10);
-        self.expect(SUCCESS, Seen::Settled);
+        self.at(10);
+        let before = self.socket.summary.sent.count;
+        self.success();
+        let released = self.socket.summary.sent.count.saturating_sub(before);
+        self.socket.summary.released = released;
 
         // A forwarded broadcast from the BBMD, and one from a stranger.
-        self.now = at(20);
+        self.at(20);
         let forwarded = Bvll::ForwardedNpdu {
             origin: ORIGIN,
             npdu: &WHO_IS,
         };
         match self.receive(&forwarded, BBMD) {
-            Seen::Delivered(source, group) => self.summary.forwarded = Some((source, group)),
-            _ => self.summary.error(),
+            Seen::Delivered(source, group) => {
+                self.socket.summary.forwarded = Some((source, group));
+            }
+            _ => self.socket.summary.error(),
         }
         match self.receive(&forwarded, STRANGER) {
-            Seen::Discarded(reason) => self.summary.untrusted = Some(reason),
-            _ => self.summary.error(),
+            Seen::Discarded(reason) => self.socket.summary.untrusted = Some(reason),
+            _ => self.socket.summary.error(),
         }
 
         // The renewal, one interval into the lease.
         self.wait();
-        self.answer(SUCCESS);
+        self.answer();
 
         // A broadcast the BBMD refuses with the DBTN NAK: the renewal comes
         // at once.
-        self.now = at(39_990);
+        self.at(39_990);
         self.broadcast();
-        self.now = at(40_000);
+        self.at(40_000);
         let code = BvlcResultCode::DISTRIBUTE_BROADCAST_TO_NETWORK_NAK;
-        match self.receive(&Bvll::BvlcResult(code), BBMD) {
-            Seen::Unmatched(code, late) => self.summary.hint = Some((code, late)),
-            _ => self.summary.error(),
+        if self.receive(&Bvll::BvlcResult(code), BBMD) != Seen::Handled {
+            self.socket.summary.error();
         }
-        self.answer(SUCCESS);
+        self.answer();
 
         // The BBMD stops answering: the attempts back off until the lease
         // lapses, as a new attempt starts.
         for _ in 0..MAX_WAITS {
             self.wait();
-            if self
-                .summary
-                .events
-                .contains(&Some(RegistrationEvent::Lapsed))
-            {
+            let lapsed = self
+                .port
+                .node()
+                .registration(self.socket.now)
+                .is_some_and(|snapshot| !snapshot.registered);
+            if lapsed {
                 break;
             }
         }
         // It answers again: registered once more, and renewed at once, since
         // that lease started at an attempt it left unanswered.
-        self.answer(SUCCESS);
-        self.answer(SUCCESS);
+        self.answer();
+        self.answer();
 
-        self.summary.registration = self.node.registration(self.now);
-        self.summary.counters = self.node.take_counters();
+        let now = self.socket.now;
+        let registration = self.port.node().registration(now);
+        let counters = self.port.node_mut().take_counters();
+        let refused = self.port.take_counters().refused;
+        let summary = &mut *self.socket.summary;
+        summary.registration = registration;
+        summary.counters = counters;
+        summary.refused = refused;
     }
 
-    /// The BBMD answers with `code` one round trip later, settling the
-    /// attempt in flight.
-    fn answer(&mut self, code: BvlcResultCode) {
-        self.now += ROUND_TRIP;
-        self.expect(code, Seen::Settled);
+    /// Let the clock run on to `millis` milliseconds into the timeline.
+    fn at(&mut self, millis: u64) {
+        self.socket.now = self.socket.now.max(at(millis));
     }
 
-    /// The BBMD sends a result with `code` now, which the node should take
-    /// as `seen`.
-    fn expect(&mut self, code: BvlcResultCode, seen: Seen) {
-        if self.receive(&Bvll::BvlcResult(code), BBMD) != seen {
-            self.summary.error();
+    /// The BBMD answers the attempt in flight with success one round trip
+    /// later.
+    fn answer(&mut self) {
+        self.socket.now += ROUND_TRIP;
+        self.success();
+    }
+
+    /// The BBMD's success arrives now and settles the attempt in flight:
+    /// note the lease it proves.
+    fn success(&mut self) {
+        if self.receive(&Bvll::BvlcResult(SUCCESS), BBMD) != Seen::Handled {
+            self.socket.summary.error();
+        }
+        let now = self.socket.now;
+        match self
+            .port
+            .node()
+            .registration(now)
+            .and_then(|view| view.lease)
+        {
+            Some(lease) => {
+                let summary = &mut *self.socket.summary;
+                record(
+                    &mut summary.leases,
+                    (lease.since, lease.until),
+                    &mut summary.errors,
+                );
+            }
+            None => self.socket.summary.error(),
         }
     }
 
-    /// Hand the node `message` from `source`, sent to its own address, and
-    /// carry out what it asks.
+    /// Hand the port `message` from `source`, sent to the node's own
+    /// address.
     fn receive(&mut self, message: &Bvll<'_>, source: SocketAddrV4) -> Seen {
-        let Ok(length) = message.encode_into(self.wire) else {
-            self.summary.error();
-            return Seen::Other;
+        let Ok(length) = message.encode_into(self.rx) else {
+            self.socket.summary.error();
+            return Seen::Handled;
         };
-        let Some(payload) = self.wire.get(..length) else {
-            self.summary.error();
-            return Seen::Other;
+        let Some(payload) = self.rx.get(..length) else {
+            self.socket.summary.error();
+            return Seen::Handled;
         };
         let to = Addressed {
             node: true,
             broadcast: false,
         };
         let datagram = Datagram::new(payload, source, Some(to));
-        let seen = match self.node.receive(&datagram, self.now, &mut Permissive) {
-            Inbound::Nak {
-                to,
-                code,
-                malformed: false,
-            } => Seen::Nak(to, code),
-            Inbound::Deliver(delivery) => {
+        self.socket.result = None;
+        let now = self.socket.now;
+        match self
+            .port
+            .receive(&datagram, now, &mut Permissive, &mut self.socket)
+        {
+            Ingress::Npdu(delivery) => {
                 if delivery.npdu != WHO_IS {
-                    self.summary.error();
+                    self.socket.summary.error();
                 }
                 Seen::Delivered(delivery.source, delivery.group)
             }
-            Inbound::Discarded(reason) => Seen::Discarded(reason),
-            Inbound::Matched {
-                accepted: true,
-                settled: true,
-                ..
-            } => Seen::Settled,
-            Inbound::Unmatched { code, late, .. } => Seen::Unmatched(code, late),
-            _ => Seen::Other,
-        };
-        self.drain();
-        seen
+            Ingress::Discarded(reason) => Seen::Discarded(reason),
+            Ingress::Handled => match self.socket.result {
+                Some((to, code)) => Seen::Nak(to, code),
+                None => Seen::Handled,
+            },
+            _ => {
+                self.socket.summary.error();
+                Seen::Handled
+            }
+        }
     }
 
-    /// Ask to broadcast a Who-Is now: send it, hold it, or drop it, as the
-    /// node says.
+    /// Ask the port to broadcast a Who-Is now: sent, held, or refused.
     fn broadcast(&mut self) {
-        let admission = self.node.admit_broadcast(self.now);
-        match self
-            .summary
-            .admissions
-            .iter_mut()
-            .find(|slot| slot.is_none())
-        {
-            Some(slot) => *slot = Some(admission),
-            None => self.summary.error(),
-        }
-        match admission {
-            Ok(Admission::Send) => self.send_broadcast(),
-            Ok(Admission::Hold) => self.held = self.held.saturating_add(1),
-            Err(_) => {}
-        }
-        self.drain();
-    }
-
-    /// Send a Who-Is as the link broadcasts it: to the BBMD, as a
-    /// Distribute-Broadcast-To-Network.
-    fn send_broadcast(&mut self) {
-        match self.node.link().broadcast(&WHO_IS) {
-            Ok((outgoing, _)) => self.send(outgoing.to, &outgoing.message),
-            Err(_) => self.summary.error(),
-        }
-    }
-
-    /// Encode `message` and send it to `to`.
-    fn send(&mut self, to: SocketAddrV4, message: &Bvll<'_>) {
-        if self.summary.sent.send(self.wire, to, message).is_none() {
-            self.summary.error();
-        }
+        let now = self.socket.now;
+        let admission = self.port.broadcast(&WHO_IS, now, &mut self.socket);
+        let summary = &mut *self.socket.summary;
+        record(&mut summary.admissions, admission, &mut summary.errors);
     }
 
     /// Let time run to the node's next deadline, and do what falls due.
     fn wait(&mut self) {
-        let Some(deadline) = self.node.next_deadline() else {
-            self.summary.error();
+        let Some(deadline) = self.port.next_deadline() else {
+            self.socket.summary.error();
             return;
         };
-        self.now = self.now.max(deadline);
-        self.node.on_deadline(self.now);
-        self.drain();
-    }
-
-    /// Poll the node's actions until it has none, carrying out each one.
-    fn drain(&mut self) {
-        for _ in 0..MAX_ACTIONS {
-            match self.node.poll_action() {
-                Action::Idle => return,
-                action @ Action::Register { exchange, to, .. } => {
-                    record(
-                        &mut self.summary.attempts,
-                        self.now,
-                        &mut self.summary.errors,
-                    );
-                    match action.message() {
-                        Some(message) => self.send(to, &message),
-                        None => self.summary.error(),
-                    }
-                    // Nothing has answered it yet, so nothing settles.
-                    if self.node.exchange_sent(exchange, self.now) {
-                        self.summary.error();
-                    }
-                }
-                Action::Registration(event) => {
-                    record(&mut self.summary.events, event, &mut self.summary.errors);
-                }
-                Action::ReleaseHeld => {
-                    for _ in 0..self.held {
-                        self.send_broadcast();
-                        self.summary.released = self.summary.released.saturating_add(1);
-                    }
-                    self.held = 0;
-                }
-                Action::DiscardHeld | Action::ExchangeEnded { .. } => self.summary.error(),
-            }
-        }
-        self.summary.error();
+        self.socket.now = self.socket.now.max(deadline);
+        let now = self.socket.now;
+        self.port.on_deadline(now, &mut self.socket);
     }
 }
 

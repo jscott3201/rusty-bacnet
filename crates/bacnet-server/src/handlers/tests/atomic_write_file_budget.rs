@@ -6,6 +6,7 @@ use bacnet_objects::file::{
 use bacnet_services::file::{
     AtomicWriteFileAck, AtomicWriteFileRequest, FileWriteAccessMethod, FileWriteAckMethod,
 };
+use bacnet_types::enums::AbortReason;
 use std::{
     borrow::Cow,
     sync::{
@@ -92,16 +93,17 @@ impl FileStorage for Probe {
 }
 fn backend_error(kind: u8) -> Error {
     if kind == 2 {
-        Error::Abort { reason: 9 }
+        Error::Abort {
+            reason: AbortReason::OUT_OF_RESOURCES,
+        }
     } else {
         Error::Protocol {
             class: if kind == 0 {
                 ErrorClass::OBJECT
             } else {
                 ErrorClass::SERVICES
-            }
-            .to_raw() as u32,
-            code: ErrorCode::FILE_FULL.to_raw() as u32,
+            },
+            code: ErrorCode::FILE_FULL,
         }
     }
 }

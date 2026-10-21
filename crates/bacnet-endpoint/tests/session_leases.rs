@@ -15,7 +15,9 @@ use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_services::read_property::ReadPropertyRequest;
 use bacnet_transport::loopback::LoopbackTransport;
-use bacnet_types::enums::{ConfirmedServiceChoice, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{
+    ConfirmedServiceChoice, EngineeringUnits, ObjectType, PropertyIdentifier,
+};
 use bytes::BytesMut;
 
 const WAIT: Duration = Duration::from_secs(2);
@@ -32,7 +34,8 @@ fn session_config() -> SessionConfig {
 
 fn database_with_analog(instance: u32, value: f32) -> ObjectDatabase {
     let mut db = ObjectDatabase::new();
-    let mut analog = AnalogInputObject::new(instance, "lease-input", 0).unwrap();
+    let mut analog =
+        AnalogInputObject::new(instance, "lease-input", EngineeringUnits::SQUARE_METERS).unwrap();
     analog.set_present_value(value);
     db.add(Box::new(analog)).unwrap();
     db
@@ -139,7 +142,7 @@ async fn lost_consumer_routes_to_policy_without_hanging() {
         &encoded,
         &[0x01],
         true,
-        bacnet_types::enums::NetworkPriority::NORMAL,
+        bacnet_npdu::NetworkPriority::Normal,
     )
     .await
     .unwrap();
@@ -200,7 +203,7 @@ async fn full_ingress_queue_overflows_to_policy() {
             &encoded,
             &[0x01],
             true,
-            bacnet_types::enums::NetworkPriority::NORMAL,
+            bacnet_npdu::NetworkPriority::Normal,
         )
         .await
         .unwrap();
@@ -239,7 +242,7 @@ async fn full_ingress_queue_overflows_to_policy() {
                     &encoded,
                     &[0x01],
                     true,
-                    bacnet_types::enums::NetworkPriority::NORMAL,
+                    bacnet_npdu::NetworkPriority::Normal,
                 )
                 .await
                 .unwrap();
@@ -290,14 +293,9 @@ async fn malformed_apdu_is_policy_owned() {
     let _peer_rx = peer.start().await.unwrap();
 
     // Und decodable APDU (empty payload decodes as malformed at classifier).
-    peer.send_apdu(
-        &[],
-        &[0x01],
-        false,
-        bacnet_types::enums::NetworkPriority::NORMAL,
-    )
-    .await
-    .unwrap();
+    peer.send_apdu(&[], &[0x01], false, bacnet_npdu::NetworkPriority::Normal)
+        .await
+        .unwrap();
 
     let deadline = tokio::time::Instant::now() + WAIT;
     loop {

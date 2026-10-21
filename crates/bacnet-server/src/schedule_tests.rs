@@ -18,6 +18,7 @@ use bytes::BytesMut;
 
 use super::*;
 use crate::handlers::{handle_read_property, handle_write_property};
+use bacnet_types::enums::EngineeringUnits;
 
 /// A Device clock a test moves by hand.
 pub(crate) struct SettableClock(Mutex<ClockFrame>);
@@ -91,8 +92,10 @@ fn database(clock: &Arc<SettableClock>, mut schedule: ScheduleObject) -> ObjectD
         DeviceObject::new(DeviceConfig::default()).unwrap(),
     ))
     .unwrap();
-    db.add(Box::new(AnalogOutputObject::new(2, "AO-2", 62).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AnalogOutputObject::new(2, "AO-2", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+    ))
+    .unwrap();
     db.add(Box::new(schedule)).unwrap();
     db
 }

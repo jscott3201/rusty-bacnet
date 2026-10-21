@@ -215,8 +215,9 @@ async fn local_server(
     let mut db = ObjectDatabase::new();
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
-            instance: 100,
-            name: "Notification Class device".into(),
+            identity: bacnet_objects::DeviceIdentity::new(100, 0)
+                .expect("valid Device identity")
+                .with_name("Notification Class device"),
             ..DeviceConfig::default()
         })
         .unwrap(),
@@ -226,6 +227,7 @@ async fn local_server(
     let nc = class.object_identifier();
     db.add(Box::new(class)).unwrap();
     let server = BACnetServer::generic_builder()
+        .device(bacnet_objects::DeviceIdentity::new(100, 0).unwrap())
         .transport(TestTransport::new())
         .database(db)
         .enable_event_enrollment(false)
@@ -340,7 +342,10 @@ async fn a_list_that_cannot_be_saved_is_refused_on_every_path_and_the_old_list_s
 
     let (server, nc) = local_server(&storage).await;
     match write_local(&server, nc, &refused).await {
-        Err(Error::Protocol { class, code }) => assert_eq!((class, code), (0, 25)),
+        Err(Error::Protocol { class, code }) => assert_eq!(
+            (class, code),
+            (ErrorClass::DEVICE, ErrorCode::OPERATIONAL_PROBLEM)
+        ),
         other => panic!("expected DEVICE / OPERATIONAL_PROBLEM, got {other:?}"),
     }
     stop(server).await;

@@ -133,7 +133,7 @@ async fn confirmed_audit_notification_sends_exact_typed_payload_and_accepts_simp
         )
         .unwrap();
         remote_network
-            .send_apdu(&ack, &received.source_mac, false, NetworkPriority::NORMAL)
+            .send_apdu(&ack, &received.source_mac, false, NetworkPriority::Normal)
             .await
             .unwrap();
         remote_network.stop().await.unwrap();
@@ -245,7 +245,7 @@ async fn audit_log_query_sends_exact_typed_payload_and_decodes_complex_ack() {
         )
         .unwrap();
         remote_network
-            .send_apdu(&ack, &received.source_mac, false, NetworkPriority::NORMAL)
+            .send_apdu(&ack, &received.source_mac, false, NetworkPriority::Normal)
             .await
             .unwrap();
         remote_network.stop().await.unwrap();
@@ -340,7 +340,7 @@ async fn audit_log_query_rejects_malformed_trailing_and_missing_ack_service_data
             )
             .unwrap();
             remote_network
-                .send_apdu(&ack, &received.source_mac, false, NetworkPriority::NORMAL)
+                .send_apdu(&ack, &received.source_mac, false, NetworkPriority::Normal)
                 .await
                 .unwrap();
         }

@@ -8,7 +8,7 @@ mod support;
 
 use bacnet_mstp_codec::{FrameType, BROADCAST_MAC};
 use bacnet_mstp_core::{
-    Action, CoreError, Direction, Duration, MasterState, ReceiveError, ReplyDecision,
+    Action, Direction, Duration, MasterState, ReceiveError, ReplyDecision, TransmitError,
     TransmitFailure, TransmitId,
 };
 
@@ -24,7 +24,7 @@ fn a_frame_heard_before_the_confirmed_start_is_received() {
     let mut core = new_core(&mut rx, &mut actions);
     poll_waiting(&mut core);
     let handed = core.next_deadline().unwrap();
-    core.on_deadline(handed).unwrap();
+    core.on_deadline(handed);
     let (id, _) = handed_over(&mut core);
     let frame = encode(
         FrameType::BACNET_DATA_NOT_EXPECTING_REPLY,
@@ -36,7 +36,7 @@ fn a_frame_heard_before_the_confirmed_start_is_received() {
     assert_eq!(core.counters().frames_received, 2);
     assert_eq!(
         core.on_transmit_started(id, last + us(300)),
-        Err(CoreError::TransmitDeferred)
+        Err(TransmitError::Deferred)
     );
     assert_eq!(core.counters().deferred_starts, 1);
     assert_eq!(core.poll_action(), Action::SetDirection(Direction::Receive));
@@ -48,14 +48,11 @@ fn a_frame_heard_before_the_confirmed_start_is_received() {
     assert_eq!(core.state(), MasterState::PollForMaster);
     let due = last + turnaround(&core);
     assert_eq!(core.next_deadline(), Some(due));
-    core.on_deadline(due).unwrap();
+    core.on_deadline(due);
     let (again, header) = handed_over(&mut core);
     assert_ne!(again, id);
     assert!(is(header, FrameType::POLL_FOR_MASTER, PEER));
-    assert_eq!(
-        core.on_transmit_started(id, due),
-        Err(CoreError::StaleTransmit)
-    );
+    assert_eq!(core.on_transmit_started(id, due), Err(TransmitError::Stale));
     core.on_transmit_started(again, due).unwrap();
     assert_eq!(core.counters().cancelled_sends, 0);
 }
@@ -70,17 +67,17 @@ fn other_input_before_the_confirmed_start_defers_it() {
         let mut core = new_core(&mut rx, &mut actions);
         poll_waiting(&mut core);
         let handed = core.next_deadline().unwrap();
-        core.on_deadline(handed).unwrap();
+        core.on_deadline(handed);
         let (id, _) = handed_over(&mut core);
         let heard = handed + Duration::from_millis(1);
         if host {
-            core.on_host_activity(2, heard).unwrap();
+            core.on_host_activity(2, heard);
         } else {
-            core.on_receive_error(ReceiveError::Framing, heard).unwrap();
+            core.on_receive_error(ReceiveError::Framing, heard);
         }
         assert_eq!(
             core.on_transmit_started(id, heard + us(100)),
-            Err(CoreError::TransmitDeferred),
+            Err(TransmitError::Deferred),
             "host {host}"
         );
         assert_eq!(core.next_deadline(), Some(heard + turnaround(&core)));
@@ -97,16 +94,16 @@ fn a_start_a_full_turnaround_after_the_activity_goes_ahead() {
         let mut core = new_core(&mut rx, &mut actions);
         poll_waiting(&mut core);
         let handed = core.next_deadline().unwrap();
-        core.on_deadline(handed).unwrap();
+        core.on_deadline(handed);
         let (id, _) = handed_over(&mut core);
         let noise = handed + Duration::from_millis(1);
-        core.on_octet(0x00, noise).unwrap();
+        core.on_octet(0x00, noise);
         let start = noise + turnaround(&core) - late;
         let result = core.on_transmit_started(id, start);
         if refused {
-            assert_eq!(result, Err(CoreError::TransmitDeferred));
+            assert_eq!(result, Err(TransmitError::Deferred));
         } else {
-            assert_eq!(result, Ok(()));
+            assert!(result.is_ok());
             assert_eq!(core.snapshot().transmit_id, Some(id));
         }
     }
@@ -123,23 +120,22 @@ fn input_after_the_confirmed_start_is_echo() {
     let mut core = new_core(&mut rx, &mut actions);
     pass_waiting(&mut core);
     let due = core.next_deadline().unwrap();
-    core.on_deadline(due).unwrap();
+    core.on_deadline(due);
     let (id, _) = handed_over(&mut core);
     core.on_transmit_started(id, due).unwrap();
     let before = (core.counters(), core.state(), core.next_deadline());
     let echo = encode(FrameType::TOKEN, PEER, STATION, &[]);
     let last = feed(&mut core, &echo, due + us(100));
     for step in 1..=5 {
-        core.on_receive_error(ReceiveError::Framing, last + us(step))
-            .unwrap();
+        core.on_receive_error(ReceiveError::Framing, last + us(step));
     }
-    core.on_host_activity(8, last + us(6)).unwrap();
+    core.on_host_activity(8, last + us(6));
     assert_eq!(
         (core.counters(), core.state(), core.next_deadline()),
         before
     );
     let end = last + us(10);
-    core.on_transmit_complete(id, end).unwrap();
+    core.on_transmit_complete(id, end);
     assert_eq!(core.state(), MasterState::PassToken);
     assert_eq!(core.next_deadline(), Some(end + Duration::from_millis(20)));
 }
@@ -173,26 +169,26 @@ fn a_reply_handed_over_waits_within_its_window() {
         core.complete_request(asked, ReplyDecision::Data(&[9]), ms(2))
             .unwrap();
         let handed = core.next_deadline().unwrap();
-        core.on_deadline(handed).unwrap();
+        core.on_deadline(handed);
         let (id, header) = handed_over(&mut core);
         assert!(is(header, FrameType::BACNET_DATA_NOT_EXPECTING_REPLY, 7));
-        core.on_octet(0x00, activity).unwrap();
+        core.on_octet(0x00, activity);
         if activity == give_up {
             assert_eq!(core.counters().expired_requests, 1);
             assert_eq!(core.state(), MasterState::Idle);
             expect_receive_only(&mut core);
             assert_eq!(
                 core.on_transmit_started(id, activity + us(1)),
-                Err(CoreError::StaleTransmit)
+                Err(TransmitError::Stale)
             );
         } else {
             assert_eq!(
                 core.on_transmit_started(id, activity + us(1)),
-                Err(CoreError::TransmitDeferred)
+                Err(TransmitError::Deferred)
             );
             expect_receive_only(&mut core);
             let due = activity + turnaround(&core);
-            core.on_deadline(due).unwrap();
+            core.on_deadline(due);
             let (again, _) = handed_over(&mut core);
             core.on_transmit_started(again, due).unwrap();
             assert_eq!(core.counters().late_replies, 0);
@@ -210,10 +206,9 @@ fn an_aborted_unstarted_transmit_is_not_sent_again() {
     let mut core = new_core(&mut rx, &mut actions);
     poll_waiting(&mut core);
     let handed = core.next_deadline().unwrap();
-    core.on_deadline(handed).unwrap();
+    core.on_deadline(handed);
     let (id, _) = handed_over(&mut core);
-    core.on_transmit_aborted(id, TransmitFailure::Rejected, handed)
-        .unwrap();
+    core.on_transmit_aborted(id, TransmitFailure::Rejected, handed);
     expect_receive_only(&mut core);
     assert_eq!(core.state(), MasterState::Idle);
     assert_eq!(
@@ -240,11 +235,10 @@ fn an_aborted_unstarted_answer_counts_as_expired() {
         ms(1),
     );
     let due = core.next_deadline().unwrap();
-    core.on_deadline(due).unwrap();
+    core.on_deadline(due);
     let (id, header) = handed_over(&mut core);
     assert!(is(header, FrameType::REPLY_TO_POLL_FOR_MASTER, 7));
-    core.on_transmit_aborted(id, TransmitFailure::Io, due)
-        .unwrap();
+    core.on_transmit_aborted(id, TransmitFailure::Io, due);
     expect_receive_only(&mut core);
     assert_eq!(core.counters().expired_requests, 1);
     assert_eq!(core.counters().cancelled_sends, 0);
@@ -262,14 +256,14 @@ fn only_a_started_transmit_adds_driver_on_time() {
         let mut core = new_core(&mut rx, &mut actions);
         poll_waiting(&mut core);
         let handed = core.next_deadline().unwrap();
-        core.on_deadline(handed).unwrap();
+        core.on_deadline(handed);
         let (id, _) = handed_over(&mut core);
         if started {
             core.on_transmit_started(id, handed).unwrap();
         }
         let watchdog = handed + core.config().transmit_watchdog;
         assert_eq!(core.next_deadline(), Some(watchdog));
-        core.on_deadline(watchdog).unwrap();
+        core.on_deadline(watchdog);
         expect_receive_only(&mut core);
         let on = if started {
             core.config().transmit_watchdog
@@ -294,7 +288,7 @@ fn only_an_abort_of_the_transmit_counts_its_reason() {
     let mut core = new_core(&mut rx, &mut actions);
     poll_waiting(&mut core);
     let handed = core.next_deadline().unwrap();
-    core.on_deadline(handed).unwrap();
+    core.on_deadline(handed);
     let (id, _) = handed_over(&mut core);
     let stranger = TransmitId::new(id.generation().wrapping_add(7));
     let before = core.counters();
@@ -304,23 +298,17 @@ fn only_an_abort_of_the_transmit_counts_its_reason() {
         TransmitFailure::Io,
         TransmitFailure::Rejected,
     ] {
-        assert_eq!(
-            core.on_transmit_aborted(stranger, failure, handed),
-            Err(CoreError::StaleTransmit)
-        );
+        core.on_transmit_aborted(stranger, failure, handed);
     }
     assert_eq!(
         core.on_transmit_started(stranger, handed),
-        Err(CoreError::StaleTransmit)
+        Err(TransmitError::Stale)
     );
-    assert_eq!(
-        core.on_transmit_complete(stranger, handed),
-        Err(CoreError::StaleTransmit)
-    );
+    core.on_transmit_complete(stranger, handed);
     assert_eq!(core.counters(), before);
+    assert_eq!(core.snapshot().transmit_id, Some(id));
 
-    core.on_transmit_aborted(id, TransmitFailure::Rejected, handed)
-        .unwrap();
+    core.on_transmit_aborted(id, TransmitFailure::Rejected, handed);
     let counters = core.counters();
     assert_eq!(
         (
@@ -331,4 +319,71 @@ fn only_an_abort_of_the_transmit_counts_its_reason() {
         ),
         (0, 0, 0, 1)
     );
+}
+
+/// The octets come with the confirmed start and only with it (decision D10,
+/// #1769), and the turnaround contract holds as before. The action names
+/// the frame by header and length; a start within T_turnaround of line
+/// activity is refused, with nothing to send, and the frame waits a full
+/// T_turnaround of quiet line from that activity (Clause 9.5.5.1); it then
+/// comes back under a new id as the same frame, and its confirmed start
+/// hands over exactly its encoding. From there on, input is echo.
+#[test]
+fn only_a_confirmed_start_hands_out_the_frame() {
+    let mut rx = [0; 64];
+    let mut actions = Actions::new();
+    let mut core = new_core(&mut rx, &mut actions);
+    poll_waiting(&mut core);
+    let handed = core.next_deadline().unwrap();
+    core.on_deadline(handed);
+    assert_eq!(
+        core.poll_action(),
+        Action::SetDirection(Direction::Transmit)
+    );
+    let Action::Transmit { id, header, length } = core.poll_action() else {
+        panic!("expected the poll");
+    };
+    assert!(is(header, FrameType::POLL_FOR_MASTER, PEER));
+
+    let noise = handed + us(100);
+    core.on_octet(0x00, noise);
+    assert_eq!(
+        core.on_transmit_started(id, noise + us(1)),
+        Err(TransmitError::Deferred)
+    );
+    assert_eq!(core.poll_action(), Action::SetDirection(Direction::Receive));
+
+    let due = noise + turnaround(&core);
+    assert_eq!(core.next_deadline(), Some(due));
+    core.on_deadline(due - us(1));
+    assert_eq!(
+        core.poll_action(),
+        Action::Idle,
+        "not before a quiet turnaround"
+    );
+    core.on_deadline(due);
+    assert_eq!(
+        core.poll_action(),
+        Action::SetDirection(Direction::Transmit)
+    );
+    let Action::Transmit {
+        id: again,
+        header: same_header,
+        length: same_length,
+    } = core.poll_action()
+    else {
+        panic!("expected the poll again");
+    };
+    assert_ne!(again, id);
+    assert_eq!((same_header, same_length), (header, length));
+    let frame = core.on_transmit_started(again, due).unwrap().to_vec();
+    assert_eq!(
+        frame,
+        encode(FrameType::POLL_FOR_MASTER, PEER, STATION, &[])
+    );
+    assert_eq!(frame.len(), length);
+
+    let before = (core.snapshot(), core.counters());
+    feed(&mut core, &frame, due + us(10));
+    assert_eq!((core.snapshot(), core.counters()), before, "its own echo");
 }

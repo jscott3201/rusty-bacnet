@@ -65,9 +65,8 @@ impl TryFrom<AuditPropertyReference> for PropertyReference {
                 .map(u32::try_from)
                 .transpose()
                 .map_err(|_| {
-                    Error::OutOfRange(
-                        "Audit property-array-index exceeds shared PropertyReference u32 limit"
-                            .into(),
+                    Error::range(
+                        "Audit property-array-index exceeds shared PropertyReference u32 limit",
                     )
                 })?,
         })

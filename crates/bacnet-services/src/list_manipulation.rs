@@ -9,6 +9,7 @@ use bacnet_encoding::constructed::tagged::{
 };
 use bacnet_encoding::{primitives, tags};
 use bacnet_types::enums::PropertyIdentifier;
+use crate::common::refused_value;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
@@ -41,17 +42,13 @@ impl ListElementRequest {
     /// value forms, vendor semantics and remote property types are not checked.
     pub fn validate(&self) -> Result<(), Error> {
         if self.property_array_index == Some(0) {
-            return Err(Error::Encoding(
-                "ListElement array index must be nonzero".into(),
-            ));
+            return Err(Error::encode("ListElement array index must be nonzero"));
         }
         if self.list_of_elements.is_empty() {
-            return Err(Error::Encoding(
-                "ListElement requires at least one encoded element".into(),
-            ));
+            return Err(Error::encode("ListElement requires at least one encoded element"));
         }
         validate_elements_framing(&self.list_of_elements)
-            .map_err(|error| Error::Encoding(format!("ListElement framing: {error}")))
+            .map_err(|error| refused_value(error, "ListElement framing"))
     }
 
     /// Encode transactionally; invalid input leaves the caller's buffer unchanged.

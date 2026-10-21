@@ -1,13 +1,13 @@
 //! BACnet primitive data types per ASHRAE 135-2020 Clause 20.2.
 //!
 //! Core types used throughout the protocol: [`ObjectIdentifier`], [`Date`],
-//! [`Time`], and the [`PropertyValue`] sum type.
+//! [`Time`], and, with `alloc`, the `PropertyValue` sum type.
 
-#[cfg(not(feature = "std"))]
+#[cfg(all(feature = "alloc", not(feature = "std")))]
 use alloc::{string::String, vec::Vec};
 
 use crate::enums::ObjectType;
-use crate::error::Error;
+use crate::error::{DecodeError, DecodingKind, Error, RangeError};
 
 // ---------------------------------------------------------------------------
 // ObjectIdentifier (Clause 20.2.14)
@@ -63,21 +63,18 @@ impl ObjectIdentifier {
     /// concrete object instance.
     ///
     /// # Errors
-    /// Returns `Err` if the object type exceeds 1023 or `instance_number` exceeds
-    /// [`MAX_INSTANCE`](Self::MAX_INSTANCE).
+    /// Returns [`Error::Range`] if the object type exceeds 1023 or
+    /// `instance_number` exceeds [`MAX_INSTANCE`](Self::MAX_INSTANCE).
     pub fn new(object_type: ObjectType, instance_number: u32) -> Result<Self, Error> {
         if instance_number > Self::MAX_INSTANCE {
-            return Err(Error::OutOfRange(format!(
-                "instance number {} exceeds max {}",
-                instance_number,
-                Self::MAX_INSTANCE
-            )));
+            return Err(RangeError::new("instance number {} exceeds max 4194303")
+                .with_value(u64::from(instance_number))
+                .into());
         }
         if object_type.to_raw() > 0x3FF {
-            return Err(Error::OutOfRange(format!(
-                "object type {} exceeds max 1023",
-                object_type.to_raw()
-            )));
+            return Err(RangeError::new("object type {} exceeds max 1023")
+                .with_value(u64::from(object_type.to_raw()))
+                .into());
         }
         Ok(Self {
             object_type,
@@ -92,17 +89,17 @@ impl ObjectIdentifier {
     /// round trips and BACnet service contexts where it is meaningful.
     ///
     /// # Errors
-    /// Returns `Err` if the object type exceeds 1023, or `instance_number` exceeds
-    /// [`MAX_INSTANCE`](Self::MAX_INSTANCE) or equals
-    /// [`WILDCARD_INSTANCE`](Self::WILDCARD_INSTANCE).
+    /// Returns [`Error::Range`] if the object type exceeds 1023, or
+    /// `instance_number` exceeds [`MAX_INSTANCE`](Self::MAX_INSTANCE) or
+    /// equals [`WILDCARD_INSTANCE`](Self::WILDCARD_INSTANCE).
     pub fn new_addressable(object_type: ObjectType, instance_number: u32) -> Result<Self, Error> {
         let identifier = Self::new(object_type, instance_number)?;
         if instance_number == Self::WILDCARD_INSTANCE {
-            return Err(Error::OutOfRange(format!(
-                "instance number {} is reserved as the wildcard value; maximum addressable instance is {}",
-                instance_number,
-                Self::MAX_ADDRESSABLE_INSTANCE
-            )));
+            return Err(RangeError::new(
+                "instance number 4194303 is reserved as the wildcard value; \
+                 maximum addressable instance is 4194302",
+            )
+            .into());
         }
         Ok(identifier)
     }
@@ -124,15 +121,16 @@ impl ObjectIdentifier {
 
     /// Encode to the 4-byte BACnet wire format (big-endian).
     pub fn encode(&self) -> [u8; 4] {
-        assert!(
+        // `new` and `decode`, the only constructors, keep both fields in
+        // range, so these hold by construction; their messages are static
+        // so no build links formatting for them (#1777).
+        debug_assert!(
             self.object_type.to_raw() <= 0x3FF,
-            "ObjectType {} exceeds 10-bit field",
-            self.object_type.to_raw()
+            "ObjectType exceeds the 10-bit field"
         );
-        assert!(
+        debug_assert!(
             self.instance_number <= Self::MAX_INSTANCE,
-            "Instance {} exceeds MAX_INSTANCE",
-            self.instance_number
+            "instance exceeds MAX_INSTANCE"
         );
         let value = (self.object_type.to_raw() << 22) | self.instance_number;
         value.to_be_bytes()
@@ -141,12 +139,9 @@ impl ObjectIdentifier {
     /// Decode from the 4-byte BACnet wire format (big-endian).
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         if data.len() != 4 {
-            return Err(Error::decoding(
-                0,
-                format!(
-                    "ObjectIdentifier expects exactly 4 bytes, got {}",
-                    data.len()
-                ),
+            return Err(wrong_length(
+                "ObjectIdentifier expects exactly 4 bytes, got {}",
+                data,
             ));
         }
         let value = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
@@ -157,6 +152,14 @@ impl ObjectIdentifier {
             instance_number: instance,
         })
     }
+}
+
+/// The error for fixed-size contents of another length than `label` names.
+#[cold]
+fn wrong_length(label: &'static str, data: &[u8]) -> Error {
+    DecodeError::new(DecodingKind::InvalidEncoding, 0, label)
+        .with_value(data.len() as u64)
+        .into()
 }
 
 impl core::fmt::Debug for ObjectIdentifier {
@@ -209,10 +212,7 @@ impl Date {
     /// Decode from 4 bytes.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         if data.len() != 4 {
-            return Err(Error::decoding(
-                0,
-                format!("Date expects exactly 4 bytes, got {}", data.len()),
-            ));
+            return Err(wrong_length("Date expects exactly 4 bytes, got {}", data));
         }
         Ok(Self {
             year: data[0],
@@ -263,10 +263,7 @@ impl Time {
     /// Decode from 4 bytes.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         if data.len() != 4 {
-            return Err(Error::decoding(
-                0,
-                format!("Time expects exactly 4 bytes, got {}", data.len()),
-            ));
+            return Err(wrong_length("Time expects exactly 4 bytes, got {}", data));
         }
         Ok(Self {
             hour: data[0],
@@ -349,7 +346,9 @@ impl core::fmt::Debug for StatusFlags {
 ///
 /// This enum covers all primitive value types that can appear as property
 /// values in BACnet objects. Constructed types (lists, sequences) are
-/// represented as nested structures.
+/// represented as nested structures. Only with `alloc`: it owns its strings
+/// and lists.
+#[cfg(feature = "alloc")]
 #[derive(Debug, Clone, PartialEq)]
 pub enum PropertyValue {
     /// Null value.
@@ -405,6 +404,7 @@ pub enum PropertyValue {
     ApplicationData(Vec<u8>),
 }
 
+#[cfg(feature = "alloc")]
 impl PropertyValue {
     /// Whether this is a value of a primitive datatype, one application tag
     /// on the wire: every variant except `List` and `ApplicationData`.
@@ -643,7 +643,7 @@ mod tests {
         for raw in [1024, u32::MAX] {
             assert!(matches!(
                 ObjectIdentifier::new(ObjectType::from_raw(raw), 0),
-                Err(Error::OutOfRange(_))
+                Err(Error::Range(_))
             ));
         }
     }
@@ -653,7 +653,7 @@ mod tests {
         for raw in [1024, u32::MAX] {
             assert!(matches!(
                 ObjectIdentifier::new_addressable(ObjectType::from_raw(raw), 0),
-                Err(Error::OutOfRange(_))
+                Err(Error::Range(_))
             ));
         }
     }
@@ -664,10 +664,44 @@ mod tests {
             for constructor in [ObjectIdentifier::new, ObjectIdentifier::new_addressable] {
                 assert!(matches!(
                     constructor(ObjectType::from_raw(1023), instance),
-                    Err(Error::OutOfRange(_))
+                    Err(Error::Range(_))
                 ));
             }
         }
+    }
+
+    /// The static labels read as the formatted messages did (#1646).
+    #[test]
+    fn object_identifier_refusals_name_the_value() {
+        let text = |result: Result<ObjectIdentifier, Error>| result.unwrap_err().to_string();
+        assert_eq!(
+            text(ObjectIdentifier::new(ObjectType::DEVICE, 4_194_304)),
+            "value out of range: instance number 4194304 exceeds max 4194303"
+        );
+        assert_eq!(
+            text(ObjectIdentifier::new(ObjectType::from_raw(1024), 0)),
+            "value out of range: object type 1024 exceeds max 1023"
+        );
+        assert_eq!(
+            text(ObjectIdentifier::new_addressable(
+                ObjectType::DEVICE,
+                ObjectIdentifier::WILDCARD_INSTANCE
+            )),
+            "value out of range: instance number 4194303 is reserved as the wildcard value; \
+             maximum addressable instance is 4194302"
+        );
+        assert_eq!(
+            ObjectIdentifier::decode(&[0; 5]).unwrap_err().to_string(),
+            "decoding error at offset 0: ObjectIdentifier expects exactly 4 bytes, got 5"
+        );
+        assert_eq!(
+            Date::decode(&[0; 3]).unwrap_err().to_string(),
+            "decoding error at offset 0: Date expects exactly 4 bytes, got 3"
+        );
+        assert_eq!(
+            Time::decode(&[]).unwrap_err().to_string(),
+            "decoding error at offset 0: Time expects exactly 4 bytes, got 0"
+        );
     }
 
     #[test]
@@ -703,6 +737,7 @@ mod tests {
         assert_eq!(ObjectType::from_raw(u32::MAX).to_raw(), u32::MAX);
     }
 
+    #[cfg(feature = "alloc")]
     #[test]
     fn property_value_variants() {
         let null = PropertyValue::Null;

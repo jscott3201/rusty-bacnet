@@ -21,7 +21,7 @@
 use std::sync::Arc;
 
 use bacnet_encoding::npdu::{decode_npdu, NpduAddress};
-use bacnet_types::enums::NetworkMessageType;
+use bacnet_npdu::NetworkMessageType;
 use bacnet_types::MacAddr;
 use bytes::Bytes;
 
@@ -77,9 +77,10 @@ async fn omitted_busy_marks_whole_via_peer_set_only() {
         SendRequest::Broadcast {
             npdu,
             data_attributes,
+            ..
         } => {
             let decoded = decode_npdu(npdu).unwrap();
-            assert_eq!(decoded.message_type, Some(BUSY.to_raw()));
+            assert_eq!(decoded.message_type, Some(BUSY));
             assert!(decoded.payload.is_empty());
             assert_eq!(data_attributes, attributes());
         }
@@ -237,10 +238,15 @@ async fn queue_full_keeps_marks_bounded_and_local() {
     h.learned(4000, 1, PEER_B);
     h.learned(5000, 0, &[9]);
     h.txs[0]
-        .try_send(SendRequest::Broadcast {
-            npdu: Bytes::from_static(&[0]),
-            data_attributes: Vec::new(),
-        })
+        .try_send(
+            bacnet_npdu::NetworkPriority::Normal,
+            SendRequest::Broadcast {
+                npdu: Bytes::from_static(&[0]),
+                data_attributes: Vec::new(),
+
+                reject_origin: None,
+            },
+        )
         .unwrap();
 
     h.handle(h.ctx(1, PEER_A, control_npdu(BUSY, &[]))).await;

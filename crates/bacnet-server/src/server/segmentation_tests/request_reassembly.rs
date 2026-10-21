@@ -52,7 +52,7 @@ pub(super) async fn start_routed_reassembly_server() -> (
     ))
     .unwrap();
     let config = ServerConfig {
-        segmentation_supported: Segmentation::BOTH,
+        device: bacnet_objects::DeviceIdentity::default().with_segmentation(Segmentation::BOTH),
         ..ServerConfig::default()
     };
     let server = BACnetServer::start(config, db, transport).await.unwrap();
@@ -157,8 +157,9 @@ pub(super) async fn start_reassembly_server_with_timeout(
     .unwrap();
 
     let config = ServerConfig {
-        segmentation_supported: segmentation,
-        apdu_segment_timeout_ms: timeout_ms,
+        device: bacnet_objects::DeviceIdentity::default()
+            .with_segmentation(segmentation)
+            .with_apdu_segment_timeout_ms(timeout_ms),
         ..ServerConfig::default()
     };
     let server = BACnetServer::start(config, db, server_transport)

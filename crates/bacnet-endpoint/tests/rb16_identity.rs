@@ -14,7 +14,7 @@ use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_types::enums::{
-    NetworkType, ObjectType, PropertyIdentifier, Segmentation, ServiceSupported,
+    EngineeringUnits, NetworkType, ObjectType, PropertyIdentifier, Segmentation, ServiceSupported,
     UnconfirmedServiceChoice,
 };
 use bacnet_types::primitives::ObjectIdentifier;
@@ -35,7 +35,12 @@ fn session_config() -> SessionConfig {
 }
 
 fn analog(instance: u32, value: f32) -> Box<dyn bacnet_objects::traits::BACnetObject> {
-    let mut o = AnalogInputObject::new(instance, format!("ai-{instance}"), 0).unwrap();
+    let mut o = AnalogInputObject::new(
+        instance,
+        format!("ai-{instance}"),
+        EngineeringUnits::SQUARE_METERS,
+    )
+    .unwrap();
     o.set_present_value(value);
     Box::new(o)
 }
@@ -62,7 +67,7 @@ fn identity_defaults_are_endpoint_composed_no_superset() {
 fn identity_rejects_bad_instance_and_max_apdu_and_dup_port() {
     assert!(DeviceIdentity::new(4_194_304, 1).is_err());
     let id = DeviceIdentity::new(1, 1).unwrap();
-    assert!(id.clone().with_max_apdu(999).is_err());
+    assert!(id.clone().with_max_apdu(49).is_err());
     let id = id.with_bip_port(1, 1, Ipv4Addr::LOCALHOST, 47808).unwrap();
     assert!(id.with_bip_port(1, 1, Ipv4Addr::LOCALHOST, 47809).is_err());
 }
@@ -184,7 +189,7 @@ fn identity_iam_bytes_match_server_discovery_construction() {
         .unwrap()
         .with_max_apdu(1476)
         .unwrap();
-    let endpoint_bytes = id.encode_iam_apdu().unwrap();
+    let endpoint_bytes = bacnet_endpoint::identity::encode_iam_apdu(&id).unwrap();
     let apdu = decode_apdu(endpoint_bytes.clone().into()).unwrap();
     let (choice, payload) = match apdu {
         Apdu::UnconfirmedRequest(req) => (req.service_choice, req.service_request),
@@ -201,8 +206,8 @@ fn identity_iam_bytes_match_server_discovery_construction() {
     assert_eq!(decoded.vendor_id, 99);
 
     // Server side builds the same four fields from the derived config.
-    let server_config = id.server_config();
-    let server_req = bacnet_server::server::discovery_iam_for_test(id.device_oid(), &server_config);
+    let server_config = bacnet_endpoint::identity::server_config(&id);
+    let server_req = bacnet_server::server::discovery_iam_for_test(&server_config);
     assert_eq!(
         server_req,
         bacnet_services::who_is::IAmRequest {
@@ -227,7 +232,7 @@ async fn session_identity_overrides_480_and_iam_broadcasts() {
     let mut a = EndpointSession::new(t_a, SessionRole::Both, session_config())
         .unwrap()
         .with_database(db)
-        .with_identity(id.clone());
+        .device(id.clone());
     let mut b_net = bacnet_network::layer::NetworkLayer::new(t_b);
     let mut b_rx = b_net.start().await.unwrap();
     a.start().await.unwrap();
@@ -293,7 +298,7 @@ async fn capability_matrix_services_and_segmentation_refuse() {
     let mut a = EndpointSession::new(t_a, SessionRole::Both, session_config())
         .unwrap()
         .with_database(db_a)
-        .with_identity(id);
+        .device(id);
     let mut b = EndpointSession::new(t_b, SessionRole::Both, session_config())
         .unwrap()
         .with_database(db_b);
@@ -325,7 +330,7 @@ async fn capability_matrix_services_and_segmentation_refuse() {
     let mut c = EndpointSession::new(t_c, SessionRole::Both, session_config())
         .unwrap()
         .with_database(db_c)
-        .with_identity(id_c);
+        .device(id_c);
     let mut peer = bacnet_network::layer::NetworkLayer::new(t_d);
     let mut peer_rx = peer.start().await.unwrap();
     c.start().await.unwrap();
@@ -354,14 +359,9 @@ async fn capability_matrix_services_and_segmentation_refuse() {
     });
     let mut enc = BytesMut::new();
     encode_apdu(&mut enc, &write_req).unwrap();
-    peer.send_apdu(
-        &enc,
-        &[0xC1],
-        true,
-        bacnet_types::enums::NetworkPriority::NORMAL,
-    )
-    .await
-    .unwrap();
+    peer.send_apdu(&enc, &[0xC1], true, bacnet_npdu::NetworkPriority::Normal)
+        .await
+        .unwrap();
     let reply = tokio::time::timeout(WAIT, peer_rx.recv())
         .await
         .expect("reject must arrive")
@@ -399,14 +399,9 @@ async fn capability_matrix_services_and_segmentation_refuse() {
     });
     let mut enc2 = BytesMut::new();
     encode_apdu(&mut enc2, &seg_req).unwrap();
-    peer.send_apdu(
-        &enc2,
-        &[0xC1],
-        true,
-        bacnet_types::enums::NetworkPriority::NORMAL,
-    )
-    .await
-    .unwrap();
+    peer.send_apdu(&enc2, &[0xC1], true, bacnet_npdu::NetworkPriority::Normal)
+        .await
+        .unwrap();
     let abort = tokio::time::timeout(WAIT, peer_rx.recv())
         .await
         .expect("abort must arrive")
@@ -613,14 +608,19 @@ fn configured_bip_entry_admission_rejects_divergent_mac_and_preserves_both_build
 
 #[test]
 fn identity_maps_its_segment_timeout_to_both_database_builders_and_full_server() {
-    for timeout in [6000, 7300] {
+    for timeout in [5000, 7300] {
         let mut identity = DeviceIdentity::new(42, 7)
             .unwrap()
             .with_segmentation(Segmentation::BOTH);
-        if timeout != 6000 {
+        if timeout != 5000 {
             identity = identity.with_apdu_segment_timeout_ms(timeout);
         }
-        assert_eq!(identity.server_config().apdu_segment_timeout_ms, timeout);
+        assert_eq!(
+            bacnet_endpoint::identity::server_config(&identity)
+                .device
+                .apdu_segment_timeout_ms(),
+            timeout
+        );
         for db in [
             identity.build_database().unwrap(),
             build_database_with_extra(&identity, vec![analog(1, 1.0)]).unwrap(),
@@ -645,7 +645,7 @@ fn identity_maps_its_segment_timeout_to_both_database_builders_and_full_server()
         apdu_timeout_ms: 1234,
         ..Default::default()
     };
-    identity.apply_to_client_config(&mut client);
+    bacnet_endpoint::identity::apply_to_client_config(&identity, &mut client);
     assert_eq!(
         client.apdu_timeout_ms, 1234,
         "client timing remains caller-owned"
@@ -670,7 +670,7 @@ async fn endpoint_roles_reject_non_none_identity_before_consuming_transport() {
             let mut endpoint = EndpointSession::new(transport, role, session_config())
                 .unwrap()
                 .with_database(identity.build_database().unwrap())
-                .with_identity(identity.clone().with_segmentation(mode));
+                .device(identity.clone().with_segmentation(mode));
             let error = endpoint
                 .start()
                 .await
@@ -678,7 +678,7 @@ async fn endpoint_roles_reject_non_none_identity_before_consuming_transport() {
             assert!(error.to_string().contains("segmentation NONE"));
             // Failed validation leaves configuration and the unstarted transport
             // reusable. A valid identity can start the exact same session.
-            let mut endpoint = endpoint.with_identity(identity);
+            let mut endpoint = endpoint.device(identity);
             endpoint.start().await.unwrap();
             endpoint.stop().await.unwrap();
         }

@@ -16,17 +16,21 @@ impl NodeHandle {
     /// (Annex J.3). One of the link's group addresses is refused, unsent
     /// (#1677).
     pub(super) async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        let dest = codec::address_from_slice(mac).map_err(bvll_error)?;
-        let outgoing = self
-            .link()
-            .unicast(dest, npdu)
-            .map_err(|refusal| self.refuse_send(refusal))?;
-
-        let mut buf = BytesMut::with_capacity(4 + npdu.len());
-        encode_bvll(&mut buf, &outgoing.message)?;
+        // In a block, so only the datagram and its address are held across
+        // the send (#1713).
+        let (buf, to) = {
+            let dest = codec::address_from_slice(mac).map_err(bvll_error)?;
+            let outgoing = self
+                .link()
+                .unicast(dest, npdu)
+                .map_err(|refusal| self.refuse_send(refusal))?;
+            let mut buf = BytesMut::with_capacity(4 + npdu.len());
+            encode_bvll(&mut buf, &outgoing.message)?;
+            (buf, outgoing.to)
+        };
 
         self.socket()
-            .send_to(&buf, outgoing.to)
+            .send_to(&buf, to)
             .await
             .map_err(Error::Transport)?;
         Ok(())
@@ -42,8 +46,8 @@ impl NodeHandle {
         npdu: &[u8],
         forwarder: Option<&OwnBroadcastForwarder>,
     ) -> Result<(), Error> {
-        let (outgoing, forward_own) = self
-            .link()
+        let link = self.link();
+        let (mut outgoing, forward_own) = link
             .broadcast(npdu)
             .map_err(|refusal| self.refuse_send(refusal))?;
 
@@ -51,11 +55,38 @@ impl NodeHandle {
         encode_bvll(&mut buf, &outgoing.message)?;
 
         // A foreign device asks its node first, which holds the broadcast
-        // while the first registration attempt after a start is outstanding,
-        // refuses it when that hold is full (#1622), and queues it behind
-        // released broadcasts its driver hasn't sent yet.
-        if matches!(self.link().mode, Mode::Foreign(_)) && !self.admit_broadcast(npdu)? {
-            return Ok(());
+        // while the first registration attempt after a start or a move to
+        // another BBMD is outstanding, refuses it when that hold is full
+        // (#1622), and queues it behind released broadcasts its driver
+        // hasn't sent yet. A broadcast it sends goes on the link it decided
+        // under: a move since the copy above sends it to the new BBMD.
+        if matches!(link.mode, Mode::Foreign(_)) {
+            #[cfg(test)]
+            {
+                // Taken first, so no guard is held while the hook runs.
+                let hook = self
+                    .before_admit
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take();
+                if let Some(hook) = hook {
+                    hook();
+                }
+            }
+            match self.admit_broadcast(npdu)? {
+                None => return Ok(()),
+                Some(decided) if decided != link => {
+                    // A move is foreign to foreign, so the mode, and with it
+                    // `forward_own` (false for a foreign device), stays.
+                    outgoing = decided
+                        .broadcast(npdu)
+                        .map_err(|refusal| self.refuse_send(refusal))?
+                        .0;
+                    buf.clear();
+                    encode_bvll(&mut buf, &outgoing.message)?;
+                }
+                Some(_) => {}
+            }
         }
 
         // The fanout is queued first, so its targets are fixed before the

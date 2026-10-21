@@ -1,0 +1,22 @@
+---
+source: crates/bacnet-cli/src/tui/tests/help_keys.rs
+expression: out
+---
+B/IP 80x24
+ 1 2 [3 Watch] 4 7 | BIP 10.0.0.1:47808 | up | READ-ONLY | drop 0        ? help 
+B/IP 120x40
+ 1 Devices 2 Browse [3 Watch] 4 Network 7 Capture | BIP 10.0.0.1:47808 | up | READ-ONLY | COV 0 | drop 0         ? help 
+B/IP 200x50
+ bacnet | 1 Devices 2 Browse [3 Watch] 4 Network 7 Capture | BIP 10.0.0.1:47808 | up | READ-ONLY | COV 0 | drop 0                                                                                ? help 
+SC 80x24
+ 1 2 [3 Watch] 4 5 7 | SC 22:10:20:30:40:50 | up | READ-ONLY | drop 0    ? help 
+SC 120x40
+ 1 Devices 2 Browse [3 Watch] 4 Network 5 SC 7 Capture | SC 22:10:20:30:40:50 | up | READ-ONLY | COV 0 | drop 0  ? help 
+SC 200x50
+ bacnet | 1 Devices 2 Browse [3 Watch] 4 Network 5 SC 7 Capture | SC 22:10:20:30:40:50 | up | READ-ONLY | COV 0 | drop 0                                                                         ? help 
+MS/TP 80x24
+ 1 2 [3 Watch] 4 6 7 | MSTP mstp:3 | up | READ-ONLY | COV 0 | drop 0     ? help 
+MS/TP 120x40
+ 1 Devices 2 Browse [3 Watch] 4 Network 6 MS/TP 7 Capture | MSTP mstp:3 | up | READ-ONLY | COV 0 | drop 0        ? help 
+MS/TP 200x50
+ bacnet | 1 Devices 2 Browse [3 Watch] 4 Network 6 MS/TP 7 Capture | MSTP mstp:3 | up | READ-ONLY | COV 0 | drop 0                                                                               ? help

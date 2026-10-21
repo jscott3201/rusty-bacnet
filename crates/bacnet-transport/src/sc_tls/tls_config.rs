@@ -95,10 +95,22 @@ impl ScNodeTlsConfig {
         // Match the hub's fixed provider: caller/global key providers cannot
         // weaken the built-in provider's certificate/key consistency check.
         let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+        // Same WebPKI policy as with_root_certificates, including its no-CRL
+        // defaults. The stable wrapper observes evidence without deciding trust.
+        let verifier = rustls::client::WebPkiServerVerifier::builder_with_provider(
+            Arc::new(roots),
+            Arc::clone(&provider),
+        )
+        .allow_unknown_revocation_status()
+        .build()
+        .map_err(|e| Error::Encoding(format!("TLS client auth error: {e}")))?;
         let config = rustls::ClientConfig::builder_with_provider(Arc::clone(&provider))
             .with_protocol_versions(&[&rustls::version::TLS13])
             .map_err(|e| Error::Encoding(format!("TLS client auth error: {e}")))?
-            .with_root_certificates(roots)
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(super::attempt_capture::ObservingVerifier(
+                verifier,
+            )))
             .with_client_auth_cert(cert_chain.clone(), key.clone_key())
             .map_err(|e| Error::Encoding(format!("TLS client auth error: {e}")))?;
         // Server role for the opt-in direct listener: the same explicit CA

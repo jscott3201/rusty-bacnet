@@ -1,0 +1,33 @@
+name: NAT topology
+
+# Runs examples/docker/nat/run.sh: two BBMD sites behind iptables NAT
+# routers that port-forward their B/IP port, and two foreign devices (one
+# on the "internet", one behind a router that forwards nothing) that must
+# each hear both sites' devices answer a Who-Is (Annex J.7.5, #940, #942).
+#
+# A manual check, run at intervals: workflow_dispatch is its only trigger,
+# so no push, pull request or schedule ever runs it. Its job's name starts
+# with "NAT (manual):", so it can't pass for CI OK or Native OK, and
+# scripts/release/ci_gate.py reads only ci.yml and native-tests.yml runs.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  nat:
+    name: "NAT (manual): two BBMD sites behind NAT routers"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build, run and probe the topology
+        run: bash examples/docker/nat/run.sh

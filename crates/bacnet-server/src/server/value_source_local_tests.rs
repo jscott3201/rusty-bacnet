@@ -7,7 +7,7 @@ use super::*;
 use bacnet_objects::analog::AnalogValueObject;
 use bacnet_objects::color::ColorObject;
 use bacnet_objects::present_value_access::PresentValueAccess;
-use bacnet_types::enums::ObjectType;
+use bacnet_types::enums::{EngineeringUnits, ObjectType};
 
 const VS: PropertyIdentifier = PropertyIdentifier::VALUE_SOURCE;
 const PV: PropertyIdentifier = PropertyIdentifier::PRESENT_VALUE;
@@ -29,8 +29,13 @@ const DEVICE: [u8; 4] = [0x02, 0x00, 0x03, 0x58];
 
 async fn harness() -> Harness {
     Harness::start_with(ServerConfig::default(), |db| {
-        let mut value =
-            AnalogValueObject::with_access(2, "AV-2", 62, PresentValueAccess::ReadOnly).unwrap();
+        let mut value = AnalogValueObject::with_access(
+            2,
+            "AV-2",
+            EngineeringUnits::DEGREES_CELSIUS,
+            PresentValueAccess::ReadOnly,
+        )
+        .unwrap();
         value.set_value_source_tracking(true);
         db.add(Box::new(value)).unwrap();
         let mut color = ColorObject::new(1, "CLR-1").unwrap();

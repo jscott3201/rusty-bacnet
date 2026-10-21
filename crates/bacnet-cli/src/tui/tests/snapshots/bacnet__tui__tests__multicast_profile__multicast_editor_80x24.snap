@@ -1,0 +1,28 @@
+---
+source: crates/bacnet-cli/src/tui/tests/multicast_profile.rs
+expression: text
+---
+" [1 Devices] 2 3 7 | BIP | disconnected | READ-ONLY | COV 0 | drop 0     ? help "
+"┌ ┌ Connection profiles ─────────────────────────────────────────────────────┐─┐"
+"│ │ Edit the B/IP profile; Enter saves it without connecting.                │ │"
+"│ │   Name          group                                                    │ │"
+"│ │ > Interface     192.0.2.20_                                              │ │"
+"│ │   UDP port      47808                                                    │ │"
+"│ │   Broadcast     255.255.255.255                                          │ │"
+"│ │   Timeout ms    6000                                                     │ │"
+"│ │   Pacing ms     0                                                        │ │"
+"│ │   BBMD                                                                   │ │"
+"│ │   TTL seconds   300                                                      │ │"
+"│ │   Renewal sec                                                            │ │"
+"│ │   Group         239.255.66.1                                             │ │"
+"│ │   Group TTL     2                                                        │ │"
+"│ │   Writes        session                                                  │ │"
+"│ │   Dangerous     false                                                    │ │"
+"│ │ Tab/Shift-Tab fields | Backspace erase | Enter save                      │ │"
+"│ │ Blank BBMD = Normal; otherwise Foreign Device (IP[:port]).               │ │"
+"│ │ Blank renewal = half TTL; interface 0.0.0.0 = all interfaces.            │ │"
+"│ │ Group: a multicast group (B/IP-M) on an explicit interface.              │ │"
+"│ │ Writes: never or session (W arms). Dangerous: allows priority 6.         │ │"
+"│ │                                                                          │ │"
+"└─└ Esc discard / back | READ-ONLY ──────────────────────────────────────────┘─┘"
+"                                                                                "

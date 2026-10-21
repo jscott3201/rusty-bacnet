@@ -7,8 +7,8 @@
 #   emulate-firmware.sh [--native] [--suggest] [--timeout <seconds>] [<board>...]
 #
 # For each board (all four unless some are named), this builds the
-# firmware link test's seven images (mstp, mstp-extended, bip, node, bbmd,
-# router and apdu) for the board's target with the `emulate` feature and
+# firmware link test's eight images (mstp, mstp-extended, bip, node, bbmd,
+# router, device and apdu) for the board's target with the `emulate` feature and
 # the board's, with the pinned toolchain, on the host: clippy first, as
 # check-firmware-link.sh does, then the `emulate` profile, which is the link
 # test's `firmware` profile under its own name. Then scripts/emu/run-qemu.sh
@@ -53,7 +53,7 @@ all_boards=(
 # One cargo run per feature set, as in check-firmware-link.sh: every image
 # but apdu without the crate's default `alloc` feature, then apdu with it.
 builds=("--no-default-features" "--lib --bin apdu")
-images=(mstp mstp-extended bip node bbmd router apdu)
+images=(mstp mstp-extended bip node bbmd router device apdu)
 stack_budget=firmware/link/stack-budget.toml
 
 usage() {

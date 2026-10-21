@@ -16,13 +16,14 @@
 //! take too, so firmware that runs a router between their ports feeds all
 //! three one clock.
 //!
-//! - [`npdu`]: a borrowed view of an NPDU's control information, held equal
-//!   to `bacnet-encoding`'s decoder field for field by a property test, and
-//!   a writer that refuses an NPDU too long for its buffer before writing an
-//!   octet.
+//! - [`npdu`]: `bacnet-npdu`, re-exported: the network-layer vocabulary
+//!   the router speaks. Its borrowed view of an NPDU's control information
+//!   is the stack's one NPDU codec, whose encoder refuses an NPDU too long
+//!   for its buffer before writing an octet; it also has the message type
+//!   codes, the reject reasons, the network priority, the port limits and
+//!   the bounded [`Mac`].
 //! - [`message`]: the network-layer messages a router reads and sends:
-//!   their type codes, the reject reasons, and allocation-free views and
-//!   writers for their payloads.
+//!   allocation-free views and writers for their payloads.
 //! - [`table`]: the routing table, sorted by network number, with
 //!   learning, the convergence modes, busy and unreachable marks, the
 //!   reject hold-down and aging.
@@ -32,35 +33,50 @@
 //!   [`Storage`] takes each frame a port receives, says what it means for
 //!   the router's own application, and asks for the sends it calls for,
 //!   which the caller polls. It takes the time with every call.
+//! - [`node`]: the receive side of a node that doesn't route: the checks
+//!   every arriving frame passes, which the router runs too, and what a
+//!   node keeps of what passes. The hosted non-router network layer runs
+//!   on it.
 //!
 //! A port is identified by its index, a [`PortId`]; its MAC is a [`Mac`] of
 //! up to [`MAX_MAC_LEN`] octets. To the engine a port is data, so any link
 //! plugs in; two features add the glue for the portable link cores, so
 //! firmware can route between them with no allocator:
 //!
-//! - `bip`: B/IP ports over `bacnet-bip-core`'s node engine, in normal or
-//!   foreign-device mode, or as a BBMD over its tables (module `bip`).
+//! - `bip`: B/IP ports over `bacnet-bip-core`'s port driver, in normal or
+//!   foreign-device mode, or as a BBMD that answers management requests
+//!   from its tables (module `bip`).
 //! - `mstp`: MS/TP ports over `bacnet-mstp-core`'s master core, with
 //!   extended frames (module `mstp`).
 //!
 //! Both hand the router each NPDU their link delivers as an `Arrived`,
 //! whose frame borrows its link source, and carry out the router's sends on
 //! their link. Each module documents its wiring, and the clauses its tests
-//! cover.
+//! cover. Each feature also re-exports its link core (`bip_core`,
+//! `mstp_core`, and through them their codecs), so a router image depends
+//! on this crate alone, and [`RouterIn`] names a router over borrowed
+//! storage without repeating its sizes.
+//!
+//! The router counts what it drops, sends and is refused as the link cores
+//! count: [`Router::take_counters`] drains `u32` counts that saturate
+//! between takes, for the caller to add to totals as wide as it needs, and
+//! [`Router::counters`] looks without taking.
 //!
 //! The types that may grow are `#[non_exhaustive]`. Start the
-//! [`Options`](router::Options) from `HOSTED` and set the fields to change;
+//! [`Options`](router::Options) from `STANDARD` (or `HOSTED`, the hosted
+//! router's, with its 256-route cap) and set the fields to change;
 //! build a [`Route`](table::Route), for comparison, with its `direct` or
 //! `learned`, and counters from `Default`; and give a `match` on an error,
 //! a refusal, a [`Discard`](router::Discard), an
 //! [`Event`](router::Event), a [`Kind`](router::Kind) or another of these
 //! enums a wildcard arm. The enums a host acts on case by case,
-//! [`Action`](router::Action), [`Received`](router::Received) and the B/IP
-//! glue's `Ingress`, stay exhaustive, as do the closed sets such as
+//! [`Action`](router::Action), [`Received`](router::Received) and a node's [`Received`](node::Received), stay
+//! exhaustive, as do the closed sets such as
 //! [`Dest`](router::Dest), [`Group`](router::Group) and
 //! [`Reachability`](table::Reachability). The wire codes,
-//! [`MessageType`](message::MessageType) and
-//! [`RejectReason`](message::RejectReason), are open: any octet converts,
+//! [`NetworkMessageType`](npdu::NetworkMessageType) and
+//! [`RejectMessageReason`](npdu::RejectMessageReason), are open: any octet
+//! converts,
 //! so a `match` on their constants needs a wildcard arm too.
 //!
 //! # Time
@@ -80,30 +96,20 @@
 //! 2 on to a node on network 1:
 //!
 //! ```
-//! use bacnet_router_core::npdu::{Address, Npdu};
+//! use bacnet_router_core::npdu::{Address, Mac, Npdu, NpduLimits};
 //! use bacnet_router_core::router::{
-//!     Action, Dest, Frame, Limits, Options, Permissive, PortConfig, Received,
+//!     Action, Dest, Frame, Groups, Options, Permissive, PortConfig, Received,
 //! };
-//! use bacnet_router_core::{Instant, Mac, PortId, Router, Storage};
+//! use bacnet_router_core::{Instant, PortId, Router, Storage};
 //!
 //! let ports = [
-//!     PortConfig {
-//!         network: 1,
-//!         mac: Mac::from_array([192, 0, 2, 1, 0xBA, 0xC0]),
-//!         max_npdu: Limits::both(1497),
-//!     },
-//!     PortConfig {
-//!         network: 2,
-//!         mac: Mac::from_array([1]),
-//!         max_npdu: Limits::both(1497),
-//!     },
+//!     PortConfig::new(1, Mac::from_array([192, 0, 2, 1, 0xBA, 0xC0]), NpduLimits::both(1497), Groups::None),
+//!     PortConfig::new(2, Mac::from_array([1]), NpduLimits::both(1497), Groups::None),
 //! ];
 //! // Two ports, a table of 8 routes and 8 hold-down records; firmware
 //! // keeps the storage in a static.
 //! let mut storage = Storage::<2, 8, 8>::new();
-//! let mut options = Options::HOSTED;
-//! options.route_cap = 8;
-//! let mut router = Router::new(&mut storage, &ports, options, Instant::ZERO)?;
+//! let mut router = Router::new(&mut storage, &ports, Options::STANDARD, Instant::ZERO)?;
 //!
 //! // A confirmed request for the node at 192.0.2.9 on network 1.
 //! let node = [192, 0, 2, 9, 0xBA, 0xC0];
@@ -111,7 +117,7 @@
 //! request.destination = Some(Address { network: 1, mac: &node });
 //! request.expecting_reply = true;
 //! let mut frame = [0u8; 32];
-//! let len = request.write(&mut frame)?;
+//! let len = request.encode_into(&mut frame)?;
 //!
 //! let arrived = Frame { port: PortId(1), source: &[5], link_group: false, npdu: &frame[..len] };
 //! let received = router.receive(arrived, Instant::from_secs(1), &mut Permissive);
@@ -122,7 +128,7 @@
 //!     panic!("a send");
 //! };
 //! assert_eq!((send.port, send.to), (PortId(0), Dest::Unicast(&node[..])));
-//! let relayed = Npdu::parse(send.npdu).expect("an NPDU");
+//! let relayed = Npdu::decode(send.npdu).expect("an NPDU");
 //! assert_eq!(relayed.source, Some(Address { network: 2, mac: &[5] }));
 //! assert_eq!(relayed.destination, None);
 //! assert_eq!(router.poll_action(), Action::Idle);
@@ -136,8 +142,8 @@
 //!
 //! | Obligation | Clause | Test |
 //! | --- | --- | --- |
-//! | The control octet says which NPCI fields follow, and they follow in one fixed order; a zero DNET, a zero or all-ones SNET and an empty SADR make the NPDU invalid | 6.2, 6.2.2, 6.2.2.1 | `tests/npdu_view.rs`: `view_agrees_with_decode_npdu` |
-//! | A DLEN or SLEN past any data link's address width is told apart from other faults, carrying the DNET and the source a reason-6 reject needs | 6.2.2.2, 6.4.4 | `tests/npdu_view.rs`: `over_long_addresses_carry_what_a_reject_needs` |
+//! | The control octet says which NPCI fields follow, and they follow in one fixed order; a zero DNET, a zero or all-ones SNET and an empty SADR make the NPDU invalid | 6.2, 6.2.2, 6.2.2.1 | `bacnet-npdu`'s `tests/view.rs`: `decoded_frames_are_consistent`, `malformations_are_named` |
+//! | A DLEN or SLEN past any data link's address width is told apart from other faults, carrying the DNET and the source a reason-6 reject needs | 6.2.2.2, 6.4.4 | `bacnet-npdu`'s `tests/view.rs`: `over_long_addresses_carry_what_a_reject_needs` |
 //! | Each network-layer message's payload is read whole or not at all, and written in the layout the clause gives it | 6.4 | `tests/message.rs` |
 //! | The table records, for each network it can reach, the port, the next router (none for a directly attached network), and a state that separates a lasting failure from congestion | 6.6.1 | `tests/table.rs` |
 //! | A later claim of the route to a network supersedes the earlier one | 6.6.3.2 | `tests/table_claims.rs` |
@@ -169,9 +175,28 @@
 //! | Flow control covers what its sender serves, named or not, and goes on to the other ports | 6.6.3.6, 6.6.3.7 | `tests/control.rs`: `flow_control_covers_what_the_sender_serves` |
 //! | A table update applies entry by entry and gets an empty answer; a query gets the whole table, over several answers when needed, and changes nothing | 6.4.7, 6.6.3.8, 6.6.3.9 | `tests/init.rs` |
 //! | The network-number messages stay on their link | 6.4.19, 6.4.20 | `tests/control.rs`: `network_number_messages_stay_local` |
+//! | No port sits on network 0, which names none, or 0xFFFF, which can't be the SNET of what it relays | 6.2.2.1 | `tests/engine.rs`: `new_refuses_what_it_cannot_route` |
 //! | At start each port hears its own number, then which networks lie beyond the others | 6.4.20, 6.6.2, 6.6.3.3 | `tests/traces.rs`: `a_discovery_learning_and_aging`, `a_one_port_router_announces_only_its_number` |
 //! | With no point-to-point links, connection messages change nothing | 6.6.3.10, 6.6.3.11 | `tests/control.rs`: `ptp_messages_change_nothing` |
 //! | A message too long for its egress port draws reason 4, a remote broadcast included, and a fan-out leaves that port out | 6.4.4, 6.6.3.5, Table 6-1 | `tests/forward.rs`: `too_long_for_the_egress_port_draws_reason_4`, `a_fan_out_goes_by_the_broadcast_limit` |
+//! | One port's sends leave in network-priority order: a frame's own output, then the router's own messages at Normal priority | 6.5.4 | `tests/congestion.rs`: `one_ports_sends_leave_in_priority_order` |
+//! | The router's own application reaches another network through the table, from the address it selects, and its replies come back to it; with no route it searches first | 6.1, 6.5.4, 6.6.3.1 | `tests/originate.rs` (#1699) |
+//!
+//! With the opt-in [`Congestion`](router::Congestion) policy (#1697):
+//!
+//! | Obligation | Clause | Test |
+//! | --- | --- | --- |
+//! | A port that stays clogged has its networks announced busy on every other port, again while it lasts, and available once it drains | 6.6.3.6, 6.6.3.7, 6.6.4 | `tests/congestion.rs`: `busy_after_clog_time_then_available_under_the_low_water_mark`, `a_lasting_clog_repeats_busy_and_drains_once` |
+//! | Traffic a clogged port's full queue refuses draws reason 2 | 6.6.3.6 | `tests/congestion.rs`: `a_full_queue_on_a_clogged_port_draws_reason_2` |
+//!
+//! The other opt-in hardening of #1698, beyond the clause: with
+//! `next_hop_rejects`, a reject changes a learned route only when its
+//! next router sent it (`tests/hardening.rs`:
+//! `next_hop_rejects_apply_only_from_the_routes_next_router`); flow control
+//! from any other router is counted, as it always was ignored
+//! (`flow_control_from_another_router_is_counted_and_changes_nothing`); and
+//! with `duplicates`, a global broadcast seen again within its time to live
+//! is dropped (`a_looped_copy_within_the_ttl_is_dropped`).
 //!
 //! Rules of this stack beyond the clause, each tested in the same files:
 //! the 18-octet address bound (#1141, #1198); a DADR beside DNET 0xFFFF
@@ -190,13 +215,15 @@
 //!
 //! # Features
 //!
-//! None by default: the crate then depends only on `bacnet-time`. Neither
+//! None by default: the crate then depends only on `bacnet-time` and
+//! `bacnet-npdu`. Neither
 //! feature needs std or an allocator, and every combination builds on
 //! bare-metal targets.
 //!
-//! - `bip`: the B/IP glue, which adds `bacnet-bip-core` and
-//!   `bacnet-bip-codec`.
-//! - `mstp`: the MS/TP glue, which adds `bacnet-mstp-core`.
+//! - `bip`: the B/IP glue, which adds `bacnet-bip-core`, and through it
+//!   `bacnet-bip-codec`, re-exported as `bip_core`.
+//! - `mstp`: the MS/TP glue, which adds `bacnet-mstp-core`, re-exported as
+//!   `mstp_core`.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -215,41 +242,35 @@ pub mod discovery;
 pub mod message;
 #[cfg(feature = "mstp")]
 pub mod mstp;
-pub mod npdu;
+pub mod node;
 pub mod router;
 pub mod table;
 
 #[cfg(any(feature = "bip", feature = "mstp"))]
 pub use arrived::Arrived;
-pub use bacnet_time::{Duration, Instant};
-pub use npdu::{Mac, MacTooLong};
-pub use router::{Router, Storage};
-
-/// The largest NPDU a B/IP or MS/TP port carries, in octets (Table 6-1;
-/// MS/TP needs extended frames for it, Clause 9.3).
-///
-/// With the glue features it is held equal to the link cores' own, so the
-/// three can't drift apart.
-pub const MAX_NPDU: usize = 1497;
-
+/// `bacnet-bip-core`, whose node, port and BBMD types the `bip` glue
+/// speaks: a router image names them through this, so its versions can't
+/// drift apart from the glue's. Its codec is [`bip_core::codec`].
 #[cfg(feature = "bip")]
-const _: () = assert!(
-    MAX_NPDU == bacnet_bip_core::node::MAX_NPDU,
-    "router-core's MAX_NPDU is bip-core's"
-);
-
+pub use bacnet_bip_core as bip_core;
+/// `bacnet-mstp-core`, whose master core the `mstp` glue speaks: a router
+/// image names it through this, so its versions can't drift apart from the
+/// glue's. Its codec is [`mstp_core::codec`].
 #[cfg(feature = "mstp")]
-const _: () = assert!(
-    MAX_NPDU == bacnet_mstp_core::codec::MAX_EXTENDED_MPDU_DATA,
-    "router-core's MAX_NPDU is the MS/TP codec's extended-frame limit"
-);
+pub use bacnet_mstp_core as mstp_core;
+/// `bacnet-npdu`, the network-layer vocabulary the router speaks: the NPDU
+/// view and encoder, the message types and reject reasons, a reject's
+/// data ([`RejectMessageToNetwork`](npdu::RejectMessageToNetwork)), the
+/// network priority, [`NpduLimits`](npdu::NpduLimits), [`Mac`],
+/// [`MAX_NPDU`] and [`MAX_MAC_LEN`]. A
+/// router image names them through this, so its version can't drift apart
+/// from the router's.
+pub use bacnet_npdu as npdu;
+pub use bacnet_time::{Duration, Instant};
+pub use router::{Router, RouterIn, Storage};
 
-/// The longest DADR, SADR or link MAC the core accepts, in octets.
-///
-/// It is `bacnet-encoding`'s `NpduAddress::MAX_MAC_LEN` (#1141), so the
-/// core refuses exactly the addresses the hosted codec refuses; a test holds
-/// the two equal. No data link in Table 6-2 uses more than 7.
-pub const MAX_MAC_LEN: usize = 18;
+// For the crate's own paths: the public ones are under `npdu`.
+use npdu::{Mac, MAX_MAC_LEN, MAX_NPDU};
 
 /// A router port, by its index in the router's port list.
 ///

@@ -61,6 +61,8 @@ const DEFAULT_TRANSMIT_WATCHDOG: Duration = Duration::from_secs(1);
 /// Kept in [`MstpCoreConfig::minimum_transmit_watchdog`] beyond the longest
 /// frame and T_postdrive, for the adapter to report the completion.
 const WATCHDOG_COMPLETION_MARGIN: Duration = Duration::from_millis(1);
+/// Default for [`MstpCoreConfig::late_deadline`].
+pub const DEFAULT_LATE_DEADLINE: Duration = Duration::from_millis(1);
 
 /// A configuration value that violates a protocol or local safety bound.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -195,8 +197,9 @@ pub enum ConfigError {
     },
     /// [`MstpCoreConfig::extended_frames`] is on, but a buffer the core was
     /// given can't hold the largest extended frame or NPDU. Only
-    /// [`MasterCore::new`](crate::MasterCore::new) reports it, since only it
-    /// sees the buffers.
+    /// [`MasterCore::new`](crate::MasterCore::new) and
+    /// [`MasterCore::from_parts`](crate::MasterCore::from_parts) report it,
+    /// since only they see the buffers.
     ExtendedStorageTooSmall {
         /// The buffer that is too small.
         buffer: CoreBuffer,
@@ -205,6 +208,15 @@ pub enum ConfigError {
         /// The size extended frames need: the longest extended frame on the
         /// wire for the receive storage and the transmit frame, the longest
         /// NPDU one carries for a delivery slot and a queue slot.
+        minimum: usize,
+    },
+    /// The receive storage the core was given can't hold even the shortest
+    /// frame. Only [`MasterCore::new`](crate::MasterCore::new) and
+    /// [`MasterCore::from_parts`](crate::MasterCore::from_parts) report it.
+    ReceiveStorageTooSmall {
+        /// Supplied storage length.
+        length: usize,
+        /// [`MIN_RX_STORAGE`](crate::MIN_RX_STORAGE).
         minimum: usize,
     },
 }
@@ -293,6 +305,10 @@ impl fmt::Display for ConfigError {
             } => write!(
                 f,
                 "the {buffer} holds {length} octets; extended frames need {minimum}"
+            ),
+            Self::ReceiveStorageTooSmall { length, minimum } => write!(
+                f,
+                "receive storage of {length} octets is under the {minimum} of the shortest frame"
             ),
         }
     }
@@ -443,6 +459,18 @@ pub struct MstpCoreConfig {
     /// UART latency still lets the frame start within T_reply_delay. It must
     /// be shorter than T_reply_delay. Default 25 ms.
     pub reply_transmit_margin: Duration,
+    /// The lateness at which a serviced deadline counts in
+    /// [`MstpCounters::late_deadlines`](crate::MstpCounters::late_deadlines):
+    /// a deadline serviced this long or longer after it fell due counts,
+    /// one serviced sooner doesn't. Every serviced deadline counts in the
+    /// lateness histogram whatever this is.
+    ///
+    /// A local setting, which nothing in the core's timing depends on. Set
+    /// it from the adapter's timer: lateness under its resolution is
+    /// ordinary, not a sign of load. Default [`DEFAULT_LATE_DEADLINE`],
+    /// 1 ms, for an adapter with a fine timer; a host whose timer rounds
+    /// sleeps to the millisecond sets more.
+    pub late_deadline: Duration,
     /// Maximum time an item may remain in a local transmit queue.
     pub queue_max_age: Duration,
     /// Number of broadcast frames scheduled per unicast frame while both
@@ -702,6 +730,7 @@ impl MstpCoreConfig {
             t_usage_delay: MAX_USAGE_DELAY,
             t_usage_timeout: MIN_USAGE_TIMEOUT,
             reply_transmit_margin: DEFAULT_REPLY_TRANSMIT_MARGIN,
+            late_deadline: DEFAULT_LATE_DEADLINE,
             queue_max_age: Duration::from_secs(5),
             broadcast_unicast_ratio: 1,
             multiple_frame_ratio: 100,
@@ -742,8 +771,8 @@ impl MstpCoreConfig {
     /// longest frame's time on the wire ([`Self::longest_frame_time`]) plus
     /// T_postdrive, which the watchdog's span from the confirmed start to
     /// completion also covers, plus 1 ms for the adapter to report the
-    /// completion, the lateness at which the core counts a deadline missed
-    /// ([`LATE_DEADLINE`](crate::LATE_DEADLINE)). A watchdog at this floor
+    /// completion, the default lateness at which the core counts a deadline
+    /// late ([`DEFAULT_LATE_DEADLINE`]). A watchdog at this floor
     /// leaves nothing more for a slow adapter; the constructors' defaults
     /// leave a second or more.
     #[must_use]

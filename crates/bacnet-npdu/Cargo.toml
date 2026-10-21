@@ -1,0 +1,27 @@
+[package]
+name = "bacnet-npdu"
+description = "The no-std BACnet network-layer vocabulary (Clause 6): a borrowed NPDU view and encoder, network message types, reject reasons, network priority and NPDU limits"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["bacnet", "npdu", "network", "embedded", "no-std"]
+categories = ["embedded", "network-programming", "no-std", "no-std::no-alloc"]
+
+# No dependencies and no features: the view borrows from the caller's frame
+# and the encoder writes into the caller's buffer, so the crate builds on
+# bare-metal targets without an allocator.
+[dependencies]
+
+[dev-dependencies]
+proptest.workspace = true
+
+[package.metadata.docs.rs]
+# A bare-metal target too, to show the crate builds without std.
+targets = ["x86_64-unknown-linux-gnu", "thumbv7em-none-eabihf"]
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true

@@ -32,12 +32,13 @@ use bacnet_endpoint::bip::BipEndpointBuilder;
 use bacnet_endpoint::identity::{build_database_with_extra, DeviceIdentity};
 use bacnet_endpoint::session::{SessionConfig, SessionRole};
 use bacnet_network::layer::NetworkLayer;
+use bacnet_npdu::NetworkPriority;
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_transport::bip::BipTransport;
 use bacnet_transport::port::{ReceivedNpdu, TransportPort};
 use bacnet_types::enums::{
-    ConfirmedServiceChoice, NetworkPriority, ObjectType, PropertyIdentifier, Segmentation,
+    ConfirmedServiceChoice, EngineeringUnits, ObjectType, PropertyIdentifier, Segmentation,
     ServiceSupported,
 };
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
@@ -75,7 +76,12 @@ fn db_with_analog(
     instance: u32,
     value: f32,
 ) -> bacnet_objects::database::ObjectDatabase {
-    let mut o = AnalogInputObject::new(instance, format!("bip-ai-{instance}"), 0).unwrap();
+    let mut o = AnalogInputObject::new(
+        instance,
+        format!("bip-ai-{instance}"),
+        EngineeringUnits::SQUARE_METERS,
+    )
+    .unwrap();
     o.set_present_value(value);
     build_database_with_extra(id, vec![Box::new(o)]).unwrap()
 }
@@ -85,7 +91,7 @@ fn db_with_analog(
 /// Receives one Confirmed ReadProperty, answers ComplexAck with the given
 /// Real value, returns (invoke_id, peer-observed endpoint MAC).
 async fn peer_respond_once(
-    rx: &mut mpsc::Receiver<bacnet_network::layer::ReceivedApdu>,
+    rx: &mut bacnet_network::layer::ApduReceiver,
     net: &NetworkLayer<BipTransport>,
     value: f32,
 ) -> (u8, MacAddr) {
@@ -145,13 +151,13 @@ async fn peer_respond_once(
                 &src.mac_address,
                 &endpoint_mac,
                 false,
-                NetworkPriority::NORMAL,
+                NetworkPriority::Normal,
             )
             .await
             .unwrap();
         }
         _ => {
-            net.send_apdu(&enc, &endpoint_mac, false, NetworkPriority::NORMAL)
+            net.send_apdu(&enc, &endpoint_mac, false, NetworkPriority::Normal)
                 .await
                 .unwrap();
         }
@@ -254,7 +260,7 @@ async fn bip_one_socket_bidirectional_and_device_inspection() {
     let mut endpoint = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
         .role(SessionRole::Both)
         .database(db)
-        .identity(id.clone())
+        .device(id.clone())
         .build_session()
         .expect("bip session must build");
     endpoint.start().await.unwrap();
@@ -322,7 +328,7 @@ async fn bip_one_socket_bidirectional_and_device_inspection() {
     let mut enc = BytesMut::new();
     encode_apdu(&mut enc, &inbound).unwrap();
     peer_net
-        .send_apdu(&enc, &endpoint_mac, true, NetworkPriority::NORMAL)
+        .send_apdu(&enc, &endpoint_mac, true, NetworkPriority::Normal)
         .await
         .unwrap();
     let reply = tokio::time::timeout(WAIT, peer_rx.recv())
@@ -353,7 +359,7 @@ async fn bip_one_socket_bidirectional_and_device_inspection() {
 
     // Device properties inspection over the same real socket: every Device
     // ReadProperty must equal the I-Am fields (I-Am ≡ ReadProperty).
-    let iam = id.iam_request();
+    let iam = bacnet_endpoint::identity::iam_request(&id);
     for (idx, (prop, expect_value)) in [
         (
             PropertyIdentifier::OBJECT_IDENTIFIER,
@@ -399,7 +405,7 @@ async fn bip_one_socket_bidirectional_and_device_inspection() {
         let mut e = BytesMut::new();
         encode_apdu(&mut e, &req).unwrap();
         peer_net
-            .send_apdu(&e, &endpoint_mac, true, NetworkPriority::NORMAL)
+            .send_apdu(&e, &endpoint_mac, true, NetworkPriority::Normal)
             .await
             .unwrap();
         let rep = tokio::time::timeout(WAIT, peer_rx.recv())
@@ -450,7 +456,7 @@ async fn bip_one_socket_bidirectional_and_device_inspection() {
     let mut re = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
         .role(SessionRole::Both)
         .database(db2)
-        .identity(id2)
+        .device(id2)
         .build_session()
         .unwrap();
     re.start().await.unwrap();

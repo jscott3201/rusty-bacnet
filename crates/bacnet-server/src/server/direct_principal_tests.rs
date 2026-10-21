@@ -21,10 +21,17 @@ use tokio_rustls::rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 
 #[path = "direct_principal_complete_tests.rs"]
 mod complete;
+#[path = "direct_principal_context_tests.rs"]
+mod contexts;
+#[path = "direct_principal_policy_tests.rs"]
+mod policy;
 #[path = "direct_response_tests.rs"]
 mod responses;
+#[path = "direct_principal_router_tests.rs"]
+mod router;
 #[path = "direct_principal_segment_tests.rs"]
 mod segments;
+use super::warn_spy;
 
 const PEER_MAC: [u8; 6] = [0x22; 6];
 const PEER_UUID: [u8; 16] = [7; 16];

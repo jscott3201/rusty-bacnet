@@ -21,7 +21,8 @@ use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_transport::bip::BipTransport;
 use bacnet_transport::bvll::{decode_bip_mac, decode_bvll, BvlcFunction};
 use bacnet_types::enums::{
-    ConfirmedServiceChoice, ObjectType, PropertyIdentifier, UnconfirmedServiceChoice,
+    ConfirmedServiceChoice, EngineeringUnits, ObjectType, PropertyIdentifier,
+    UnconfirmedServiceChoice,
 };
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use bytes::BytesMut;
@@ -125,22 +126,27 @@ async fn loopback_broadcast_is_delivered() -> bool {
 }
 
 async fn server() -> BACnetServer<BipTransport> {
+    let identity = bacnet_objects::DeviceIdentity::new(DEVICE, 0)
+        .expect("valid Device identity")
+        .with_name("B/IP server");
     let mut db = ObjectDatabase::new();
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
-            instance: DEVICE,
-            name: "B/IP server".into(),
+            identity: identity.clone(),
             ..DeviceConfig::default()
         })
         .unwrap(),
     ))
     .unwrap();
-    db.add(Box::new(AnalogValueObject::new(1, "AV-1", 62).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+    ))
+    .unwrap();
     BACnetServer::bip_builder()
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
         .broadcast_address(LOOPBACK_BROADCAST)
+        .device(identity)
         .database(db)
         .build()
         .await

@@ -187,6 +187,12 @@ server without CertificateRequest can complete without receiving node credential
 The paired strict hub requests and verifies credentials, but the node factory alone
 does not enforce that remote behavior or establish full-profile conformance.
 
+## NAT topology
+
+`nat/` holds a separate topology: two BBMD sites behind NAT routers and two
+foreign devices (#940). Run `bash nat/run.sh`; see
+[docs/ci.md](../../docs/ci.md#nat-topology-manual).
+
 Sources: [OpenSSL req](https://docs.openssl.org/3.6/man1/openssl-req/),
 [extensions](https://docs.openssl.org/3.6/man5/x509v3_config/),
 [verify](https://docs.openssl.org/3.6/man1/openssl-verify/),

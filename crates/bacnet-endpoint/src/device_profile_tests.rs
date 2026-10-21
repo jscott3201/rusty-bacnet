@@ -35,13 +35,13 @@ fn primitive(bytes: &[u8]) -> PropertyValue {
 }
 fn assert_reject<T: std::fmt::Debug>(result: Result<T, Error>) {
     assert!(
-        matches!(result, Err(Error::Reject { reason }) if reason == RejectReason::UNRECOGNIZED_SERVICE.to_raw()),
+        matches!(result, Err(Error::Reject { reason }) if reason == RejectReason::UNRECOGNIZED_SERVICE),
         "{result:?}"
     );
 }
 fn assert_error<T: std::fmt::Debug>(result: Result<T, Error>, expected: ErrorCode) {
     assert!(
-        matches!(result, Err(Error::Protocol { class, code }) if class == ErrorClass::PROPERTY.to_raw() as u32 && code == expected.to_raw() as u32),
+        matches!(result, Err(Error::Protocol { class, code }) if class == ErrorClass::PROPERTY && code == expected),
         "{result:?}"
     );
 }
@@ -67,11 +67,15 @@ fn profiled_database(
     let before = identity_rows.map(|p| original.read_property(p, None).unwrap());
     let mut object = DeviceObject::with_tags_persistence(
         DeviceConfig {
-            instance: identity.instance(),
-            name,
-            vendor_id: identity.vendor_id(),
-            max_apdu_length: identity.max_apdu_length().into(),
-            segmentation_supported: identity.segmentation(),
+            identity: bacnet_objects::DeviceIdentity::new(
+                identity.instance(),
+                identity.vendor_id(),
+            )
+            .expect("valid Device identity")
+            .with_name(name)
+            .with_max_apdu(identity.max_apdu_length())
+            .expect("valid Device APDU")
+            .with_segmentation(identity.segmentation()),
             ..Default::default()
         },
         store,
@@ -108,7 +112,7 @@ async fn device_profiles_read_but_tags_never_enter_endpoint_mutation_authority()
                 crate::bip::BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
                     .role(SessionRole::ServerOnly)
                     .database(db)
-                    .identity(identity)
+                    .device(identity)
                     .build_session()
                     .unwrap();
             if writes {

@@ -1,5 +1,5 @@
 #[cfg(not(feature = "std"))]
-use alloc::{string::ToString, vec::Vec};
+use alloc::vec::Vec;
 
 use super::recipient::{check_encoded_recipient, write_recipient};
 use super::tagged::{
@@ -10,7 +10,7 @@ use super::{decode_recipient, validate_tlv_sequence};
 use crate::{primitives, tags};
 use bacnet_types::constructed::{AuditPropertyReference, BACnetAuditNotification};
 use bacnet_types::enums::{AuditOperation, ErrorClass, ErrorCode};
-use bacnet_types::error::Error;
+use bacnet_types::error::{DecodeError, DecodingKind, Error, RangeError};
 use bytes::BytesMut;
 
 /// Encode one bare `BACnetAuditNotification` field sequence.
@@ -20,18 +20,19 @@ pub fn encode_audit_notification(
 ) -> Result<(), Error> {
     let operation = notification.operation.to_raw();
     if !valid_operation(operation) {
-        return Err(Error::OutOfRange(format!(
-            "AuditNotification operation {operation} is reserved"
-        )));
+        return Err(RangeError::new("AuditNotification operation {} is reserved")
+            .with_value(operation.into())
+            .into());
     }
-    if notification
+    if let Some(priority) = notification
         .target_priority
-        .is_some_and(|priority| !(1..=16).contains(&priority))
+        .filter(|priority| !(1..=16).contains(priority))
     {
-        return Err(Error::OutOfRange(format!(
-            "AuditNotification target priority {} is outside 1..=16",
-            notification.target_priority.unwrap()
-        )));
+        return Err(
+            RangeError::new("AuditNotification target priority {} is outside 1..=16")
+                .with_value(priority.into())
+                .into(),
+        );
     }
     validate_raw_value(
         notification.target_value.as_deref(),
@@ -117,11 +118,11 @@ fn encode_raw_value(buf: &mut BytesMut, field_tag: u8, value: &[u8]) {
 
 /// Check a raw value before encoding it. `what` names it in the error, written
 /// out whole, so a value that passes builds no label (#1645).
-fn validate_raw_value(value: Option<&[u8]>, what: &str) -> Result<(), Error> {
+fn validate_raw_value(value: Option<&[u8]>, what: &'static str) -> Result<(), Error> {
     let Some(value) = value else {
         return Ok(());
     };
-    validate_tlv_sequence(value, what).map_err(|error| Error::Encoding(error.to_string()))
+    validate_tlv_sequence(value, what).map_err(Error::into_encode_refusal)
 }
 
 /// Decode one bare `BACnetAuditNotification` starting at `offset`.
@@ -163,10 +164,13 @@ pub fn decode_audit_notification_at(
     let (operation_raw, next) =
         decode_ctx_canonical_unsigned::<u32>(data, offset, 4, "AuditNotification operation")?;
     if !valid_operation(operation_raw) {
-        return Err(Error::decoding(
+        return Err(DecodeError::new(
+            DecodingKind::InvalidEncoding,
             operation_offset,
-            format!("AuditNotification operation {operation_raw} is reserved"),
-        ));
+            "AuditNotification operation {} is reserved",
+        )
+        .with_value(operation_raw.into())
+        .into());
     }
     let operation = AuditOperation::from_raw(operation_raw);
     offset = next;
@@ -247,10 +251,13 @@ pub fn decode_audit_notification_at(
         decode_ctx_canonical_unsigned::<u8>,
     )?;
     if let Some(priority) = target_priority.filter(|priority| !(1..=16).contains(priority)) {
-        return Err(Error::out_of_range(
+        return Err(DecodeError::new(
+            DecodingKind::OutOfRange,
             priority_offset,
-            format!("AuditNotification target-priority {priority} is outside 1..=16"),
-        ));
+            "AuditNotification target-priority {} is outside 1..=16",
+        )
+        .with_value(priority.into())
+        .into());
     }
     offset = next;
     let target_value = if next_is_opening(data, offset, 14)? {
@@ -337,7 +344,7 @@ fn decode_wrapped_recipient(
     data: &[u8],
     offset: usize,
     tag_number: u8,
-    what: &str,
+    what: &'static str,
 ) -> Result<(bacnet_types::constructed::BACnetRecipient, usize), Error> {
     let (body, next) = decode_ctx_constructed(data, offset, tag_number, what)?;
     let (recipient, recipient_end) = decode_recipient(body, 0)?;
@@ -345,10 +352,7 @@ fn decode_wrapped_recipient(
     let mut canonical = BytesMut::new();
     write_recipient(&mut canonical, &recipient);
     if canonical.as_ref() != body {
-        return Err(Error::decoding(
-            offset,
-            format!("{what} is not canonically encoded"),
-        ));
+        return Err(not_canonical(offset, what));
     }
     Ok((recipient, next))
 }
@@ -357,25 +361,31 @@ fn decode_canonical_timestamp(
     data: &[u8],
     offset: usize,
     tag_number: u8,
-    what: &str,
+    what: &'static str,
 ) -> Result<(bacnet_types::primitives::BACnetTimeStamp, usize), Error> {
     let (timestamp, next) = primitives::decode_timestamp(data, offset, tag_number)?;
     let mut canonical = BytesMut::new();
     primitives::encode_timestamp(&mut canonical, tag_number, &timestamp)?;
     if canonical.as_ref() != &data[offset..next] {
-        return Err(Error::decoding(
-            offset,
-            format!("{what} is not canonically encoded"),
-        ));
+        return Err(not_canonical(offset, what));
     }
     Ok((timestamp, next))
+}
+
+/// The refusal of a member `what` at `offset` whose encoding isn't the
+/// canonical one.
+#[cold]
+fn not_canonical(offset: usize, what: &'static str) -> Error {
+    DecodeError::new(DecodingKind::InvalidEncoding, offset, "not canonically encoded")
+        .within(what)
+        .into()
 }
 
 fn decode_raw_value(
     data: &[u8],
     offset: usize,
     tag_number: u8,
-    what: &str,
+    what: &'static str,
 ) -> Result<(Vec<u8>, usize), Error> {
     let (value, next) = decode_ctx_constructed(data, offset, tag_number, what)?;
     validate_tlv_sequence(value, what)?;

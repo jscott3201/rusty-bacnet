@@ -106,7 +106,5 @@ pub(super) fn apply(state: &mut ProfileState, write: &PendingWrite) -> Result<()
         .unwrap()
 }
 pub(super) fn assert_code<T>(result: Result<T, Error>, expected: ErrorCode) {
-    assert!(
-        matches!(result, Err(Error::Protocol { code, .. }) if code == u32::from(expected.to_raw()))
-    );
+    assert!(matches!(result, Err(Error::Protocol { code, .. }) if code == expected));
 }

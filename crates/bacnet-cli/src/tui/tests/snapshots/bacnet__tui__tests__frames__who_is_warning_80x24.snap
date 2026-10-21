@@ -2,10 +2,10 @@
 source: crates/bacnet-cli/src/tui/tests/frames.rs
 expression: "screen(&mut app, w, h)"
 ---
-" bacnet | BIP 10.0.0.1:47808 | up | READ-ONLY | drop 0                   ? help "
+" [1 Devices] 2 3 4 7 | BIP 10.0.0.1:47808 | up | READ-ONLY | drop 0      ? help "
 "┌ Devices (1) | sort: instance ↑ ──────────────────────────────────────────────┐"
-"│  Instance* Address                         Net    Vendor APDU  Seg      Seen │"
-"│> 7         10.0.0.7:47808                  local  1      1476  none     0s   │"
+"│  Instance* Name Address        Net   Vendor APDU Seg  Seen                   │"
+"│> 7         …    10.0.0.7:47808 local 1      1476 none 0s                     │"
 "│                                                                              │"
 "│                                                                              │"
 "│                                                                              │"

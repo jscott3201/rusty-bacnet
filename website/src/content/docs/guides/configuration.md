@@ -17,7 +17,7 @@ Most configuration mistakes come from mixing settings that sound similar but act
 | Request pacing | `--min-interval-ms` | `min_request_interval_ms` | Least time between requests to one device, in milliseconds; 0 by default |
 | Remote endpoint | Command target | Method `address` | Target address and, where needed, remote port |
 
-The reviewed CLI defaults to local UDP port `47808`, broadcast address `255.255.255.255`, and APDU timeout `6000` ms. One-shot commands without an interface use `0.0.0.0`; the interactive shell may prompt for an interface.
+The reviewed CLI defaults to local UDP port `47808`, broadcast address `255.255.255.255`, and APDU timeout `6000` ms. One-shot commands without an interface use `0.0.0.0`; the terminal UI may ask for an interface in a dialog.
 
 Do not infer receive isolation or multi-interface behavior from the word “bind.” Broadcast reception can involve wildcard socket behavior. Verify the actual host/interface arrangement, especially when multiple network adapters, VPNs, or local BACnet applications are present.
 
@@ -33,7 +33,7 @@ For standard same-subnet discovery, start with the intended BACnet network's por
 
 ## Configuration lives in the interface you use
 
-The reviewed CLI exposes command-line options and interactive session settings. These guides do not invent a global `bacnet.toml`, a `--config` flag, or a universal environment-variable layer.
+The reviewed CLI exposes command-line options and terminal UI profiles. These guides do not invent a global `bacnet.toml`, a `--config` flag, or a universal environment-variable layer. The terminal UI also keeps named profiles as TOML files under its configuration directory (`BACNET_CONFIG_DIR` replaces it), chosen with `bacnet tui --profile NAME`.
 
 In Python, construct the client or server with the documented keyword arguments. In Rust, configure the corresponding builder and transport. An application's own JSON/TOML configuration can map to those APIs, but that is an application convention—not a built-in CLI contract.
 
@@ -53,6 +53,6 @@ Documentation, GitHub Pages, public issues, and screenshots must not contain rea
 
 ## Sources and release scope
 
-These instructions target **v0.13.0**. Source review is not a claim of hardware qualification.
+These instructions target **v0.14.0**. Source review is not a claim of hardware qualification.
 
-[CLI definitions](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/crates/bacnet-cli/src/args.rs) · [CLI transport construction](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/crates/bacnet-cli/src/transport.rs) · [Python constructor](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/docs/python-api.md).
+[CLI definitions](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/crates/bacnet-cli/src/args.rs) · [CLI transport construction](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/crates/bacnet-cli/src/transport.rs) · [Python constructor](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/python-api.md).

@@ -95,6 +95,7 @@ fn driven(resolution_to: SocketAddrV6) -> (Arc<Resolver>, Arc<Capture>) {
         resolver: Arc::clone(&resolver),
         source: OWN,
         resolution_to,
+        foreign: None,
     };
     tokio::spawn(driver.run());
     (resolver, capture)
@@ -316,8 +317,13 @@ async fn a_foreign_device_asks_its_bbmd_and_sends_once_answered() {
 }
 
 /// With nobody answering, the send fails with a transport TimedOut three
-/// seconds after the first request, the BBMD got all three, and the next
-/// send to that VMAC fails at once.
+/// seconds after the first request, the next send to that VMAC fails at
+/// once, and the BBMD got all three requests.
+///
+/// The timing is checked on the paused clock before the test waits on any
+/// real socket. While a datagram is still crossing loopback the runtime
+/// looks idle, and a paused clock then jumps to its next timer (#1885). The
+/// BBMD's socket is read after the clock resumes.
 #[tokio::test(start_paused = true)]
 async fn a_foreign_device_send_fails_after_three_seconds_unanswered() {
     let bbmd = UdpSocket::bind("[::1]:0").await.unwrap();
@@ -327,9 +333,6 @@ async fn a_foreign_device_send_fails_after_three_seconds_unanswered() {
     let result = transport.send_unicast(NPDU, &PEER).await;
     assert_eq!(kind(&result), Some(io::ErrorKind::TimedOut), "{result:?}");
     assert_eq!(start.elapsed(), Duration::from_secs(3));
-    for _ in 0..3 {
-        assert_eq!(next_request(&bbmd).await.0, ADDRESS_RESOLUTION);
-    }
     let again = transport.send_unicast(NPDU, &PEER).await;
     assert_eq!(
         kind(&again),
@@ -337,12 +340,20 @@ async fn a_foreign_device_send_fails_after_three_seconds_unanswered() {
         "{again:?}"
     );
     assert_eq!(start.elapsed(), Duration::from_secs(3));
+    tokio::time::resume();
+    for _ in 0..3 {
+        assert_eq!(next_request(&bbmd).await.0, ADDRESS_RESOLUTION);
+    }
     transport.stop().await.unwrap();
 }
 
 /// A BBMD that refuses to pass the request on (Address-Resolution NAK)
 /// makes the failure say so.
-#[tokio::test(start_paused = true)]
+///
+/// This runs on the real clock because the NAK has to cross loopback before
+/// the resolution's three seconds run out. A paused clock could use them up
+/// while the NAK is still on its way (#1885).
+#[tokio::test]
 async fn a_bbmd_refusal_fails_the_send_as_refused() {
     let bbmd = UdpSocket::bind("[::1]:0").await.unwrap();
     let mut transport = foreign_device(&bbmd).await;
@@ -390,7 +401,7 @@ async fn receiver(
         local_ip,
         unicast_ips: vec![local_ip],
         wildcard_bind: false,
-        foreign_bbmd: foreign.then(|| (*bbmd().ip(), bbmd().port())),
+        foreign_bbmd: foreign.then(|| super::foreign_target::ForeignTarget::at(bbmd())),
         neighbours: resolver,
         forwarded_group_origin_drops: Arc::default(),
         drops: Arc::default(),
@@ -414,6 +425,7 @@ async fn feed(
         destination: IpAddr::V6(to),
         arrival_index: Some(1),
         os_group_delivery: None,
+        arrival_stamp: None,
     };
     receiver.handle_datagram(&frame, &datagram).await
 }
@@ -545,6 +557,7 @@ async fn only_the_configured_bbmds_nak_refuses_a_resolution() {
             destination: IpAddr::V6(receiver.local_ip),
             arrival_index: Some(1),
             os_group_delivery: None,
+            arrival_stamp: None,
         };
         assert_eq!(receiver.handle_datagram(&nak, &datagram).await, None);
         resolver.with_state(|state, counts| state.poll(t0 + Duration::from_secs(3), counts));
@@ -625,6 +638,9 @@ async fn a_virtual_address_resolution_times_out_unanswered() {
         .unwrap_err();
     assert!(matches!(&error, Error::Transport(e) if e.kind() == io::ErrorKind::TimedOut));
     assert_eq!(start.elapsed(), Duration::from_secs(3));
+    // As in the foreign-device timeout test: read the requests on the real
+    // clock, so one still on its way can't let the paused clock jump.
+    tokio::time::resume();
     let mut buf = [0u8; 64];
     for _ in 0..3 {
         let (len, _) = silent.recv_from(&mut buf).await.unwrap();

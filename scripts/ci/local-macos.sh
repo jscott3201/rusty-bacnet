@@ -8,8 +8,10 @@
 #   bash scripts/ci/local-macos.sh          # lint + clippy + macOS tests
 #   bash scripts/ci/local-macos.sh --quick  # skip the test suite
 #
-# serial and ethernet are Linux-only features, so macOS uses every other
-# optional feature, including those crates gate on their own features (#906).
+# ethernet, serial-gpio and bacnet-integration-tests/ethernet are Linux-only,
+# so macOS uses every other optional feature, serial included (#958; and
+# bacnet-cli/serial, experimental there, #969), including those crates gate on
+# their own features (#906). bacnet-cli/tui is a default feature (#974).
 # Clippy and rustdoc deny warnings, as CI does. The no_std clippy step and the
 # firmware link test need their bare-metal targets once: `rustup target add
 # thumbv6m-none-eabi thumbv7em-none-eabihf riscv32imac-unknown-none-elf
@@ -40,15 +42,19 @@ step "MSRV script regressions"; python3 scripts/ci/test-check-msrv.py
 step "firmware size script regressions"; python3 scripts/ci/test-firmware-size.py
 step "named_codes! copies match"; python3 scripts/ci/check-named-codes.py
 step "changelog fragments"; python3 -m unittest discover -s scripts -p 'test_changelog.py' && python3 scripts/changelog.py check
-features=bacnet-types/serde,bacnet-mstp-codec/bytes,bacnet-mstp-codec/heapless,bacnet-mstp-core/alloc,bacnet-bip-codec/bytes,bacnet-bip-codec/heapless,bacnet-router-core/bip,bacnet-router-core/mstp,bacnet-transport/ipv6,bacnet-transport/sc-tls,bacnet-client/ipv6,bacnet-client/sc-tls,bacnet-server/sc-tls,bacnet-endpoint/sc-tls,bacnet-integration-tests/ipv6,bacnet-cli/sc-tls,bacnet-cli/pcap,bacnet-cli/tui
+features=bacnet-types/serde,bacnet-encoding/heapless,bacnet-mstp-codec/bytes,bacnet-mstp-codec/heapless,bacnet-mstp-core/alloc,bacnet-bip-codec/bytes,bacnet-bip-codec/heapless,bacnet-router-core/bip,bacnet-router-core/mstp,bacnet-transport/ipv6,bacnet-transport/sc-tls,bacnet-transport/serial,bacnet-client/ipv6,bacnet-client/sc-tls,bacnet-server/sc-tls,bacnet-endpoint/sc-tls,bacnet-integration-tests/ipv6,bacnet-cli/sc-tls,bacnet-cli/pcap,bacnet-cli/serial
 step "clippy (every macOS feature)"
 cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked --features "$features" -- -D warnings
 step "clippy (PyO3 bindings)"; cargo clippy -p rusty-bacnet --all-targets --locked -- -D warnings
+step "clippy (bacnet-cli, no default features: without the TUI)"
+cargo clippy -p bacnet-cli --no-default-features --all-targets --locked -- -D warnings
 step "clippy and rustdoc (each published crate, default features; no_std types, encoding and services)"
 bash scripts/ci/check-default-features.sh
 step "clippy (no_std crates, bare-metal targets)"; bash scripts/ci/check-no-std.sh
 step "clippy (no_std types, encoding and services with alloc, all targets)"
 cargo clippy -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --features alloc --all-targets --locked -- -D warnings
+step "clippy (no_std types, encoding and services without alloc, all targets)"
+cargo clippy -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --all-targets --locked -- -D warnings
 step "firmware link test (bare-metal images, size budgets)"; bash scripts/ci/check-firmware-link.sh
 # The firmware images under QEMU: a manual check, never part of this run.
 # Uncomment to opt in; it needs Docker running (or add --native for a
@@ -68,9 +74,13 @@ if ! "$quick"; then
   cargo test --doc --workspace --exclude rusty-bacnet --locked --features "$features"
   step "bacnet-cli tests (default features)"
   cargo nextest run -p bacnet-cli --locked
+  step "bacnet-cli tests (no default features: without the TUI)"
+  cargo nextest run -p bacnet-cli --no-default-features --locked
   step "no_std crates' tests and doctests (alloc, without std)"
   cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --features alloc --locked
   cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --features alloc --locked
+  step "no_std crates' tests (without alloc)"
+  cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --locked
   step "PyO3 crate Rust tests"
   cargo nextest run -p rusty-bacnet --locked
 fi

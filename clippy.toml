@@ -1,2 +1,4 @@
 # Printing is denied workspace-wide; tests may print.
 allow-print-in-tests = true
+# `missing_safety_doc` checks private unsafe fns too (#1880).
+check-private-items = true

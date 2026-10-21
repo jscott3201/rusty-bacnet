@@ -19,7 +19,7 @@
 //! helpers, so a refusal has the kind and wording it has there.
 
 use bacnet_types::enums::{ConfirmedServiceChoice, ErrorClass, ErrorCode};
-use bacnet_types::error::Error;
+use bacnet_types::error::{DecodeError, DecodingKind, Error};
 
 use crate::constructed::tagged::{
     decode_app_enumerated, decode_app_unsigned, decode_ctx_constructed, decode_ctx_object_id,
@@ -30,7 +30,7 @@ use crate::tags;
 
 /// Decodes the members after `[0]` from an offset, returning the offset past
 /// them.
-type Members = fn(&[u8], usize, &str) -> Result<usize, Error>;
+type Members = fn(&[u8], usize, &'static str) -> Result<usize, Error>;
 
 /// The class and code of `data` when it is the complete formal error body of
 /// `service`; `None` when the service has no formal body or `data` does not
@@ -42,7 +42,7 @@ pub(super) fn decode_formal_body(
     service: ConfirmedServiceChoice,
     data: &[u8],
 ) -> Result<Option<(ErrorClass, ErrorCode)>, Error> {
-    let (what, members): (&str, Members) = match service {
+    let (what, members): (&'static str, Members) = match service {
         s if s == ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE => {
             ("formal WPM Error", first_failed_write_attempt)
         }
@@ -103,21 +103,33 @@ fn subscribe_cov_property_multiple(data: &[u8]) -> Result<Option<(ErrorClass, Er
 }
 
 /// WPM's `[1]` frame around the first failed write attempt.
-fn first_failed_write_attempt(data: &[u8], offset: usize, what: &str) -> Result<usize, Error> {
+fn first_failed_write_attempt(
+    data: &[u8],
+    offset: usize,
+    what: &'static str,
+) -> Result<usize, Error> {
     let (reference, end) = decode_ctx_constructed(data, offset, 1, what)?;
     decode_object_property_reference(reference)?;
     Ok(end)
 }
 
 /// ChangeList's and CreateObject's `[1]` Unsigned first failed element number.
-fn first_failed_element_number(data: &[u8], offset: usize, what: &str) -> Result<usize, Error> {
+fn first_failed_element_number(
+    data: &[u8],
+    offset: usize,
+    what: &'static str,
+) -> Result<usize, Error> {
     let (_, end) = decode_ctx_unsigned::<u32>(data, offset, 1, what)?;
     Ok(end)
 }
 
 /// ConfirmedPrivateTransfer's `[1]` vendor identifier and `[2]` service
 /// number, then its optional `[3]` error parameters.
-fn private_transfer_members(data: &[u8], offset: usize, what: &str) -> Result<usize, Error> {
+fn private_transfer_members(
+    data: &[u8],
+    offset: usize,
+    what: &'static str,
+) -> Result<usize, Error> {
     let (_, offset) = decode_ctx_unsigned::<u32>(data, offset, 1, what)?;
     let (_, offset) = decode_ctx_unsigned::<u32>(data, offset, 2, what)?;
     if offset == data.len() {
@@ -128,7 +140,7 @@ fn private_transfer_members(data: &[u8], offset: usize, what: &str) -> Result<us
 }
 
 /// VTClose's optional `[1]` frame of application Unsigned8 identifiers.
-fn vt_session_identifiers(data: &[u8], offset: usize, what: &str) -> Result<usize, Error> {
+fn vt_session_identifiers(data: &[u8], offset: usize, what: &'static str) -> Result<usize, Error> {
     if offset == data.len() {
         return Ok(offset);
     }
@@ -137,10 +149,14 @@ fn vt_session_identifiers(data: &[u8], offset: usize, what: &str) -> Result<usiz
     while position < sessions.len() {
         let (session, next) = decode_app_unsigned::<u64>(sessions, position, what)?;
         if u8::try_from(session).is_err() {
-            return Err(Error::out_of_range(
+            return Err(DecodeError::new(
+                DecodingKind::OutOfRange,
                 position,
-                format!("{what}: session identifier {session} exceeds u8"),
-            ));
+                "session identifier {} exceeds u8",
+            )
+            .within(what)
+            .with_value(session)
+            .into());
         }
         position = next;
     }
@@ -153,7 +169,7 @@ fn error_type(
     data: &[u8],
     offset: usize,
     number: u8,
-    what: &str,
+    what: &'static str,
 ) -> Result<((ErrorClass, ErrorCode), usize), Error> {
     let (error_body, end) = decode_ctx_constructed(data, offset, number, what)?;
     let (class, next) = decode_app_enumerated(error_body, 0, what)?;

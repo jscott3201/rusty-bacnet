@@ -5,6 +5,20 @@ use super::{
     accepts_ethernet_destination, check_llc_control, is_group_mac, LLC_CONTROL_TEST_CMD,
     LLC_CONTROL_XID_CMD,
 };
+use crate::warn_throttle::WarnThrottle;
+
+/// Log a frame dropped because the network layer's NPDU channel is full:
+/// a warning at most once per
+/// [`WARNING_INTERVAL`](crate::warn_throttle::WARNING_INTERVAL) of
+/// `warning`, with the drops since the last one, and debug for the rest
+/// (#1950). Returns the drops reported, when it warns.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(super) fn npdu_channel_full(warning: &WarnThrottle) -> Option<u64> {
+    crate::warn_throttled!(
+        warning,
+        "Ethernet: NPDU channel full, dropping incoming frame"
+    )
+}
 
 /// The receive loop's decision on one raw frame.
 #[derive(Debug, PartialEq, Eq)]

@@ -10,7 +10,7 @@ use bacnet_mstp_codec::{
     MAX_STANDARD_FRAME_LENGTH, MAX_STANDARD_MPDU_DATA,
 };
 use bacnet_mstp_core::{
-    Action, ActionBuffers, AllocQueues, CoreError, Direction, HeaplessQueues, Instant, MasterCore,
+    Action, ActionBuffers, AllocQueues, Direction, FixedQueues, Instant, MasterCore,
     MstpCoreConfig, QueueStorage, RequestId, TransmitId, MIN_RX_STORAGE,
 };
 
@@ -47,7 +47,7 @@ pub fn run(input: &Input) {
         Layout::Heapless => drive::<_, MAX_STANDARD_MPDU_DATA, 3, MAX_STANDARD_FRAME_LENGTH>(
             input,
             config,
-            HeaplessQueues::<3, 2>::new(),
+            FixedQueues::<3, 2>::new(),
             [3, 2],
             standard_rx,
         ),
@@ -82,7 +82,7 @@ fn drive<Q: QueueStorage, const NPDU: usize, const SLOTS: usize, const FRAME: us
     let mut buffers = Box::new(ActionBuffers::<SLOTS, NPDU, FRAME>::new());
     let start = std::ptr::addr_of!(*buffers) as usize;
     let span = start..start + std::mem::size_of::<ActionBuffers<SLOTS, NPDU, FRAME>>();
-    let mut core = MasterCore::new(config, queues, &mut rx, &mut *buffers, Instant::ZERO)
+    let mut core = MasterCore::from_parts(config, queues, &mut rx, &mut *buffers, Instant::ZERO)
         .unwrap_or_else(|error| panic!("the core refused the setup: {error:?}"));
     let line = Line::new(&mut shadow, params.extended, params.frame_abort);
     let mut driver = Driver {
@@ -196,15 +196,13 @@ impl<'s> Driver<'s> {
     fn line_input<'c, Q: QueueStorage, const N: usize>(
         &mut self,
         core: &mut MasterCore<'c, Q, N>,
-        feed: impl FnOnce(&mut MasterCore<'c, Q, N>, Instant) -> Result<(), CoreError>,
+        feed: impl FnOnce(&mut MasterCore<'c, Q, N>, Instant),
         hear: impl FnOnce(&mut Line<'s>, u64, &mut Vec<Heard>),
     ) {
         let now = self.now;
         if self.transmitting() {
             let before = (core.snapshot(), core.counters());
-            if let Err(error) = feed(core, self.at()) {
-                self.fail(&format!("echo refused: {error:?}"));
-            }
+            feed(core, self.at());
             self.stamp = now;
             if (core.snapshot(), core.counters()) != before {
                 self.fail("the station's own echo changed the core");
@@ -212,9 +210,7 @@ impl<'s> Driver<'s> {
             return;
         }
         self.checker.tick(now);
-        if let Err(error) = feed(core, self.at()) {
-            self.fail(&format!("line input refused: {error:?}"));
-        }
+        feed(core, self.at());
         self.stamp = now;
         let mut heard = Vec::new();
         hear(&mut self.checker.line, now, &mut heard);
@@ -260,18 +256,24 @@ impl<'s> Driver<'s> {
             self.checker.tick(now);
         }
         let before = (core.snapshot(), core.counters());
-        let result = core.on_validated_frame(frame.frame(), self.at());
-        match (taken, result) {
-            (true, Ok(())) => self.stamp = now,
-            (false, Err(CoreError::Frame(_))) => {}
-            (_, result) => self.fail(&format!(
-                "a host assembler's {frame:?} got {result:?}, though the codec would {}",
-                if taken { "take it" } else { "refuse it" }
-            )),
+        core.on_validated_frame(frame.frame(), self.at());
+        if taken {
+            self.stamp = now;
+        } else {
+            // Refused: counted as the adapter's error, and nothing else.
+            let mut expected = before;
+            expected.1.adapter_errors += 1;
+            if (core.snapshot(), core.counters()) != expected {
+                self.fail(&format!(
+                    "a host assembler's {frame:?}, which the codec would refuse, \
+                     was not refused as the adapter's error alone"
+                ));
+            }
+            return;
         }
-        if echo || !taken {
+        if echo {
             if (core.snapshot(), core.counters()) != before {
-                self.fail("a refused frame, or the station's echo, changed the core");
+                self.fail("the station's echo changed the core");
             }
             return;
         }
@@ -307,10 +309,31 @@ impl<'s> Driver<'s> {
                     Some(_) => self.checker.withdrawn(),
                     None => {}
                 },
-                Action::Transmit { id, frame } => {
+                Action::Transmit { id, header, length } => {
                     direction = false;
-                    self.check_span(frame, self.frame, "a transmit");
-                    let octets = frame.to_vec();
+                    if length > self.frame {
+                        self.fail(&format!(
+                            "a transmit of {length} octets, over {}",
+                            self.frame
+                        ));
+                    }
+                    // An adapter gets the octets with the confirmed start;
+                    // the checker sees them now, through `inspect`, and the
+                    // start must hand over the same.
+                    let octets = match core.handed_over_frame() {
+                        Some((handed, frame)) if handed == id => {
+                            self.check_span(frame, self.frame, "a transmit");
+                            frame.to_vec()
+                        }
+                        other => self.fail(&format!("transmit {id:?} handed over as {other:?}")),
+                    };
+                    if (
+                        octets.len(),
+                        Seen::decode(&octets).map(|seen| seen.frame().header),
+                    ) != (length, Ok(header))
+                    {
+                        self.fail("the transmit action misnames its frame");
+                    }
                     if tracing() {
                         eprintln!("  {} us: transmit {:?}", self.now, Seen::decode(&octets));
                     }

@@ -18,6 +18,7 @@ pub(super) async fn serve_npdu_loop<W>(
         member,
         identity,
         response,
+        warnings,
     } = peer;
     let mut retired = member.retirement();
     let mut prefer_send = false;
@@ -79,7 +80,7 @@ pub(super) async fn serve_npdu_loop<W>(
                 continue;
             }
             Ok(Some(Err(e))) => {
-                warn!("direct recv error from {peer_addr}: {e}");
+                crate::warn_throttled!(warnings.frame, "direct recv error from {peer_addr}: {e}");
                 return;
             }
             Ok(None) => return,
@@ -91,13 +92,16 @@ pub(super) async fn serve_npdu_loop<W>(
         };
         idle_deadline = tokio::time::Instant::now() + config.idle_timeout;
         if data.len() > config.max_bvlc_length as usize {
-            warn!("direct frame exceeds local Max-BVLC-Length, dropping from {peer_addr}");
+            crate::warn_throttled!(
+                warnings.frame,
+                "direct frame exceeds local Max-BVLC-Length, dropping from {peer_addr}"
+            );
             continue;
         }
         let msg = match decode_sc_message(&data) {
             Ok(msg) => msg,
             Err(e) => {
-                warn!("direct decode error from {peer_addr}: {e}");
+                crate::warn_throttled!(warnings.frame, "direct decode error from {peer_addr}: {e}");
                 continue;
             }
         };

@@ -19,7 +19,7 @@ use bacnet_services::cov_multiple::{
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};
 use bacnet_types::constructed::PropertyReference;
-use bacnet_types::enums::ObjectType;
+use bacnet_types::enums::{EngineeringUnits, ObjectType};
 use bacnet_types::primitives::{Date, Time};
 use std::sync::atomic::AtomicBool;
 use std::sync::Mutex as StdMutex;
@@ -195,23 +195,32 @@ impl Harness {
     }
 
     pub(super) async fn start_with(
-        config: ServerConfig,
+        mut config: ServerConfig,
         extend: impl FnOnce(&mut ObjectDatabase),
     ) -> Self {
+        config.device = bacnet_objects::DeviceIdentity::new(856, 0)
+            .unwrap()
+            .with_max_apdu(config.device.max_apdu_length())
+            .unwrap();
         let (tx, rx) = mpsc::channel(16);
         let mut db = ObjectDatabase::new();
         db.add(Box::new(
             DeviceObject::new(DeviceConfig {
-                instance: 856,
-                name: "Timed COV Device".into(),
-                max_apdu_length: config.max_apdu_length,
+                identity: bacnet_objects::DeviceIdentity::new(856, 0)
+                    .expect("valid Device identity")
+                    .with_name("Timed COV Device")
+                    .with_max_apdu(
+                        u16::try_from(u32::from(config.device.max_apdu_length()))
+                            .expect("Device APDU fits u16"),
+                    )
+                    .expect("valid Device APDU"),
                 ..DeviceConfig::default()
             })
             .unwrap(),
         ))
         .unwrap();
-        db.add(Box::new(AnalogValueObject::new(1, "AV-1", 62).unwrap()))
-            .unwrap();
+        let av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS);
+        db.add(Box::new(av.unwrap())).unwrap();
         extend(&mut db);
         let frames = Arc::new(StdMutex::new(Vec::new()));
         let clock = SharedClock(Arc::new(StdMutex::new(at(0))));

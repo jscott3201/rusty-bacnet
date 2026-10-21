@@ -1,10 +1,11 @@
 use super::*;
 use crate::audit::AuditReporterObject;
 use crate::{analog::AnalogValueObject, binary::BinaryValueObject, traits::BACnetObject};
+use bacnet_types::enums::EngineeringUnits;
 use bacnet_types::{enums::PropertyIdentifier as P, primitives::PropertyValue};
 
 fn objects(policy: ObjectAuditPolicy) -> Vec<Box<dyn BACnetObject>> {
-    let mut av = AnalogValueObject::new(1, "av", 62).unwrap();
+    let mut av = AnalogValueObject::new(1, "av", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     av.set_audit_policy(policy);
     let mut bv = BinaryValueObject::new(1, "bv").unwrap();
     bv.set_audit_policy(policy);

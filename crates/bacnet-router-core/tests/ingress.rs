@@ -3,8 +3,9 @@
 
 mod fixture;
 
-use bacnet_router_core::message::{MessageType, RejectReason};
+use bacnet_router_core::npdu::NetworkPriority;
 use bacnet_router_core::npdu::{AddressField, Malformed, Npdu};
+use bacnet_router_core::npdu::{NetworkMessageType, RejectMessageReason};
 use bacnet_router_core::router::{Discard, Kind, Options};
 use fixture::{
     addr, apdu_to, at, bytes, deliver, deliver_broadcast, learn_9_via_r7, port_on, router,
@@ -69,10 +70,13 @@ fn over_long_addresses_reject_with_reason_6() {
     assert_eq!(outcome, dropped(AddressField::Destination, 19));
     assert_eq!(sent.len(), 1);
     assert_eq!((sent[0].port, sent[0].to.as_deref()), (0, Some(NODE_A)));
-    assert_eq!(sent[0].kind, Kind::Reject(RejectReason::ADDRESSING_ERROR));
+    assert_eq!(
+        sent[0].kind,
+        Kind::Reject(RejectMessageReason::ADDRESSING_ERROR)
+    );
     assert_eq!(
         sent_reject(&sent[0]),
-        (RejectReason::ADDRESSING_ERROR, 9, None)
+        (RejectMessageReason::ADDRESSING_ERROR, 9, None)
     );
 
     // A long DADR with a remote origin behind it: the reject goes to the
@@ -82,7 +86,11 @@ fn over_long_addresses_reject_with_reason_6() {
     assert_eq!(sent[0].to.as_deref(), Some(NODE_A));
     assert_eq!(
         sent_reject(&sent[0]),
-        (RejectReason::ADDRESSING_ERROR, 9, Some((7, vec![1, 2, 3])))
+        (
+            RejectMessageReason::ADDRESSING_ERROR,
+            9,
+            Some((7, vec![1, 2, 3]))
+        )
     );
 
     // A long SADR: the origin can't be named, so the link sender hears.
@@ -97,7 +105,7 @@ fn over_long_addresses_reject_with_reason_6() {
     assert_eq!(outcome, dropped(AddressField::Source, 19));
     assert_eq!(
         sent_reject(&sent[0]),
-        (RejectReason::ADDRESSING_ERROR, 9, None)
+        (RejectMessageReason::ADDRESSING_ERROR, 9, None)
     );
 
     // A global broadcast, and an NPDU with no DNET: dropped, unanswered.
@@ -207,7 +215,7 @@ fn a_global_broadcast_with_a_dadr_goes_nowhere() {
     let mut router = router();
     let mut host = Recorder::default();
     for frame in [apdu_to(0xFFFF, &[5], UNCONFIRMED), {
-        let mut npdu = Npdu::message(MessageType::I_AM_ROUTER_TO_NETWORK, &[0, 9]);
+        let mut npdu = Npdu::message(NetworkMessageType::I_AM_ROUTER_TO_NETWORK, &[0, 9]);
         npdu.destination = Some(addr(0xFFFF, &[5]));
         bytes(&npdu)
     }] {
@@ -249,7 +257,7 @@ fn broadcast_addresses_carry_only_unconfirmed() {
     );
     assert_eq!(outcome, Outcome::Handled);
     assert_eq!(sent.len(), 1);
-    let mut who_is = Npdu::message(MessageType::WHO_IS_ROUTER_TO_NETWORK, &[]);
+    let mut who_is = Npdu::message(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK, &[]);
     who_is.destination = Some(addr(0xFFFF, &[]));
     let (outcome, _) = deliver(&mut router, &mut host, 0, NODE_A, &bytes(&who_is), at(1));
     assert_eq!(outcome, Outcome::Handled);
@@ -268,7 +276,7 @@ fn local_delivery_reports_how_it_was_addressed() {
         group,
         global,
         expecting_reply: false,
-        priority: 0,
+        priority: NetworkPriority::Normal,
     };
 
     // No DNET: the link says whether it was a group delivery.
@@ -307,7 +315,7 @@ fn local_delivery_reports_how_it_was_addressed() {
     // SNET, SADR, priority and expecting-reply reach the application.
     let mut routed = Npdu::apdu(CONFIRMED);
     routed.source = Some(addr(7, &[1, 2]));
-    routed.priority = 2;
+    routed.priority = NetworkPriority::CriticalEquipment;
     routed.expecting_reply = true;
     let (outcome, _) = deliver(&mut router, &mut host, 1, R7, &bytes(&routed), at(1));
     assert_eq!(
@@ -319,7 +327,7 @@ fn local_delivery_reports_how_it_was_addressed() {
             group: false,
             global: false,
             expecting_reply: true,
-            priority: 2,
+            priority: NetworkPriority::CriticalEquipment,
         }
     );
 }
@@ -399,7 +407,7 @@ fn own_address_on_any_port_is_local() {
             group: false,
             global: false,
             expecting_reply: true,
-            priority: 0,
+            priority: NetworkPriority::Normal,
         }
     );
     assert!(sent.is_empty(), "nothing on any wire");
@@ -452,11 +460,4 @@ fn a_dlen_0_broadcast_is_never_the_routers_own_address() {
     let (outcome, sent) = deliver(&mut router, &mut host, 0, NODE_A, &frame, at(1));
     assert_eq!(outcome, Outcome::Handled);
     assert_eq!((sent[0].port, sent[0].is_broadcast()), (1, true));
-}
-
-/// A port numbered 0 or 0xFFFF is taken with no direct route, as today.
-#[test]
-fn a_reserved_port_number_has_no_direct_route() {
-    let router = router_with(&[port_on(0, OWN_0), port_on(2, OWN_1)], Options::HOSTED);
-    assert_eq!(router.table().networks().collect::<Vec<_>>(), [2]);
 }

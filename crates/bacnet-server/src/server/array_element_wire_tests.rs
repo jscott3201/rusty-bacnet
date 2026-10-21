@@ -71,8 +71,8 @@ fn command() -> CommandObject {
 
 fn is_invalid_array_index(error: &Error) -> bool {
     matches!(error, Error::Protocol { class, code }
-        if *class == ErrorClass::PROPERTY.to_raw() as u32
-            && *code == ErrorCode::INVALID_ARRAY_INDEX.to_raw() as u32)
+        if *class == ErrorClass::PROPERTY
+            && *code == ErrorCode::INVALID_ARRAY_INDEX)
 }
 
 #[tokio::test]

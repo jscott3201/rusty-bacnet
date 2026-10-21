@@ -105,7 +105,7 @@ fn assert_protocol(error: Error, class: ErrorClass, code: ErrorCode) {
     assert!(matches!(
         error,
         Error::Protocol { class: actual_class, code: actual_code }
-            if actual_class == class.to_raw() as u32 && actual_code == code.to_raw() as u32
+            if actual_class == class && actual_code == code
     ));
 }
 
@@ -203,8 +203,8 @@ impl BACnetObject for AuditWithoutCapability {
         _array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
         Err(Error::Protocol {
-            class: ErrorClass::PROPERTY.to_raw() as u32,
-            code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+            class: ErrorClass::PROPERTY,
+            code: ErrorCode::UNKNOWN_PROPERTY,
         })
     }
 
@@ -216,8 +216,8 @@ impl BACnetObject for AuditWithoutCapability {
         _priority: Option<u8>,
     ) -> Result<(), Error> {
         Err(Error::Protocol {
-            class: ErrorClass::PROPERTY.to_raw() as u32,
-            code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
+            class: ErrorClass::PROPERTY,
+            code: ErrorCode::WRITE_ACCESS_DENIED,
         })
     }
 

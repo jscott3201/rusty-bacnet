@@ -3,12 +3,13 @@
 
 mod fixture;
 
-use bacnet_router_core::message::{MessageType, RoutingEntries};
-use bacnet_router_core::router::{ControlClass, Discard, Event, Kind, Options, SendRefusal};
-use bacnet_router_core::{Mac, PortId};
+use bacnet_router_core::message::RoutingEntries;
+use bacnet_router_core::npdu::Mac;
+use bacnet_router_core::npdu::NetworkMessageType;
+use bacnet_router_core::router::{ControlClass, Discard, Event, Kind, SendRefusal};
+use bacnet_router_core::PortId;
 use fixture::{
-    at, deliver, drain_refusing, learn_9_via_r7, message, port_on, router, router_with, Outcome,
-    Recorder, NODE_A, OWN_0, OWN_1, R7,
+    at, deliver, drain_refusing, learn_9_via_r7, message, router, Outcome, Recorder, NODE_A, R7,
 };
 
 /// An Initialize-Routing-Table with these (network, Port ID) entries, each
@@ -21,7 +22,7 @@ fn init_rt(entries: &[(u16, u8)], info: &[u8]) -> Vec<u8> {
         data.push(info.len() as u8);
         data.extend_from_slice(info);
     }
-    message(MessageType::INITIALIZE_ROUTING_TABLE, &data)
+    message(NetworkMessageType::INITIALIZE_ROUTING_TABLE, &data)
 }
 
 /// The (network, Port ID) entries of a sent Ack.
@@ -29,7 +30,7 @@ fn ack_entries(sent: &fixture::Sent) -> Vec<(u16, u8)> {
     let parsed = sent.parsed();
     assert_eq!(
         parsed.message_type,
-        Some(MessageType::INITIALIZE_ROUTING_TABLE_ACK)
+        Some(NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK)
     );
     RoutingEntries::parse(parsed.payload)
         .unwrap()
@@ -78,11 +79,11 @@ fn updates_apply_in_order_and_ack_empty() {
     assert_eq!((sent[0].port, sent[0].to.as_deref()), (1, Some(R7)));
     assert_eq!(
         sent[0].kind,
-        Kind::Answer(MessageType::INITIALIZE_ROUTING_TABLE_ACK)
+        Kind::Answer(NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK)
     );
     assert_eq!(
         sent[0].npdu,
-        message(MessageType::INITIALIZE_ROUTING_TABLE_ACK, &[])
+        message(NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK, &[])
     );
     assert_eq!(
         host.events,
@@ -151,10 +152,10 @@ fn query_splits_into_bounded_acks() {
 /// update's Ack with no data (init_routing_table_tests.rs:104).
 #[test]
 fn an_empty_table_answers_with_one_count_zero_ack() {
-    let mut router = router_with(
-        &[port_on(0, OWN_0), port_on(0xFFFF, OWN_1)],
-        Options::HOSTED,
-    );
+    let mut router = router();
+    for network in [1, 2] {
+        router.table_mut().remove(network);
+    }
     assert!(router.table().is_empty());
     let (_, sent) = deliver(
         &mut router,
@@ -167,7 +168,7 @@ fn an_empty_table_answers_with_one_count_zero_ack() {
     assert_eq!(sent.len(), 1);
     assert_eq!(
         sent[0].npdu,
-        message(MessageType::INITIALIZE_ROUTING_TABLE_ACK, &[0])
+        message(NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK, &[0])
     );
 }
 
@@ -254,7 +255,7 @@ fn ack_entries_are_learned_through_the_arrival_port() {
         data.extend_from_slice(&network.to_be_bytes());
         data.extend_from_slice(&[port_id, 0]);
     }
-    let ack = message(MessageType::INITIALIZE_ROUTING_TABLE_ACK, &data);
+    let ack = message(NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK, &data);
     let (outcome, sent) = deliver(&mut router, &mut host, 1, R7, &ack, at(1));
     assert_eq!(outcome, Outcome::Handled);
     assert!(sent.is_empty());
@@ -266,7 +267,7 @@ fn ack_entries_are_learned_through_the_arrival_port() {
     assert_eq!(host.asked[0].targets, [44, 0, 45]);
     assert_eq!(router.table().claim_counters().learned_ok, 2);
 
-    let empty = message(MessageType::INITIALIZE_ROUTING_TABLE_ACK, &[]);
+    let empty = message(NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK, &[]);
     let (outcome, _) = deliver(&mut router, &mut host, 1, R7, &empty, at(2));
     assert_eq!(outcome, Outcome::Handled);
     assert_eq!(host.asked.len(), 1, "a data-less Ack asks nothing");

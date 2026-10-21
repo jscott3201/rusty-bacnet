@@ -32,8 +32,8 @@ fn reinit_wrong_password_rejected() {
     let err = handle_reinitialize_device(&buf, &pw).unwrap_err();
     match err {
         Error::Protocol { class, code } => {
-            assert_eq!(class, ErrorClass::SECURITY.to_raw() as u32);
-            assert_eq!(code, ErrorCode::PASSWORD_FAILURE.to_raw() as u32);
+            assert_eq!(class, ErrorClass::SECURITY);
+            assert_eq!(code, ErrorCode::PASSWORD_FAILURE);
         }
         other => panic!("expected Protocol error, got: {other:?}"),
     }
@@ -53,8 +53,8 @@ fn reinit_missing_password_when_required() {
     let err = handle_reinitialize_device(&buf, &pw).unwrap_err();
     match err {
         Error::Protocol { class, code } => {
-            assert_eq!(class, ErrorClass::SECURITY.to_raw() as u32);
-            assert_eq!(code, ErrorCode::PASSWORD_FAILURE.to_raw() as u32);
+            assert_eq!(class, ErrorClass::SECURITY);
+            assert_eq!(code, ErrorCode::PASSWORD_FAILURE);
         }
         other => panic!("expected Protocol error, got: {other:?}"),
     }

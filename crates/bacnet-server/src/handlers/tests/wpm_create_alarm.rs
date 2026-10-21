@@ -298,8 +298,9 @@ fn create_object_bad_initial_value_rolls_back() {
 /// slot to overwrite. Returns the db and the AO's object identifier.
 fn make_db_with_commandable_ao() -> (ObjectDatabase, ObjectIdentifier) {
     use bacnet_objects::analog::AnalogOutputObject;
+    use bacnet_types::enums::EngineeringUnits;
     let mut db = ObjectDatabase::new();
-    let mut ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
+    let mut ao = AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     // Establish an active command at priority 8.
     ao.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
@@ -449,8 +450,9 @@ fn wpm_prefix_commit_keeps_relinquished_priority_slot() {
 #[test]
 fn wpm_prefix_commit_keeps_noncommandable_present_value_analoginput() {
     use bacnet_objects::analog::AnalogInputObject;
+    use bacnet_types::enums::EngineeringUnits;
     let mut db = ObjectDatabase::new();
-    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ai.write_property(
         PropertyIdentifier::OUT_OF_SERVICE,
         None,

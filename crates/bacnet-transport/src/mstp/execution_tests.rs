@@ -74,8 +74,8 @@ pub(crate) async fn execution_timing_harness<S: SerialPort, P: SerialPort>(
                 ..config(3, 127)
             },
         );
-        if let Some(mode) = mode {
-            transport = transport.with_execution_mode(mode);
+        if let Some(mode) = &mode {
+            transport = transport.with_execution_mode(mode.clone());
         }
         let mut npdus = transport.start().await.unwrap();
         assert_eq!(npdus.max_capacity(), 64);
@@ -178,7 +178,7 @@ async fn execution_modes_write_the_same_bytes() {
             for mode in [
                 None,
                 Some(MstpExecutionMode::Tokio),
-                Some(MstpExecutionMode::DedicatedThread),
+                Some(MstpExecutionMode::dedicated_thread()),
             ] {
                 let (serial, peer) = LoopbackSerial::pair();
                 let wire = execution_timing_harness(serial, peer, mode, baud, chunked).await;
@@ -193,7 +193,10 @@ async fn execution_modes_write_the_same_bytes() {
 
 #[tokio::test]
 async fn execution_modes_answer_requests_in_time() {
-    for mode in [MstpExecutionMode::Tokio, MstpExecutionMode::DedicatedThread] {
+    for mode in [
+        MstpExecutionMode::Tokio,
+        MstpExecutionMode::dedicated_thread(),
+    ] {
         for ready in [true, false] {
             tokio::time::timeout(Duration::from_secs(2), async {
                 let (serial, peer) = LoopbackSerial::pair();
@@ -207,7 +210,7 @@ async fn execution_modes_answer_requests_in_time() {
                     },
                     config(3, 127),
                 )
-                .with_execution_mode(mode);
+                .with_execution_mode(mode.clone());
                 let mut npdus = transport.start().await.unwrap();
                 let request = encode(FrameType::BACNET_DATA_EXPECTING_REPLY, 3, 7, &[1, 4, 0x10]);
                 peer.write(&request).await.unwrap();
@@ -249,7 +252,7 @@ async fn abort_and_drop_release_serial_and_pending_reply(mode: MstpExecutionMode
             tokio::time::timeout(Duration::from_secs(2), async {
                 let (serial, peer) = LoopbackSerial::pair();
                 let mut transport =
-                    MstpTransport::new(serial, config(3, 127)).with_execution_mode(mode);
+                    MstpTransport::new(serial, config(3, 127)).with_execution_mode(mode.clone());
                 let mut npdus = transport.start().await.unwrap();
                 let reply_tx = if pending_reply {
                     let request =
@@ -278,7 +281,7 @@ async fn abort_and_drop_release_serial_and_pending_reply(mode: MstpExecutionMode
 
 #[tokio::test]
 async fn dedicated_abort_and_drop_release_serial_and_pending_reply() {
-    abort_and_drop_release_serial_and_pending_reply(MstpExecutionMode::DedicatedThread).await;
+    abort_and_drop_release_serial_and_pending_reply(MstpExecutionMode::dedicated_thread()).await;
 }
 
 /// On a multi-thread runtime the aborted task is dropped on a worker

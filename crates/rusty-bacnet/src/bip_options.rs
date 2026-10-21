@@ -5,9 +5,9 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use bacnet_transport::bbmd::{BdtEntry, ForeignDevicePolicy};
+use bacnet_transport::bbmd::{BdtEntry, ForeignDevicePolicy, NatTraversal, PrivateRange};
 use bacnet_transport::bip::{
-    BbmdOptions, BipMode, ForeignDeviceConfig, ForeignRegistrationOutcome,
+    BbmdOptions, BipMode, BipMulticast, ForeignDeviceConfig, ForeignRegistrationOutcome,
     ForeignRegistrationSnapshot, DEFAULT_BACNET_PORT,
 };
 use pyo3::exceptions::PyValueError;
@@ -115,7 +115,18 @@ impl PyForeignDevice {
 /// devices register (default False: every registration is refused).
 /// `management_acl` lists the IPv4 addresses allowed to delete Foreign
 /// Device Table entries (default: none). `bdt_persist_path` names a file
-/// holding a BDT to start with instead, when it loads.
+/// holding a BDT to start with instead, when it loads, and where a BDT
+/// activated through the registered Network Port is saved. `alone_on_subnet`
+/// says this BBMD is the only device of its B/IP network on its subnet, as
+/// behind a NAT router: it then skips the local rebroadcast of forwarded and
+/// distributed broadcasts (default False). `nat_global_address`, `"ip"` or
+/// `"ip:port"`, runs it behind a NAT router that port-forwards that public
+/// address to it (Annex J.7.5): the BDT must then list that address, and
+/// every row must be two-hop, or `ValueError` is raised (an empty BDT, a
+/// BBMD serving foreign devices only, is fine). `nat_private_ranges` lists
+/// up to four `"a.b.c.d/n"` ranges to count as private besides RFC 1918;
+/// `"0.0.0.0/0"` counts every foreign device as private, so all their
+/// broadcasts go on from the global address.
 #[pyclass(name = "Bbmd", module = "rusty_bacnet", frozen, skip_from_py_object)]
 pub(crate) struct PyBbmd {
     options: BbmdOptions,
@@ -125,12 +136,16 @@ pub(crate) struct PyBbmd {
 impl PyBbmd {
     /// Check and keep the BBMD's settings.
     #[new]
-    #[pyo3(signature = (bdt=None, *, accept_foreign_devices=false, management_acl=None, bdt_persist_path=None))]
+    #[pyo3(signature = (bdt=None, *, accept_foreign_devices=false, management_acl=None, bdt_persist_path=None, alone_on_subnet=false, nat_global_address=None, nat_private_ranges=None))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         bdt: Option<Vec<Bound<'_, PyAny>>>,
         accept_foreign_devices: bool,
         management_acl: Option<Vec<String>>,
         bdt_persist_path: Option<PathBuf>,
+        alone_on_subnet: bool,
+        nat_global_address: Option<String>,
+        nat_private_ranges: Option<Vec<String>>,
     ) -> PyResult<Self> {
         let bdt = bdt
             .unwrap_or_default()
@@ -142,12 +157,18 @@ impl PyBbmd {
             .iter()
             .map(|ip| parse_ip(ip, "management_acl").map(|ip| ip.octets()))
             .collect::<PyResult<Vec<_>>>()?;
+        let nat = nat_options(nat_global_address, nat_private_ranges)?;
+        if let Some(nat) = &nat {
+            check_nat_bdt(&bdt, nat.global_address)?;
+        }
         Ok(Self {
             options: BbmdOptions {
                 bdt,
                 foreign_device_policy: accept_foreign_devices.then(ForeignDevicePolicy::default),
                 management_acl,
                 bdt_persist_path,
+                alone_on_subnet,
+                nat,
                 ..BbmdOptions::default()
             },
         })
@@ -156,17 +177,7 @@ impl PyBbmd {
     /// The BDT rows given, as `("ip:port", "mask")`.
     #[getter]
     fn bdt(&self) -> Vec<(String, String)> {
-        self.options
-            .bdt
-            .iter()
-            .map(|row| {
-                let address = SocketAddrV4::new(Ipv4Addr::from(row.ip), row.port);
-                (
-                    address.to_string(),
-                    Ipv4Addr::from(row.broadcast_mask).to_string(),
-                )
-            })
-            .collect()
+        self.options.bdt.iter().map(bdt_row).collect()
     }
 
     /// Whether foreign devices may register.
@@ -190,17 +201,174 @@ impl PyBbmd {
         self.options.bdt_persist_path.clone()
     }
 
+    /// Whether this BBMD is the only device of its B/IP network on its
+    /// subnet.
+    #[getter]
+    fn alone_on_subnet(&self) -> bool {
+        self.options.alone_on_subnet
+    }
+
+    /// The NAT router's public `"ip:port"` this BBMD runs behind, if any.
+    #[getter]
+    fn nat_global_address(&self) -> Option<String> {
+        self.options
+            .nat
+            .as_ref()
+            .map(|nat| nat.global_address.to_string())
+    }
+
+    /// The ranges counted as private besides RFC 1918, as `"a.b.c.d/n"`.
+    #[getter]
+    fn nat_private_ranges(&self) -> Vec<String> {
+        self.options.nat.as_ref().map_or_else(Vec::new, |nat| {
+            nat.private_ranges.iter().map(ToString::to_string).collect()
+        })
+    }
+
     fn __repr__(&self) -> String {
+        let python = |flag: bool| if flag { "True" } else { "False" };
+        let nat = self
+            .nat_global_address()
+            .map_or_else(|| "None".to_string(), |global| format!("'{global}'"));
         format!(
-            "Bbmd(bdt={} rows, accept_foreign_devices={})",
+            "Bbmd(bdt={} rows, accept_foreign_devices={}, alone_on_subnet={}, nat_global_address={nat})",
             self.options.bdt.len(),
-            if self.accept_foreign_devices() {
-                "True"
-            } else {
-                "False"
-            }
+            python(self.accept_foreign_devices()),
+            python(self.options.alone_on_subnet),
         )
     }
+}
+
+/// A B/IP multicast group, for the `multicast=` keyword (Annex J.8, #941).
+///
+/// `group` is a class D IPv4 address outside 224.0.0.0/24, the block
+/// reserved for local network control. The node's broadcasts then go to the
+/// group, and it takes broadcasts only from the group, never a subnet
+/// broadcast. `ttl`, 1 to 255 (default 1), is the multicast TTL: 1 keeps
+/// the group's traffic on the local network, so raise it for a group that
+/// spans IP routers. `port` is the group's UDP port, by default the node's
+/// own; members on one host at one address need their own ports and so a
+/// shared group port. Multicast needs an explicit `interface` (not
+/// "0.0.0.0") and can't be combined with `foreign_device=` or
+/// `share_port_by_address=True`; with `bbmd=` the owner is the BBMD that
+/// serves the group (Annex J.8.3). A bad value raises ValueError, or
+/// OverflowError for an integer out of range.
+#[pyclass(
+    name = "Multicast",
+    module = "rusty_bacnet",
+    frozen,
+    eq,
+    hash,
+    skip_from_py_object
+)]
+#[derive(PartialEq, Eq, Hash)]
+pub(crate) struct PyMulticast {
+    multicast: BipMulticast,
+}
+
+#[pymethods]
+impl PyMulticast {
+    /// Check and keep the group.
+    #[new]
+    #[pyo3(signature = (group, *, ttl=1, port=None))]
+    fn new(group: &str, ttl: u8, port: Option<u16>) -> PyResult<Self> {
+        let ip = parse_ip(group, "group")?;
+        let invalid = |e: bacnet_types::error::Error| PyValueError::new_err(e.to_string());
+        let mut multicast = BipMulticast::new(ip).map_err(invalid)?;
+        multicast = multicast.with_ttl(ttl).map_err(invalid)?;
+        if let Some(port) = port {
+            multicast = multicast.with_port(port).map_err(invalid)?;
+        }
+        Ok(Self { multicast })
+    }
+
+    /// The group address.
+    #[getter]
+    fn group(&self) -> String {
+        self.multicast.group().to_string()
+    }
+
+    /// The multicast TTL.
+    #[getter]
+    fn ttl(&self) -> u8 {
+        self.multicast.ttl()
+    }
+
+    /// The group's UDP port, or None for the node's own.
+    #[getter]
+    fn port(&self) -> Option<u16> {
+        self.multicast.port()
+    }
+
+    fn __repr__(&self) -> String {
+        let port = self
+            .port()
+            .map_or_else(|| "None".to_string(), |p| p.to_string());
+        format!(
+            "Multicast(group='{}', ttl={}, port={port})",
+            self.group(),
+            self.ttl()
+        )
+    }
+
+    /// Copy and pickle as a call to the constructor with the same settings,
+    /// keywords included, so a copy is equal and checked again.
+    fn __reduce__<'py>(slf: &Bound<'py, Self>) -> PyResult<(Bound<'py, PyAny>, ())> {
+        let py = slf.py();
+        let this = slf.get();
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("ttl", this.ttl())?;
+        kwargs.set_item("port", this.port())?;
+        let rebuild = py
+            .import("functools")?
+            .getattr("partial")?
+            .call((slf.get_type(), this.group()), Some(&kwargs))?;
+        Ok((rebuild, ()))
+    }
+}
+
+/// The group the `multicast=` keyword asks for: only on B/IP, with an
+/// explicit interface, and not for a foreign device. A BBMD with a group
+/// serves it (Annex J.8.3).
+pub(crate) fn bip_multicast(
+    transport: &str,
+    interface: &str,
+    port: u16,
+    share_port_by_address: bool,
+    mode: &BipMode,
+    multicast: Option<PyRef<'_, PyMulticast>>,
+) -> PyResult<Option<BipMulticast>> {
+    let Some(multicast) = multicast else {
+        return Ok(None);
+    };
+    if transport != "bip" {
+        return Err(PyValueError::new_err(
+            "multicast applies only to transport='bip'",
+        ));
+    }
+    if matches!(mode, BipMode::Foreign(_)) {
+        return Err(PyValueError::new_err(
+            "multicast can't be combined with foreign_device: a foreign device broadcasts \
+             through its BBMD",
+        ));
+    }
+    if parse_ip(interface, "interface")?.is_unspecified() {
+        return Err(PyValueError::new_err(
+            "multicast needs an explicit interface address, not 0.0.0.0",
+        ));
+    }
+    if share_port_by_address {
+        return Err(PyValueError::new_err(
+            "multicast can't be combined with share_port_by_address; give each owner on \
+             the host its own port and the group a shared one (Multicast(port=...))",
+        ));
+    }
+    if port == 0 && multicast.multicast.port().is_none() {
+        return Err(PyValueError::new_err(
+            "multicast with port=0 needs the group's own port: Multicast(group, port=...)",
+        ));
+    }
+    Ok(Some(multicast.multicast))
 }
 
 /// The B/IP mode the `bbmd=` and `foreign_device=` keywords ask for: one of
@@ -253,9 +421,84 @@ pub(crate) fn registration_dict(registration: ForeignRegistrationSnapshot) -> Py
     })
 }
 
+/// The NAT setting the `nat_global_address` and `nat_private_ranges`
+/// keywords ask for: none without a global address, and ranges only with
+/// one.
+fn nat_options(
+    global: Option<String>,
+    ranges: Option<Vec<String>>,
+) -> PyResult<Option<NatTraversal>> {
+    let Some(global) = global else {
+        if ranges.is_some_and(|ranges| !ranges.is_empty()) {
+            return Err(PyValueError::new_err(
+                "nat_private_ranges needs nat_global_address",
+            ));
+        }
+        return Ok(None);
+    };
+    let address = parse_address(&global, "nat_global_address")?;
+    if address.ip().is_loopback() {
+        return Err(PyValueError::new_err(format!(
+            "nat_global_address must be a non-loopback address, got '{global}'"
+        )));
+    }
+    let mut nat = NatTraversal::new(address);
+    for range in ranges.unwrap_or_default() {
+        nat.private_ranges.push(parse_range(&range)?);
+    }
+    if nat.private_ranges.len() > NatTraversal::MAX_PRIVATE_RANGES {
+        return Err(PyValueError::new_err(format!(
+            "nat_private_ranges holds at most {} ranges",
+            NatTraversal::MAX_PRIVATE_RANGES
+        )));
+    }
+    Ok(Some(nat))
+}
+
+/// Behind NAT, a BDT with rows must list the global address, and every row
+/// must be two-hop (Annex J.7.5); an empty one serves foreign devices only.
+fn check_nat_bdt(bdt: &[BdtEntry], global: SocketAddrV4) -> PyResult<()> {
+    if bdt.iter().any(|row| row.broadcast_mask != [255; 4]) {
+        return Err(PyValueError::new_err(
+            "behind NAT every bdt row must be two-hop ('ip:port', mask 255.255.255.255)",
+        ));
+    }
+    let lists_global = bdt
+        .iter()
+        .any(|row| SocketAddrV4::new(Ipv4Addr::from(row.ip), row.port) == global);
+    if !bdt.is_empty() && !lists_global {
+        return Err(PyValueError::new_err(format!(
+            "behind NAT the bdt must list nat_global_address {global} as this BBMD's own row"
+        )));
+    }
+    Ok(())
+}
+
+/// `"a.b.c.d/n"`, a prefix of at most 32 bits.
+fn parse_range(text: &str) -> PyResult<PrivateRange> {
+    let refused = || {
+        PyValueError::new_err(format!(
+            "nat_private_ranges entries are 'a.b.c.d/n', got '{text}'"
+        ))
+    };
+    let (network, prefix) = text.split_once('/').ok_or_else(refused)?;
+    let network = network.parse::<Ipv4Addr>().map_err(|_| refused())?;
+    let prefix = prefix.parse::<u8>().map_err(|_| refused())?;
+    PrivateRange::new(network, prefix).map_err(|_| refused())
+}
+
+/// A BDT row as Python reads it: `("ip:port", "mask")`.
+pub(crate) fn bdt_row(row: &BdtEntry) -> (String, String) {
+    let address = SocketAddrV4::new(Ipv4Addr::from(row.ip), row.port);
+    (
+        address.to_string(),
+        Ipv4Addr::from(row.broadcast_mask).to_string(),
+    )
+}
+
 /// A BDT row: `"ip[:port]"`, its broadcasts forwarded by unicast, or
 /// `("ip[:port]", "mask")`.
-fn bdt_entry(row: &Bound<'_, PyAny>) -> PyResult<BdtEntry> {
+pub(crate) fn bdt_entry(row: &Bound<'_, PyAny>) -> PyResult<BdtEntry> {
     let (address, mask) = match row.extract::<String>() {
         Ok(address) => (address, Ipv4Addr::BROADCAST),
         Err(_) => {
@@ -274,7 +517,7 @@ fn bdt_entry(row: &Bound<'_, PyAny>) -> PyResult<BdtEntry> {
 }
 
 /// `"ip"` or `"ip:port"`, a unicast IPv4 address with a nonzero port.
-fn parse_address(text: &str, what: &str) -> PyResult<SocketAddrV4> {
+pub(crate) fn parse_address(text: &str, what: &str) -> PyResult<SocketAddrV4> {
     let address = match text.parse::<SocketAddrV4>() {
         Ok(address) => address,
         Err(_) => SocketAddrV4::new(parse_ip(text, what)?, DEFAULT_BACNET_PORT),

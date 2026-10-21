@@ -1,7 +1,7 @@
 use super::*;
 use tokio::time::{timeout, Duration};
 
-async fn malformed_management_ack(function: BvlcFunction, payload_len: usize) -> Error {
+async fn malformed_management_ack(function: BvlcFunction, payload_len: usize) -> BvlcExchangeError {
     let server = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
         .await
         .unwrap();
@@ -113,11 +113,10 @@ async fn read_fdt_ack_encodes_fdt_entries_as_n10_payload() {
 
     let mut client_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     let _client_rx = client_transport.start().await.unwrap();
-    let result = client_transport
+    client_transport
         .register_foreign_device_bvlc(&bbmd_mac, 120)
         .await
         .unwrap();
-    assert_eq!(result, BvlcResultCode::SUCCESSFUL_COMPLETION);
     let (fd_ip, fd_port) = decode_bip_mac(client_transport.local_mac()).unwrap();
 
     let response = raw_bvlc_request(&bbmd_mac, BvlcFunction::READ_FOREIGN_DEVICE_TABLE, &[]).await;

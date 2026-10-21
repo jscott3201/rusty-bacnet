@@ -9,8 +9,9 @@
 //! right after the refused ones is the first frame out of port B, which
 //! shows the refused ones went nowhere.
 
-use bacnet_encoding::npdu::{encode_npdu, Npdu, NpduAddress, RejectMessageToNetwork};
-use bacnet_types::enums::{NetworkMessageType, RejectMessageReason};
+use bacnet_encoding::npdu::{encode_npdu, Npdu, NpduAddress};
+use bacnet_npdu::RejectMessageToNetwork;
+use bacnet_npdu::{NetworkMessageType, RejectMessageReason};
 use bacnet_types::MacAddr;
 use bytes::{Bytes, BytesMut};
 
@@ -84,7 +85,7 @@ async fn router_delivers_only_an_unconfirmed_request_to_a_group_dadr() {
         reject_of(&reject),
         RejectMessageToNetwork {
             reason: RejectMessageReason::NOT_DIRECTLY_CONNECTED,
-            dnet: 5000,
+            network: 5000,
         }
     );
 
@@ -150,16 +151,14 @@ async fn a_network_message_for_a_group_dadr_is_dropped_and_counted() {
     // never is.
     let controls = [
         Npdu {
-            is_network_message: true,
-            message_type: Some(NetworkMessageType::INITIALIZE_ROUTING_TABLE.to_raw()),
+            message_type: Some(NetworkMessageType::INITIALIZE_ROUTING_TABLE),
             destination: to_group.clone(),
             hop_count: 255,
             payload: Bytes::from_static(&[0x00]),
             ..Npdu::default()
         },
         Npdu {
-            is_network_message: true,
-            message_type: Some(0x80),
+            message_type: Some(NetworkMessageType::from_raw(0x80)),
             vendor_id: Some(999),
             destination: to_group,
             hop_count: 255,
@@ -180,7 +179,7 @@ async fn a_network_message_for_a_group_dadr_is_dropped_and_counted() {
         Some(&[0x0B][..]),
         "the controls went nowhere"
     );
-    assert!(!first.is_network_message);
+    assert!(!first.is_network_message());
     assert_eq!(first.payload, APDU[..]);
     assert_eq!(fixture.router.group_dadr_drops(), 2);
     fixture.stop().await;
@@ -194,8 +193,7 @@ async fn a_relayed_reject_for_a_group_dadr_is_dropped_and_counted() {
     // A reject about network 5000, which this router doesn't know, so the
     // routing table is left as it is.
     let reject = Npdu {
-        is_network_message: true,
-        message_type: Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK.to_raw()),
+        message_type: Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK),
         destination: Some(NpduAddress {
             network: 2000,
             mac_address: MacAddr::from_slice(&[GROUP]),
@@ -211,7 +209,7 @@ async fn a_relayed_reject_for_a_group_dadr_is_dropped_and_counted() {
 
     let (first, to) = next_from_router(&mut fixture.from_router_b).await;
     assert_eq!(to.as_deref(), Some(&[0x0B][..]), "the reject went nowhere");
-    assert!(!first.is_network_message);
+    assert!(!first.is_network_message());
     assert_eq!(fixture.router.group_dadr_drops(), 1);
     fixture.stop().await;
 }

@@ -20,6 +20,7 @@ use bacnet_types::constructed::{
 
 use super::tests::SettableClock;
 use super::*;
+use bacnet_types::enums::EngineeringUnits;
 
 fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(object_type, instance).unwrap()
@@ -64,7 +65,12 @@ fn database() -> Arc<RwLock<ObjectDatabase>> {
     .unwrap();
     for instance in [1, 2] {
         db.add(Box::new(
-            AnalogOutputObject::new(instance, format!("AO-{instance}"), 62).unwrap(),
+            AnalogOutputObject::new(
+                instance,
+                format!("AO-{instance}"),
+                EngineeringUnits::DEGREES_CELSIUS,
+            )
+            .unwrap(),
         ))
         .unwrap();
     }

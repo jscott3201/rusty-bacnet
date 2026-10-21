@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use bacnet_encoding::npdu::{Npdu, NpduAddress};
-use bacnet_types::enums::NetworkMessageType;
+use bacnet_npdu::NetworkMessageType;
 use bacnet_types::MacAddr;
 
 use super::control_policy::{ControlAuthContext, ControlAuthorizer, ControlGate, ControlPolicy};
@@ -358,10 +358,15 @@ async fn init_query_answered_in_hardened_full_queue_bounded() {
     );
     for _ in 0..16 {
         h.txs[0]
-            .try_send(SendRequest::Broadcast {
-                npdu: bytes::Bytes::new(),
-                data_attributes: Vec::new(),
-            })
+            .try_send(
+                bacnet_npdu::NetworkPriority::Normal,
+                SendRequest::Broadcast {
+                    npdu: bytes::Bytes::new(),
+                    data_attributes: Vec::new(),
+
+                    reject_origin: None,
+                },
+            )
             .unwrap();
     }
     // Allowed update still applies; ACK drops bounded on a full queue.
@@ -388,10 +393,15 @@ async fn init_query_answered_in_hardened_full_queue_bounded() {
     );
     for _ in 0..16 {
         denied.txs[0]
-            .try_send(SendRequest::Broadcast {
-                npdu: bytes::Bytes::new(),
-                data_attributes: Vec::new(),
-            })
+            .try_send(
+                bacnet_npdu::NetworkPriority::Normal,
+                SendRequest::Broadcast {
+                    npdu: bytes::Bytes::new(),
+                    data_attributes: Vec::new(),
+
+                    reject_origin: None,
+                },
+            )
             .unwrap();
     }
     denied
@@ -563,7 +573,7 @@ async fn authorizer_sees_an_omitted_list_as_omitted() {
         let seen = Arc::clone(&seen);
         Arc::new(move |ctx: &ControlAuthContext| {
             seen.lock().unwrap().push((
-                ctx.message_type,
+                ctx.message_type.to_raw(),
                 ctx.target_nets.clone(),
                 ctx.targets_omitted,
             ));
@@ -645,8 +655,7 @@ async fn authorizer_sees_only_protected_and_replaced_peer_differs() {
 async fn control_context_debug_is_redacted() {
     use bacnet_transport::port::TransportProvenance;
     let npdu = Npdu {
-        is_network_message: true,
-        message_type: Some(NetworkMessageType::I_AM_ROUTER_TO_NETWORK.to_raw()),
+        message_type: Some(NetworkMessageType::I_AM_ROUTER_TO_NETWORK),
         source: Some(NpduAddress {
             network: 900,
             mac_address: MacAddr::from_slice(&[0xAA, 0xBB]),

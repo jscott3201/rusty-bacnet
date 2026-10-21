@@ -1,4 +1,5 @@
 use super::*;
+use crate::event_stream::LossyReceiver;
 
 // ---------------------------------------------------------------------------
 // COV Notification — read-only wrapper
@@ -119,17 +120,15 @@ impl PyCovNotification {
 // COV Notification async iterator
 // ---------------------------------------------------------------------------
 
-/// Async iterator yielding COV notifications from a broadcast channel.
-#[pyclass(name = "CovNotificationIterator", module = "rusty_bacnet")]
-pub struct PyCovNotificationIterator {
-    rx: Arc<tokio::sync::Mutex<broadcast::Receiver<ReceivedCOVNotification>>>,
-}
+/// Async iterator yielding COV notifications from a broadcast channel. A
+/// notification whose `__anext__` was cancelled while it was being
+/// delivered comes back on the next call (#1858).
+#[pyclass(name = "CovNotificationIterator", module = "rusty_bacnet", frozen)]
+pub struct PyCovNotificationIterator(LossyReceiver<ReceivedCOVNotification>);
 
 impl PyCovNotificationIterator {
     pub fn new(rx: broadcast::Receiver<ReceivedCOVNotification>) -> Self {
-        Self {
-            rx: Arc::new(tokio::sync::Mutex::new(rx)),
-        }
+        Self(LossyReceiver::new(rx))
     }
 }
 
@@ -146,27 +145,23 @@ impl PyCovNotificationIterator {
     }
 
     fn __anext__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let rx = self.rx.clone();
-        crate::py_async::future_into_py(py, async move {
-            let mut guard = rx.lock().await;
-            loop {
-                match guard.recv().await {
-                    Ok(notif) => {
-                        return Ok(PyCovNotification { inner: notif });
-                    }
-                    Err(broadcast::error::RecvError::Lagged(n)) => {
-                        #[allow(clippy::print_stderr)]
-                        // no logging path in this crate; warn the Python user on stderr
-                        {
-                            eprintln!("COV notification iterator lagged, skipped {n} messages");
-                        }
-                        continue;
-                    }
-                    Err(broadcast::error::RecvError::Closed) => {
-                        return Err(PyStopAsyncIteration::new_err("channel closed"));
-                    }
-                }
-            }
-        })
+        let (next, put_back) = self.0.next();
+        crate::py_async::future_into_py_or_put_back(
+            py,
+            async move {
+                next.await
+                    .map(|next| next.map(|inner| PyCovNotification { inner }))
+                    .ok_or_else(|| crate::event_stream::ended("COV notifications"))
+            },
+            put_back,
+        )
+    }
+
+    /// Notifications this iterator lost: because it fell behind the client's
+    /// COV channel, or dropped on the way to a read, as when its event loop
+    /// closed first.
+    #[getter]
+    fn missed(&self) -> u64 {
+        self.0.missed()
     }
 }

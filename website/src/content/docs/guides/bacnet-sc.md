@@ -56,6 +56,6 @@ These instructions explain configuration boundaries. They are not a certificate-
 
 ## Sources and release scope
 
-These instructions target **v0.13.0**. Source review is not a claim of hardware qualification.
+These instructions target **v0.14.0**. Source review is not a claim of hardware qualification.
 
-[CLI SC transport](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/docs/CLI.md#transport-variants) · [CLI flags](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/crates/bacnet-cli/src/args.rs) · [Python credentials](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/docs/python-api.md#required-operational-credentials) · [SC example](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/examples/python/sc_secure_connect.py).
+[CLI SC transport](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/CLI.md#transport-variants) · [CLI flags](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/crates/bacnet-cli/src/args.rs) · [Python credentials](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/python-api.md#required-operational-credentials) · [SC example](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/examples/python/sc_secure_connect.py).

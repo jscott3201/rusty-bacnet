@@ -15,7 +15,7 @@ use bacnet_objects::loop_obj::LoopObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::cov::{COVNotificationRequest, SubscribeCOVRequest};
 use bacnet_services::write_property::WritePropertyRequest;
-use bacnet_types::enums::{ObjectType, Reliability};
+use bacnet_types::enums::{EngineeringUnits, ObjectType, Reliability};
 
 const FAULT: u8 = 0x40;
 const OUT_OF_SERVICE: u8 = 0x10;
@@ -75,7 +75,7 @@ fn loop_report(
 
 async fn start(configure: impl FnOnce(&mut LoopObject)) -> Harness {
     Harness::start_with(ServerConfig::default(), |db| {
-        let mut object = LoopObject::new(1, "LOOP-1", 62).unwrap();
+        let mut object = LoopObject::new(1, "LOOP-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
         configure(&mut object);
         db.add(Box::new(object)).unwrap();
     })
@@ -324,7 +324,7 @@ async fn loop_present_value_write_property_follows_out_of_service() {
         .unwrap_err();
     assert!(
         matches!(refused, Error::Protocol { code, .. }
-            if code == ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32),
+            if code == ErrorCode::WRITE_ACCESS_DENIED),
         "{refused:?}"
     );
     h.no_notification().await;

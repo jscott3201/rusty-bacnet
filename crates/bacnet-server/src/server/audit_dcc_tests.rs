@@ -13,6 +13,7 @@ use bacnet_objects::{
     traits::BACnetObject,
 };
 use bacnet_services::{cov::SubscribeCOVRequest, device_mgmt::DeviceCommunicationControlRequest};
+use bacnet_types::enums::EngineeringUnits;
 use bacnet_types::{constructed::BACnetDestination, enums::EnableDisable};
 
 /// Put the server under DISABLE_INITIATION through a wire request, as a peer
@@ -240,7 +241,8 @@ async fn disable_initiation_still_holds_back_cov_and_events_beside_audit() {
             })
             .unwrap();
         db.add(Box::new(class)).unwrap();
-        let mut watched = AnalogValueObject::new(1, "watched", 62).unwrap();
+        let mut watched =
+            AnalogValueObject::new(1, "watched", EngineeringUnits::DEGREES_CELSIUS).unwrap();
         for (property, value) in [
             (PropertyIdentifier::HIGH_LIMIT, PropertyValue::Real(80.0)),
             (PropertyIdentifier::LOW_LIMIT, PropertyValue::Real(20.0)),
@@ -334,7 +336,8 @@ async fn audit_owing_writes_commit_and_notify_under_disable_initiation() {
         .await
         .unwrap();
         if case == "object policy" {
-            let mut value = AnalogValueObject::new(11, "policy", 62).unwrap();
+            let mut value =
+                AnalogValueObject::new(11, "policy", EngineeringUnits::DEGREES_CELSIUS).unwrap();
             let mut operations = AuditOperationFlags::empty();
             operations.insert(AuditOperation::WRITE);
             value.set_audit_policy(ObjectAuditPolicy {
@@ -512,3 +515,6 @@ async fn a_resource_drop_under_disable_initiation_is_summarized() {
 
 #[path = "audit_dcc_record_tests.rs"]
 mod records;
+
+#[path = "audit_reinitialize_tests.rs"]
+mod reinitialize;

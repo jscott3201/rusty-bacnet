@@ -15,6 +15,7 @@ use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::{
     BACnetObjectPropertyReference, PropertyReference, ReadAccessSpecification,
 };
+use bacnet_types::enums::EngineeringUnits;
 
 const CVR: PropertyIdentifier = PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE;
 const MVR: PropertyIdentifier = PropertyIdentifier::MANIPULATED_VARIABLE_REFERENCE;
@@ -104,14 +105,24 @@ fn reference_target() -> ObjectIdentifier {
 }
 
 fn add_loop(db: &mut ObjectDatabase, instance: u32) -> ObjectIdentifier {
-    let lo = LoopObject::new(instance, format!("LOOP-{instance}"), 62).unwrap();
+    let lo = LoopObject::new(
+        instance,
+        format!("LOOP-{instance}"),
+        EngineeringUnits::DEGREES_CELSIUS,
+    )
+    .unwrap();
     let oid = lo.object_identifier();
     db.add(Box::new(lo)).unwrap();
     oid
 }
 
 fn add_pulse_converter(db: &mut ObjectDatabase, instance: u32) -> ObjectIdentifier {
-    let pc = PulseConverterObject::new(instance, format!("PC-{instance}"), 62).unwrap();
+    let pc = PulseConverterObject::new(
+        instance,
+        format!("PC-{instance}"),
+        EngineeringUnits::DEGREES_CELSIUS,
+    )
+    .unwrap();
     let oid = pc.object_identifier();
     db.add(Box::new(pc)).unwrap();
     oid
@@ -130,16 +141,8 @@ fn assert_refused(
     let before = read_raw(db, oid, property);
     match write_raw(db, oid, property, raw_value).expect_err(context) {
         Error::Protocol { class, code } => {
-            assert_eq!(
-                class,
-                ErrorClass::PROPERTY.to_raw() as u32,
-                "{context}: wrong error class"
-            );
-            assert_eq!(
-                code,
-                expected_code.to_raw() as u32,
-                "{context}: wrong error code"
-            );
+            assert_eq!(class, ErrorClass::PROPERTY, "{context}: wrong error class");
+            assert_eq!(code, expected_code, "{context}: wrong error code");
         }
         other => panic!("{context}: expected PROPERTY/{expected_code:?}, got {other:?}"),
     }
@@ -565,8 +568,8 @@ fn wpm_reference_write_commits_in_order_and_keeps_prefix_on_failure() {
     .unwrap_err();
     match err {
         Error::Protocol { class, code } => {
-            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
-            assert_eq!(code, ErrorCode::INVALID_DATA_TYPE.to_raw() as u32);
+            assert_eq!(class, ErrorClass::PROPERTY);
+            assert_eq!(code, ErrorCode::INVALID_DATA_TYPE);
         }
         other => panic!("expected PROPERTY/INVALID_DATA_TYPE, got {other:?}"),
     }
@@ -594,8 +597,8 @@ fn wpm_reference_write_commits_in_order_and_keeps_prefix_on_failure() {
     .unwrap_err();
     assert!(
         matches!(err, Error::Protocol { class, code }
-            if class == ErrorClass::PROPERTY.to_raw() as u32
-                && code == ErrorCode::INVALID_DATA_TYPE.to_raw() as u32),
+            if class == ErrorClass::PROPERTY
+                && code == ErrorCode::INVALID_DATA_TYPE),
         "{err:?}"
     );
     assert_eq!(read_raw(&db, oid, MVR), UNSET_AO);

@@ -186,8 +186,8 @@ mod tests {
             }
             assert!(
                 matches!(object.write_property(P::FEEDBACK_VALUE, None, PropertyValue::Unsigned(0x1_0000_0002), None),
-                Err(Error::Protocol { class, code }) if class == u32::from(ErrorClass::PROPERTY.to_raw())
-                    && code == u32::from(ErrorCode::VALUE_OUT_OF_RANGE.to_raw()))
+                Err(Error::Protocol { class, code }) if class == ErrorClass::PROPERTY
+                    && code == ErrorCode::VALUE_OUT_OF_RANGE)
             );
             object.set_relinquish_default(3).unwrap();
             object

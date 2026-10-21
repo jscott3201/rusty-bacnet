@@ -25,18 +25,18 @@ fn wpm_outbound_late_invalid_priority_preserves_buffer() {
         let mut buffer = BytesMut::from(&b"prefix"[..]);
         assert!(matches!(
             request.encode(&mut buffer),
-            Err(Error::Encoding(_))
+            Err(Error::Encode(_))
         ));
         assert_eq!(&buffer[..], b"prefix");
     }
 }
 
 fn assert_invalid(request: &WritePropertyMultipleRequest) {
-    assert!(matches!(request.validate(), Err(Error::Encoding(_))));
+    assert!(matches!(request.validate(), Err(Error::Encode(_))));
     let mut buffer = BytesMut::from(&b"existing"[..]);
     assert!(matches!(
         request.encode(&mut buffer),
-        Err(Error::Encoding(_))
+        Err(Error::Encode(_))
     ));
     assert_eq!(&buffer[..], b"existing");
 }

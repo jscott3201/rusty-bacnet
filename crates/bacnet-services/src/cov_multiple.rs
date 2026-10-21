@@ -10,7 +10,7 @@ use bacnet_encoding::tags;
 #[cfg(test)]
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::enums::RejectReason;
-use bacnet_types::error::Error;
+use bacnet_types::error::{EncodeError, Error};
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
@@ -86,35 +86,31 @@ impl SubscribeCOVPropertyMultipleRequest {
             (Some(lifetime), Some(max_delay))
                 if lifetime != 0 && max_delay <= 3_600 && max_delay < lifetime => {}
             (Some(_), Some(_)) => {
-                return Err(Error::Encoding(
-                    "SubscribeCOVPropertyMultiple timing values are out of range".into(),
-                ));
+                return Err(Error::encode("SubscribeCOVPropertyMultiple timing values are out of range"));
             }
             _ => {
-                return Err(Error::Encoding(
-                    "SubscribeCOVPropertyMultiple lifetime and max-notification-delay must both be present or absent".into(),
-                ));
+                return Err(Error::encode("SubscribeCOVPropertyMultiple lifetime and max-notification-delay must both be present or absent"));
             }
         }
         let mut total_references = 0usize;
         for spec in &self.list_of_cov_subscription_specifications {
             if spec.list_of_cov_references.is_empty() {
-                return Err(Error::Encoding(
-                    "SubscribeCOVPropertyMultiple COV-reference list must not be empty".into(),
-                ));
+                return Err(Error::encode("SubscribeCOVPropertyMultiple COV-reference list must not be empty"));
             }
             total_references = total_references
                 .checked_add(spec.list_of_cov_references.len())
-                .ok_or_else(|| Error::Encoding("COV-reference count overflow".into()))?;
+                .ok_or_else(|| Error::encode("COV-reference count overflow"))?;
             if total_references > MAX_DECODED_ITEMS {
-                return Err(Error::Encoding(format!(
-                    "SubscribeCOVPropertyMultiple exceeds {MAX_DECODED_ITEMS} COV references"
-                )));
+                return Err(EncodeError::new(
+                    "SubscribeCOVPropertyMultiple exceeds {} COV references",
+                )
+                .with_value(MAX_DECODED_ITEMS as u32)
+                .into());
             }
             for cov_ref in &spec.list_of_cov_references {
                 validate_property_identifier(
                     cov_ref.monitored_property.property_identifier,
-                    "SubscribeCOVPropertyMultiple monitored property",
+                    "SubscribeCOVPropertyMultiple monitored property cannot be ALL, OPTIONAL, or REQUIRED",
                 )?;
             }
         }
@@ -293,7 +289,7 @@ impl SubscribeCOVPropertyMultipleRequest {
                 let (prop_ref, new_off) = decode_property_reference(data, tag_end)?;
                 validate_decoded_property_identifier(
                     prop_ref.property_identifier,
-                    "SubscribeCOVPropertyMultiple monitored property",
+                    "SubscribeCOVPropertyMultiple monitored property cannot be ALL, OPTIONAL, or REQUIRED",
                 )?;
                 offset = new_off;
                 let (tag, tag_end) = tags::decode_tag(data, offset)?;

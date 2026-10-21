@@ -14,7 +14,7 @@ async fn dcc_source_exact_full_bytes_and_fail_closed_wire() {
     let direct = vec![127, 0, 0, 1, 0xba, 0xc0];
     // The longest routed source the NPDU codec carries (#1141); the reply
     // goes back to it as DNET/DADR.
-    let long = vec![42; NpduAddress::MAX_MAC_LEN];
+    let long = vec![42; bacnet_npdu::MAX_MAC_LEN];
     let restrictions = [
         None,
         Some(DccSourceRestriction::new(vec![]).unwrap()),
@@ -80,7 +80,7 @@ async fn dcc_source_exact_full_bytes_and_fail_closed_wire() {
     }
     // Direct matching also uses full bytes, independently of the wire fixture's
     // MAC, up to the longest entry a restriction holds (#1157).
-    for length in [1, 6, NpduAddress::MAX_MAC_LEN - 1, NpduAddress::MAX_MAC_LEN] {
+    for length in [1, 6, bacnet_npdu::MAX_MAC_LEN - 1, bacnet_npdu::MAX_MAC_LEN] {
         let address = vec![1; length];
         let restriction =
             DccSourceRestriction::new(vec![DccSource::Direct(address.clone())]).unwrap();

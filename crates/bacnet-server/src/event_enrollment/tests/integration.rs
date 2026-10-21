@@ -8,6 +8,7 @@ use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::event_enrollment::EventEnrollmentObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetEventParameter};
+use bacnet_types::enums::EngineeringUnits;
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -19,12 +20,12 @@ fn evaluates_multiple_enrollments() {
     let mut db = ObjectDatabase::new();
 
     // Two analog inputs
-    let mut ai1 = AnalogInputObject::new(80, "AI-80", 62).unwrap();
+    let mut ai1 = AnalogInputObject::new(80, "AI-80", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ai1.set_present_value(90.0); // will trigger HIGH_LIMIT
     let ai1_oid = ai1.object_identifier();
     db.add(Box::new(ai1)).unwrap();
 
-    let mut ai2 = AnalogInputObject::new(81, "AI-81", 62).unwrap();
+    let mut ai2 = AnalogInputObject::new(81, "AI-81", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ai2.set_present_value(50.0); // normal
     let ai2_oid = ai2.object_identifier();
     db.add(Box::new(ai2)).unwrap();
@@ -98,15 +99,16 @@ pub(super) fn setup_qualified_reference(
     let mut db = ObjectDatabase::new();
     for instance in local_device_instances {
         let device = DeviceObject::new(DeviceConfig {
-            instance: *instance,
-            name: format!("Device-{instance}"),
+            identity: bacnet_objects::DeviceIdentity::new(*instance, 0)
+                .expect("valid Device identity")
+                .with_name(format!("Device-{instance}")),
             ..DeviceConfig::default()
         })
         .unwrap();
         db.add(Box::new(device)).unwrap();
     }
 
-    let mut ai = AnalogInputObject::new(3, "AI-3", 62).unwrap();
+    let mut ai = AnalogInputObject::new(3, "AI-3", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ai.set_present_value(90.0);
     let ai_oid = ai.object_identifier();
     db.add(Box::new(ai)).unwrap();
@@ -262,8 +264,8 @@ impl BACnetObject for ReferenceValueObject {
             && !self.fault_parameters_supported
         {
             Err(bacnet_types::error::Error::Protocol {
-                class: bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32,
-                code: bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+                class: bacnet_types::enums::ErrorClass::PROPERTY,
+                code: bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY,
             })
         } else if property == PropertyIdentifier::EVENT_PARAMETERS
             && !self.event_parameters_readable.load(Ordering::SeqCst)
@@ -432,7 +434,8 @@ pub(super) fn reference_value(
 #[test]
 fn failed_source_write_does_not_persist_dependent_state() {
     let mut db = ObjectDatabase::new();
-    let mut target = AnalogValueObject::new(99, "AV-failed-source", 62).unwrap();
+    let mut target =
+        AnalogValueObject::new(99, "AV-failed-source", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     target
         .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
@@ -464,7 +467,12 @@ fn failed_source_write_does_not_persist_dependent_state() {
 #[test]
 fn source_write_failure_still_allows_an_immediate_stateless_transition() {
     let mut db = ObjectDatabase::new();
-    let mut target = AnalogValueObject::new(100, "AV-immediate-source", 62).unwrap();
+    let mut target = AnalogValueObject::new(
+        100,
+        "AV-immediate-source",
+        EngineeringUnits::DEGREES_CELSIUS,
+    )
+    .unwrap();
     target
         .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
@@ -503,7 +511,8 @@ fn source_write_failure_still_allows_an_immediate_stateless_transition() {
 #[test]
 fn failed_state_reset_clears_source_ownership() {
     let mut db = ObjectDatabase::new();
-    let mut target = AnalogValueObject::new(101, "AV-state-reset", 62).unwrap();
+    let mut target =
+        AnalogValueObject::new(101, "AV-state-reset", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     target
         .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
@@ -642,7 +651,7 @@ fn stale_eval_state() -> bacnet_objects::event_enrollment::EventEnrollmentEvalSt
 #[test]
 fn malformed_retarget_does_not_resume_stale_countdown() {
     let mut db = ObjectDatabase::new();
-    let mut ai = AnalogInputObject::new(3, "AI-3", 62).unwrap();
+    let mut ai = AnalogInputObject::new(3, "AI-3", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ai.set_present_value(90.0);
     let target = ai.object_identifier();
     db.add(Box::new(ai)).unwrap();

@@ -112,6 +112,14 @@ pub(super) fn for_object(object: &DeviceObject) -> Cow<'_, [PropertyMetadata]> {
                 .collect(),
         )
     };
+    if object.properties.contains_key(&P::BACKUP_AND_RESTORE_STATE) {
+        rows.to_mut().extend([
+            PropertyMetadata::new(P::BACKUP_FAILURE_TIMEOUT, Optional, None, Always),
+            PropertyMetadata::new(P::CONFIGURATION_FILES, Optional, None, ReadOnly),
+            PropertyMetadata::new(P::LAST_RESTORE_TIME, Optional, None, ReadOnly),
+            PropertyMetadata::new(P::BACKUP_AND_RESTORE_STATE, Optional, None, ReadOnly),
+        ]);
+    }
     if object.audit_recipient_present() {
         rows.to_mut().push(PropertyMetadata::new(
             P::AUDIT_NOTIFICATION_RECIPIENT,

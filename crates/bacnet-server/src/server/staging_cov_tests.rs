@@ -16,7 +16,7 @@ use bacnet_services::cov::{
 };
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::constructed::{BACnetDeviceObjectReference, BACnetStageLimitValue};
-use bacnet_types::enums::ObjectType;
+use bacnet_types::enums::{EngineeringUnits, ObjectType};
 use std::collections::BTreeMap;
 
 const STAGE: PropertyIdentifier = PropertyIdentifier::PRESENT_STAGE;
@@ -74,7 +74,7 @@ fn staging(db: &mut ObjectDatabase) {
             StagingConfig {
                 present_value: 5.0,
                 min_present_value: 0.0,
-                units: 62,
+                units: EngineeringUnits::DEGREES_CELSIUS,
                 priority_for_writing: 8,
                 stages: vec![stage(10.0, false), stage(30.0, true), stage(50.0, true)],
                 target_references: vec![BACnetDeviceObjectReference {

@@ -4,21 +4,8 @@ const SER_RS485_ENABLED: u32 = 1;
 const SER_RS485_RTS_ON_SEND: u32 = 1 << 1;
 const SER_RS485_RTS_AFTER_SEND: u32 = 1 << 2;
 
-// Linux UAPI serial_rs485; addressing features are unused and left zeroed.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) struct SerialRs485 {
-    flags: u32,
-    delay_rts_before_send: u32,
-    delay_rts_after_send: u32,
-    padding: [u32; 5],
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Request {
-    Set,
-    Get,
-}
+// The serial_rs485 layout and the ioctl requests live with the ioctl.
+pub(super) use crate::sys::serial::{Request, SerialRs485};
 
 pub(super) fn configure(
     invert_rts: bool,
@@ -259,18 +246,5 @@ mod tests {
             Ok(())
         })
         .unwrap();
-    }
-
-    #[test]
-    fn linux_serial_rs485_layout_matches_uapi() {
-        use std::mem::{align_of, offset_of, size_of};
-
-        assert_eq!(size_of::<SerialRs485>(), 32);
-        assert_eq!(align_of::<SerialRs485>(), 4);
-        assert_eq!(offset_of!(SerialRs485, flags), 0);
-        assert_eq!(offset_of!(SerialRs485, delay_rts_before_send), 4);
-        assert_eq!(offset_of!(SerialRs485, delay_rts_after_send), 8);
-        assert_eq!(offset_of!(SerialRs485, padding), 12);
-        assert_eq!(size_of::<[u32; 5]>(), 20);
     }
 }

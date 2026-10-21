@@ -36,7 +36,7 @@ fn master(station: u8, extended: bool) -> MasterSpec {
 fn extended_pair(policy: ReplyPolicy) -> (Sim, Vec<u8>) {
     let mut sim = Sim::new(SimConfig::new(BAUD));
     sim.add_master(master(0, true));
-    sim.add_master(master(3, true).reply(policy));
+    sim.add_master(master(3, true).application(policy));
     let request = long_npdu(1000, true, 0x31);
     sim.enqueue(ms(1_000), 0, 3, &request);
     (sim, request)

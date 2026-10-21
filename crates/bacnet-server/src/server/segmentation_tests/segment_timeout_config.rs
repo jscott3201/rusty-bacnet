@@ -6,8 +6,9 @@ fn database(mode: Segmentation, timeout: u64) -> ObjectDatabase {
     let mut db = ObjectDatabase::new();
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
-            segmentation_supported: mode,
-            apdu_segment_timeout: timeout,
+            identity: bacnet_objects::DeviceIdentity::default()
+                .with_segmentation(mode)
+                .with_apdu_segment_timeout_ms(timeout),
             ..Default::default()
         })
         .unwrap(),
@@ -28,8 +29,9 @@ async fn segment_timeout_invalid_configuration_and_declaration_fail_before_io() 
         (Segmentation::BOTH, 5000, Segmentation::BOTH, 6000),
     ] {
         let config = ServerConfig {
-            segmentation_supported: mode,
-            apdu_segment_timeout_ms: timeout,
+            device: bacnet_objects::DeviceIdentity::default()
+                .with_segmentation(mode)
+                .with_apdu_segment_timeout_ms(timeout),
             ..Default::default()
         };
         let error = BACnetServer::start(
@@ -49,14 +51,11 @@ async fn segment_timeout_invalid_configuration_and_declaration_fail_before_io() 
         .is_none()
     {
         let config = ServerConfig {
-            apdu_segment_timeout_ms: timeout_ms,
+            device: bacnet_objects::DeviceIdentity::default()
+                .with_apdu_segment_timeout_ms(timeout_ms),
             ..Default::default()
         };
-        assert!(super::super::segmented_receive::validate_segment_timeout(
-            &config,
-            &ObjectDatabase::new()
-        )
-        .is_err());
+        assert!(super::super::segmented_receive::validate_segment_timeout(&config).is_err());
     }
 }
 
@@ -65,15 +64,21 @@ async fn segment_timeout_builder_validation_precedes_transport_start_or_sc_dial(
     for timeout in [0, u64::MAX] {
         let generic = BACnetServer::generic_builder()
             .transport(TestTransport::never_start())
-            .segmentation_supported(Segmentation::BOTH)
-            .apdu_segment_timeout_ms(timeout)
+            .device(
+                bacnet_objects::DeviceIdentity::default()
+                    .with_segmentation(Segmentation::BOTH)
+                    .with_apdu_segment_timeout_ms(timeout),
+            )
             .build()
             .await
             .err();
         let bip = BACnetServer::bip_builder()
             .port(0)
-            .segmentation_supported(Segmentation::BOTH)
-            .apdu_segment_timeout_ms(timeout)
+            .device(
+                bacnet_objects::DeviceIdentity::default()
+                    .with_segmentation(Segmentation::BOTH)
+                    .with_apdu_segment_timeout_ms(timeout),
+            )
             .build()
             .await
             .err();
@@ -86,8 +91,11 @@ async fn segment_timeout_builder_validation_precedes_transport_start_or_sc_dial(
                 .hub_url("not-a-websocket-url")
                 .tls_config(crate::server::sc_builder::test_tls_config())
                 .device_uuid(crate::server::sc_builder::TEST_DEVICE_UUID)
-                .segmentation_supported(Segmentation::BOTH)
-                .apdu_segment_timeout_ms(timeout)
+                .device(
+                    bacnet_objects::DeviceIdentity::default()
+                        .with_segmentation(Segmentation::BOTH)
+                        .with_apdu_segment_timeout_ms(timeout),
+                )
                 .build()
                 .await
                 .err();
@@ -108,12 +116,15 @@ async fn segment_timeout_all_known_modes_start_with_coherent_device() {
         let mut server = BACnetServer::generic_builder()
             .transport(transport)
             .database(database(mode, 700))
-            .segmentation_supported(mode)
-            .apdu_segment_timeout_ms(700)
+            .device(
+                bacnet_objects::DeviceIdentity::default()
+                    .with_segmentation(mode)
+                    .with_apdu_segment_timeout_ms(700),
+            )
             .build()
             .await
             .unwrap();
-        assert_eq!(server.config.apdu_segment_timeout_ms, 700);
+        assert_eq!(server.config.device.apdu_segment_timeout_ms(), 700);
         server.stop().await.unwrap();
     }
 }
@@ -125,9 +136,10 @@ async fn configured_segment_timeout_drives_real_server_response_ack_wait() {
     let mut db = ObjectDatabase::new();
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
-            name: "large-response-".repeat(20),
-            segmentation_supported: Segmentation::TRANSMIT,
-            apdu_segment_timeout: 250,
+            identity: bacnet_objects::DeviceIdentity::default()
+                .with_name("large-response-".repeat(20))
+                .with_segmentation(Segmentation::TRANSMIT)
+                .with_apdu_segment_timeout_ms(250),
             ..Default::default()
         })
         .unwrap(),
@@ -136,8 +148,11 @@ async fn configured_segment_timeout_drives_real_server_response_ack_wait() {
     let mut server = BACnetServer::generic_builder()
         .transport(transport)
         .database(db)
-        .segmentation_supported(Segmentation::TRANSMIT)
-        .apdu_segment_timeout_ms(250)
+        .device(
+            bacnet_objects::DeviceIdentity::default()
+                .with_segmentation(Segmentation::TRANSMIT)
+                .with_apdu_segment_timeout_ms(250),
+        )
         .build()
         .await
         .unwrap();

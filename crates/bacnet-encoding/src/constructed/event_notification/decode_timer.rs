@@ -5,38 +5,47 @@ fn decode_date_time(
     data: &[u8],
     offset: usize,
     context_tag: u8,
-    field: &str,
+    field: &'static str,
 ) -> Result<((Date, Time), usize), Error> {
     let (opening, mut pos) = tags::decode_tag(data, offset)?;
     if !opening.is_opening_tag(context_tag) {
-        return Err(misplaced_tag(
+        return Err(misplaced(
             data,
             &opening,
             Some(context_tag),
             offset,
-            format!("{field} expected opening tag {context_tag}"),
-        ));
+            "expected opening tag {}",
+        )
+        .within(field)
+        .with_value(context_tag.into())
+        .into());
     }
 
     let (date_tag, content_start) = tags::decode_tag(data, pos)?;
     if date_tag.class != tags::TagClass::Application || date_tag.number != tags::app_tag::DATE {
-        return Err(misplaced_tag(
-            data,
-            &date_tag,
-            None,
-            pos,
-            format!("{field} expected Date"),
-        ));
+        return Err(misplaced(data, &date_tag, None, pos, "expected Date")
+            .within(field)
+            .into());
     }
     if date_tag.length != 4 {
-        return Err(Error::decoding(
+        return Err(DecodeError::new(
+            DecodingKind::InvalidEncoding,
             pos,
-            format!("{field} Date must be four octets"),
-        ));
+            "Date must be four octets",
+        )
+        .within(field)
+        .into());
     }
     let content_end = content_start
         .checked_add(date_tag.length as usize)
-        .ok_or_else(|| Error::decoding(content_start, format!("{field} Date length overflow")))?;
+        .ok_or_else(|| {
+            DecodeError::new(
+                DecodingKind::InvalidEncoding,
+                content_start,
+                "Date length overflow",
+            )
+            .within(field)
+        })?;
     let date = Date::decode(
         data.get(content_start..content_end)
             .ok_or_else(|| Error::buffer_too_short(content_end, data.len()))?,
@@ -45,23 +54,29 @@ fn decode_date_time(
 
     let (time_tag, content_start) = tags::decode_tag(data, pos)?;
     if time_tag.class != tags::TagClass::Application || time_tag.number != tags::app_tag::TIME {
-        return Err(misplaced_tag(
-            data,
-            &time_tag,
-            None,
-            pos,
-            format!("{field} expected Time"),
-        ));
+        return Err(misplaced(data, &time_tag, None, pos, "expected Time")
+            .within(field)
+            .into());
     }
     if time_tag.length != 4 {
-        return Err(Error::decoding(
+        return Err(DecodeError::new(
+            DecodingKind::InvalidEncoding,
             pos,
-            format!("{field} Time must be four octets"),
-        ));
+            "Time must be four octets",
+        )
+        .within(field)
+        .into());
     }
     let content_end = content_start
         .checked_add(time_tag.length as usize)
-        .ok_or_else(|| Error::decoding(content_start, format!("{field} Time length overflow")))?;
+        .ok_or_else(|| {
+            DecodeError::new(
+                DecodingKind::InvalidEncoding,
+                content_start,
+                "Time length overflow",
+            )
+            .within(field)
+        })?;
     let time = Time::decode(
         data.get(content_start..content_end)
             .ok_or_else(|| Error::buffer_too_short(content_end, data.len()))?,
@@ -70,11 +85,12 @@ fn decode_date_time(
 
     let (closing, next) = tags::decode_tag(data, pos)?;
     if !closing.is_closing_tag(context_tag) {
-        return Err(Error::decoding_kind(
-            unclosed_kind(&closing),
-            pos,
-            format!("{field} expected closing tag {context_tag}"),
-        ));
+        return Err(
+            DecodeError::new(unclosed_kind(&closing), pos, "expected closing tag {}")
+                .within(field)
+                .with_value(context_tag.into())
+                .into(),
+        );
     }
     Ok(((date, time), next))
 }

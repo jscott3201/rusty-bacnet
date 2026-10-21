@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_types::enums::EngineeringUnits;
 
 /// Handle a WhoHas request and return an IHave response if we have the object.
 ///
@@ -213,8 +214,8 @@ fn create(
     const MAX_OBJECTS: usize = 10_000;
     if db.len() >= MAX_OBJECTS {
         return Err(Error::Protocol {
-            class: ErrorClass::RESOURCES.to_raw() as u32,
-            code: ErrorCode::NO_SPACE_FOR_OBJECT.to_raw() as u32,
+            class: ErrorClass::RESOURCES,
+            code: ErrorCode::NO_SPACE_FOR_OBJECT,
         });
     }
 
@@ -225,19 +226,20 @@ fn create(
                 .iter()
                 .map(|oid| oid.instance_number())
                 .collect();
-            let next = (1u32..=4_194_303)
-                .find(|i| !existing.contains(i))
-                .ok_or_else(|| Error::Protocol {
-                    class: ErrorClass::RESOURCES.to_raw() as u32,
-                    code: ErrorCode::NO_SPACE_FOR_OBJECT.to_raw() as u32,
-                })?;
+            let next =
+                (1u32..=4_194_303)
+                    .find(|i| !existing.contains(i))
+                    .ok_or(Error::Protocol {
+                        class: ErrorClass::RESOURCES,
+                        code: ErrorCode::NO_SPACE_FOR_OBJECT,
+                    })?;
             (*obj_type, next)
         }
         ObjectSpecifier::Identifier(oid) => {
             if db.get(oid).is_some() {
                 return Err(Error::Protocol {
-                    class: ErrorClass::OBJECT.to_raw() as u32,
-                    code: ErrorCode::OBJECT_IDENTIFIER_ALREADY_EXISTS.to_raw() as u32,
+                    class: ErrorClass::OBJECT,
+                    code: ErrorCode::OBJECT_IDENTIFIER_ALREADY_EXISTS,
                 });
             }
             (oid.object_type(), oid.instance_number())
@@ -258,13 +260,13 @@ fn create(
         Box::new(bacnet_objects::analog::AnalogInputObject::new(
             instance,
             name(),
-            95,
+            EngineeringUnits::NO_UNITS,
         )?)
     } else if object_type == ObjectType::ANALOG_OUTPUT {
         Box::new(bacnet_objects::analog::AnalogOutputObject::new(
             instance,
             name(),
-            95,
+            EngineeringUnits::NO_UNITS,
         )?)
     } else if object_type == ObjectType::BINARY_INPUT {
         Box::new(bacnet_objects::binary::BinaryInputObject::new(
@@ -319,8 +321,8 @@ fn create(
         )?)
     } else {
         return Err(Error::Protocol {
-            class: ErrorClass::OBJECT.to_raw() as u32,
-            code: ErrorCode::UNSUPPORTED_OBJECT_TYPE.to_raw() as u32,
+            class: ErrorClass::OBJECT,
+            code: ErrorCode::UNSUPPORTED_OBJECT_TYPE,
         });
     };
 
@@ -427,8 +429,8 @@ fn initialize(
     match fixed_count {
         Some(count) if state_count(db, created_oid) != count => {
             Err(CreateObjectRefusal::Failed(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32,
+                class: ErrorClass::PROPERTY,
+                code: ErrorCode::VALUE_OUT_OF_RANGE,
             }))
         }
         _ => Ok(()),
@@ -463,8 +465,8 @@ pub fn handle_delete_object(
     match request.object_identifier.object_type() {
         ObjectType::DEVICE | ObjectType::NETWORK_PORT => {
             return Err(Error::Protocol {
-                class: ErrorClass::OBJECT.to_raw() as u32,
-                code: ErrorCode::OBJECT_DELETION_NOT_PERMITTED.to_raw() as u32,
+                class: ErrorClass::OBJECT,
+                code: ErrorCode::OBJECT_DELETION_NOT_PERMITTED,
             });
         }
         _ => {}
@@ -472,7 +474,7 @@ pub fn handle_delete_object(
 
     db.remove(&request.object_identifier)?
         .ok_or(Error::Protocol {
-            class: ErrorClass::OBJECT.to_raw() as u32,
-            code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
+            class: ErrorClass::OBJECT,
+            code: ErrorCode::UNKNOWN_OBJECT,
         })
 }

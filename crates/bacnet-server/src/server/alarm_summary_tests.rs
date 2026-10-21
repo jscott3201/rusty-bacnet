@@ -40,8 +40,8 @@ impl BACnetObject for MalformedAlarmObject {
                 data: vec![0xe0],
             }),
             _ => Err(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+                class: ErrorClass::PROPERTY,
+                code: ErrorCode::UNKNOWN_PROPERTY,
             }),
         }
     }
@@ -54,8 +54,8 @@ impl BACnetObject for MalformedAlarmObject {
         _priority: Option<u8>,
     ) -> Result<(), Error> {
         Err(Error::Protocol {
-            class: ErrorClass::PROPERTY.to_raw() as u32,
-            code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
+            class: ErrorClass::PROPERTY,
+            code: ErrorCode::WRITE_ACCESS_DENIED,
         })
     }
 
@@ -270,7 +270,7 @@ async fn alarm_summary_within_budget_segmented_bip_roundtrip() {
             .interface(Ipv4Addr::LOCALHOST)
             .port(0)
             .database(database)
-            .segmentation_supported(Segmentation::BOTH)
+            .device(bacnet_objects::DeviceIdentity::default().with_segmentation(Segmentation::BOTH))
             .get_alarm_summary_budget(GetAlarmSummaryBudget {
                 max_objects: work,
                 max_service_ack_bytes: bytes,
@@ -295,9 +295,9 @@ async fn alarm_summary_within_budget_segmented_bip_roundtrip() {
         client.stop().await.unwrap();
         server.stop().await.unwrap();
         match expected {
-            Some(reason) => assert!(
-                matches!(result, Err(Error::Abort { reason: actual }) if actual == reason.to_raw())
-            ),
+            Some(reason) => {
+                assert!(matches!(result, Err(Error::Abort { reason: actual }) if actual == reason))
+            }
             None => {
                 let response = result.unwrap();
                 assert_eq!(

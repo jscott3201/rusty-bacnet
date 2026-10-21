@@ -72,7 +72,7 @@ async fn issuance_waits_for_poll_and_complete_encoding_but_not_transport_result(
             &[1],
             destination.as_ref(),
             false,
-            NetworkPriority::URGENT,
+            NetworkPriority::Urgent,
             || {
                 issued.fetch_add(1, Ordering::SeqCst);
             },
@@ -90,7 +90,7 @@ async fn issuance_waits_for_poll_and_complete_encoding_but_not_transport_result(
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0].0.destination, destination);
         assert_eq!(frames[0].0.payload.as_ref(), &[0x20, 1, 15]);
-        assert_eq!(frames[0].0.priority, NetworkPriority::URGENT);
+        assert_eq!(frames[0].0.priority, NetworkPriority::Urgent);
         assert!(!frames[0].0.expecting_reply);
         assert_eq!(frames[0].1, vec![1]);
     }
@@ -109,7 +109,7 @@ async fn encoding_failure_never_issues_and_transport_failure_does_not_undo_issua
             &[1],
             Some(&invalid),
             false,
-            NetworkPriority::NORMAL,
+            NetworkPriority::Normal,
             || {
                 issued.fetch_add(1, Ordering::SeqCst);
             },
@@ -125,7 +125,7 @@ async fn encoding_failure_never_issues_and_transport_failure_does_not_undo_issua
             &[1],
             None,
             false,
-            NetworkPriority::NORMAL,
+            NetworkPriority::Normal,
             || {
                 issued.fetch_add(1, Ordering::SeqCst);
             }

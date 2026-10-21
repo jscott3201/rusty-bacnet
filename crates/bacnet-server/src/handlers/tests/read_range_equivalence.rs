@@ -240,7 +240,7 @@ fn walked_read(
     object: &dyn BACnetObject,
     identities: &[Identity],
     range: &RangeSpec,
-) -> Result<Vec<u8>, u32> {
+) -> Result<Vec<u8>, ErrorCode> {
     let len = identities.len();
     let (anchor, count, refusal) = match *range {
         RangeSpec::BySequenceNumber {
@@ -278,7 +278,7 @@ fn walked_read(
         RangeSpec::ByPosition { .. } => unreachable!("only sequence and time reads"),
     };
     if let Some(code) = refusal {
-        return Err(code.to_raw() as u32);
+        return Err(code);
     }
     let selection = super::super::super::read_range::select_signed_range(len, anchor, count);
     let window: Range<usize> = selection.range.clone();
@@ -306,7 +306,7 @@ fn handled_read(
     db: &ObjectDatabase,
     oid: ObjectIdentifier,
     range: &RangeSpec,
-) -> Option<Result<Vec<u8>, u32>> {
+) -> Option<Result<Vec<u8>, ErrorCode>> {
     let mut request = BytesMut::new();
     ReadRangeRequest {
         object_identifier: oid,
@@ -320,7 +320,7 @@ fn handled_read(
     Some(match handle_read_range(db, &request, &mut ack) {
         Ok(()) => Ok(ack.to_vec()),
         Err(Error::Protocol { class, code }) => {
-            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
+            assert_eq!(class, ErrorClass::PROPERTY);
             Err(code)
         }
         Err(other) => panic!("unexpected {other:?}"),
@@ -609,7 +609,7 @@ fn an_audit_ring_holding_a_zero_still_refuses_what_it_cannot_place() {
     .unwrap_err();
     assert!(matches!(
         unnumbered,
-        Error::Protocol { code, .. } if code == ErrorCode::LIST_ITEM_NOT_NUMBERED.to_raw() as u32
+        Error::Protocol { code, .. } if code == ErrorCode::LIST_ITEM_NOT_NUMBERED
     ));
     let untimed = read(RangeSpec::ByTime {
         reference_time: (DATE, time(0)),
@@ -619,6 +619,6 @@ fn an_audit_ring_holding_a_zero_still_refuses_what_it_cannot_place() {
     assert!(matches!(
         untimed,
         Error::Protocol { code, .. }
-            if code == ErrorCode::LIST_ITEM_NOT_TIMESTAMPED.to_raw() as u32
+            if code == ErrorCode::LIST_ITEM_NOT_TIMESTAMPED
     ));
 }

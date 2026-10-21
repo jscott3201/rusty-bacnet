@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use bacnet_encoding::npdu::{decode_npdu, Npdu, NpduAddress};
-use bacnet_types::enums::NetworkMessageType;
+use bacnet_npdu::NetworkMessageType;
 use bacnet_types::MacAddr;
 use bytes::Bytes;
 
@@ -101,7 +101,7 @@ impl Fixture {
                 };
                 assert_eq!(dest.as_slice(), mac);
                 let ack = decode_npdu(data).unwrap();
-                assert_eq!(ack.message_type, Some(ACK.to_raw()));
+                assert_eq!(ack.message_type, Some(ACK));
                 assert!(ack.payload.is_empty());
             }
             assert!(rx.try_recv().is_err());

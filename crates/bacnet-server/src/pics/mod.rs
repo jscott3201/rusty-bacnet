@@ -193,10 +193,18 @@ pub struct ServiceSupport {
 }
 
 /// Data link layer support.
+///
+/// It is `#[non_exhaustive]`, so a new option isn't a breaking change: a
+/// `match` on it needs a wildcard arm.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DataLinkSupport {
     /// BACnet/IP over IPv4.
     BipV4,
+    /// BACnet/IP over IPv4 with NAT traversal: a BBMD behind a NAT router,
+    /// reached at a configured global address (Annex J.7.5). Claim it with
+    /// [`BipV4`](Self::BipV4) for a device that can run that way.
+    BipV4NatTraversal,
     /// BACnet/IP over IPv6.
     BipV6,
     /// MS/TP over RS-485.
@@ -211,6 +219,7 @@ impl fmt::Display for DataLinkSupport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::BipV4 => f.write_str("BACnet/IP (Annex J)"),
+            Self::BipV4NatTraversal => f.write_str("BACnet/IP with NAT traversal (Annex J.7.5)"),
             Self::BipV6 => f.write_str("BACnet/IPv6 (Annex U)"),
             Self::Mstp => f.write_str("MS/TP (Clause 9)"),
             Self::Ethernet => f.write_str("BACnet Ethernet (Clause 7)"),
@@ -382,7 +391,7 @@ impl<'a> PicsGenerator<'a> {
 
     fn build_vendor_info(&self) -> VendorInfo {
         VendorInfo {
-            vendor_id: self.server_config.vendor_id,
+            vendor_id: self.server_config.device.vendor_id(),
             vendor_name: self.pics_config.vendor_name.clone(),
             model_name: self.pics_config.model_name.clone(),
             firmware_revision: self.pics_config.firmware_revision.clone(),
@@ -411,6 +420,7 @@ impl<'a> PicsGenerator<'a> {
                     self.db,
                     crate::device_view::DeviceExecution::FullServer,
                 )
+                .with_identity(Some(&self.server_config.device))
             });
             let supported_properties =
                 Self::union_property_support(objects.iter().flat_map(|object| {
@@ -885,3 +895,6 @@ mod selected_device_tests;
 
 #[cfg(test)]
 mod creation_only_tests;
+
+#[cfg(test)]
+mod data_link_tests;

@@ -8,17 +8,27 @@ repository.workspace = true
 description = "BACnet transport layer: BIP, IPv6, BACnet/SC, MS/TP, BBMD, Ethernet"
 keywords = ["bacnet", "building-automation", "transport", "bip", "mstp"]
 categories = ["network-programming"]
+readme = "README.md"
+
+[package.metadata.docs.rs]
+no-default-features = true
+features = ["ipv6", "sc-tls", "serial", "serial-gpio", "ethernet"]
+default-target = "x86_64-unknown-linux-gnu"
+targets = []
+rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
+bacnet-npdu = { workspace = true }
 bacnet-types = { workspace = true, features = ["std"] }
 bacnet-encoding = { workspace = true, features = ["std"] }
 bacnet-bip-codec = { workspace = true, features = ["bytes"] }
 bacnet-bip-core = { workspace = true }
 bacnet-mstp-codec = { workspace = true, features = ["alloc"] }
 bacnet-mstp-core = { workspace = true, features = ["alloc"] }
+bacnet-time = { workspace = true, features = ["std"] }
 bytes = { workspace = true, features = ["std"] }
 tracing.workspace = true
-tokio = { workspace = true, features = ["net", "rt", "sync", "macros", "time"] }
+tokio = { workspace = true, features = ["net", "rt", "sync", "macros", "time", "io-util"] }
 socket2 = { workspace = true, features = ["all"] }
 tokio-tungstenite = { workspace = true, optional = true }
 tokio-rustls = { workspace = true, optional = true }
@@ -29,6 +39,13 @@ tokio-serial = { version = "5", optional = true }
 gpiocdev = { version = "0.8", optional = true }
 libc = { workspace = true }
 getrandom = { workspace = true }
+x509-parser = { version = "0.18.1", default-features = false, features = ["verify-aws"], optional = true }
+
+# Safe recvmsg, sendmsg and socket options for UDP packet info and receive
+# stamps (#1882), on the targets where nix covers them; on Linux, the MS/TP
+# thread's CPU affinity (#501).
+[target.'cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple", target_os = "freebsd", target_os = "dragonfly", target_os = "openbsd", target_os = "netbsd"))'.dependencies]
+nix = { workspace = true, features = ["socket", "uio", "net", "sched"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
@@ -48,14 +65,22 @@ sc-tls = [
     "dep:rustls",
     "dep:futures-util",
     "dep:aws-lc-rs",
+    "dep:x509-parser",
 ]
-serial = ["dep:tokio-serial", "tokio/io-util"]
+serial = ["dep:tokio-serial"]
 serial-gpio = ["serial", "dep:gpiocdev"]
 ethernet = []
+# The scripted MS/TP line and token ring the monitor's own tests use, as
+# `mstp::monitor::script`, for tools built on the monitor (#1854).
+test-support = []
 
 [dev-dependencies]
 rcgen.workspace = true
 tokio = { workspace = true, features = ["test-util", "rt-multi-thread"] }
+
+# The tests' rlimit, interface-index and packet-info oracle calls (#1881).
+[target.'cfg(unix)'.dev-dependencies]
+nix = { workspace = true, features = ["net", "resource", "uio"] }
 
 [lints]
 workspace = true

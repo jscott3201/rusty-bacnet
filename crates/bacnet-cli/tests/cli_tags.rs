@@ -17,8 +17,7 @@ async fn server() -> BACnetServer<BipTransport> {
     let mut db = ObjectDatabase::new();
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
-            instance: 1,
-            name: "tags-reader".into(),
+            identity: bacnet_objects::DeviceIdentity::default().with_name("tags-reader"),
             ..DeviceConfig::default()
         })
         .unwrap(),

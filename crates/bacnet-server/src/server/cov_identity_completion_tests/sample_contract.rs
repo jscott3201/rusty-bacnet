@@ -40,8 +40,8 @@ impl BACnetObject for Probe {
             s.reads += 1;
             if s.fail {
                 return Err(Error::Protocol {
-                    class: ErrorClass::PROPERTY.to_raw() as u32,
-                    code: ErrorCode::READ_ACCESS_DENIED.to_raw() as u32,
+                    class: ErrorClass::PROPERTY,
+                    code: ErrorCode::READ_ACCESS_DENIED,
                 });
             }
             if s.changing {
@@ -50,8 +50,8 @@ impl BACnetObject for Probe {
             return Ok(s.value.clone());
         }
         Err(Error::Protocol {
-            class: ErrorClass::PROPERTY.to_raw() as u32,
-            code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+            class: ErrorClass::PROPERTY,
+            code: ErrorCode::UNKNOWN_PROPERTY,
         })
     }
     fn write_property(

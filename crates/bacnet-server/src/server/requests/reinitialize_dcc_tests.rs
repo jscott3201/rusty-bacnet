@@ -256,8 +256,8 @@ async fn reinitialize_non_restart_and_failed_requests_preserve_disable_and_timer
     for config in [
         recording_config(None, || {
             Err(Error::Protocol {
-                class: ErrorClass::DEVICE.to_raw() as u32,
-                code: ErrorCode::CONFIGURATION_IN_PROGRESS.to_raw() as u32,
+                class: ErrorClass::DEVICE,
+                code: ErrorCode::CONFIGURATION_IN_PROGRESS,
             })
         })
         .0,

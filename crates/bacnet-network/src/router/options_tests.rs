@@ -3,9 +3,9 @@
 
 use std::sync::Arc;
 
+use bacnet_npdu::NetworkMessageType;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::{ReceivedNpdu, TransportPort};
-use bacnet_types::enums::NetworkMessageType;
 use tokio::time::{timeout, Duration};
 
 use super::*;
@@ -50,7 +50,7 @@ async fn ports() -> (
 async fn one_start_combines_admission_tracking_a_control_policy_and_the_control_receiver() {
     let (ports, [(mut peer_a, _), (mut peer_b, _)]) = ports().await;
     // Hardened, with an authorizer that admits rejects and nothing else.
-    let reject = NetworkMessageType::REJECT_MESSAGE_TO_NETWORK.to_raw();
+    let reject = NetworkMessageType::REJECT_MESSAGE_TO_NETWORK;
     let options = RouterOptions::new()
         .track_admission()
         .control_policy(ControlPolicy::Hardened)
@@ -142,6 +142,9 @@ async fn rejects_to_the_router(
 ) {
     for _ in 0..count {
         peer_b.send_unicast(&REJECT_3000, &[0x02]).await.unwrap();
+        // The loopback link drops what finds the router's 256-frame queue
+        // full (#1713), so let the router take each frame as it goes.
+        tokio::task::yield_now().await;
     }
     peer_b.send_unicast(&TO_6000, &[0x02]).await.unwrap();
     while recv(from_router_b).await.npdu[..] != REJECT_6000 {}

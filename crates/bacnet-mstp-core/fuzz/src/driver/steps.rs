@@ -1,8 +1,8 @@
 //! Each step: what it feeds the core, and what the core must answer.
 
 use bacnet_mstp_core::{
-    CoreError, MasterCore, QueueRefusal, QueueStorage, ReceiveError, ReplyDecision, RequestId,
-    TransmitFailure, TransmitId,
+    MasterCore, QueueRefusal, QueueStorage, ReceiveError, ReplyDecision, RequestError, RequestId,
+    TransmitError, TransmitFailure, TransmitId,
 };
 
 use super::Driver;
@@ -117,7 +117,7 @@ impl Driver<'_> {
             Step::Silence(micros) => {
                 self.now += u64::from(*micros);
                 self.checker.tick(self.now);
-                self.expect_ok(core.on_silence(self.at()), "on_silence");
+                core.on_silence(self.at());
                 self.stamp = self.now;
                 self.drain(core);
             }
@@ -142,10 +142,7 @@ impl Driver<'_> {
                 self.now += u64::from(*after);
                 self.checker.tick(self.now);
                 let failure = TransmitFailure::from(*reason);
-                self.expect_ok(
-                    core.on_transmit_aborted(id, failure, self.at()),
-                    "on_transmit_aborted",
-                );
+                core.on_transmit_aborted(id, failure, self.at());
                 self.stamp = self.now;
                 self.tx = None;
                 if started {
@@ -215,12 +212,6 @@ impl Driver<'_> {
         }
     }
 
-    fn expect_ok(&self, result: Result<(), CoreError>, call: &str) {
-        if let Err(error) = result {
-            self.fail(&format!("{call} refused: {error:?}"));
-        }
-    }
-
     /// Octets back to back, with an optional gap before one of them.
     fn wire<Q: QueueStorage, const N: usize>(
         &mut self,
@@ -246,13 +237,13 @@ impl Driver<'_> {
         start_before_poll: bool,
     ) {
         self.checker.tick(self.now);
-        self.expect_ok(core.on_deadline(self.at()), "on_deadline");
+        core.on_deadline(self.at());
         self.stamp = self.now;
         if start_before_poll {
             let held = self.tx.as_ref().map(|tx| tx.id);
             if let Some(id) = core.snapshot().transmit_id.filter(|&id| Some(id) != held) {
-                let result = core.on_transmit_started(id, self.at());
-                if result != Err(CoreError::TransmitNotPolled) {
+                let result = core.on_transmit_started(id, self.at()).map(<[u8]>::len);
+                if result != Err(TransmitError::NotPolled) {
                     self.fail(&format!(
                         "a start before the frame was polled got {result:?}"
                     ));
@@ -265,7 +256,7 @@ impl Driver<'_> {
             match core.next_deadline() {
                 Some(due) if due.as_micros() <= self.now => {
                     self.checker.tick(self.now);
-                    self.expect_ok(core.on_deadline(self.at()), "on_deadline");
+                    core.on_deadline(self.at());
                     self.stamp = self.now;
                     self.drain(core);
                     self.checker.answers_due(self.now, None);
@@ -287,9 +278,9 @@ impl Driver<'_> {
         let id = tx.id;
         if tx.started.is_some() {
             let before = core.snapshot();
-            let result = core.on_transmit_started(id, self.at());
+            let result = core.on_transmit_started(id, self.at()).map(<[u8]>::len);
             self.stamp = self.now;
-            if result != Err(CoreError::TransmitAlreadyStarted) || core.snapshot() != before {
+            if result != Err(TransmitError::AlreadyStarted) || core.snapshot() != before {
                 self.fail(&format!("a second start got {result:?}"));
             }
             return;
@@ -299,17 +290,23 @@ impl Driver<'_> {
         let result = core.on_transmit_started(id, self.at());
         self.stamp = self.now;
         match result {
-            Ok(()) => {
+            Ok(frame) => {
+                // Only a confirmed start hands the octets over: exactly the
+                // frame the action named, from the action buffers.
+                self.check_span(frame, self.frame, "a started transmit");
+                if self.tx.as_ref().is_none_or(|tx| tx.octets != frame) {
+                    self.fail("the start handed over other octets than the action named");
+                }
                 self.checker.started(self.now);
                 if let Some(tx) = &mut self.tx {
                     tx.started = Some(self.now);
                 }
             }
-            Err(CoreError::TransmitDeferred) => {
+            Err(TransmitError::Deferred) => {
                 self.checker.deferred(self.now);
                 self.tx = None;
             }
-            Err(CoreError::RequestExpired) => {
+            Err(TransmitError::Expired) => {
                 self.checker.expired(self.now);
                 self.tx = None;
             }
@@ -329,11 +326,11 @@ impl Driver<'_> {
         };
         let id = tx.id;
         let Some(start) = tx.started else {
-            let before = core.snapshot();
-            let result = core.on_transmit_complete(id, self.at());
+            let before = (core.snapshot(), core.counters().adapter_errors);
+            core.on_transmit_complete(id, self.at());
             self.stamp = self.now;
-            if result != Err(CoreError::TransmitNotStarted) || core.snapshot() != before {
-                self.fail(&format!("completing an unstarted frame got {result:?}"));
+            if (core.snapshot(), core.counters().adapter_errors) != (before.0, before.1 + 1) {
+                self.fail("completing an unstarted frame was not ignored and counted");
             }
             return;
         };
@@ -361,10 +358,7 @@ impl Driver<'_> {
         }
         self.now = self.now.max(start + octets.len() as u64 * octet_time) + after;
         self.checker.tick(self.now);
-        self.expect_ok(
-            core.on_transmit_complete(id, self.at()),
-            "on_transmit_complete",
-        );
+        core.on_transmit_complete(id, self.at());
         self.stamp = self.now;
         self.tx = None;
         self.checker.completed(self.now);
@@ -372,7 +366,8 @@ impl Driver<'_> {
     }
 
     /// A transmit event for an id the adapter doesn't hold, which the core
-    /// must refuse as stale without changing anything.
+    /// must ignore, or refuse as stale for a start, without changing
+    /// anything.
     fn bogus<Q: QueueStorage, const N: usize>(
         &mut self,
         core: &mut MasterCore<'_, Q, N>,
@@ -390,12 +385,18 @@ impl Driver<'_> {
         let before = (core.snapshot(), core.counters());
         let at = self.at();
         let result = match event {
-            TransmitEvent::Start => core.on_transmit_started(id, at),
-            TransmitEvent::Complete => core.on_transmit_complete(id, at),
-            TransmitEvent::Abort => core.on_transmit_aborted(id, TransmitFailure::Io, at),
+            TransmitEvent::Start => core.on_transmit_started(id, at).map(drop),
+            TransmitEvent::Complete => {
+                core.on_transmit_complete(id, at);
+                Err(TransmitError::Stale)
+            }
+            TransmitEvent::Abort => {
+                core.on_transmit_aborted(id, TransmitFailure::Io, at);
+                Err(TransmitError::Stale)
+            }
         };
         self.stamp = self.now;
-        if result != Err(CoreError::StaleTransmit) || (core.snapshot(), core.counters()) != before {
+        if result != Err(TransmitError::Stale) || (core.snapshot(), core.counters()) != before {
             self.fail(&format!(
                 "{event:?} for an id nobody holds got {result:?}, or changed the core"
             ));
@@ -451,10 +452,10 @@ impl Driver<'_> {
                     Decision::Abandoned => Decided::Abandoned,
                 },
             ),
-            Err(CoreError::ReplyOversize { .. }) if data.len() <= max_npdu => {
+            Err(RequestError::Oversize { .. }) if data.len() <= max_npdu => {
                 self.fail(&format!("a reply of {} octets was refused", data.len()));
             }
-            Err(CoreError::StaleRequest | CoreError::NoPendingRequest) => {}
+            Err(RequestError::Stale | RequestError::NoPending) => {}
             Err(error) if id.is_none() => {
                 self.fail(&format!(
                     "a decision for a request nobody made got {error:?}"
@@ -502,7 +503,7 @@ impl Driver<'_> {
                 _ => {
                     // Nothing is due yet, so the call changes nothing.
                     let before = (core.snapshot(), core.counters());
-                    self.expect_ok(core.on_deadline(self.at()), "on_deadline");
+                    core.on_deadline(self.at());
                     if (core.snapshot(), core.counters()) != before {
                         self.fail("a deadline serviced before it fell due changed the core");
                     }

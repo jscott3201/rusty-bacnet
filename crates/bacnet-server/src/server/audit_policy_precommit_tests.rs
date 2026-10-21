@@ -42,7 +42,7 @@ async fn mandatory_policy_send_capacity_denial_is_atomic() {
         .await;
     assert!(
         matches!(result, Err(Error::Protocol { class, code })
-        if class == ErrorClass::SERVICES.to_raw() as u32 && code == ErrorCode::SERVICE_REQUEST_DENIED.to_raw() as u32),
+        if class == ErrorClass::SERVICES && code == ErrorCode::SERVICE_REQUEST_DENIED),
         "{result:?}"
     );
     let db = f.server.db.read().await;
@@ -63,7 +63,7 @@ async fn mandatory_policy_send_capacity_denial_is_atomic() {
 fn denied(result: Result<(), Error>) {
     assert!(
         matches!(result, Err(Error::Protocol { class, code })
-        if class == ErrorClass::SERVICES.to_raw() as u32 && code == ErrorCode::SERVICE_REQUEST_DENIED.to_raw() as u32),
+        if class == ErrorClass::SERVICES && code == ErrorCode::SERVICE_REQUEST_DENIED),
         "{result:?}"
     );
 }
@@ -347,7 +347,7 @@ async fn mandatory_policy_invalid_noop_null_and_ordinary_writes_keep_their_contr
             .await
             .unwrap_err();
         assert!(
-            matches!(error, Error::Protocol { class: c, code: e } if c == class.to_raw() as u32 && e == code.to_raw() as u32),
+            matches!(error, Error::Protocol { class: c, code: e } if c == class && e == code),
             "{error:?}"
         );
     }
@@ -529,8 +529,8 @@ async fn mandatory_policy_stop_between_capture_and_commit_denies_without_assignm
     audit.failed(
         &mut db,
         &Error::Protocol {
-            class: ErrorClass::SERVICES.to_raw() as u32,
-            code: ErrorCode::SERVICE_REQUEST_DENIED.to_raw() as u32,
+            class: ErrorClass::SERVICES,
+            code: ErrorCode::SERVICE_REQUEST_DENIED,
         },
     );
     assert_eq!(

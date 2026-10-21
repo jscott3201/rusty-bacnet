@@ -33,8 +33,8 @@ pub(super) struct RecipientState {
 
 fn property_error(code: ErrorCode) -> Error {
     Error::Protocol {
-        class: ErrorClass::PROPERTY.to_raw() as u32,
-        code: code.to_raw() as u32,
+        class: ErrorClass::PROPERTY,
+        code,
     }
 }
 
@@ -49,6 +49,24 @@ impl DeviceAuthority<'_> {
     }
     pub fn set_services_supported(&mut self, services: &[ServiceSupported]) {
         self.0.set_services_supported(services);
+    }
+    pub fn set_object_list(&mut self, oids: Vec<ObjectIdentifier>) {
+        self.0.set_object_list(oids);
+    }
+    pub fn set_system_status(&mut self, status: DeviceStatus) {
+        self.0.set_system_status(status);
+    }
+    pub fn set_database_revision(&mut self, revision: u32) {
+        self.0.set_database_revision(revision);
+    }
+    pub fn set_backup_and_restore_state(&mut self, state: BackupAndRestoreState) {
+        self.0.set_backup_and_restore_state(state);
+    }
+    pub fn set_last_restore_time(&mut self, time: BACnetTimeStamp) {
+        self.0.set_last_restore_time(time);
+    }
+    pub fn set_configuration_files(&mut self, files: Vec<ObjectIdentifier>) {
+        self.0.set_configuration_files(files);
     }
     pub fn write_property(
         &mut self,
@@ -176,8 +194,8 @@ impl DeviceObject {
         }
         if priority.is_some_and(|p| !(1..=16).contains(&p)) {
             return Err(Error::Protocol {
-                class: ErrorClass::SERVICES.to_raw() as u32,
-                code: ErrorCode::PARAMETER_OUT_OF_RANGE.to_raw() as u32,
+                class: ErrorClass::SERVICES,
+                code: ErrorCode::PARAMETER_OUT_OF_RANGE,
             });
         }
         if value == PropertyValue::Null {

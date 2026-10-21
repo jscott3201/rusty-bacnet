@@ -47,7 +47,7 @@ fn subscribe_cov_lifetime_only_preserves_whole_table_and_quota_before_lookup_or_
             )
             .unwrap_err();
             assert!(matches!(error, Error::Reject { reason }
-                if reason == RejectReason::INCONSISTENT_PARAMETERS.to_raw()));
+                if reason == RejectReason::INCONSISTENT_PARAMETERS));
             assert_eq!(table.len(), 2);
             assert_eq!(table.counters().snapshot(), counters);
             for before in [&finite, &expired] {

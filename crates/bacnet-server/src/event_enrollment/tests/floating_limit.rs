@@ -93,8 +93,9 @@ fn setup_qualified_setpoint(
     for &instance in local_devices {
         db.add(Box::new(
             DeviceObject::new(DeviceConfig {
-                instance,
-                name: format!("Device-{instance}"),
+                identity: bacnet_objects::DeviceIdentity::new(instance, 0)
+                    .expect("valid Device identity")
+                    .with_name(format!("Device-{instance}")),
                 ..DeviceConfig::default()
             })
             .unwrap(),

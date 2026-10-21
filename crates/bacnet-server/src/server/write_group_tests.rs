@@ -24,13 +24,18 @@ use bacnet_encoding::npdu::{encode_npdu, Npdu};
 use bacnet_objects::analog::AnalogOutputObject;
 use bacnet_services::write_group::GroupChannelValue;
 use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};
-use bacnet_types::enums::WriteStatus;
+use bacnet_types::enums::{EngineeringUnits, WriteStatus};
 use std::num::NonZeroU32;
 
 fn objects(db: &mut ObjectDatabase) {
     for instance in 1..=5 {
         db.add(Box::new(
-            AnalogOutputObject::new(instance, format!("AO-{instance}"), 62).unwrap(),
+            AnalogOutputObject::new(
+                instance,
+                format!("AO-{instance}"),
+                EngineeringUnits::DEGREES_CELSIUS,
+            )
+            .unwrap(),
         ))
         .unwrap();
     }
@@ -315,7 +320,7 @@ async fn deny_all_denies_each_channel_write_of_a_write_group() {
     // An authorizer that would allow everything isn't asked.
     let h = start(ServerConfig {
         mutation_policy: MutationPolicy::DenyAll,
-        mutation_authorizer: Some(Arc::new(|_| true)),
+        policy: Some(Arc::new(crate::FnPolicy::new().mutation(|_| true))),
         ..ServerConfig::default()
     })
     .await;
@@ -336,16 +341,16 @@ async fn deny_all_denies_each_channel_write_of_a_write_group() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn the_mutation_authorizer_decides_each_channel_write_of_a_write_group() {
+async fn the_policy_decides_each_channel_write_of_a_write_group() {
     // It allows CH-3 and CH-5, and keeps every context it is shown.
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
     let shown = Arc::clone(&seen);
     let h = start(ServerConfig {
-        mutation_authorizer: Some(Arc::new(move |context| {
+        policy: Some(Arc::new(crate::FnPolicy::new().mutation(move |context| {
             shown.lock().unwrap().push(context.clone());
             matches!(&context.target, MutationTarget::WriteGroup(target)
                 if [3, 5].contains(&target.channel.instance_number()))
-        })),
+        }))),
         ..ServerConfig::default()
     })
     .await;
@@ -405,9 +410,11 @@ async fn the_mutation_authorizer_decides_each_channel_write_of_a_write_group() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_panicking_authorizer_denies_the_channel_write() {
+async fn a_panicking_policy_denies_the_channel_write() {
     let h = start(ServerConfig {
-        mutation_authorizer: Some(Arc::new(|_| panic!("authorizer bug"))),
+        policy: Some(Arc::new(
+            crate::FnPolicy::new().mutation(|_| panic!("authorizer bug")),
+        )),
         ..ServerConfig::default()
     })
     .await;

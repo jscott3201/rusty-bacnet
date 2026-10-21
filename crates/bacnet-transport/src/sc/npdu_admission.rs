@@ -20,16 +20,32 @@
 //! NAKed earlier) and never touch the quota or the counters. Fairness drops
 //! never consult or consume the rejection NAK budget.
 //!
-//! Numbers: the network layer allows 16 queued APDUs per source in a
-//! 256-item queue (a 1:16 ratio). Scaled to the 64-item SC NPDU queue this
-//! gives **4 per origin in 64 aggregate**. Tradeoff, measured in
+//! Numbers: **32 per origin in 256 aggregate** (#1712). The quota sits above
+//! what a server admits from one peer at once (16 confirmed requests, 1 DCC
+//! recovery request and 8 unconfirmed ones; see `docs/request-admission.md`),
+//! so a single busy peer meets the server's prompt Abort rather than a drop
+//! here, which its requests would only show as APDU timeouts. It also holds
+//! the replies to that many requests from one client to one server. The
+//! receive loop admits frames that arrive together without yielding, so a
+//! burst from one peer lands before the network layer drains any of it: the
+//! earlier 4-of-64 dropped the fifth NPDU of such a burst, and a client with
+//! ten requests in flight to one server stalled. Tradeoff, measured in
 //! `rb11_npdu_fairness_tests::bursty_source_capped_while_legitimate_origins_progress`:
-//! one bursty origin is capped at 4/64 slots (6%) while fifteen legitimate
-//! origins still fill the remaining 60 and progress; a larger quota would let
-//! one origin take a larger share of the small queue, a smaller one would
-//! drop legitimate back-to-back NPDUs (e.g. a finite segmented burst) under a
-//! merely slow consumer. Draining always releases quota, so a live consumer
-//! never deadlocks a legitimate source.
+//! one bursty origin is capped at 32/256 slots (12.5%) while seven
+//! legitimate origins still fill the remaining 224 and progress; a larger
+//! quota would let one origin take a larger share of the queue, a smaller
+//! one drops a busy peer's legitimate concurrency. Draining always releases
+//! quota, so a live consumer never deadlocks a legitimate source.
+//!
+//! Network-layer messages also pass a per-source rate limit first
+//! ([`ScControlRateLimit`], `control_rate`, #518), so the precedence is
+//! **Closed > control rate > fairness > Full**. APDUs are never charged.
+//!
+//! Drops: control-rate, fairness and Full drops share one [`WarnThrottle`] per admission
+//! instance, so one transport or listener warns at most once per
+//! [`WARNING_INTERVAL`](crate::warn_throttle::WARNING_INTERVAL), with the
+//! number dropped since its last warning; the rest log at debug. Closed drops
+//! only happen as the receiver goes away and stay at debug.
 //!
 //! Lifecycle: the per-source map is bounded by construction — entries exist
 //! only for queued items (`live_entries <= current_depth <= CAPACITY`, checked
@@ -51,9 +67,11 @@
 //! `try_send`/drop-arriving. Concurrent direct connections serialize on the
 //! same section; the post-send reconcile keeps the map exact under races in
 //! the conservative direction (a recycled slot may count one extra fairness
-//! drop, never an unbounded entry).
+//! drop, never an unbounded entry). A drop then takes the warning throttle's
+//! own short lock, after the accounting lock is released; the two never nest.
 
 use std::collections::{HashMap, VecDeque};
+use std::fmt;
 #[cfg(any(test, feature = "sc-tls"))]
 use std::net::SocketAddr;
 use std::sync::Mutex as StdMutex;
@@ -65,36 +83,44 @@ use tracing::{debug, warn};
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 
+use super::control_rate::{is_network_message, ControlRate, ControlSource, ScControlRateLimit};
 use super::{data_attributes, ScTransport, WebSocketPort};
 use crate::port::{ReceivedNpdu, TransportProvenance};
 use crate::sc_frame::{ScMessage, Vmac, BROADCAST_VMAC};
+use crate::warn_throttle::WarnThrottle;
 
-/// SC NPDU queue capacity this admission is scaled to.
+/// SC NPDU queue capacity: the aggregate admission cap.
 ///
-/// Must match the hub (`ScTransport::start`) and direct-listener
-/// (`DirectListener::start`) NPDU channel capacities; enforced by a
-/// `debug_assert` on every admission.
-pub(crate) const SC_NPDU_QUEUE_CAPACITY: usize = 64;
+/// The hub transport (`ScTransport::start`) and the direct listener
+/// (`DirectListener::start`) size their NPDU channels with it; a
+/// `debug_assert` on every admission checks that. Like the B/IP channel, it
+/// holds 256 NPDUs.
+pub(crate) const SC_NPDU_QUEUE_CAPACITY: usize = 256;
 
-/// Default per-origin queued-NPDU quota: the network-layer 16/256 ratio
-/// scaled to the 64-item SC queue.
-pub(crate) const DEFAULT_NPDU_PER_ORIGIN_LIMIT: usize = 4;
+/// Default per-origin queued-NPDU quota: above a server's whole per-peer
+/// request budget (25 handlers), and one eighth of the queue (#1712).
+pub(crate) const DEFAULT_NPDU_PER_ORIGIN_LIMIT: usize = 32;
 
 /// Startup-validated SC NPDU admission limits (builder-style).
 ///
 /// Only the per-origin quota is configurable; the aggregate cap is the fixed
-/// 64-item NPDU channel. The default quota of 4 scales the network layer's 16-of-256
-/// per-origin ratio to that 64-item queue.
+/// 256-item NPDU channel. The default quota of 32 lets one busy peer keep as
+/// many requests or replies queued as a server would admit from it, while
+/// one origin holds at most 12.5% of the queue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ScNpduAdmissionPolicy {
     /// Maximum queued, unconsumed NPDUs per `(ingress path, source)` key.
     pub per_origin_limit: usize,
+    /// Rate limit on network-layer messages per `(ingress path, source)` key.
+    pub control_rate: ScControlRateLimit,
 }
 
 impl Default for ScNpduAdmissionPolicy {
     fn default() -> Self {
         Self {
             per_origin_limit: DEFAULT_NPDU_PER_ORIGIN_LIMIT,
+            control_rate: ScControlRateLimit::default(),
         }
     }
 }
@@ -112,7 +138,7 @@ impl ScNpduAdmissionPolicy {
                 self.per_origin_limit
             )));
         }
-        Ok(())
+        self.control_rate.validate()
     }
 }
 
@@ -120,11 +146,15 @@ impl ScNpduAdmissionPolicy {
 ///
 /// Count-only diagnostics mirroring the hub's `ScHubBroadcastDropCounts`
 /// and the network-layer `QueueAdmissionSnapshot`: each admission drop
-/// increments exactly one field in **Closed > fairness > Full** order, values
+/// increments exactly one field in **Closed > control rate > fairness > Full** order, values
 /// saturate at `u64::MAX`, and no field is ever an input to an admission
 /// decision. Readable after stop; clones observe the same queue.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ScNpduDropCounts {
+    /// Network-layer messages dropped by the per-source control-message rate
+    /// limit, before taking a queue slot (#518). Queue-wide total.
+    pub control_rate_drops: u64,
     /// NPDUs dropped by the per-origin quota (evaluated before Full even when
     /// the queue has room). Queue-wide total, never per-source.
     pub fairness_drops: u64,
@@ -151,12 +181,14 @@ struct AdmissionKey {
     source: MacAddr,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct AdmissionState {
     /// Sources in admission order; length tracks the channel depth.
     queued: VecDeque<AdmissionKey>,
     /// Live per-source counts; entries exist only for queued items.
     counts: HashMap<AdmissionKey, usize>,
+    /// Network-layer message buckets, bounded on their own.
+    control: ControlRate,
     drops: ScNpduDropCounts,
 }
 
@@ -211,6 +243,7 @@ impl AdmissionState {
 #[derive(Debug)]
 pub(crate) enum AdmissionOutcome {
     Admitted,
+    ControlRateDrop(ReceivedNpdu),
     FairnessDrop(ReceivedNpdu),
     FullDrop(ReceivedNpdu),
     ClosedDrop(ReceivedNpdu),
@@ -231,6 +264,9 @@ fn saturating_inc(counter: &mut u64) {
 pub(crate) struct ScNpduAdmission {
     policy: ScNpduAdmissionPolicy,
     state: StdMutex<AdmissionState>,
+    /// Throttles the warning for fairness and Full drops, shared by every
+    /// hand-off into this queue.
+    drop_warning: WarnThrottle,
 }
 
 /// Identity, address and reply channel of a direct-connect peer whose NPDU is
@@ -251,7 +287,13 @@ impl ScNpduAdmission {
     pub(crate) fn new(policy: ScNpduAdmissionPolicy) -> Self {
         Self {
             policy,
-            state: StdMutex::new(AdmissionState::default()),
+            state: StdMutex::new(AdmissionState {
+                queued: VecDeque::new(),
+                counts: HashMap::new(),
+                control: ControlRate::new(policy.control_rate),
+                drops: ScNpduDropCounts::default(),
+            }),
+            drop_warning: WarnThrottle::default(),
         }
     }
 
@@ -262,14 +304,17 @@ impl ScNpduAdmission {
             .drops
     }
 
-    /// Core gate: Closed > fairness > Full. Holds only the short accounting
-    /// lock across the synchronous `try_send`; never across an await.
+    /// Core gate: Closed > control rate > fairness > Full. Holds only the
+    /// short accounting lock across the synchronous `try_send`; never across
+    /// an await. `charge_control` is false only for an item another queue's
+    /// admission already charged.
     pub(crate) fn admit(
         &self,
         tx: &mpsc::Sender<ReceivedNpdu>,
         path: ScIngressPath,
         source: &MacAddr,
         item: ReceivedNpdu,
+        charge_control: bool,
     ) -> AdmissionOutcome {
         let mut state = self.state.lock().expect("SC NPDU admission state poisoned");
         if tx.is_closed() {
@@ -279,6 +324,22 @@ impl ScNpduAdmission {
         debug_assert_eq!(tx.max_capacity(), SC_NPDU_QUEUE_CAPACITY);
         state.reconcile(tx);
         state.debug_check(self.policy.per_origin_limit);
+        // A verified direct peer spends its certificate's budget, so a
+        // VMAC change or reconnect doesn't reset it; anything else spends
+        // its ingress path and VMAC's.
+        let control_source = || match item.provenance.principal() {
+            Some(principal) => ControlSource::Principal(principal),
+            None => ControlSource::Vmac(path, source.clone()),
+        };
+        if charge_control
+            && is_network_message(&item.npdu)
+            && !state
+                .control
+                .admit(control_source(), tokio::time::Instant::now())
+        {
+            saturating_inc(&mut state.drops.control_rate_drops);
+            return AdmissionOutcome::ControlRateDrop(item);
+        }
         let key = AdmissionKey {
             path,
             source: source.clone(),
@@ -327,43 +388,18 @@ impl ScNpduAdmission {
             provenance: TransportProvenance::verified_relayed_origin(),
             reply_tx: None,
         };
-        match self.admit(tx, ScIngressPath::Hub, &source_mac, item) {
-            AdmissionOutcome::Admitted => {}
-            AdmissionOutcome::FairnessDrop(dropped) => {
-                debug!("SC transport: per-origin NPDU quota exceeded, dropping incoming message");
-                drop(dropped);
-            }
-            AdmissionOutcome::FullDrop(dropped) => {
-                warn!("SC transport: NPDU channel full, dropping incoming message");
-                drop(dropped);
-            }
-            AdmissionOutcome::ClosedDrop(dropped) => {
-                debug!("SC transport: NPDU receiver closed, dropping incoming message");
-                drop(dropped);
-            }
-        }
+        let outcome = self.admit(tx, ScIngressPath::Hub, &source_mac, item, true);
+        self.settle(outcome, "hub", None);
     }
 
     /// Hub-side direct merge: the listener already admitted this item into
     /// its own queue; re-admit into the hub queue under the direct-path key
     /// so bursty direct peers cannot starve hub-path origins (or vice versa).
+    /// The listener's admission already charged its control-message rate.
     pub(crate) fn admit_merged_direct(&self, tx: &mpsc::Sender<ReceivedNpdu>, item: ReceivedNpdu) {
         let source = item.source_mac.clone();
-        match self.admit(tx, ScIngressPath::Direct, &source, item) {
-            AdmissionOutcome::Admitted => {}
-            AdmissionOutcome::FairnessDrop(dropped) => {
-                debug!("SC transport: per-origin NPDU quota exceeded, dropping direct message");
-                drop(dropped);
-            }
-            AdmissionOutcome::FullDrop(dropped) => {
-                warn!("SC transport: NPDU channel full, dropping direct message");
-                drop(dropped);
-            }
-            AdmissionOutcome::ClosedDrop(dropped) => {
-                debug!("SC transport: NPDU receiver closed, dropping direct message");
-                drop(dropped);
-            }
-        }
+        let outcome = self.admit(tx, ScIngressPath::Direct, &source, item, false);
+        self.settle(outcome, "merged direct", None);
     }
 
     /// Direct socket hand-off: build the verified-direct envelope and admit under
@@ -392,20 +428,54 @@ impl ScNpduAdmission {
             direct_response,
             reply_tx: None,
         };
-        match self.admit(tx, ScIngressPath::Direct, &source_mac, item) {
-            AdmissionOutcome::Admitted => {}
-            AdmissionOutcome::FairnessDrop(dropped) => {
-                debug!("direct per-origin NPDU quota exceeded, dropping from {peer_addr}");
-                drop(dropped);
+        let outcome = self.admit(tx, ScIngressPath::Direct, &source_mac, item, true);
+        self.settle(outcome, "direct peer", Some(&peer_addr));
+    }
+
+    /// Log an admission outcome and drop a rejected item, after the
+    /// accounting lock is released. `handoff` names the hand-off and `peer`
+    /// a direct peer's socket address.
+    ///
+    /// Fairness and Full drops warn at most once per
+    /// [`WARNING_INTERVAL`](crate::warn_throttle::WARNING_INTERVAL) for this
+    /// queue, with the number dropped since the last warning, so a busy peer
+    /// over its quota shows in the log without flooding it; the rest log at
+    /// debug. The counters count every drop either way. Closed drops log at
+    /// debug: they only happen as the receiver goes away.
+    fn settle(
+        &self,
+        outcome: AdmissionOutcome,
+        handoff: &'static str,
+        peer: Option<&dyn fmt::Display>,
+    ) {
+        let peer = peer.map(tracing::field::display);
+        let (item, reason) = match outcome {
+            AdmissionOutcome::Admitted => return,
+            AdmissionOutcome::ControlRateDrop(item) => (item, "control-message rate"),
+            AdmissionOutcome::FairnessDrop(item) => (item, "per-origin quota"),
+            AdmissionOutcome::FullDrop(item) => (item, "queue full"),
+            AdmissionOutcome::ClosedDrop(item) => {
+                debug!(
+                    handoff,
+                    peer, "SC transport: NPDU receiver closed, dropping an incoming NPDU"
+                );
+                drop(item);
+                return;
             }
-            AdmissionOutcome::FullDrop(dropped) => {
-                warn!("direct NPDU channel full, dropping from {peer_addr}");
-                drop(dropped);
-            }
-            AdmissionOutcome::ClosedDrop(dropped) => {
-                debug!("direct NPDU receiver closed, dropping from {peer_addr}");
-                drop(dropped);
-            }
+        };
+        drop(item);
+        match self.drop_warning.note() {
+            Some(dropped) => warn!(
+                dropped,
+                reason,
+                handoff,
+                peer,
+                "SC transport: NPDU admission dropped incoming NPDUs since the last warning"
+            ),
+            None => debug!(
+                reason,
+                handoff, peer, "SC transport: NPDU admission dropped an incoming NPDU"
+            ),
         }
     }
 
@@ -428,24 +498,37 @@ impl ScNpduAdmission {
 impl<W: WebSocketPort> ScTransport<W> {
     /// Set the per-origin queued-NPDU quota (builder-style).
     ///
-    /// Defaults to `DEFAULT_NPDU_PER_ORIGIN_LIMIT`: the network-layer
-    /// 16/256 ratio scaled to the 64-item SC queue. [`TransportPort::start`](crate::port::TransportPort::start)
+    /// Defaults to 32 of the 256-item SC queue, enough for one busy peer's
+    /// requests or replies (#1712); 4 restores the stricter guard used before.
+    /// [`TransportPort::start`](crate::port::TransportPort::start)
     /// validates the limit before any I/O or state change and rejects zero
     /// or above-capacity values; the aggregate cap stays the fixed channel
     /// capacity. Applies jointly to hub-relayed and merged-direct NPDUs,
     /// keyed by ingress path so neither starves the other.
     pub fn with_npdu_per_origin_limit(mut self, limit: usize) -> Self {
-        self.npdu_admission_policy = ScNpduAdmissionPolicy {
-            per_origin_limit: limit,
-        };
+        self.npdu_admission_policy.per_origin_limit = limit;
+        self
+    }
+
+    /// Set the per-source limit on inbound network-layer messages
+    /// (builder-style; default [`ScControlRateLimit::default`], #518).
+    ///
+    /// Each originating VMAC on the hub path, and each direct peer's verified
+    /// certificate whatever VMAC it uses, gets its own bucket; a message over budget is dropped silently and counted in
+    /// [`ScNpduDropCounts::control_rate_drops`]. APDUs are never charged.
+    /// [`TransportPort::start`](crate::port::TransportPort::start) validates
+    /// it before any I/O.
+    pub fn with_control_rate_limit(mut self, limit: ScControlRateLimit) -> Self {
+        self.npdu_admission_policy.control_rate = limit;
         self
     }
 
     /// Read this transport's NPDU drop counts, including after
     /// [`TransportPort::stop`](crate::port::TransportPort::stop).
     ///
-    /// Count-only and saturating: per-origin fairness drops, aggregate-full
-    /// drops, and closed-receiver drops in Closed > fairness > Full order.
+    /// Count-only and saturating: control-message rate drops, per-origin
+    /// fairness drops, aggregate-full drops, and closed-receiver drops in
+    /// Closed > control rate > fairness > Full order.
     /// No per-VMAC statistics or wire response is created. A never-started
     /// transport reports zero.
     pub fn npdu_drop_counts(&self) -> ScNpduDropCounts {
@@ -457,320 +540,5 @@ impl<W: WebSocketPort> ScTransport<W> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::sc_frame::ScFunction;
-
-    fn item(source: &MacAddr) -> ReceivedNpdu {
-        ReceivedNpdu {
-            direct_response: None,
-            npdu: Bytes::from_static(&[0x01, 0x00, 0x30]),
-            source_mac: source.clone(),
-            link_layer_group: false,
-            data_attributes: Vec::new(),
-            provenance: TransportProvenance::unverified(),
-            reply_tx: None,
-        }
-    }
-
-    fn hub_source(id: u8) -> (ScIngressPath, MacAddr) {
-        (ScIngressPath::Hub, MacAddr::from_slice(&[id; 6]))
-    }
-
-    fn admitted(
-        admission: &ScNpduAdmission,
-        tx: &mpsc::Sender<ReceivedNpdu>,
-        path: ScIngressPath,
-        source: &MacAddr,
-    ) {
-        match admission.admit(tx, path, source, item(source)) {
-            AdmissionOutcome::Admitted => {}
-            outcome => panic!("expected admission, got {outcome:?}"),
-        }
-    }
-
-    fn fairness_dropped(
-        admission: &ScNpduAdmission,
-        tx: &mpsc::Sender<ReceivedNpdu>,
-        path: ScIngressPath,
-        source: &MacAddr,
-    ) {
-        match admission.admit(tx, path, source, item(source)) {
-            AdmissionOutcome::FairnessDrop(_) => {}
-            outcome => panic!("expected fairness drop, got {outcome:?}"),
-        }
-    }
-
-    fn full_dropped(
-        admission: &ScNpduAdmission,
-        tx: &mpsc::Sender<ReceivedNpdu>,
-        path: ScIngressPath,
-        source: &MacAddr,
-    ) {
-        match admission.admit(tx, path, source, item(source)) {
-            AdmissionOutcome::FullDrop(_) => {}
-            outcome => panic!("expected full drop, got {outcome:?}"),
-        }
-    }
-
-    fn encapsulated(dest: Option<Vmac>) -> ScMessage {
-        ScMessage {
-            function: ScFunction::EncapsulatedNpdu,
-            message_id: 0x1234,
-            originating_vmac: None,
-            destination_vmac: dest,
-            dest_options: Vec::new(),
-            data_options: Vec::new(),
-            payload: Bytes::from_static(&[0x01, 0x00, 0x30]),
-        }
-    }
-
-    #[test]
-    fn policy_defaults_to_scaled_ratio_and_validates_bounds() {
-        assert_eq!(
-            ScNpduAdmissionPolicy::default().per_origin_limit,
-            DEFAULT_NPDU_PER_ORIGIN_LIMIT
-        );
-        assert_eq!(DEFAULT_NPDU_PER_ORIGIN_LIMIT, 4);
-        ScNpduAdmissionPolicy::default().validate().unwrap();
-        for limit in [1, 4, 63, SC_NPDU_QUEUE_CAPACITY] {
-            ScNpduAdmissionPolicy {
-                per_origin_limit: limit,
-            }
-            .validate()
-            .unwrap();
-        }
-        for limit in [0, SC_NPDU_QUEUE_CAPACITY + 1, usize::MAX] {
-            let err = ScNpduAdmissionPolicy {
-                per_origin_limit: limit,
-            }
-            .validate()
-            .unwrap_err();
-            assert!(err.to_string().contains("per-origin limit"), "{err}");
-        }
-    }
-
-    #[test]
-    fn single_source_flood_caps_at_quota_and_releases_on_drain() {
-        let (tx, mut rx) = mpsc::channel(SC_NPDU_QUEUE_CAPACITY);
-        let admission = ScNpduAdmission::new(ScNpduAdmissionPolicy::default());
-        let (path, source) = hub_source(2);
-        for _ in 0..DEFAULT_NPDU_PER_ORIGIN_LIMIT {
-            admitted(&admission, &tx, path, &source);
-        }
-        assert_eq!(
-            admission.test_live_entries(),
-            (1, DEFAULT_NPDU_PER_ORIGIN_LIMIT)
-        );
-        fairness_dropped(&admission, &tx, path, &source);
-        assert_eq!(admission.drop_counts().fairness_drops, 1);
-        assert_eq!(admission.drop_counts().full_drops, 0);
-        // Draining releases quota: the previously capped source progresses.
-        rx.try_recv().unwrap();
-        rx.try_recv().unwrap();
-        admitted(&admission, &tx, path, &source);
-        admitted(&admission, &tx, path, &source);
-        fairness_dropped(&admission, &tx, path, &source);
-        assert_eq!(admission.test_live_entries(), (1, 4));
-        assert_eq!(admission.drop_counts().fairness_drops, 2);
-    }
-
-    #[test]
-    fn sixteen_origins_compose_to_capacity_and_fairness_precedes_full() {
-        let (tx, _rx) = mpsc::channel(SC_NPDU_QUEUE_CAPACITY);
-        let admission = ScNpduAdmission::new(ScNpduAdmissionPolicy::default());
-        for id in 0..16u8 {
-            let (path, source) = hub_source(id);
-            for _ in 0..DEFAULT_NPDU_PER_ORIGIN_LIMIT {
-                admitted(&admission, &tx, path, &source);
-            }
-        }
-        assert_eq!(admission.test_live_entries(), (16, 64));
-        // Below quota but globally full: aggregate drop.
-        let fresh = MacAddr::from_slice(&[0xFF; 6]);
-        full_dropped(&admission, &tx, ScIngressPath::Hub, &fresh);
-        // Over quota AND globally full: fairness takes precedence.
-        let (path, capped) = hub_source(0);
-        fairness_dropped(&admission, &tx, path, &capped);
-        assert_eq!(
-            admission.drop_counts(),
-            ScNpduDropCounts {
-                fairness_drops: 1,
-                full_drops: 1,
-                closed_drops: 0,
-            }
-        );
-    }
-
-    #[test]
-    fn unicast_and_broadcast_share_one_quota_while_paths_stay_separate() {
-        let (tx, rx) = mpsc::channel(SC_NPDU_QUEUE_CAPACITY);
-        let admission = ScNpduAdmission::new(ScNpduAdmissionPolicy::default());
-        let source: Vmac = [0x22; 6];
-        let npdu = Bytes::from_static(&[0x01, 0x00, 0x30]);
-        // Two unicast-shaped plus two broadcast-shaped hub NPDUs share the
-        // single hub-path quota of 4; neither shape bypasses as "broadcast".
-        for dest in [None, None, Some(BROADCAST_VMAC), Some(BROADCAST_VMAC)] {
-            admission.admit_hub_relayed(&tx, &encapsulated(dest), npdu.clone(), source);
-        }
-        assert_eq!(rx.len(), 4);
-        admission.admit_hub_relayed(&tx, &encapsulated(None), npdu.clone(), source);
-        admission.admit_hub_relayed(
-            &tx,
-            &encapsulated(Some(BROADCAST_VMAC)),
-            npdu.clone(),
-            source,
-        );
-        assert_eq!(rx.len(), 4);
-        assert_eq!(admission.drop_counts().fairness_drops, 2);
-        assert_eq!(admission.drop_counts().full_drops, 0);
-        // Identical bytes on the direct path are a separate key and progress.
-        let peer_addr: SocketAddr = "127.0.0.1:1".parse().unwrap();
-        admission.admit_direct_peer(
-            &tx,
-            &encapsulated(None),
-            npdu.clone(),
-            DirectPeer {
-                vmac: source,
-                addr: peer_addr,
-                identity: crate::port::DirectScIdentity::verified([1; 32], 1),
-                response: None,
-            },
-        );
-        admission.admit_direct_peer(
-            &tx,
-            &encapsulated(None),
-            npdu.clone(),
-            DirectPeer {
-                vmac: source,
-                addr: peer_addr,
-                identity: crate::port::DirectScIdentity::verified([1; 32], 1),
-                response: None,
-            },
-        );
-        assert_eq!(rx.len(), 6);
-        assert_eq!(admission.drop_counts().fairness_drops, 2);
-        assert_eq!(admission.test_live_entries(), (2, 6));
-    }
-
-    #[test]
-    fn churn_cannot_grow_map_beyond_queued_items() {
-        let (tx, mut rx) = mpsc::channel(SC_NPDU_QUEUE_CAPACITY);
-        let admission = ScNpduAdmission::new(ScNpduAdmissionPolicy::default());
-        for round in 0..3u16 {
-            for id in 0..512u16 {
-                let mut bytes = [0u8; 6];
-                bytes[0..2].copy_from_slice(&round.to_be_bytes());
-                bytes[2..4].copy_from_slice(&id.to_be_bytes());
-                let source = MacAddr::from_slice(&bytes);
-                let _ = admission.admit(&tx, ScIngressPath::Hub, &source, item(&source));
-            }
-            // Every queued item has at most one key; overflow is Full, never
-            // fairness (each churned key appears once).
-            assert_eq!(admission.test_live_entries(), (64, 64));
-            assert_eq!(admission.drop_counts().fairness_drops, 0);
-            assert_eq!(
-                admission.drop_counts().full_drops,
-                u64::from(round + 1) * 448
-            );
-            for _ in 0..32 {
-                rx.try_recv().unwrap();
-            }
-            // Half-drained: the next admission reaps before charging.
-            let fresh = MacAddr::from_slice(&[0xEE; 6]);
-            admitted(&admission, &tx, ScIngressPath::Hub, &fresh);
-            let (entries, queued) = admission.test_live_entries();
-            assert!(entries <= queued, "{entries} entries vs {queued} queued");
-            assert!(queued <= SC_NPDU_QUEUE_CAPACITY);
-            for _ in 0..33 {
-                rx.try_recv().unwrap();
-            }
-            // Fully drained: the next admission reaps every churned key, so
-            // only the fresh key remains live.
-            let fresh_tail = MacAddr::from_slice(&[0xEF; 6]);
-            admitted(&admission, &tx, ScIngressPath::Hub, &fresh_tail);
-            assert_eq!(admission.test_live_entries(), (1, 1));
-            rx.try_recv().unwrap();
-        }
-    }
-
-    #[test]
-    fn close_and_drop_clear_map_and_count_closed_first() {
-        for drop_receiver in [false, true] {
-            let (tx, mut rx) = mpsc::channel(SC_NPDU_QUEUE_CAPACITY);
-            let admission = ScNpduAdmission::new(ScNpduAdmissionPolicy::default());
-            let (path, source) = hub_source(2);
-            for _ in 0..DEFAULT_NPDU_PER_ORIGIN_LIMIT {
-                admitted(&admission, &tx, path, &source);
-            }
-            assert_eq!(admission.test_live_entries(), (1, 4));
-            if drop_receiver {
-                drop(rx);
-            } else {
-                rx.close();
-            }
-            // Closed takes precedence over fairness even for a capped source.
-            match admission.admit(&tx, path, &source, item(&source)) {
-                AdmissionOutcome::ClosedDrop(_) => {}
-                outcome => panic!("expected closed drop, got {outcome:?}"),
-            }
-            assert_eq!(admission.test_live_entries(), (0, 0));
-            assert_eq!(
-                admission.drop_counts(),
-                ScNpduDropCounts {
-                    closed_drops: 1,
-                    ..Default::default()
-                }
-            );
-        }
-    }
-
-    #[test]
-    fn counters_saturate_without_affecting_depth_or_other_drops() {
-        let (tx, _rx) = mpsc::channel(SC_NPDU_QUEUE_CAPACITY);
-        let admission = ScNpduAdmission::new(ScNpduAdmissionPolicy::default());
-        let (path, source) = hub_source(2);
-        for _ in 0..DEFAULT_NPDU_PER_ORIGIN_LIMIT {
-            admitted(&admission, &tx, path, &source);
-        }
-        admission.test_set_fairness_drops(u64::MAX - 1);
-        fairness_dropped(&admission, &tx, path, &source);
-        fairness_dropped(&admission, &tx, path, &source);
-        assert_eq!(admission.drop_counts().fairness_drops, u64::MAX);
-        assert_eq!(admission.drop_counts().full_drops, 0);
-        assert_eq!(admission.drop_counts().closed_drops, 0);
-        assert_eq!(
-            admission.test_live_entries(),
-            (1, DEFAULT_NPDU_PER_ORIGIN_LIMIT)
-        );
-    }
-
-    #[tokio::test]
-    async fn cancelled_recv_changes_no_counts() {
-        let (tx, mut rx) = mpsc::channel(SC_NPDU_QUEUE_CAPACITY);
-        let admission = ScNpduAdmission::new(ScNpduAdmissionPolicy::default());
-        assert!(
-            tokio::time::timeout(std::time::Duration::from_millis(10), rx.recv())
-                .await
-                .is_err()
-        );
-        assert_eq!(admission.drop_counts(), ScNpduDropCounts::default());
-        assert_eq!(admission.test_live_entries(), (0, 0));
-        let (path, source) = hub_source(2);
-        admitted(&admission, &tx, path, &source);
-        assert_eq!(
-            tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
-                .await
-                .expect("admitted item must arrive")
-                .expect("channel open")
-                .source_mac,
-            source
-        );
-        assert_eq!(admission.test_live_entries(), (1, 1));
-        // The dequeue is observed on the next admission, not by the recv.
-        let other = MacAddr::from_slice(&[0x03; 6]);
-        admitted(&admission, &tx, ScIngressPath::Hub, &other);
-        assert_eq!(admission.test_live_entries(), (1, 1));
-        assert_eq!(admission.drop_counts(), ScNpduDropCounts::default());
-    }
-}
+#[path = "npdu_admission_tests.rs"]
+mod tests;

@@ -1,0 +1,28 @@
+---
+source: crates/bacnet-cli/src/tui/tests/profile_ui.rs
+expression: text
+---
+" [1 Devices] 2 3 7 | BIP | disconnected | READ-ONLY | COV 0 | drop 0     ? help "
+"┌ ┌ Connection profiles ─────────────────────────────────────────────────────┐─┐"
+"│ │ lab-local — resolved B/IP connection                                     │ │"
+"│ │ Mode: Foreign Device                                                     │ │"
+"│ │ Bind: 127.0.0.1:0   Broadcast: 127.0.0.255                               │ │"
+"│ │ APDU timeout: 6000 ms   Pacing: 0 ms                                     │ │"
+"│ │ BBMD: 127.0.0.2:47808   TTL: 300 s                                       │ │"
+"│ │ Renewal: half TTL                                                        │ │"
+"│ │ Local connection does not prove BBMD acceptance; see L log.              │ │"
+"│ │ Writes: session; dangerous: false. Read-only until W arms a session.     │ │"
+"│ │                                                                          │ │"
+"│ │ First use requires your explicit authorization:                          │ │"
+"│ │ I am authorized to use BACnet on this network.                           │ │"
+"│ │ a attest, save authorization and connect | Esc cancel                    │ │"
+"│ │ e edit | r reload from disk | p profiles | n/s/m new B/IP, SC, MS/TP     │ │"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"└─└ Esc close | READ-ONLY ───────────────────────────────────────────────────┘─┘"
+"                                                                                "

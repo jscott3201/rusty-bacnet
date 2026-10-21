@@ -546,9 +546,9 @@ fn refusals(who_is: &[u8]) -> u8 {
     };
     let network_0_refused = matches!(
         encode_npdu(&mut BytesMut::new(), &to_network_0),
-        Err(Error::Encoding(_))
+        Err(Error::Range(_))
     );
-    // `validate_max_apdu_length` refuses the size, as an encoding error,
+    // `validate_max_apdu_length` refuses the size, as a static range error,
     // before the encoder writes the header.
     let odd_size = Apdu::ConfirmedRequest(ConfirmedRequest {
         segmented: false,
@@ -564,7 +564,7 @@ fn refusals(who_is: &[u8]) -> u8 {
     });
     let mut header = BytesMut::new();
     let odd_size_refused =
-        matches!(encode_apdu(&mut header, &odd_size), Err(Error::Encoding(_))) && header.is_empty();
+        matches!(encode_apdu(&mut header, &odd_size), Err(Error::Range(_))) && header.is_empty();
     u8::from(version_refused) + u8::from(network_0_refused) + u8::from(odd_size_refused)
 }
 

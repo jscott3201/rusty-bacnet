@@ -48,7 +48,13 @@ impl Fixture {
     /// Write Present_Value at `priority`.
     pub(super) fn present(&mut self, value: PropertyValue, priority: u8) {
         self.lo
-            .write_property(PV, None, value, Some(priority))
+            .write_property_from(
+                PV,
+                None,
+                value,
+                Some(priority),
+                &crate::command_source::test_origin(),
+            )
             .unwrap();
     }
 

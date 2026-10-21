@@ -172,7 +172,7 @@ fn optional_property_absent(error: &Error) -> bool {
     matches!(
         error,
         Error::Protocol { class, code }
-            if *class == ErrorClass::PROPERTY.to_raw() as u32
-                && *code == ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32
+            if *class == ErrorClass::PROPERTY
+                && *code == ErrorCode::UNKNOWN_PROPERTY
     )
 }

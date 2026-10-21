@@ -333,7 +333,7 @@ async fn close_and_drop_preserve_closed_precedence_and_release_all_source_entrie
 }
 
 #[tokio::test(start_paused = true)]
-async fn legacy_apdus_and_tracked_controls_have_no_per_source_cap() {
+async fn raw_apdus_and_tracked_controls_have_no_per_source_cap() {
     let (mut network, tx) = fixture();
     let mut controls = network
         .enable_network_control_receiver_with_admission()
@@ -343,14 +343,25 @@ async fn legacy_apdus_and_tracked_controls_have_no_per_source_cap() {
         tx.send(incoming(&[2], id)).await.unwrap();
         tx.send(control()).await.unwrap();
     }
-    barrier(&tx).await;
-    assert_eq!(apdus.len(), 256);
+    // The raw receiver decodes as it is polled (#1713), so nothing is
+    // admitted yet; then all 257 APDUs from one source come through.
+    assert_eq!(
+        controls.counters().snapshot(),
+        QueueAdmissionSnapshot::default()
+    );
+    for id in 0..257 {
+        assert_apdu(&apdus.try_recv().unwrap(), &[2], id);
+    }
+    assert_eq!(
+        apdus.try_recv().unwrap_err(),
+        mpsc::error::TryRecvError::Empty
+    );
     assert_eq!(
         controls.counters().snapshot(),
         QueueAdmissionSnapshot {
             current_depth: 256,
             high_water: 256,
-            full_drops: 2, // Includes the final control barrier.
+            full_drops: 1,
             ..Default::default()
         }
     );
@@ -361,16 +372,11 @@ async fn legacy_apdus_and_tracked_controls_have_no_per_source_cap() {
         .unwrap()
         .queued_by_source
         .is_empty());
-    for id in 0..256 {
-        assert_apdu(&apdus.try_recv().unwrap(), &[2], id);
+    for id in 0..256u64 {
         let control = controls.try_recv().unwrap();
         assert_eq!(control.source_mac.as_slice(), &[2]);
-        assert_eq!(control.ingress_sequence, u64::from(id) + 1);
+        assert_eq!(control.ingress_sequence, id + 1);
     }
-    assert_eq!(
-        apdus.try_recv().unwrap_err(),
-        mpsc::error::TryRecvError::Empty
-    );
     network.stop().await.unwrap();
 }
 
@@ -481,6 +487,7 @@ async fn concurrent_dispatch_and_dequeues_keep_source_and_depth_accounting_in_st
 
 fn router_apdu(ingress_network: u16, source: &[u8], id: u16) -> ReceivedApdu {
     ReceivedApdu {
+        router_response: None,
         direct_response: None,
         apdu: Bytes::copy_from_slice(&id.to_be_bytes()),
         source_mac: MacAddr::from_slice(source),
@@ -584,4 +591,50 @@ fn cloned_router_senders_enforce_composite_quotas_across_threads_and_dequeues() 
     assert_eq!(counters.snapshot().fairness_drops, 960);
     assert_eq!(counters.snapshot().full_drops, 0);
     assert_eq!(counters.snapshot().closed_drops, 0);
+}
+
+/// The raw receiver's `recv` is cancel safe (#1713): the server and client
+/// wait on it in `select!`, which drops it whenever another branch wins. Here
+/// it is dropped over and over while a sender feeds APDUs and network
+/// messages in gaps; every APDU arrives once, in order, and every control
+/// reaches its receiver.
+#[tokio::test(start_paused = true)]
+async fn raw_receive_cancelled_mid_stream_loses_nothing() {
+    const COUNT: u16 = 200;
+    let (mut network, tx) = fixture();
+    let mut controls = network.enable_network_control_receiver().unwrap();
+    let mut apdus = network.start().await.unwrap();
+    let sender = tokio::spawn(async move {
+        for id in 0..COUNT {
+            tx.send(incoming(&[2], id)).await.unwrap();
+            tx.send(control()).await.unwrap();
+            if id % 3 == 0 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        }
+        tx
+    });
+    let mut next = 0;
+    let mut cancelled = 0;
+    while next < COUNT {
+        tokio::select! {
+            biased;
+            received = apdus.recv() => {
+                assert_apdu(&received.unwrap(), &[2], next);
+                next += 1;
+            }
+            () = tokio::time::sleep(Duration::from_millis(1)) => {
+                cancelled += 1;
+                assert!(cancelled < 10_000, "APDU {next} never arrived");
+            }
+        }
+    }
+    assert!(cancelled > 0, "the receive was never cancelled");
+    let _tx = sender.await.unwrap();
+    crate::loopback_fixture::pump(&mut apdus);
+    for _ in 0..COUNT {
+        controls.try_recv().unwrap();
+    }
+    assert!(controls.try_recv().is_err());
+    network.stop().await.unwrap();
 }

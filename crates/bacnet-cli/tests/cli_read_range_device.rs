@@ -228,7 +228,10 @@ async fn all_prints_what_it_read_and_where_to_resume_before_an_error() {
     assert_eq!(json["pages"], serde_json::json!(1));
     assert_eq!(json["next"], serde_json::json!("--sequence 3"));
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Abort { reason: 10 }"), "{stderr}");
+    assert!(
+        stderr.contains("Abort { reason: AbortReason::TSM_TIMEOUT }"),
+        "{stderr}"
+    );
     task.abort();
 }
 

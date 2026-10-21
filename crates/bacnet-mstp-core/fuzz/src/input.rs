@@ -1,7 +1,8 @@
 //! The fuzz input: one station's configuration, and the steps that drive it.
 
 use arbitrary::Arbitrary;
-use bacnet_mstp_core::{Duration, MstpCoreConfig, NetworkPriority, ReceiveError, TransmitFailure};
+use bacnet_mstp_core::npdu::NetworkPriority;
+use bacnet_mstp_core::{Duration, MstpCoreConfig, ReceiveError, TransmitFailure};
 
 /// Steps past this many are ignored, to keep runs quick.
 pub const MAX_STEPS: usize = 2048;
@@ -87,7 +88,7 @@ pub struct Policy {
 pub enum Layout {
     /// Standard sizes, allocating queues, one delivery slot.
     Standard,
-    /// Standard sizes, heapless queues (3 unicast, 2 broadcast), three
+    /// Standard sizes, fixed queues (3 unicast, 2 broadcast), three
     /// delivery slots.
     Heapless,
     /// Extended sizes, allocating queues, two delivery slots: what extended

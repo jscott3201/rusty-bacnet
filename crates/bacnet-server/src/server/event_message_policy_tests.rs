@@ -7,13 +7,34 @@ use bacnet_objects::multistate::{
     MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject,
 };
 use bacnet_objects::traits::BACnetObject;
-use bacnet_types::enums::{EventState, EventType};
+use bacnet_types::enums::{EngineeringUnits, EventState, EventType};
 
 fn builtin_intrinsic_objects() -> Vec<Box<dyn BACnetObject>> {
     vec![
-        Box::new(AnalogInputObject::new(41, "localized analog input", 0).unwrap()),
-        Box::new(AnalogOutputObject::new(41, "localized analog output", 0).unwrap()),
-        Box::new(AnalogValueObject::new(41, "localized analog value", 0).unwrap()),
+        Box::new(
+            AnalogInputObject::new(
+                41,
+                "localized analog input",
+                EngineeringUnits::SQUARE_METERS,
+            )
+            .unwrap(),
+        ),
+        Box::new(
+            AnalogOutputObject::new(
+                41,
+                "localized analog output",
+                EngineeringUnits::SQUARE_METERS,
+            )
+            .unwrap(),
+        ),
+        Box::new(
+            AnalogValueObject::new(
+                41,
+                "localized analog value",
+                EngineeringUnits::SQUARE_METERS,
+            )
+            .unwrap(),
+        ),
         Box::new(BinaryInputObject::new(41, "localized binary input").unwrap()),
         Box::new(BinaryOutputObject::new(41, "localized binary output").unwrap()),
         Box::new(BinaryValueObject::new(41, "localized binary value").unwrap()),
@@ -122,7 +143,7 @@ fn policy_format_uses_object_and_state_display_including_unknown_state_numbers()
     let unknown = EventState::from_raw(65_535);
     let mut db = ObjectDatabase::new();
     db.add(Box::new(
-        AnalogInputObject::new(7, "name is not policy", 0).unwrap(),
+        AnalogInputObject::new(7, "name is not policy", EngineeringUnits::SQUARE_METERS).unwrap(),
     ))
     .unwrap();
 
@@ -146,8 +167,10 @@ fn policy_format_uses_object_and_state_display_including_unknown_state_numbers()
 fn stale_commit_does_not_mutate_committed_event_properties() {
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 8).unwrap();
     let mut db = ObjectDatabase::new();
-    db.add(Box::new(AnalogInputObject::new(8, "AI-8", 0).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AnalogInputObject::new(8, "AI-8", EngineeringUnits::SQUARE_METERS).unwrap(),
+    ))
+    .unwrap();
     assert!(commit(
         &mut db,
         oid,

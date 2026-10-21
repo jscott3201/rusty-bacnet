@@ -10,13 +10,20 @@ fn lighting_objects(configured: bool) -> [Box<dyn BACnetObject>; 2] {
     let mut lo = LightingOutputObject::new(7, "LO-7").unwrap();
     let mut blo = BinaryLightingOutputObject::new(7, "BLO-7").unwrap();
     if configured {
-        lo.write_property(P::PRESENT_VALUE, None, PropertyValue::Real(50.0), Some(8))
-            .unwrap();
-        lo.write_property(
+        lo.write_property_from(
+            P::PRESENT_VALUE,
+            None,
+            PropertyValue::Real(50.0),
+            Some(8),
+            &crate::command_source::test_origin(),
+        )
+        .unwrap();
+        lo.write_property_from(
             P::LIGHTING_COMMAND,
             None,
             PropertyValue::ApplicationData(vec![0x09, 0x0A]),
             None,
+            &crate::command_source::test_origin(),
         )
         .unwrap();
         lo.write_property(
@@ -37,11 +44,12 @@ fn lighting_objects(configured: bool) -> [Box<dyn BACnetObject>; 2] {
         .unwrap();
         lo.write_property(P::EGRESS_TIME, None, PropertyValue::Unsigned(600), None)
             .unwrap();
-        blo.write_property(
+        blo.write_property_from(
             P::PRESENT_VALUE,
             None,
             PropertyValue::Enumerated(1),
             Some(8),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
         blo.write_property(
@@ -109,6 +117,9 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
             P::DEFAULT_STEP_INCREMENT,
             P::CURRENT_COMMAND_PRIORITY,
             P::COV_INCREMENT,
+            P::VALUE_SOURCE,
+            P::VALUE_SOURCE_ARRAY,
+            P::LAST_COMMAND_TIME,
         ],
         _ => vec![
             P::OBJECT_IDENTIFIER,
@@ -125,11 +136,14 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
             P::PRIORITY_ARRAY,
             P::RELINQUISH_DEFAULT,
             P::CURRENT_COMMAND_PRIORITY,
+            P::VALUE_SOURCE,
+            P::VALUE_SOURCE_ARRAY,
+            P::LAST_COMMAND_TIME,
         ],
     };
     // Default_Fade_Time, Default_Ramp_Rate and Default_Step_Increment follow
-    // Relinquish_Default on Lighting Output only; Current_Command_Priority
-    // ends both projections.
+    // Relinquish_Default on Lighting Output only; the value-source rows
+    // (#1866) end both projections.
     // COV_Increment is the last optional row on Lighting Output.
     let mut optional = vec![P::DESCRIPTION, P::RELIABILITY];
     if kind == ObjectType::LIGHTING_OUTPUT {
@@ -192,8 +206,8 @@ fn rpm_lighting_metadata_does_not_enable_create_object() {
             let mut response = BytesMut::new();
             let result = handle_create_object(&mut db, &request, &mut response);
             assert!(matches!(result, Err(Error::Protocol { class, code })
-                if class == ErrorClass::OBJECT.to_raw() as u32
-                    && code == ErrorCode::UNSUPPORTED_OBJECT_TYPE.to_raw() as u32));
+                if class == ErrorClass::OBJECT
+                    && code == ErrorCode::UNSUPPORTED_OBJECT_TYPE));
             assert!(response.is_empty());
             assert!(db.is_empty());
         }

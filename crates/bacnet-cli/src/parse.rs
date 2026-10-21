@@ -374,44 +374,6 @@ pub fn parse_value_with_priority(s: &str) -> Result<(PropertyValue, Option<u8>),
     }
 }
 
-/// Returns all object type names for tab completion (ALL_NAMED names + abbreviations).
-///
-/// Full names are converted from `UPPER_SNAKE_CASE` to `kebab-case` for user convenience.
-pub fn object_type_completions() -> Vec<String> {
-    let mut completions: Vec<String> = Vec::new();
-
-    // Add abbreviations.
-    for &(abbr, _) in OBJ_ABBREVS {
-        completions.push(abbr.to_string());
-    }
-
-    // Add full names from ALL_NAMED, converted to kebab-case.
-    for &(name, _) in ObjectType::ALL_NAMED {
-        completions.push(name.to_ascii_lowercase().replace('_', "-"));
-    }
-
-    completions
-}
-
-/// Returns all property names for tab completion (ALL_NAMED names + abbreviations).
-///
-/// Full names are converted from `UPPER_SNAKE_CASE` to `kebab-case` for user convenience.
-pub fn property_completions() -> Vec<String> {
-    let mut completions: Vec<String> = Vec::new();
-
-    // Add abbreviations.
-    for &(abbr, _) in PROP_ABBREVS {
-        completions.push(abbr.to_string());
-    }
-
-    // Add full names from ALL_NAMED, converted to kebab-case.
-    for &(name, _) in PropertyIdentifier::ALL_NAMED {
-        completions.push(name.to_ascii_lowercase().replace('_', "-"));
-    }
-
-    completions
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -600,12 +562,6 @@ mod tests {
     }
 
     #[test]
-    fn completions_not_empty() {
-        assert!(!object_type_completions().is_empty());
-        assert!(!property_completions().is_empty());
-    }
-
-    #[test]
     fn lp_maps_to_life_safety_point() {
         assert_eq!(parse_object_type("lp").unwrap().to_raw(), 21);
         assert_eq!(parse_object_type("lsp").unwrap().to_raw(), 21);
@@ -664,19 +620,6 @@ mod tests {
             }
             other => panic!("expected ObjectIdentifier, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn completions_are_kebab_case() {
-        let ot = object_type_completions();
-        // Full names should be kebab-case (no underscores, lowercase).
-        let full_names: Vec<&String> = ot.iter().filter(|s| s.contains('-')).collect();
-        assert!(!full_names.is_empty());
-        for name in &full_names {
-            assert!(!name.contains('_'), "found underscore in '{name}'");
-            assert_eq!(name.to_ascii_lowercase(), **name, "not lowercase: '{name}'");
-        }
-        assert!(ot.iter().any(|s| s == "analog-input"));
     }
 
     #[test]

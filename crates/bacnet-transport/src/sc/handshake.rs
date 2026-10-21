@@ -25,9 +25,11 @@ fn notify_state(state_tx: Option<&watch::Sender<ScConnectionState>>, state: ScCo
 
 fn malformed_bvlc_result_error(error: Error) -> Error {
     match error {
-        Error::Decoding {
-            offset, message, ..
-        } => ScConnectError::MalformedBvlcResult { offset, message }.into_bacnet_error(),
+        Error::Decoding(refused) => ScConnectError::MalformedBvlcResult {
+            offset: refused.offset,
+            message: refused.message().to_string(),
+        }
+        .into_bacnet_error(),
         other => other,
     }
 }

@@ -78,6 +78,7 @@ fn from(
     source_network: Option<NpduAddress>,
 ) -> bacnet_network::layer::ReceivedApdu {
     bacnet_network::layer::ReceivedApdu {
+        router_response: None,
         direct_response: None,
         apdu: Bytes::new(),
         source_mac: MacAddr::from_slice(source_mac),

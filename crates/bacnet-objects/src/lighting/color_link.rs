@@ -22,7 +22,7 @@
 //! identifier can't name another one.
 
 use bacnet_types::constructed::BACnetXyColor;
-use bacnet_types::enums::{ObjectType, PropertyIdentifier as P};
+use bacnet_types::enums::{ColorOperationInProgress, ObjectType, PropertyIdentifier as P};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
@@ -219,14 +219,18 @@ impl ObjectDatabase {
     ///
     /// `None` when the object has no Color_Reference, the reference in use
     /// names no object (instance 4194303), or this database holds no Color
-    /// or Color Temperature object by that identifier. It reads the
-    /// properties, so it follows any object that serves them.
+    /// or Color Temperature object by that identifier. Also `None` while
+    /// that object's In_Progress reads NOT_CONTROLLED (#1526): nothing has
+    /// driven its output yet, so its Tracking_Value is no colour to show. It
+    /// reads the properties, so it follows any object that serves them.
     pub fn lighting_color(&self, lighting_output: &ObjectIdentifier) -> Option<LightingColor> {
         let source = read_link(self.get(lighting_output)?)?.active_reference()?;
-        let tracking = self
-            .get(&source)?
-            .read_property(P::TRACKING_VALUE, None)
-            .ok()?;
+        let object = self.get(&source)?;
+        let undriven = PropertyValue::Enumerated(ColorOperationInProgress::NOT_CONTROLLED.to_raw());
+        if object.read_property(P::IN_PROGRESS, None).ok() == Some(undriven) {
+            return None;
+        }
+        let tracking = object.read_property(P::TRACKING_VALUE, None).ok()?;
         let color = match (source.object_type(), tracking) {
             (ObjectType::COLOR, PropertyValue::List(xy)) => match xy.as_slice() {
                 [PropertyValue::Real(x), PropertyValue::Real(y)] => {

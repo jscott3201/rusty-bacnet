@@ -29,7 +29,7 @@ class ParseTests(unittest.TestCase):
         def cargo(*args):
             calls.append(args)
             target = args[args.index("--target") + 1]
-            crate = "pcap" if "sc-tls,pcap" in args else "rusty" if "rusty-bacnet" in args else "cli"
+            crate = "pcap" if "sc-tls,pcap,serial" in args else "rusty" if "rusty-bacnet" in args else "cli"
             return f"{crate} v1.0.0\n{target.split('-')[0]}-only v1.0.0\nshared v2.0.0\n"
 
         with mock.patch.object(tpn, "cargo", cargo):
@@ -38,7 +38,7 @@ class ParseTests(unittest.TestCase):
         cli_features = {c[c.index("--target") + 1]: c[c.index("--features") + 1] for c in calls if "bacnet-cli" in c}
         self.assertEqual(cli_features, tpn.TARGETS)
         self.assertEqual(cli_features["x86_64-pc-windows-msvc"], "sc-tls")
-        self.assertEqual(cli_features["aarch64-unknown-linux-gnu"], "sc-tls,pcap")
+        self.assertEqual(cli_features["aarch64-unknown-linux-gnu"], "sc-tls,pcap,serial")
         self.assertEqual(used[("pcap", "1.0.0")], {"CLI"})
         self.assertEqual(used[("shared", "2.0.0")], {"CLI", "Python"})
         self.assertIn(("aarch64-only", "1.0.0"), used)
@@ -102,6 +102,16 @@ class LicenseFilesTests(unittest.TestCase):
                 (root / path).unlink()
                 with self.assertRaisesRegex(tpn.NoticesError, f"no longer has {path}"):
                     tpn.license_files(self.package(root, name="aws-lc-sys"))
+
+    def test_vendored_licence_for_its_pinned_version(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            files = tpn.license_files(self.package(root, name="tui-tree-widget", version="0.24.1"))
+            self.assertEqual(len(files), 1)
+            self.assertTrue(files[0][0].startswith("tui-tree-widget-0.24.1-LICENSE: "))
+            self.assertIn("Copyright (c) EdJoPaTo", files[0][1])
+            with self.assertRaisesRegex(tpn.NoticesError, "vendored licence is for 0.24.1"):
+                tpn.license_files(self.package(root, name="tui-tree-widget", version="0.25.0"))
 
     def test_licence_comment_must_still_be_a_licence(self):
         with tempfile.TemporaryDirectory() as tmp:

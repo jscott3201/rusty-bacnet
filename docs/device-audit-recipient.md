@@ -92,7 +92,7 @@ routes and precommit admission/encoding failure leave the old state intact.
 Valid priorities 1–16 are ignored for this noncommandable property.
 
 The standalone target uses the existing server mutation policy. Its default remains
-Permissive without an authorizer; enabling Audit does not authenticate callers.
+Permissive without a `ServerPolicy`; enabling Audit does not authenticate callers.
 Applications needing admission control must configure that policy. WPM preserves
 its committed prefix and stops at the failing element. The endpoint source in
 `Both` instead requires an explicit `with_device_writes` authorizer; no callback

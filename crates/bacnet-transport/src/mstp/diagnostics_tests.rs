@@ -96,11 +96,28 @@ async fn frames_are_counted_by_kind_and_outlive_the_transport() {
     assert_eq!(snapshot.mac.unicast.dequeued, 2);
     assert_eq!(snapshot.mac.token_rotations, 3);
     assert_eq!(snapshot.mac.adapter_errors, 0);
+    assert_eq!(snapshot.mac.internal_errors, 0);
     assert_eq!(
         observer.snapshot(),
         snapshot,
         "counts survive the transport"
     );
+}
+
+/// The handle publishes the node's place in the ring: after joining a
+/// ring with station 7 the station passes its token there and is no sole
+/// master, and the last state stays readable after the transport stops.
+#[tokio::test(start_paused = true)]
+async fn the_node_state_follows_the_ring_and_outlives_the_transport() {
+    let mut bus = Bus::start(config(3, 7)).await;
+    let observer = bus.transport.diagnostics();
+    let token = bus.join(7).await;
+    assert_eq!(token.destination, 7);
+    let node = observer.node_state().expect("published after an event");
+    assert_eq!(node.next_station, 7);
+    assert!(!node.sole_master);
+    bus.stop().await;
+    assert_eq!(observer.node_state(), Some(node));
 }
 
 /// A wait for a reply that ends in T_reply_timeout is counted.
@@ -153,9 +170,13 @@ async fn ingress_drops_are_counted() {
 /// transport keeps them while its task and port go away.
 #[tokio::test]
 async fn execution_modes_share_the_counts() {
-    for mode in [MstpExecutionMode::Tokio, MstpExecutionMode::DedicatedThread] {
+    for mode in [
+        MstpExecutionMode::Tokio,
+        MstpExecutionMode::dedicated_thread(),
+    ] {
         let (serial, peer) = LoopbackSerial::pair();
-        let mut transport = MstpTransport::new(serial, config(3, 127)).with_execution_mode(mode);
+        let mut transport =
+            MstpTransport::new(serial, config(3, 127)).with_execution_mode(mode.clone());
         let observer = transport.diagnostics();
         assert_eq!(observer.snapshot(), MstpDiagnosticsSnapshot::default());
         let mut npdus = transport.start().await.unwrap();

@@ -1,9 +1,10 @@
 use super::*;
 use crate::tsm::{CompletionOutcome, CoordinatedCompletion, CoordinatedTerminalPhase};
 
-fn log_mismatch(outcome: &CompletionOutcome, invoke_id: u8, pdu: &str) {
+fn log_mismatch(outcome: &CompletionOutcome, invoke_id: u8, pdu: &str, warning: &WarnThrottle) {
     if let CompletionOutcome::ServiceChoiceMismatch { expected, observed } = outcome {
-        warn!(
+        warn_throttled!(
+            warning,
             invoke_id,
             pdu,
             expected = expected.to_raw(),
@@ -13,13 +14,21 @@ fn log_mismatch(outcome: &CompletionOutcome, invoke_id: u8, pdu: &str) {
     }
 }
 
-pub(super) fn log_coordinated_mismatch(outcome: &CoordinatedCompletion, invoke_id: u8, pdu: &str) {
+/// Log an acknowledgment labelled for another service, through `warning`,
+/// the client's response throttle (#1950).
+pub(super) fn log_coordinated_mismatch(
+    outcome: &CoordinatedCompletion,
+    invoke_id: u8,
+    pdu: &str,
+    warning: &WarnThrottle,
+) {
     match outcome {
         CoordinatedCompletion::Completed(outcome) => {
-            log_mismatch(outcome, invoke_id, pdu);
+            log_mismatch(outcome, invoke_id, pdu, warning);
         }
         CoordinatedCompletion::ServiceChoiceMismatch { expected, observed } => {
-            warn!(
+            warn_throttled!(
+                warning,
                 invoke_id,
                 pdu,
                 expected = expected.to_raw(),
@@ -205,8 +214,7 @@ pub(super) async fn complete_terminal_response(
                     &owner,
                     None,
                     TsmResponse::Abort {
-                        reason: bacnet_types::enums::AbortReason::INVALID_APDU_IN_THIS_STATE
-                            .to_raw(),
+                        reason: bacnet_types::enums::AbortReason::INVALID_APDU_IN_THIS_STATE,
                     },
                 );
                 return TerminalDispatchOutcome::PrematureSegmentedRequestAborted;

@@ -26,6 +26,7 @@ fn received_apdu_preserves_provenance_through_clone() {
         global_broadcast: false,
         data_attributes: Vec::new(),
         provenance: TransportProvenance::unverified(),
+        router_response: None,
         direct_response: None,
         reply_tx: None,
     };
@@ -40,6 +41,7 @@ fn received_apdu_preserves_provenance_through_clone() {
 #[test]
 fn received_apdu_debug_is_redacted() {
     let apdu = ReceivedApdu {
+        router_response: None,
         direct_response: None,
         apdu: Bytes::from_static(&[0xDE, 0xAD]),
         source_mac: MacAddr::from_slice(&[0xAA, 0xBB, 0xCC]),

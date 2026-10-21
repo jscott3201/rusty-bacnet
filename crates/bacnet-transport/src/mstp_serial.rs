@@ -15,6 +15,11 @@
 //!   DE/RE control via the Linux GPIO character device (`/dev/gpiochipN`).
 //!   Use this for RS-485 hats (like the Seeed Studio RS-485 Shield) where
 //!   DE/RE is wired to a GPIO pin rather than the UART's RTS.
+//!
+//! [`ReceiveOnlyPort`] opens a port for the receive-only MS/TP monitor
+//! ([`crate::mstp::monitor`]): it can't transmit, and it uses none of the
+//! direction controls above. [`available_ports`] lists the ports to choose
+//! from.
 
 use std::sync::Arc;
 
@@ -28,6 +33,8 @@ use crate::mstp::{Echo, SerialPort};
 
 #[cfg(any(target_os = "linux", test))]
 mod kernel_rs485;
+mod receive_only;
+pub use receive_only::ReceiveOnlyPort;
 
 /// Configuration for a serial port connection.
 pub struct SerialConfig {
@@ -47,17 +54,57 @@ impl Default for SerialConfig {
 }
 
 /// The names of the serial ports the operating system reports, for
-/// [`SerialConfig::port_name`].
+/// [`SerialConfig::port_name`]: [`available_port_infos`]' names.
 ///
-/// macOS lists them through IOKit, Windows through SetupAPI and the registry,
-/// and Linux from sysfs (`/sys/class/tty`), so a port that another program has
-/// open is listed too. An empty list means the system reports no serial port.
+/// # Errors
+///
+/// As [`available_port_infos`].
+pub fn available_ports() -> Result<Vec<String>, Error> {
+    Ok(available_port_infos()?
+        .into_iter()
+        .map(|port| port.name)
+        .collect())
+}
+
+/// What kind of device the operating system says a serial port is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PortKind {
+    /// A USB device, such as a USB RS-485 adapter.
+    Usb,
+    /// A PCI device.
+    Pci,
+    /// A Bluetooth serial service.
+    Bluetooth,
+    /// Anything else, or not known: a built-in UART, a pseudo-terminal, a
+    /// platform's debug console.
+    Unknown,
+}
+
+/// A serial port the operating system reports: its name, for
+/// [`SerialConfig::port_name`], and what kind of device it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct PortInfo {
+    /// The port's name: `/dev/ttyUSB0`, `/dev/cu.usbserial-1420`, `COM3`.
+    pub name: String,
+    /// What kind of device it is.
+    pub kind: PortKind,
+}
+
+/// The serial ports the operating system reports, with their kinds.
+///
+/// macOS lists them through IOKit, both the call-out (`/dev/cu.*`) and the
+/// dial-in (`/dev/tty.*`) device of each; Windows through SetupAPI and the
+/// registry; and Linux from sysfs (`/sys/class/tty`), so a port that another
+/// program has open is listed too. An empty list means the system reports
+/// no serial port.
 ///
 /// # Errors
 ///
 /// [`Error::Transport`] if the operating system can't be asked, with the
 /// [`std::io::ErrorKind`] of the failure.
-pub fn available_ports() -> Result<Vec<String>, Error> {
+pub fn available_port_infos() -> Result<Vec<PortInfo>, Error> {
     // serialport panics when sysfs has no tty class (a chroot without /sys, say).
     #[cfg(target_os = "linux")]
     if !std::path::Path::new("/sys/class/tty").is_dir() {
@@ -67,7 +114,18 @@ pub fn available_ports() -> Result<Vec<String>, Error> {
         )));
     }
     match tokio_serial::available_ports() {
-        Ok(ports) => Ok(ports.into_iter().map(|port| port.port_name).collect()),
+        Ok(ports) => Ok(ports
+            .into_iter()
+            .map(|port| PortInfo {
+                kind: match port.port_type {
+                    tokio_serial::SerialPortType::UsbPort(_) => PortKind::Usb,
+                    tokio_serial::SerialPortType::PciPort => PortKind::Pci,
+                    tokio_serial::SerialPortType::BluetoothPort => PortKind::Bluetooth,
+                    tokio_serial::SerialPortType::Unknown => PortKind::Unknown,
+                },
+                name: port.port_name,
+            })
+            .collect()),
         Err(error) => {
             let error = std::io::Error::from(error);
             Err(Error::Transport(std::io::Error::new(
@@ -149,25 +207,12 @@ impl TokioSerialPort {
     /// or driver-sanitized mismatch returns an error even though the hardware
     /// configuration may already have changed. No rollback or retry is attempted.
     #[cfg(target_os = "linux")]
-    #[allow(unsafe_code)]
     pub fn enable_kernel_rs485(
         &self,
         invert_rts: bool,
         delay_before_send_us: u32,
         delay_after_send_us: u32,
     ) -> Result<(), Error> {
-        use std::os::unix::io::AsRawFd;
-
-        #[cfg(not(any(target_arch = "sparc", target_arch = "sparc64")))]
-        use libc::{TIOCGRS485, TIOCSRS485};
-        // libc 0.2.189 does not export these on SPARC. Linux v6.12 UAPI:
-        // arch/sparc/include/uapi/asm/{ioctls,ioctl}.h encodes a 32-byte
-        // serial_rs485 with _IOR('T', 0x41, ...) and _IOWR('T', 0x42, ...).
-        #[cfg(any(target_arch = "sparc", target_arch = "sparc64"))]
-        const TIOCGRS485: libc::c_ulong = 0x4020_5441;
-        #[cfg(any(target_arch = "sparc", target_arch = "sparc64"))]
-        const TIOCSRS485: libc::c_ulong = 0xc020_5442;
-
         let stream = self.inner.try_lock().map_err(|_| {
             Error::Encoding("Cannot enable RS-485: serial port is in use".to_string())
         })?;
@@ -176,21 +221,8 @@ impl TokioSerialPort {
             invert_rts,
             delay_before_send_us,
             delay_after_send_us,
-            |request, config| {
-                let request = match request {
-                    kernel_rs485::Request::Set => TIOCSRS485,
-                    kernel_rs485::Request::Get => TIOCGRS485,
-                };
-                // SAFETY: The lock guard keeps the serial stream and its fd alive.
-                // `config` is a writable, initialized 32-byte Linux serial_rs485
-                // structure, and the pointer remains valid for this ioctl call.
-                let ret = unsafe { libc::ioctl(stream.as_raw_fd(), request, config as *mut _) };
-                if ret < 0 {
-                    Err(std::io::Error::last_os_error())
-                } else {
-                    Ok(())
-                }
-            },
+            // The lock guard keeps the serial stream and its fd alive.
+            |request, config| crate::sys::serial::rs485_ioctl(&stream, request, config),
         )
     }
 }
@@ -464,5 +496,7 @@ impl<S: SerialPort> SerialPort for GpioDirectionPort<S> {
     }
 }
 
+#[cfg(all(test, unix))]
+mod monitor_tests;
 #[cfg(test)]
 mod tests;

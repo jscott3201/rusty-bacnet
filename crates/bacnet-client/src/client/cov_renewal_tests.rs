@@ -641,3 +641,79 @@ async fn managed_cov_subscription_validates_finite_lifetime_options() {
     client.stop().await.unwrap();
     peer_transport.stop().await.unwrap();
 }
+
+/// The property variant sends SubscribeCOVProperty first and again on each
+/// renewal, with the same property and lifetime.
+#[tokio::test]
+async fn managed_cov_property_subscription_renews_with_subscribe_cov_property() {
+    use bacnet_services::cov::SubscribeCOVPropertyRequest;
+    let client_mac = vec![0x81];
+    let peer_mac = vec![0x82];
+    let (client_transport, mut peer_transport) =
+        LoopbackTransport::pair(client_mac.clone(), peer_mac.clone());
+    let mut peer_rx = peer_transport.start().await.unwrap();
+    let client = Arc::new(
+        BACnetClient::generic_builder()
+            .transport(client_transport)
+            .apdu_timeout_ms(1000)
+            .build()
+            .await
+            .unwrap(),
+    );
+    let subscription = CovPropertySubscription {
+        subscriber_process_identifier: 4101,
+        monitored_object_identifier: analog_object(7),
+        monitored_property_identifier: PropertyIdentifier::STATUS_FLAGS,
+        monitored_property_array_index: None,
+        confirmed: false,
+        lifetime: std::num::NonZeroU32::new(2).unwrap(),
+        cov_increment: None,
+    };
+    let client_for_task = Arc::clone(&client);
+    let peer_mac_for_task = peer_mac.clone();
+    let start = tokio::spawn(async move {
+        client_for_task
+            .manage_cov_property_subscription(
+                &peer_mac_for_task,
+                subscription,
+                ManagedCOVSubscriptionOptions::default()
+                    .with_renewal_margin(Duration::from_millis(1500)),
+            )
+            .await
+    });
+    for _ in 0..2 {
+        let received = timeout(Duration::from_secs(2), peer_rx.recv())
+            .await
+            .expect("peer timed out waiting for SubscribeCOVProperty")
+            .expect("peer channel closed");
+        let npdu = decode_npdu(received.npdu).unwrap();
+        let Apdu::ConfirmedRequest(request) = decode_apdu(npdu.payload).unwrap() else {
+            panic!("expected a confirmed request");
+        };
+        assert_eq!(
+            request.service_choice,
+            ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY
+        );
+        let decoded = SubscribeCOVPropertyRequest::decode(&request.service_request).unwrap();
+        assert_eq!(decoded.subscriber_process_identifier, 4101);
+        assert_eq!(
+            decoded.monitored_property_identifier,
+            PropertyIdentifier::STATUS_FLAGS
+        );
+        assert_eq!(decoded.lifetime, Some(2));
+        send_local_simple_ack(
+            &peer_transport,
+            &client_mac,
+            request.invoke_id,
+            ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY,
+        )
+        .await;
+    }
+    let managed = start.await.unwrap().unwrap();
+    managed.stop().await;
+    let Ok(mut client) = Arc::try_unwrap(client) else {
+        panic!("managed subscription kept a client reference after stop");
+    };
+    client.stop().await.unwrap();
+    peer_transport.stop().await.unwrap();
+}

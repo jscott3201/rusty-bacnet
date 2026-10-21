@@ -40,8 +40,8 @@ pub(crate) fn assert_list_element_refused<T: std::fmt::Debug>(
             code: actual_code,
             detail,
         }) => {
-            assert_eq!(actual_class, class.to_raw() as u32, "{context}: class");
-            assert_eq!(actual_code, code.to_raw() as u32, "{context}: {code:?}");
+            assert_eq!(actual_class, class, "{context}: class");
+            assert_eq!(actual_code, code, "{context}: {code:?}");
             assert_eq!(
                 *detail,
                 ErrorDetail::FirstFailedElementNumber(position),

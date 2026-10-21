@@ -52,10 +52,7 @@ fn assert_refused(result: Result<(), Error>, class: ErrorClass, code: ErrorCode)
         Err(Error::Protocol {
             class: actual_class,
             code: actual_code,
-        }) => assert_eq!(
-            (actual_class, actual_code),
-            (class.to_raw() as u32, code.to_raw() as u32)
-        ),
+        }) => assert_eq!((actual_class, actual_code), (class, code)),
         other => panic!("expected {class:?}/{code:?}, got {other:?}"),
     }
 }

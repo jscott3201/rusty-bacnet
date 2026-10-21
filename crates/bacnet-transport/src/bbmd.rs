@@ -15,21 +15,28 @@ use std::time::Duration;
 use std::time::Instant;
 
 use bacnet_bip_codec::{self as codec, BdtEntries, BvlcResultCode, FdtEntries};
-use bacnet_bip_core::bbmd::{self as core_bbmd, BdtError, RegistrationRefusal, Reservation};
+use bacnet_bip_core::bbmd::{self as core_bbmd, BdtError, Request};
 use bacnet_bip_core::Arrival;
-use bacnet_types::error::Error;
+use bacnet_time::HostClock;
+use bacnet_types::error::{DecodeError, DecodingKind, Error};
 use bytes::BytesMut;
 
 use crate::bvll::bvll_error;
 
-mod clock;
+mod activation;
 mod forward;
+mod nat;
+mod persist;
 mod policy;
+mod serve;
 mod tables;
-use clock::CoreClock;
 pub(crate) use forward::Forward;
+use nat::NatSetting;
+pub use nat::{NatError, NatTraversal, PrivateRange};
+pub(crate) use persist::{decode_file, BdtFile, PersistedNat};
 use policy::ForeignDeviceRateTracker;
 pub use policy::{FdtCounters, ForeignDevicePolicy};
+pub(crate) use serve::Reply;
 pub(crate) use tables::{lock, LiveTables};
 
 /// Rows the BDT holds, this BBMD's own row included.
@@ -74,12 +81,12 @@ pub struct FdtEntry {
 impl FdtEntry {
     /// This entry as the core's registration, on a clock whose midpoint is
     /// the registration time, and that clock.
-    fn registration(&self) -> (core_bbmd::Registration, CoreClock) {
-        let clock = CoreClock::new(self.registered_at);
+    fn registration(&self) -> (core_bbmd::Registration, HostClock) {
+        let clock = HostClock::centred(self.registered_at);
         let registration = core_bbmd::Registration::new(
             address(self.ip, self.port),
             self.ttl,
-            clock.to_core(self.registered_at),
+            clock.instant(self.registered_at),
         );
         (registration, clock)
     }
@@ -87,7 +94,7 @@ impl FdtEntry {
     /// Whether this entry has expired (TTL + grace period) relative to `now`.
     pub fn is_expired_at(&self, now: Instant) -> bool {
         let (registration, clock) = self.registration();
-        registration.is_expired_at(clock.to_core(now))
+        registration.is_expired_at(clock.instant(now))
     }
 
     /// Whether this entry has expired (TTL + grace period).
@@ -98,7 +105,7 @@ impl FdtEntry {
     /// Seconds remaining including the 30-second grace period relative to `now`.
     pub fn seconds_remaining_at(&self, now: Instant) -> u16 {
         let (registration, clock) = self.registration();
-        registration.seconds_remaining_at(clock.to_core(now))
+        registration.seconds_remaining_at(clock.instant(now))
     }
 
     /// Seconds remaining including the 30-second grace period.
@@ -109,7 +116,7 @@ impl FdtEntry {
     /// This entry as a Read-FDT-Ack reports it at `now` (Annex J.2.8.1).
     pub fn wire_entry_at(&self, now: Instant) -> codec::FdtEntry {
         let (registration, clock) = self.registration();
-        registration.wire_entry_at(clock.to_core(now))
+        registration.wire_entry_at(clock.instant(now))
     }
 }
 
@@ -222,9 +229,11 @@ pub fn decode_fdt(data: &[u8]) -> Result<Vec<FdtEntryWire>, Error> {
 pub fn bdt_from_wire(table: BdtEntries<'_>) -> Result<Vec<BdtEntry>, Error> {
     let count = table.len();
     if count > BbmdState::MAX_BDT_ENTRIES {
-        let max = BbmdState::MAX_BDT_ENTRIES;
-        let msg = format!("BDT entry count {count} exceeds maximum of {max}");
-        return Err(Error::decoding(0, msg));
+        return Err(table_too_long(
+            "BDT entry count {} exceeds maximum of {}",
+            count,
+            BbmdState::MAX_BDT_ENTRIES,
+        ));
     }
     Ok(table.iter().map(BdtEntry::from).collect())
 }
@@ -234,11 +243,20 @@ pub fn bdt_from_wire(table: BdtEntries<'_>) -> Result<Vec<BdtEntry>, Error> {
 pub fn fdt_from_wire(table: FdtEntries<'_>) -> Result<Vec<FdtEntryWire>, Error> {
     let count = table.len();
     if count > BbmdState::MAX_FDT_ENTRIES {
-        let max = BbmdState::MAX_FDT_ENTRIES;
-        let msg = format!("FDT entry count {count} exceeds maximum of {max}");
-        return Err(Error::decoding(0, msg));
+        return Err(table_too_long(
+            "FDT entry count {} exceeds maximum of {}",
+            count,
+            BbmdState::MAX_FDT_ENTRIES,
+        ));
     }
     Ok(table.iter().map(FdtEntryWire::from).collect())
+}
+
+/// The refusal of a table of `count` entries past its `max`.
+fn table_too_long(label: &'static str, count: usize, max: usize) -> Error {
+    DecodeError::new(DecodingKind::InvalidEncoding, 0, label)
+        .with_values(count as u64, max as u64)
+        .into()
 }
 
 /// BBMD state: the BDT and FDT, run by `bacnet-bip-core`, and the host's
@@ -246,19 +264,31 @@ pub fn fdt_from_wire(table: FdtEntries<'_>) -> Result<Vec<FdtEntryWire>, Error> 
 #[derive(Debug)]
 pub struct BbmdState {
     /// Maps the host clock onto the core's.
-    clock: CoreClock,
-    /// Both tables. The BDT holds this BBMD's own B/IP address.
+    clock: HostClock,
+    /// Both tables. The BDT holds this BBMD's own B/IP address: the global
+    /// one behind a NAT router, the local one otherwise.
     tables: Tables,
+    /// The B/IP address of this BBMD's socket on its own subnet.
+    local: SocketAddrV4,
+    /// Whether it runs behind a NAT router, and how it is reached there.
+    nat: NatSetting,
     /// The mask of the subnet this BBMD's own address is on, when the host
     /// reports it: a peer's Forwarded-NPDU sent from that subnet at this
     /// BBMD's own port isn't broadcast on it again (Annex J.4.5).
     subnet_mask: Option<Ipv4Addr>,
+    /// Whether this BBMD is the only device of its B/IP network on its
+    /// subnet: it then skips the local rebroadcast of forwarded and
+    /// distributed broadcasts (Annex J.4.5, J.7.5).
+    alone_on_subnet: bool,
     /// Allowed source IPs for Delete-Foreign-Device-Table-Entry.
     /// Empty means deny all (fail closed).
     management_acl: Vec<[u8; 4]>,
     /// Explicit policy for foreign device registrations.
     /// None means fail closed (deny all registrations).
     foreign_device_policy: Option<ForeignDevicePolicy>,
+    /// The policy kept while BBMD_Accept_FD_Registrations is FALSE, for
+    /// when it is TRUE again.
+    parked_policy: Option<ForeignDevicePolicy>,
     rate_tracker: ForeignDeviceRateTracker,
     counters: FdtCounters,
 }
@@ -267,11 +297,15 @@ impl BbmdState {
     /// Create a new BBMD with the given local address.
     pub fn new(local_ip: [u8; 4], local_port: u16) -> Self {
         Self {
-            clock: CoreClock::new(Instant::now()),
+            clock: HostClock::centred(Instant::now()),
             tables: Tables::new(address(local_ip, local_port)),
+            local: address(local_ip, local_port),
+            nat: NatSetting::default(),
             subnet_mask: None,
+            alone_on_subnet: false,
             management_acl: Vec::new(),
             foreign_device_policy: None,
+            parked_policy: None,
             rate_tracker: ForeignDeviceRateTracker::new(),
             counters: FdtCounters::default(),
         }
@@ -297,11 +331,18 @@ impl BbmdState {
         self.counters
     }
 
-    /// This BBMD's own B/IP address (IP and UDP port): the one given to
-    /// [`Self::new`], or the one a restart of a `0.0.0.0`-bound transport chose.
-    pub fn local_address(&self) -> ([u8; 4], u16) {
-        let own = self.tables.bdt.own_address();
-        (own.ip().octets(), own.port())
+    /// This BBMD's B/IP address (IP and UDP port) on its own subnet: the
+    /// one given to [`Self::new`], or the one a restart of a `0.0.0.0`-bound
+    /// transport chose. Behind a NAT router the BDT knows it by its global
+    /// address instead ([`Self::own_address`]).
+    pub fn local_address(&self) -> SocketAddrV4 {
+        self.local
+    }
+
+    /// [`Self::local_address`] as the octets and port the tests compare.
+    #[cfg(test)]
+    pub(crate) fn local_pair(&self) -> ([u8; 4], u16) {
+        (self.local.ip().octets(), self.local.port())
     }
 
     /// Change this BBMD's own B/IP address, keeping the BDT and FDT. Only the
@@ -311,11 +352,15 @@ impl BbmdState {
     /// the new one. A row the BDT lists explicitly stays, and becomes an
     /// ordinary peer row once it no longer matches. Returns `Error::Encoding`,
     /// changing nothing, when the new self row would overflow the BDT.
+    /// Behind a NAT router the BDT's own row is the global address, which
+    /// stays.
     pub(crate) fn set_local_address(&mut self, ip: [u8; 4], port: u16) -> Result<(), Error> {
-        self.tables
-            .bdt
-            .set_own_address(address(ip, port))
-            .map_err(bdt_error)
+        let local = address(ip, port);
+        if !self.nat.enabled {
+            self.tables.bdt.set_own_address(local).map_err(bdt_error)?;
+        }
+        self.local = local;
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -340,6 +385,20 @@ impl BbmdState {
             .bdt
             .set(BdtEntries::from_entries(&rows))
             .map_err(bdt_error)
+    }
+
+    /// Say whether this BBMD serves a B/IP-M group (Annex J.8.3, #941):
+    /// its own BDT row must then have the all-ones mask, and a BDT whose own
+    /// row has another is refused from now on. Turning it on fails, changing
+    /// nothing, while the own row has another mask.
+    pub(crate) fn set_serves_group(&mut self, serves: bool) -> Result<(), Error> {
+        self.tables.bdt.set_serves_group(serves).map_err(bdt_error)
+    }
+
+    /// Whether this BBMD serves a B/IP-M group (Annex J.8.3): see
+    /// [`BipTransport::set_multicast`](crate::bip::BipTransport::set_multicast).
+    pub fn serves_group(&self) -> bool {
+        self.tables.bdt.serves_group()
     }
 
     /// A copy of the current BDT, this BBMD's own row included.
@@ -376,7 +435,8 @@ impl BbmdState {
         self.register_foreign_device_at(ip, port, ttl, Instant::now())
     }
 
-    /// Register or re-register a foreign device at the given `now` instant.
+    /// Register or re-register a foreign device at the given `now` instant,
+    /// as a Register-Foreign-Device from `ip:port` is answered.
     ///
     /// Without a policy every registration is refused. With one, the core
     /// purges lapsed entries and checks the time-to-live; then this
@@ -389,60 +449,15 @@ impl BbmdState {
         ttl: u16,
         now: Instant,
     ) -> BvlcResultCode {
-        let Some(policy) = &self.foreign_device_policy else {
-            self.counters.registrations_rejected += 1;
-            return BvlcResultCode::REGISTER_FOREIGN_DEVICE_NAK;
-        };
-        let mut limits = core_bbmd::RegistrationLimits::DEFAULT;
-        limits.min_ttl = policy.min_ttl;
-        limits.max_ttl = policy.max_ttl;
-        limits.max_entries_per_source = policy.max_entries_per_source;
-        limits.reserved_capacity = policy.reserved_capacity;
-        let reservation = if policy.reserved_sources.contains(&ip) {
-            Reservation::Reserved
-        } else {
-            Reservation::Ordinary
-        };
-        let rate_tracker = &mut self.rate_tracker;
-        let admit = || {
-            policy
-                .allowed_sources
-                .as_ref()
-                .is_none_or(|allowed| allowed.contains(&ip))
-                && !rate_tracker.is_rate_exceeded(
-                    ip,
-                    now,
-                    policy.rate_window,
-                    policy.registration_rate_per_source,
-                    policy.registration_rate_global,
-                )
-        };
-        let outcome = self.tables.fdt.register(
-            address(ip, port),
-            ttl,
-            self.clock.to_core(now),
-            &limits,
-            reservation,
-            admit,
-        );
-        self.counters.registrations_expired += outcome.purged as u64;
-        match outcome.result {
-            Ok(_) => {
-                self.rate_tracker.record(ip);
-                self.counters.registrations_accepted += 1;
-                BvlcResultCode::SUCCESSFUL_COMPLETION
-            }
-            Err(refusal) => {
-                if refusal == RegistrationRefusal::TableFull {
-                    self.counters.capacity_exhausted += 1;
-                }
-                self.counters.registrations_rejected += 1;
-                refusal.result_code()
-            }
+        let sender = address(ip, port);
+        match self.serve(Request::Register { sender, ttl }, now) {
+            Reply::Result(code) => code,
+            other => unreachable!("a registration is answered with a result, not {other:?}"),
         }
     }
 
-    /// Delete a foreign device entry.
+    /// Delete a foreign device entry, lapsed or not, on the host's own
+    /// authority: no access list applies.
     pub fn delete_foreign_device(&mut self, ip: [u8; 4], port: u16) -> BvlcResultCode {
         if self.tables.fdt.delete(address(ip, port)) {
             BvlcResultCode::SUCCESSFUL_COMPLETION
@@ -453,7 +468,7 @@ impl BbmdState {
 
     /// Purge expired FDT entries at the given instant and return the number removed.
     pub fn purge_expired_at(&mut self, now: Instant) -> usize {
-        let removed = self.tables.fdt.purge(self.clock.to_core(now));
+        let removed = self.tables.fdt.purge(self.clock.instant(now));
         self.counters.registrations_expired += removed as u64;
         removed
     }
@@ -474,7 +489,10 @@ impl BbmdState {
                 ip: registration.address.ip().octets(),
                 port: registration.address.port(),
                 ttl: registration.ttl,
-                registered_at: self.clock.to_std(registration.registered_at),
+                registered_at: self
+                    .clock
+                    .to_std(registration.registered_at)
+                    .unwrap_or(self.clock.origin()),
             })
             .collect()
     }
@@ -488,7 +506,7 @@ impl BbmdState {
     /// [`Self::fdt_wire_entries`] at `now`.
     pub(crate) fn fdt_wire_entries_at(&mut self, now: Instant) -> Vec<codec::FdtEntry> {
         self.purge_expired_at(now);
-        let now = self.clock.to_core(now);
+        let now = self.clock.instant(now);
         self.tables
             .fdt
             .registrations()
@@ -513,18 +531,20 @@ impl BbmdState {
     /// the subnet's mask). The sender's own row doesn't matter. One
     /// that arrives by broadcast never is; see
     /// [`Tables::rebroadcasts_forwarded`](core_bbmd::Tables::rebroadcasts_forwarded).
+    /// A BBMD that serves a B/IP-M group ([`Self::serves_group`]) passes it
+    /// to the group whatever the peer's subnet (Annex J.8.3).
     pub fn forwarded_npdu_needs_local_broadcast(&self, ip: [u8; 4], port: u16) -> bool {
         let sender = address(ip, port);
+        let mask = self.subnet_mask.filter(|_| !self.serves_group());
         sender != self.tables.bdt.own_address()
             && self.tables.bdt.contains(sender)
             && self
                 .tables
-                .rebroadcasts_forwarded(self.subnet_mask, sender, Arrival::Unicast)
+                .rebroadcasts_forwarded(mask, sender, Arrival::Unicast)
     }
 
     /// The mask of the subnet this BBMD's own address is on, as the host
     /// reported it at start; `None` when it didn't.
-    #[cfg(test)]
     pub(crate) fn subnet_mask(&self) -> Option<Ipv4Addr> {
         self.subnet_mask
     }
@@ -534,13 +554,32 @@ impl BbmdState {
         self.subnet_mask = mask;
     }
 
+    /// Whether this BBMD is set up as the only device of its B/IP network on
+    /// its subnet ([`Self::set_alone_on_subnet`]).
+    pub fn alone_on_subnet(&self) -> bool {
+        self.alone_on_subnet
+    }
+
+    /// Say whether this BBMD is the only device of its B/IP network on its
+    /// subnet, as a BBMD behind a NAT router often is (Annex J.7.5). When it
+    /// is, a peer's Forwarded-NPDU and a foreign device's
+    /// Distribute-Broadcast-To-Network go only to the peers and foreign
+    /// devices, not to the subnet's broadcast address, where nothing would
+    /// receive them. Annex J.4.5 permits this for the Forwarded-NPDU; the
+    /// Distribute-Broadcast-To-Network case extends it. Off by default: with another device of
+    /// the network on the subnet, that device stops receiving remote
+    /// broadcasts.
+    pub fn set_alone_on_subnet(&mut self, alone: bool) {
+        self.alone_on_subnet = alone;
+    }
+
     /// Check if a sender is a registered (non-expired) foreign device, for
     /// tests (#1669).
     #[cfg(test)]
     pub(crate) fn is_registered_foreign_device(&mut self, ip: [u8; 4], port: u16) -> bool {
         let now = Instant::now();
         self.purge_expired_at(now);
-        let now = self.clock.to_core(now);
+        let now = self.clock.instant(now);
         self.tables.fdt.is_registered_at(address(ip, port), now)
     }
 
@@ -573,7 +612,7 @@ impl BbmdState {
             .expect("foreign device entry exists");
         registration.registered_at = self
             .clock
-            .to_core(Instant::now())
+            .instant(Instant::now())
             .saturating_sub(bacnet_bip_core::Duration::saturating_from_core(elapsed));
         self.tables
             .fdt
@@ -588,7 +627,7 @@ impl BbmdState {
         let registration = core_bbmd::Registration::new(
             address(entry.ip, entry.port),
             entry.ttl,
-            self.clock.to_core(entry.registered_at),
+            self.clock.instant(entry.registered_at),
         );
         self.tables.fdt.restore(registration).expect("FDT has room");
     }
@@ -605,10 +644,19 @@ fn rows_of(rows: &[codec::BdtEntry]) -> Vec<BdtEntry> {
 }
 
 #[cfg(test)]
+mod activation_tests;
+
+#[cfg(test)]
 mod foreign_device_tests;
 
 #[cfg(test)]
+mod nat_tests;
+
+#[cfg(test)]
 mod run_tests;
+
+#[cfg(test)]
+mod serve_tests;
 
 #[cfg(test)]
 mod tests;

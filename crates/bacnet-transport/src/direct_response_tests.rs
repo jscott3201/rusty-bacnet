@@ -137,3 +137,40 @@ async fn direct_response_owner_seal_and_drop_cancel_queued_work_irreversibly() {
         "old owner never reopens"
     );
 }
+
+#[tokio::test]
+async fn direct_response_both_owner_guards_retire_unstarted_writes() {
+    for seal_router in [false, true] {
+        let (_, _member, response, mut recv) = route((100, 96));
+        let network = DirectResponseScope::default();
+        let router = DirectResponseScope::default();
+        let guard = router.guard();
+        let mut send = Box::pin(response.send_with_owner(&[1, 0], &network, &guard));
+        assert!(poll_once(send.as_mut()).is_pending());
+        let write = recv.recv().await.unwrap();
+        assert!(write.can_start());
+        if seal_router {
+            router.seal();
+        } else {
+            network.seal();
+        }
+        assert!(
+            !write.can_start(),
+            "either owner retires a still-waiting write"
+        );
+        drop(write);
+        assert!(send.await.is_err());
+        assert!(response
+            .send_with_owner(&[1, 0], &network, &guard)
+            .await
+            .is_err());
+        assert!(recv.try_recv().is_err());
+    }
+    let scope = DirectResponseScope::default();
+    let guard = scope.guard();
+    drop(scope);
+    assert!(
+        !guard.is_open(),
+        "a retained guard cannot keep its owner alive"
+    );
+}

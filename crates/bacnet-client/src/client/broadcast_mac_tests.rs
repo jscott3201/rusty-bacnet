@@ -78,7 +78,7 @@ async fn a_confirmed_request_to_the_broadcast_mac_is_refused_before_any_state() 
         .await;
     assert!(
         matches!(routed, Err(Error::Abort { reason })
-            if reason == AbortReason::TSM_TIMEOUT.to_raw()),
+            if reason == AbortReason::TSM_TIMEOUT),
         "{routed:?}"
     );
     let request = decode_npdu(frames.try_recv().unwrap().npdu).unwrap();
@@ -161,7 +161,7 @@ async fn refuses_each_group_form(groups: GroupDestinations, forms: &[Vec<u8>], u
         .await;
     assert!(
         matches!(sent, Err(Error::Abort { reason })
-            if reason == AbortReason::TSM_TIMEOUT.to_raw()),
+            if reason == AbortReason::TSM_TIMEOUT),
         "{sent:?}"
     );
     assert!(frames.try_recv().is_ok());

@@ -297,6 +297,53 @@ impl<'a, R: ResidentLogRecord> LogLifecycle<'a, R> {
         Ok(())
     }
 
+    /// [`record_interruption`](Self::record_interruption) at the clock's
+    /// time, or without a valid clock at `fallback` if that is an actual
+    /// moment, as a log reopened from storage does (#1541). Returns whether
+    /// the record went in.
+    ///
+    /// A log that reopens full and stopped (Enable FALSE, as Stop_When_Full
+    /// leaves it, Clause 12.25.12) skips the record and returns true: the
+    /// marker would push out its oldest record, and a stopped log keeps its
+    /// records as they are. LOG_INTERRUPTED (Clause 12.25.14) only warns a
+    /// reader that samples may be missing, which isn't worth a sample. A
+    /// stopped log with room still takes it, with LOG_DISABLED.
+    pub(crate) fn record_interruption_now(&mut self, fallback: Option<(Date, Time)>) -> bool {
+        if !*self.enabled && self.buffer.capacity() > 0 && self.buffer.is_full() {
+            return true;
+        }
+        valid_timestamp(self.clock)
+            .ok()
+            .or(fallback)
+            .is_some_and(|at| self.record_interruption(at).is_ok())
+    }
+
+    /// Take back a saved log (#1541): Enable, Stop_When_Full, the window
+    /// ends, the records and Total_Record_Count, and BUFFER_READY's two
+    /// counts. The buffer is already sized to the saved Buffer_Size. The
+    /// window's last look is forgotten, so the first look only notes where
+    /// it stands. Nothing is recorded.
+    pub(crate) fn reopen(
+        &mut self,
+        snapshot: &mut crate::log_persistence::LogSnapshot<R>,
+    ) -> Result<(), Error> {
+        self.window.configure(P::START_TIME, snapshot.start_time)?;
+        self.window.configure(P::STOP_TIME, snapshot.stop_time)?;
+        *self.enabled = snapshot.log_enable;
+        *self.stop_when_full = snapshot.stop_when_full;
+        self.restore(
+            snapshot.total_record_count,
+            std::mem::take(&mut snapshot.records).into(),
+        )?;
+        self.reporting.resume(
+            snapshot.last_notify_record,
+            snapshot.records_since_notification_from,
+        );
+        self.reporting
+            .set_notification_threshold(snapshot.notification_threshold);
+        Ok(())
+    }
+
     fn insert_status(&mut self, timestamp: (Date, Time), status: LogStatus) {
         self.buffer
             .insert_forced(R::log_status(timestamp.0, timestamp.1, status));

@@ -10,13 +10,14 @@
 //! names the record kind and the field.
 
 #[cfg(not(feature = "std"))]
-use alloc::{string::ToString, vec::Vec};
+use alloc::vec::Vec;
 
 use super::tagged::{contents, decode_ctx_constructed, expect_end};
 use super::validate_tlv_sequence;
 use crate::{primitives, tags};
 use bacnet_types::bitstring::LogStatus;
-use bacnet_types::error::Error;
+use bacnet_types::enums::{ErrorClass, ErrorCode};
+use bacnet_types::error::{DecodeError, DecodingKind, Error, RangeError};
 use bacnet_types::primitives::{Date, Time};
 use bytes::BytesMut;
 
@@ -33,7 +34,7 @@ pub(super) fn encode_timestamp(buf: &mut BytesMut, date: &Date, time: &Time) {
 pub(super) fn decode_timestamp(
     data: &[u8],
     offset: usize,
-    what: &str,
+    what: &'static str,
 ) -> Result<(Date, Time, usize), Error> {
     let (body, end) = decode_ctx_constructed(data, offset, 0, what)?;
     let (date, next) = application(body, 0, tags::app_tag::DATE, 4, offset, what)?;
@@ -53,14 +54,17 @@ pub(super) fn encode_log_status(buf: &mut BytesMut, tag: u8, status: LogStatus) 
 pub(super) fn decode_log_status(
     contents: &[u8],
     offset: usize,
-    record: &str,
+    record: &'static str,
 ) -> Result<LogStatus, Error> {
     match contents {
         [5, bits] if bits & 0x1f == 0 => Ok(LogStatus::from_bacnet(&[*bits])),
-        _ => Err(Error::decoding(
+        _ => Err(DecodeError::new(
+            DecodingKind::InvalidEncoding,
             offset,
-            format!("{record} log-status must be a canonical three-bit BitString"),
-        )),
+            "log-status must be a canonical three-bit BitString",
+        )
+        .within(record)
+        .into()),
     }
 }
 
@@ -84,10 +88,13 @@ pub(super) fn encode_ctx_integer(buf: &mut BytesMut, tag: u8, value: i64) {
 /// 32 bits but need not, so a record read from a peer can carry more.
 pub(super) fn decode_integer(contents: &[u8], offset: usize) -> Result<i64, Error> {
     if contents.is_empty() || contents.len() > 8 {
-        return Err(Error::decoding(
+        return Err(DecodeError::new(
+            DecodingKind::InvalidEncoding,
             offset,
-            format!("integer-value needs 1 to 8 octets, got {}", contents.len()),
-        ));
+            "integer-value needs 1 to 8 octets, got {}",
+        )
+        .with_value(contents.len() as u64)
+        .into());
     }
     let fill = if contents[0] & 0x80 != 0 { 0xFF } else { 0x00 };
     let mut octets = [fill; 8];
@@ -97,32 +104,56 @@ pub(super) fn decode_integer(contents: &[u8], offset: usize) -> Result<i64, Erro
 
 /// Write the error pair as constructed context `tag` around an application
 /// Enumerated class then code.
-pub(super) fn encode_failure(buf: &mut BytesMut, tag: u8, error_class: u32, error_code: u32) {
+pub(super) fn encode_failure(
+    buf: &mut BytesMut,
+    tag: u8,
+    error_class: ErrorClass,
+    error_code: ErrorCode,
+) {
     tags::encode_opening_tag(buf, tag);
-    primitives::encode_app_enumerated(buf, error_class);
-    primitives::encode_app_enumerated(buf, error_code);
+    primitives::encode_app_enumerated(buf, error_class.to_raw().into());
+    primitives::encode_app_enumerated(buf, error_code.to_raw().into());
     tags::encode_closing_tag(buf, tag);
 }
 
-/// The class and code in the body of a failure alternative.
-pub(super) fn decode_failure(body: &[u8], offset: usize, what: &str) -> Result<(u32, u32), Error> {
+/// The class and code in the body of a failure alternative. Clause 21 holds
+/// both to 16 bits, so a wider one is refused, as the Error-PDU decoder
+/// refuses it (#1814).
+pub(super) fn decode_failure(
+    body: &[u8],
+    offset: usize,
+    what: &'static str,
+) -> Result<(ErrorClass, ErrorCode), Error> {
     let (class, next) = application(body, 0, tags::app_tag::ENUMERATED, 0, offset, what)?;
     let (code, last) = application(body, next, tags::app_tag::ENUMERATED, 0, offset, what)?;
     expect_end(body, last, offset, what)?;
+    let sixteen = |raw: &[u8], message: &'static str| -> Result<u16, Error> {
+        let value = primitives::decode_unsigned_u32(raw)?;
+        u16::try_from(value).map_err(|_| {
+            DecodeError::new(DecodingKind::OutOfRange, offset, message)
+                .within(what)
+                .with_value(value.into())
+                .into()
+        })
+    };
     Ok((
-        primitives::decode_unsigned_u32(class)?,
-        primitives::decode_unsigned_u32(code)?,
+        ErrorClass::from_raw(sixteen(class, "error class {} exceeds u16")?),
+        ErrorCode::from_raw(sixteen(code, "error code {} exceeds u16")?),
     ))
 }
 
 /// Refuse a bit string whose unused-bit count is above 7, or nonzero with no
-/// data: the decoder would refuse it. `what` names the value in the error.
-pub(super) fn check_bit_string(unused_bits: u8, data: &[u8], what: &str) -> Result<(), Error> {
+/// data: the decoder would refuse it. `label` names the value and holds a
+/// placeholder for the unused-bit count, then one for the octet count.
+pub(super) fn check_bit_string(
+    unused_bits: u8,
+    data: &[u8],
+    label: &'static str,
+) -> Result<(), Error> {
     if unused_bits > 7 || (data.is_empty() && unused_bits != 0) {
-        return Err(Error::OutOfRange(format!(
-            "{what} has {unused_bits} unused bits over {} octets",
-            data.len()
-        )));
+        return Err(RangeError::new(label)
+            .with_values(unused_bits.into(), data.len() as u64)
+            .into());
     }
     Ok(())
 }
@@ -132,7 +163,7 @@ pub(super) fn check_bit_string(unused_bits: u8, data: &[u8], what: &str) -> Resu
 /// wrapping them cannot unbalance the record.
 pub(super) fn encode_any_value(buf: &mut BytesMut, tag: u8, bytes: &[u8]) -> Result<(), Error> {
     validate_tlv_sequence(bytes, "any-value")
-        .map_err(|error| Error::Encoding(error.to_string()))?;
+        .map_err(Error::into_encode_refusal)?;
     tags::encode_opening_tag(buf, tag);
     buf.extend_from_slice(bytes);
     tags::encode_closing_tag(buf, tag);
@@ -154,17 +185,21 @@ fn application<'a>(
     number: u8,
     length: u32,
     offset: usize,
-    what: &str,
+    what: &'static str,
 ) -> Result<(&'a [u8], usize), Error> {
     let (tag, start) = tags::decode_tag(data, pos)?;
     if tag.class != tags::TagClass::Application
         || tag.number != number
         || (length != 0 && tag.length != length)
     {
-        return Err(Error::decoding(
+        return Err(DecodeError::new(
+            DecodingKind::InvalidEncoding,
             offset,
-            format!("{what}: expected application tag {number}"),
-        ));
+            "expected application tag {}",
+        )
+        .within(what)
+        .with_value(number.into())
+        .into());
     }
     contents(data, start, tag.length)
 }

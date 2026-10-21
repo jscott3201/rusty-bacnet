@@ -9,6 +9,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
 
 use crate::common;
+use crate::log_persistence::LogAcquisitionSettings;
 
 /// The Log_Interval a trend log takes, in hundredths of a second (one
 /// minute), when POLLED is chosen while its Log_Interval is zero. Clauses
@@ -19,13 +20,13 @@ pub const DEFAULT_LOG_INTERVAL: u32 = 6_000;
 /// differ.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Rules {
-    /// Trend Log (Clause 12.25). It may log by COV, and a Log_Interval write
-    /// is how older clients move it between POLLED and COV (12.25.9). This
-    /// device has no COV acquisition yet (#1480), so both ways into COV are
-    /// refused with PROPERTY / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, the
-    /// answer Clause 12.25.26 gives for a Logging_Type the object doesn't
-    /// support: a Logging_Type of COV (or any value but POLLED and
-    /// TRIGGERED), and a POLLED log's nonzero Log_Interval written to zero.
+    /// Trend Log (Clause 12.25), which logs by COV too (#1480). A
+    /// Log_Interval write is how older clients move it between POLLED and
+    /// COV (12.25.9): a POLLED log's nonzero interval written to zero turns
+    /// it to COV, and a nonzero interval written while COV turns it back to
+    /// POLLED at that interval. Any value but POLLED, COV and TRIGGERED is
+    /// PROPERTY / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, the answer Clause
+    /// 12.25.26 gives for a Logging_Type the object doesn't support.
     TrendLog,
     /// Trend Log Multiple (Clause 12.30), which never logs by COV: COV, like
     /// any value but POLLED and TRIGGERED, is PROPERTY / VALUE_OUT_OF_RANGE
@@ -38,7 +39,7 @@ pub(super) enum Rules {
 pub(super) struct Acquisition {
     rules: Rules,
     logging_type: LoggingType,
-    /// Hundredths of a second; zero while TRIGGERED.
+    /// Hundredths of a second; zero while TRIGGERED or COV.
     log_interval: u32,
     align_intervals: bool,
     interval_offset: u32,
@@ -60,6 +61,27 @@ impl Acquisition {
 
     pub(super) fn logging_type(&self) -> LoggingType {
         self.logging_type
+    }
+
+    /// The settings a durable log saves (#1541). Trigger isn't one: a
+    /// pending acquisition doesn't outlive a restart.
+    pub(super) fn settings(&self) -> LogAcquisitionSettings {
+        LogAcquisitionSettings {
+            logging_type: self.logging_type,
+            log_interval: self.log_interval,
+            align_intervals: self.align_intervals,
+            interval_offset: self.interval_offset,
+        }
+    }
+
+    /// Take back saved settings as they were. The snapshot was checked
+    /// against these rules when it was read.
+    pub(super) fn restore(&mut self, settings: LogAcquisitionSettings) {
+        self.logging_type = settings.logging_type;
+        self.log_interval = settings.log_interval;
+        self.align_intervals = settings.align_intervals;
+        self.interval_offset = settings.interval_offset;
+        self.trigger = false;
     }
 
     /// Whether Log_Interval takes writes now: in every mode but TRIGGERED
@@ -116,12 +138,12 @@ impl Acquisition {
         })
     }
 
-    /// Choose POLLED or TRIGGERED acquisition (Clauses 12.25.26 and
-    /// 12.30.12). COV and any other value change nothing and are refused
-    /// with the error [`Rules`] gives each object type. POLLED with a zero
-    /// Log_Interval sets [`DEFAULT_LOG_INTERVAL`]; TRIGGERED sets
-    /// Log_Interval to zero. Leaving TRIGGERED drops a Trigger not yet acted
-    /// on.
+    /// Choose POLLED, TRIGGERED or (on a Trend Log) COV acquisition
+    /// (Clauses 12.25.26 and 12.30.12). Any other value changes nothing and
+    /// is refused with the error [`Rules`] gives each object type. POLLED
+    /// with a zero Log_Interval sets [`DEFAULT_LOG_INTERVAL`]; TRIGGERED and
+    /// COV set Log_Interval to zero. Leaving TRIGGERED drops a Trigger not
+    /// yet acted on.
     pub(super) fn set_logging_type(&mut self, logging_type: LoggingType) -> Result<(), Error> {
         match logging_type {
             LoggingType::POLLED => {
@@ -131,6 +153,10 @@ impl Acquisition {
                 self.trigger = false;
             }
             LoggingType::TRIGGERED => self.log_interval = 0,
+            LoggingType::COV if self.rules == Rules::TrendLog => {
+                self.log_interval = 0;
+                self.trigger = false;
+            }
             _ => return Err(self.unsupported_logging_type()),
         }
         self.logging_type = logging_type;
@@ -138,7 +164,9 @@ impl Acquisition {
     }
 
     /// Set Log_Interval as local configuration, held to the network rules:
-    /// while TRIGGERED it is read-only, PROPERTY / WRITE_ACCESS_DENIED.
+    /// while TRIGGERED it is read-only, PROPERTY / WRITE_ACCESS_DENIED, and
+    /// on a Trend Log it may switch between POLLED and COV (see
+    /// [`Rules::TrendLog`]).
     pub(super) fn set_log_interval(&mut self, hundredths: u32) -> Result<(), Error> {
         if !self.log_interval_writable() {
             return Err(common::write_access_denied_error());
@@ -146,17 +174,22 @@ impl Acquisition {
         self.store_log_interval(hundredths)
     }
 
-    /// Store a Log_Interval written while it is writable. A POLLED Trend Log
-    /// whose interval goes from nonzero to zero is being asked to log by COV
-    /// (Clause 12.25.9): zero is a valid interval, but COV is a function this
-    /// device lacks, so it is refused as a COV Logging_Type is.
+    /// Store a Log_Interval written while it is writable, with a Trend
+    /// Log's two Clause 12.25.9 switches: a POLLED log whose interval goes
+    /// from nonzero to zero now logs by COV, and a COV log given a nonzero
+    /// interval polls at it. Zero written to a COV log, or to a POLLED log
+    /// already at zero, changes no mode.
     fn store_log_interval(&mut self, hundredths: u32) -> Result<(), Error> {
-        if self.rules == Rules::TrendLog
-            && self.logging_type == LoggingType::POLLED
-            && self.log_interval != 0
-            && hundredths == 0
-        {
-            return Err(self.unsupported_logging_type());
+        if self.rules == Rules::TrendLog {
+            match self.logging_type {
+                LoggingType::POLLED if self.log_interval != 0 && hundredths == 0 => {
+                    self.logging_type = LoggingType::COV;
+                }
+                LoggingType::COV if hundredths != 0 => {
+                    self.logging_type = LoggingType::POLLED;
+                }
+                _ => {}
+            }
         }
         self.log_interval = hundredths;
         Ok(())

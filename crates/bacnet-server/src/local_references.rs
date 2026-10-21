@@ -263,7 +263,8 @@ mod tests {
         let mut db = ObjectDatabase::new();
         db.add(Box::new(
             DeviceObject::new(DeviceConfig {
-                instance,
+                identity: bacnet_objects::DeviceIdentity::new(instance, 0)
+                    .expect("valid Device identity"),
                 ..DeviceConfig::default()
             })
             .unwrap(),

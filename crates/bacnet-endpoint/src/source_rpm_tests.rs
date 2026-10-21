@@ -94,7 +94,7 @@ fn response(invoke: u8, ack: &ReadPropertyMultipleACK) -> Apdu {
     })
 }
 async fn records(
-    receiver: &mut mpsc::Receiver<ReceivedApdu>,
+    receiver: &mut bacnet_network::layer::ApduReceiver,
     sink: &NetworkLayer<BipTransport>,
     confirmed: bool,
     n: usize,

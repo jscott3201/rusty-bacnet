@@ -3,13 +3,15 @@ use super::*;
 use bacnet_encoding::apdu::{encode_apdu, Apdu, ConfirmedRequest, UnconfirmedRequest};
 use bacnet_endpoint_core::coordinator::CanonicalPeer;
 use bacnet_endpoint_core::endpoint_ingress::EndpointEgressAdmissionError;
+use bacnet_npdu::NetworkPriority;
 use bacnet_server::server::{
     __endpoint_NotificationWorkerResult as NotificationWorkerResult,
     __endpoint_run_notification_worker as run_notification_worker,
 };
 use bacnet_services::audit::AuditNotificationRequest;
 use bacnet_types::enums::{
-    ConfirmedServiceChoice, ErrorClass, ErrorCode, NetworkPriority, UnconfirmedServiceChoice,
+    AbortReason, ConfirmedServiceChoice, ErrorClass, ErrorCode, RejectReason,
+    UnconfirmedServiceChoice,
 };
 use bacnet_types::MacAddr;
 use bytes::BytesMut;
@@ -71,10 +73,13 @@ pub(super) fn admit(
     let Some(mut encoded) = encode(&notification, confirmed, source.max_apdu, 0) else {
         return;
     };
+    // A source record carries the source timestamp; a record of an
+    // operation on this device, the target timestamp.
     let timestamp = notification
         .source_timestamp
         .clone()
-        .expect("source record timestamp");
+        .or_else(|| notification.target_timestamp.clone())
+        .expect("record timestamp");
     let permit = match owner.try_admit_audit() {
         Ok(permit) => permit,
         Err(tokio::sync::TryAcquireError::NoPermits) => {
@@ -172,7 +177,7 @@ pub(super) fn admit_encoded(
             destination_mac: mac,
         },
         confirmed,
-        NetworkPriority::NORMAL,
+        NetworkPriority::Normal,
         Vec::new(),
         Some(deadline),
     )
@@ -190,7 +195,7 @@ pub(super) fn admit_global_broadcast(
         encoded,
         EndpointApduDestination::GlobalBroadcast,
         false,
-        NetworkPriority::NORMAL,
+        NetworkPriority::Normal,
         Vec::new(),
         Some(deadline),
     )
@@ -233,41 +238,44 @@ pub(super) async fn finish_send(
 pub(super) fn result<T>(outcome: &Result<T, Error>) -> Option<(ErrorClass, ErrorCode)> {
     let error = outcome.as_ref().err()?;
     let code = match error {
-        Error::Protocol { class, code } => {
-            return Some(match (u16::try_from(*class), u16::try_from(*code)) {
-                (Ok(class), Ok(code)) => (ErrorClass::from_raw(class), ErrorCode::from_raw(code)),
-                _ => (ErrorClass::COMMUNICATION, ErrorCode::OTHER),
-            })
-        }
+        Error::Protocol { class, code } => return Some((*class, *code)),
         Error::Timeout(_) => ErrorCode::TIMEOUT,
-        Error::Abort { reason } => match reason {
-            0 => ErrorCode::ABORT_OTHER,
-            1 => ErrorCode::ABORT_BUFFER_OVERFLOW,
-            2 => ErrorCode::ABORT_INVALID_APDU_IN_THIS_STATE,
-            3 => ErrorCode::ABORT_PREEMPTED_BY_HIGHER_PRIORITY_TASK,
-            4 => ErrorCode::ABORT_SEGMENTATION_NOT_SUPPORTED,
-            5 => ErrorCode::ABORT_SECURITY_ERROR,
-            6 => ErrorCode::ABORT_INSUFFICIENT_SECURITY,
-            7 => ErrorCode::ABORT_WINDOW_SIZE_OUT_OF_RANGE,
-            8 => ErrorCode::ABORT_APPLICATION_EXCEEDED_REPLY_TIME,
-            9 => ErrorCode::ABORT_OUT_OF_RESOURCES,
-            10 => ErrorCode::ABORT_TSM_TIMEOUT,
-            11 => ErrorCode::ABORT_APDU_TOO_LONG,
-            64..=255 => ErrorCode::ABORT_PROPRIETARY,
+        Error::Abort { reason } => match *reason {
+            AbortReason::OTHER => ErrorCode::ABORT_OTHER,
+            AbortReason::BUFFER_OVERFLOW => ErrorCode::ABORT_BUFFER_OVERFLOW,
+            AbortReason::INVALID_APDU_IN_THIS_STATE => ErrorCode::ABORT_INVALID_APDU_IN_THIS_STATE,
+            AbortReason::PREEMPTED_BY_HIGHER_PRIORITY_TASK => {
+                ErrorCode::ABORT_PREEMPTED_BY_HIGHER_PRIORITY_TASK
+            }
+            AbortReason::SEGMENTATION_NOT_SUPPORTED => ErrorCode::ABORT_SEGMENTATION_NOT_SUPPORTED,
+            AbortReason::SECURITY_ERROR => ErrorCode::ABORT_SECURITY_ERROR,
+            AbortReason::INSUFFICIENT_SECURITY => ErrorCode::ABORT_INSUFFICIENT_SECURITY,
+            AbortReason::WINDOW_SIZE_OUT_OF_RANGE => ErrorCode::ABORT_WINDOW_SIZE_OUT_OF_RANGE,
+            AbortReason::APPLICATION_EXCEEDED_REPLY_TIME => {
+                ErrorCode::ABORT_APPLICATION_EXCEEDED_REPLY_TIME
+            }
+            AbortReason::OUT_OF_RESOURCES => ErrorCode::ABORT_OUT_OF_RESOURCES,
+            AbortReason::TSM_TIMEOUT => ErrorCode::ABORT_TSM_TIMEOUT,
+            AbortReason::APDU_TOO_LONG => ErrorCode::ABORT_APDU_TOO_LONG,
+            reason if reason.to_raw() >= 64 => ErrorCode::ABORT_PROPRIETARY,
             _ => ErrorCode::OTHER,
         },
-        Error::Reject { reason } => match reason {
-            0 => ErrorCode::REJECT_OTHER,
-            1 => ErrorCode::REJECT_BUFFER_OVERFLOW,
-            2 => ErrorCode::REJECT_INCONSISTENT_PARAMETERS,
-            3 => ErrorCode::REJECT_INVALID_PARAMETER_DATA_TYPE,
-            4 => ErrorCode::REJECT_INVALID_TAG,
-            5 => ErrorCode::REJECT_MISSING_REQUIRED_PARAMETER,
-            6 => ErrorCode::REJECT_PARAMETER_OUT_OF_RANGE,
-            7 => ErrorCode::REJECT_TOO_MANY_ARGUMENTS,
-            8 => ErrorCode::REJECT_UNDEFINED_ENUMERATION,
-            9 => ErrorCode::REJECT_UNRECOGNIZED_SERVICE,
-            64..=255 => ErrorCode::REJECT_PROPRIETARY,
+        Error::Reject { reason } => match *reason {
+            RejectReason::OTHER => ErrorCode::REJECT_OTHER,
+            RejectReason::BUFFER_OVERFLOW => ErrorCode::REJECT_BUFFER_OVERFLOW,
+            RejectReason::INCONSISTENT_PARAMETERS => ErrorCode::REJECT_INCONSISTENT_PARAMETERS,
+            RejectReason::INVALID_PARAMETER_DATA_TYPE => {
+                ErrorCode::REJECT_INVALID_PARAMETER_DATA_TYPE
+            }
+            RejectReason::INVALID_TAG => ErrorCode::REJECT_INVALID_TAG,
+            RejectReason::MISSING_REQUIRED_PARAMETER => {
+                ErrorCode::REJECT_MISSING_REQUIRED_PARAMETER
+            }
+            RejectReason::PARAMETER_OUT_OF_RANGE => ErrorCode::REJECT_PARAMETER_OUT_OF_RANGE,
+            RejectReason::TOO_MANY_ARGUMENTS => ErrorCode::REJECT_TOO_MANY_ARGUMENTS,
+            RejectReason::UNDEFINED_ENUMERATION => ErrorCode::REJECT_UNDEFINED_ENUMERATION,
+            RejectReason::UNRECOGNIZED_SERVICE => ErrorCode::REJECT_UNRECOGNIZED_SERVICE,
+            reason if reason.to_raw() >= 64 => ErrorCode::REJECT_PROPRIETARY,
             _ => ErrorCode::OTHER,
         },
         _ => ErrorCode::OTHER,
@@ -285,7 +293,7 @@ mod tests {
         for (reason, code) in abort_codes.into_iter().enumerate() {
             assert_eq!(
                 result::<()>(&Err(Error::Abort {
-                    reason: reason as u8
+                    reason: AbortReason::from_raw(reason as u8)
                 })),
                 Some((ErrorClass::COMMUNICATION, ErrorCode::from_raw(code)))
             );
@@ -293,46 +301,47 @@ mod tests {
         for (reason, code) in reject_codes.into_iter().enumerate() {
             assert_eq!(
                 result::<()>(&Err(Error::Reject {
-                    reason: reason as u8
+                    reason: RejectReason::from_raw(reason as u8)
                 })),
                 Some((ErrorClass::COMMUNICATION, ErrorCode::from_raw(code)))
             );
         }
         for reason in [12, 63] {
             assert_eq!(
-                result::<()>(&Err(Error::Abort { reason })),
+                result::<()>(&Err(Error::Abort {
+                    reason: AbortReason::from_raw(reason)
+                })),
                 Some((ErrorClass::COMMUNICATION, ErrorCode::OTHER))
             );
         }
         for reason in [10, 11, 63] {
             assert_eq!(
-                result::<()>(&Err(Error::Reject { reason })),
+                result::<()>(&Err(Error::Reject {
+                    reason: RejectReason::from_raw(reason)
+                })),
                 Some((ErrorClass::COMMUNICATION, ErrorCode::OTHER))
             );
         }
         for reason in [64, 255] {
             assert_eq!(
-                result::<()>(&Err(Error::Abort { reason })),
+                result::<()>(&Err(Error::Abort {
+                    reason: AbortReason::from_raw(reason)
+                })),
                 Some((ErrorClass::COMMUNICATION, ErrorCode::ABORT_PROPRIETARY))
             );
             assert_eq!(
-                result::<()>(&Err(Error::Reject { reason })),
+                result::<()>(&Err(Error::Reject {
+                    reason: RejectReason::from_raw(reason)
+                })),
                 Some((ErrorClass::COMMUNICATION, ErrorCode::REJECT_PROPRIETARY))
             );
         }
         assert_eq!(
             result::<()>(&Err(Error::Protocol {
-                class: 512,
-                code: 513
+                class: ErrorClass::from_raw(512),
+                code: ErrorCode::from_raw(513)
             })),
             Some((ErrorClass::from_raw(512), ErrorCode::from_raw(513)))
-        );
-        assert_eq!(
-            result::<()>(&Err(Error::Protocol {
-                class: u32::MAX,
-                code: 513
-            })),
-            Some((ErrorClass::COMMUNICATION, ErrorCode::OTHER))
         );
         assert_eq!(result(&Ok(())), None);
     }

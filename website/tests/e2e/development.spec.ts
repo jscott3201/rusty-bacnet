@@ -34,3 +34,16 @@ test('search discovers development Network Port guidance and retains its scope',
   expect(text).toContain('Register a B/IP receiving port');
   expect(text).toContain('https://jscott3201.github.io/rusty-bacnet/development/overview/');
 });
+
+test('choose-your-path routes firmware work to the embedded page', async ({ page, request }) => {
+  await page.goto(base + 'start/choose-your-path/');
+  await page.locator('.sl-markdown-content').getByRole('link', { name: 'Run on a microcontroller', exact: true }).click();
+  await expect(page).toHaveURL(base + 'start/embedded/');
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Run on a microcontroller');
+  const main = page.locator('main');
+  await expect(main.getByRole('heading', { name: 'Adapter rules', exact: true })).toBeVisible();
+  await expect(main).toContainText('Merge deadlines with bacnet_time::earliest.');
+  await expect(main.getByRole('cell', { name: 'a whole MS/TP device with Who-Is and ReadProperty' })).toBeVisible();
+  const raw = await (await request.get(base + 'raw/start/embedded.md')).text();
+  expect(raw).toContain('cargo run -p bacnet-router-core --features bip,mstp --example bip_mstp_router');
+});

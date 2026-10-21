@@ -11,6 +11,8 @@ pub(super) struct InboundSegmentSource<'a> {
     pub(super) network: &'a Option<NpduAddress>,
     /// Transport provenance snapshot for this segment.
     pub(super) provenance: TransportProvenance,
+    /// The client's throttle on warnings about responses it refuses.
+    pub(super) warning: &'a WarnThrottle,
 }
 
 /// Limits and routing state for one segmented confirmed request.

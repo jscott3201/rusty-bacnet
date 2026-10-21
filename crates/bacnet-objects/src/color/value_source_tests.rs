@@ -63,7 +63,7 @@ fn stop() -> PropertyValue {
 fn assert_code(result: Result<impl std::fmt::Debug, Error>, expected: ErrorCode) {
     match result {
         Err(Error::Protocol { code, .. }) => {
-            assert_eq!(code, expected.to_raw() as u32, "expected {expected:?}")
+            assert_eq!(code, expected, "expected {expected:?}")
         }
         other => panic!("expected {expected:?}, got {other:?}"),
     }

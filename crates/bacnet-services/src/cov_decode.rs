@@ -11,7 +11,7 @@ use bacnet_encoding::constructed::{
 };
 use bacnet_encoding::tags;
 use bacnet_types::enums::RejectReason;
-use bacnet_types::error::Error;
+use bacnet_types::error::{DecodeError, DecodingKind, Error};
 use bacnet_types::primitives::ObjectIdentifier;
 
 use crate::common::MAX_DECODED_ITEMS;
@@ -70,13 +70,14 @@ fn decode_required_context<'a>(
     data: &'a [u8],
     offset: usize,
     expected_tag: u8,
-    field: &str,
+    field: &'static str,
 ) -> COVDecodeResult<(&'a [u8], usize)> {
     if offset >= data.len() {
-        return Err(syntax(Error::missing(
-            offset,
-            format!("{field} is missing"),
-        )));
+        return Err(syntax(
+            DecodeError::new(DecodingKind::Missing, offset, "is missing")
+                .within(field)
+                .into(),
+        ));
     }
     decode_ctx_primitive(data, offset, expected_tag, field).map_err(syntax)
 }
@@ -85,12 +86,17 @@ fn decode_required_u32(
     data: &[u8],
     offset: usize,
     expected_tag: u8,
-    field: &str,
+    field: &'static str,
 ) -> COVDecodeResult<(u32, usize)> {
     let (content, end) = decode_required_context(data, offset, expected_tag, field)?;
     let value = decode_canonical_unsigned(content, offset, field).map_err(syntax)?;
-    let value = u32::try_from(value)
-        .map_err(|_| syntax(Error::out_of_range(offset, format!("{field} exceeds u32"))))?;
+    let value = u32::try_from(value).map_err(|_| {
+        syntax(
+            DecodeError::new(DecodingKind::OutOfRange, offset, "exceeds u32")
+                .within(field)
+                .into(),
+        )
+    })?;
     Ok((value, end))
 }
 

@@ -6,6 +6,7 @@ mod node_support;
 use core::net::Ipv4Addr;
 
 use bacnet_bip_codec::{BdtEntries, BdtEntry, BvlcFunction, BvlcResultCode, Bvll, FdtEntries};
+use bacnet_bip_core::bbmd::Request;
 use bacnet_bip_core::node::{
     Addressed, Delivery, Discard, ForBbmd, ForwardedTrust, Inbound, Link, LocalAddresses, Mode,
     Node, Path, Permissive, Received, Response,
@@ -583,6 +584,51 @@ fn foreign_trust_takes_forwards_only_from_the_bbmd_by_unicast() {
 }
 
 #[test]
+fn foreign_trust_counts_a_forward_to_its_own_broadcast_address_as_unicast() {
+    // A foreign device whose broadcast address is its own, as in a loopback
+    // test, sees every datagram flagged as both (#1851).
+    let forwarded = wire(Bvll::ForwardedNpdu {
+        origin: REMOTE,
+        npdu: NPDU,
+    });
+    let untrusted = Received::Discarded(Discard::ForwardedUntrusted);
+    let both = Addressed {
+        node: true,
+        broadcast: true,
+    };
+    let strict = link(Mode::Foreign(foreign()));
+    assert_eq!(
+        receive(&strict, &forwarded, BBMD, both),
+        delivered(REMOTE, true)
+    );
+    // Anyone else's is still dropped, and so is a broadcast from the BBMD.
+    assert_eq!(receive(&strict, &forwarded, PEER, both), untrusted);
+    assert_eq!(receive(&strict, &forwarded, BBMD, TO_BROADCAST), untrusted);
+    // An OS-reported group delivery is never the node's unicast.
+    let local = LocalAddresses::new(*OWN.ip(), *OWN.ip());
+    let grouped = Addressed::classify(*OWN.ip(), Some(true), &local);
+    assert_eq!(receive(&strict, &forwarded, BBMD, grouped), untrusted);
+    // A broadcast listener keeps no unicast; the primary socket reads it.
+    let on_listener = with(datagram(&forwarded, BBMD, both), |datagram| {
+        datagram.path = Path::Listener {
+            other_interface: false,
+        };
+    });
+    assert_eq!(
+        receive_datagram(&strict, &on_listener),
+        Received::Discarded(Discard::ListenerMismatch {
+            other_interface: false
+        })
+    );
+    // Outside foreign mode both flags still make it a broadcast.
+    let received = receive(&link(Mode::Bbmd), &forwarded, BBMD, both);
+    let Received::Bbmd(ForBbmd::Forwarded { arrival, .. }) = received else {
+        panic!("{received:?}");
+    };
+    assert_eq!(arrival, Arrival::Broadcast);
+}
+
+#[test]
 fn bbmd_mode_hands_over_its_share() {
     let link = link(Mode::Bbmd);
     let broadcast = wire(Bvll::OriginalBroadcastNpdu(NPDU));
@@ -619,25 +665,25 @@ fn bbmd_mode_hands_over_its_share() {
         ),
         (
             wire(Bvll::RegisterForeignDevice { ttl: 90 }),
-            ForBbmd::Register {
+            ForBbmd::Management(Request::Register {
                 sender: PEER,
                 ttl: 90,
-            },
+            }),
         ),
         (
             wire(Bvll::ReadBroadcastDistributionTable),
-            ForBbmd::ReadBdt { sender: PEER },
+            ForBbmd::Management(Request::ReadBdt { sender: PEER }),
         ),
         (
             wire(Bvll::ReadForeignDeviceTable),
-            ForBbmd::ReadFdt { sender: PEER },
+            ForBbmd::Management(Request::ReadFdt { sender: PEER }),
         ),
         (
             wire(Bvll::DeleteForeignDeviceTableEntry(REMOTE)),
-            ForBbmd::DeleteFdtEntry {
+            ForBbmd::Management(Request::DeleteFdtEntry {
                 sender: PEER,
                 entry: REMOTE,
-            },
+            }),
         ),
     ];
     for (payload, share) in shares {

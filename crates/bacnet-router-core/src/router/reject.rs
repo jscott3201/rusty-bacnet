@@ -1,16 +1,83 @@
 //! The rejects this router sends, and the ones it passes on.
 
 use super::counters::bump;
-use super::host::{Event, Group, Host};
+use super::host::{Event, Host};
 use super::ingress::{Arrival, Discard, Received};
 use super::tasks::Task;
+use super::Group;
 use super::Storage;
-use crate::message::RejectReason;
+use crate::npdu::RejectMessageReason;
 use crate::npdu::{Address, Npdu, GLOBAL_NETWORK};
-use crate::PortId;
+use crate::{Mac, PortId};
 
-impl<const P: usize, const R: usize, const H: usize, const D: usize, const N: usize>
-    Storage<P, R, H, D, N>
+/// The owned return path for a routed send that can draw a length reject.
+/// Copy it from [`Send::reject_origin`](super::Send::reject_origin) when
+/// queueing that send, and return it to
+/// [`Router::refused_later`](super::Router::refused_later) if refused.
+///
+/// Only the router constructs this record. It retains the original DNET
+/// and the arrival's return path even when the queued NPDU no longer has
+/// its destination. Forwarded rejects and fan-outs carry no such record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RejectOrigin {
+    port: PortId,
+    to: Mac,
+    network: u16,
+    destination_network: u16,
+    destination: Mac,
+}
+
+impl RejectOrigin {
+    // A valid routed DNET is never zero. Keep the empty value all zero
+    // bits, as the firmware's static router storage requires.
+    pub(super) const NONE: Self = Self {
+        port: PortId(0),
+        to: Mac::EMPTY,
+        network: 0,
+        destination_network: 0,
+        destination: Mac::EMPTY,
+    };
+
+    pub(super) fn as_option(self) -> Option<Self> {
+        (self.network != 0).then_some(self)
+    }
+
+    fn new(port: PortId, to: &[u8], destination: Option<Address<'_>>, network: u16) -> Self {
+        // These addresses have already passed the ingress bounds.
+        let mac = |bytes: &[u8]| Mac::from_slice(bytes).unwrap_or(Mac::EMPTY);
+        Self {
+            port,
+            to: mac(to),
+            network,
+            destination_network: destination.map_or(0, |address| address.network),
+            destination: destination.map_or(Mac::EMPTY, |address| mac(address.mac)),
+        }
+    }
+
+    fn task(self, reason: RejectMessageReason) -> Task {
+        let destination = (self.destination_network != 0).then_some(Address {
+            network: self.destination_network,
+            mac: self.destination.as_slice(),
+        });
+        Task::reject(
+            self.port,
+            self.to.as_slice(),
+            destination,
+            self.network,
+            reason,
+        )
+    }
+}
+
+impl<
+        const P: usize,
+        const R: usize,
+        const H: usize,
+        const D: usize,
+        const N: usize,
+        G: super::GroupClassifier,
+        const B: usize,
+    > Storage<P, R, H, D, N, G, B>
 {
     /// Whether `address` is this router: a port's network with the
     /// router's MAC on that port.
@@ -39,28 +106,43 @@ impl<const P: usize, const R: usize, const H: usize, const D: usize, const N: us
         at: &Arrival<'_>,
         origin: Option<Address<'_>>,
         network: u16,
-        reason: RejectReason,
+        reason: RejectMessageReason,
         host: &mut impl Host,
     ) {
-        let task = match origin {
-            None => Task::reject(at.port, at.source, None, network, reason),
-            Some(origin) if self.is_own(origin) => {
-                host.observe(Event::OwnOrigin { network });
-                return;
-            }
+        if let Some(origin) = self.reject_origin(at, origin, network) {
+            self.queue_reject(origin, reason);
+        } else {
+            host.observe(Event::OwnOrigin { network });
+        }
+    }
+
+    /// Resolve the same return path for immediate and queued refusals.
+    pub(super) fn reject_origin(
+        &self,
+        at: &Arrival<'_>,
+        origin: Option<Address<'_>>,
+        network: u16,
+    ) -> Option<RejectOrigin> {
+        Some(match origin {
+            None => RejectOrigin::new(at.port, at.source, None, network),
+            Some(origin) if self.is_own(origin) => return None,
             Some(origin) => {
                 let ports = &self.ports[..self.port_count];
                 match ports.iter().position(|port| port.network == origin.network) {
                     // At most 255 ports.
                     Some(index) => {
-                        Task::reject(PortId(index as u8), origin.mac, None, network, reason)
+                        RejectOrigin::new(PortId(index as u8), origin.mac, None, network)
                     }
-                    None => Task::reject(at.port, at.source, Some(origin), network, reason),
+                    None => RejectOrigin::new(at.port, at.source, Some(origin), network),
                 }
             }
-        };
+        })
+    }
+
+    /// Append a rejection without replacing any already waiting output.
+    pub(super) fn queue_reject(&mut self, origin: RejectOrigin, reason: RejectMessageReason) {
         bump(&mut self.counters.rejects);
-        self.out.push(task);
+        self.out.push(origin.task(reason));
     }
 
     /// Pass on a reject the table has taken (Clause 6.6.3.5). One with no
@@ -87,7 +169,7 @@ impl<const P: usize, const R: usize, const H: usize, const D: usize, const N: us
         };
         match route {
             // Never as a broadcast (decisions L23 and L24 on #1677).
-            Some(route) if self.group_of(&route, npdu, host) != Group::No => self.group_drop(),
+            Some(route) if self.group_of(&route, npdu) != Group::No => self.group_drop(),
             Some(route) => self.forward(at, npdu, &route, host),
             None => {
                 bump(&mut self.counters.unroutable_rejects);

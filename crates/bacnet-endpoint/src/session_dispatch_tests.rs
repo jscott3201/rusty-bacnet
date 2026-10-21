@@ -16,6 +16,7 @@ fn envelope(invoke_id: u8) -> ReceivedApdu {
     )
     .unwrap();
     ReceivedApdu {
+        router_response: None,
         direct_response: None,
         apdu: bytes.freeze(),
         source_mac: [2].into_iter().collect(),

@@ -1,4 +1,5 @@
-//! A Trend Log's Logging_Type, Log_Interval and Trigger (#1354), and the
+//! A Trend Log's Logging_Type, Log_Interval and Trigger (#1354), its COV
+//! acquisition and COV rows (#1480), and the
 //! Start_Time / Stop_Time window of a Trend Log and an Event Log (#1353),
 //! over WriteProperty and ReadProperty.
 
@@ -11,10 +12,15 @@ use bacnet_types::bitstring::LogStatus;
 use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, EventLogDatum, LogDatum};
 use std::sync::Arc;
 
+use bacnet_types::enums::EngineeringUnits;
 use PropertyIdentifier as P;
 
 fn tl1() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::TREND_LOG, 1).unwrap()
+}
+
+fn av1() -> ObjectIdentifier {
+    ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 1).unwrap()
 }
 
 fn el1() -> ObjectIdentifier {
@@ -25,7 +31,7 @@ fn el1() -> ObjectIdentifier {
 /// both clocks bound.
 fn database() -> ObjectDatabase {
     let mut db = crate::server::clocked_test_database();
-    let mut av = AnalogValueObject::new(1, "AV-1", 95).unwrap();
+    let mut av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::NO_UNITS).unwrap();
     av.set_relinquish_default(21.5).unwrap();
     db.add(Box::new(av)).unwrap();
     let mut tl = TrendLogObject::new(1, "TL-1", 8).unwrap();
@@ -78,7 +84,7 @@ fn rp(db: &ObjectDatabase, oid: ObjectIdentifier, property: P) -> Vec<u8> {
 fn assert_refused(result: Result<(), Error>, class: ErrorClass, code: ErrorCode) {
     assert!(
         matches!(result, Err(Error::Protocol { class: c, code: e })
-            if c == class.to_raw() as u32 && e == code.to_raw() as u32),
+            if c == class && e == code),
         "expected {class:?} / {code:?}, got {result:?}"
     );
 }
@@ -113,26 +119,71 @@ const TRUE: [u8; 1] = [0x11];
 const FALSE: [u8; 1] = [0x10];
 
 #[test]
-fn trend_log_logging_type_refuses_cov_and_steers_log_interval() {
+fn trend_log_logging_type_takes_cov_and_steers_log_interval() {
     let mut db = database();
     wp(&mut db, tl1(), P::LOG_INTERVAL, &[0x21, 0x64]).unwrap();
-    // No COV acquisition yet (#1480): COV, a value outside the enumeration,
-    // and the Clause 12.25.9 route into COV all get the Clause 12.25.26
-    // answer.
-    for value in [COV, [0x91, 0x03]] {
-        assert_refused(
-            wp(&mut db, tl1(), P::LOGGING_TYPE, &value),
-            ErrorClass::PROPERTY,
-            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-        );
-    }
+    // A value outside the enumeration gets the Clause 12.25.26 answer.
     assert_refused(
-        wp(&mut db, tl1(), P::LOG_INTERVAL, &[0x21, 0x00]),
+        wp(&mut db, tl1(), P::LOGGING_TYPE, &[0x91, 0x03]),
         ErrorClass::PROPERTY,
         ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
     );
     assert_eq!(rp(&db, tl1(), P::LOGGING_TYPE), POLLED);
-    assert_eq!(rp(&db, tl1(), P::LOG_INTERVAL), [0x21, 0x64]);
+    // COV zeroes Log_Interval, which stays writable; a nonzero interval
+    // turns the log back to POLLED, and zero to COV again (Clause 12.25.9,
+    // #1480).
+    wp(&mut db, tl1(), P::LOGGING_TYPE, &COV).unwrap();
+    assert_eq!(rp(&db, tl1(), P::LOG_INTERVAL), [0x21, 0x00]);
+    wp(&mut db, tl1(), P::LOG_INTERVAL, &[0x21, 0x64]).unwrap();
+    assert_eq!(rp(&db, tl1(), P::LOGGING_TYPE), POLLED);
+    wp(&mut db, tl1(), P::LOG_INTERVAL, &[0x21, 0x00]).unwrap();
+    assert_eq!(rp(&db, tl1(), P::LOGGING_TYPE), COV);
+    // The two COV rows go over the wire too: NULL and a REAL increment, and
+    // a nonzero resubscription interval.
+    assert_eq!(rp(&db, tl1(), P::CLIENT_COV_INCREMENT), [0x00]);
+    wp(
+        &mut db,
+        tl1(),
+        P::CLIENT_COV_INCREMENT,
+        &[0x44, 0x40, 0x00, 0x00, 0x00],
+    )
+    .unwrap();
+    assert_eq!(
+        rp(&db, tl1(), P::CLIENT_COV_INCREMENT),
+        [0x44, 0x40, 0x00, 0x00, 0x00]
+    );
+    wp(
+        &mut db,
+        tl1(),
+        P::COV_RESUBSCRIPTION_INTERVAL,
+        &[0x21, 0x3C],
+    )
+    .unwrap();
+    assert_eq!(rp(&db, tl1(), P::COV_RESUBSCRIPTION_INTERVAL), [0x21, 0x3C]);
+    assert_refused(
+        wp(
+            &mut db,
+            tl1(),
+            P::COV_RESUBSCRIPTION_INTERVAL,
+            &[0x21, 0x00],
+        ),
+        ErrorClass::PROPERTY,
+        ErrorCode::VALUE_OUT_OF_RANGE,
+    );
+    // The poller logs AV-1's value once, then only a change of at least the
+    // increment, 2.0.
+    db.poll_trend_logs();
+    assert_eq!(statuses(&db, tl1()), [None]);
+    for (value, records) in [
+        ([0x44, 0x41, 0xB0, 0x00, 0x00], 1),
+        ([0x44, 0x41, 0xD0, 0x00, 0x00], 2),
+    ] {
+        // 22.0 is 0.5 past 21.5; 26.0 is 4.0 past it.
+        wp(&mut db, av1(), P::PRESENT_VALUE, &value).unwrap();
+        db.poll_trend_logs();
+        assert_eq!(statuses(&db, tl1()).len(), records);
+    }
+    wp(&mut db, tl1(), P::LOG_INTERVAL, &[0x21, 0x64]).unwrap();
 
     // TRIGGERED zeroes Log_Interval and makes it read-only.
     wp(&mut db, tl1(), P::LOGGING_TYPE, &TRIGGERED).unwrap();
@@ -142,13 +193,14 @@ fn trend_log_logging_type_refuses_cov_and_steers_log_interval() {
         ErrorClass::PROPERTY,
         ErrorCode::WRITE_ACCESS_DENIED,
     );
-    // A Trigger written over the wire is served by the next poll.
+    // A Trigger written over the wire is served by the next poll, after
+    // the two COV records.
     db.poll_trend_logs();
-    assert!(statuses(&db, tl1()).is_empty());
+    assert_eq!(statuses(&db, tl1()), [None, None]);
     wp(&mut db, tl1(), P::TRIGGER, &TRUE).unwrap();
     assert_eq!(rp(&db, tl1(), P::TRIGGER), TRUE);
     db.poll_trend_logs();
-    assert_eq!(statuses(&db, tl1()), [None]);
+    assert_eq!(statuses(&db, tl1()), [None, None, None]);
     assert_eq!(rp(&db, tl1(), P::TRIGGER), FALSE);
 }
 

@@ -7,7 +7,7 @@ use alloc::vec::Vec;
 
 use bacnet_encoding::{primitives, tags};
 use bacnet_types::enums::PropertyIdentifier;
-use bacnet_types::error::Error;
+use bacnet_types::error::{DecodeError, DecodingKind, Error};
 use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
 use bytes::BytesMut;
 
@@ -16,16 +16,18 @@ use bacnet_encoding::constructed::tagged::{
     decode_ctx_unsigned, expect_end, misplaced_tag, next_is_context,
 };
 
-fn decode_count(data: &[u8], offset: usize, field: &str) -> Result<(i32, usize), Error> {
+fn decode_count(data: &[u8], offset: usize, field: &'static str) -> Result<(i32, usize), Error> {
     let (content, end) = decode_app_primitive(data, offset, tags::app_tag::SIGNED, field)?;
     let value = primitives::decode_signed(content)?;
-    let value = i16::try_from(value)
-        .map_err(|_| Error::out_of_range(offset, format!("{field} exceeds INTEGER16")))?;
+    let value = i16::try_from(value).map_err(|_| {
+        DecodeError::new(DecodingKind::OutOfRange, offset, "exceeds INTEGER16").within(field)
+    })?;
     if value == 0 {
-        return Err(Error::out_of_range(
-            offset,
-            format!("{field} may not be zero"),
-        ));
+        return Err(
+            DecodeError::new(DecodingKind::OutOfRange, offset, "may not be zero")
+                .within(field)
+                .into(),
+        );
     }
     Ok((i32::from(value), end))
 }
@@ -95,14 +97,10 @@ impl ReadRangeRequest {
             self.property_identifier,
             PropertyIdentifier::ALL | PropertyIdentifier::REQUIRED | PropertyIdentifier::OPTIONAL
         ) {
-            return Err(Error::Encoding(
-                "ReadRange property may not be ALL, REQUIRED, or OPTIONAL".into(),
-            ));
+            return Err(Error::encode("ReadRange property may not be ALL, REQUIRED, or OPTIONAL"));
         }
         if self.property_array_index == Some(0) {
-            return Err(Error::Encoding(
-                "ReadRange array index may not be zero".into(),
-            ));
+            return Err(Error::encode("ReadRange array index may not be zero"));
         }
         if let Some(range) = &self.range {
             let count = match range {
@@ -114,17 +112,13 @@ impl ReadRangeRequest {
                     count,
                 } => {
                     if !specific_datetime(date, time) {
-                        return Err(Error::Encoding(
-                            "ReadRange byTime requires a specific datetime".into(),
-                        ));
+                        return Err(Error::encode("ReadRange byTime requires a specific datetime"));
                     }
                     *count
                 }
             };
             if count == 0 || i16::try_from(count).is_err() {
-                return Err(Error::Encoding(
-                    "ReadRange count must be a nonzero INTEGER16".into(),
-                ));
+                return Err(Error::encode("ReadRange count must be a nonzero INTEGER16"));
             }
         }
         Ok(())

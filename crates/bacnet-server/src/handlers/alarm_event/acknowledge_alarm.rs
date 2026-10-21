@@ -43,8 +43,8 @@ pub fn handle_acknowledge_alarm(
     let object = db
         .get_mut(&request.event_object_identifier)
         .ok_or(Error::Protocol {
-            class: ErrorClass::OBJECT.to_raw() as u32,
-            code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
+            class: ErrorClass::OBJECT,
+            code: ErrorCode::UNKNOWN_OBJECT,
         })?;
 
     let change = object.acknowledge_alarm_correlated_detailed_internal(

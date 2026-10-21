@@ -7,6 +7,7 @@
 use super::cov_wire_test_support::*;
 use super::*;
 use bacnet_objects::analog::AnalogValueObject;
+use bacnet_types::enums::EngineeringUnits;
 
 #[tokio::test]
 async fn initial_report_carries_admission_time() {
@@ -258,8 +259,10 @@ fn av2() -> ObjectIdentifier {
 #[tokio::test]
 async fn any_notification_to_the_context_conveys_every_pending_timestamped_change() {
     let mut h = Harness::start_with(ServerConfig::default(), |db| {
-        db.add(Box::new(AnalogValueObject::new(2, "AV-2", 62).unwrap()))
-            .unwrap();
+        db.add(Box::new(
+            AnalogValueObject::new(2, "AV-2", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+        ))
+        .unwrap();
     })
     .await;
     h.subscribe_specs(
@@ -420,8 +423,10 @@ async fn a_timestamped_companion_keeps_its_time_over_an_unchanged_selector() {
 #[tokio::test]
 async fn the_header_names_each_notifications_own_newest_change_even_if_older() {
     let mut h = Harness::start_with(ServerConfig::default(), |db| {
-        db.add(Box::new(AnalogValueObject::new(2, "AV-2", 62).unwrap()))
-            .unwrap();
+        db.add(Box::new(
+            AnalogValueObject::new(2, "AV-2", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+        ))
+        .unwrap();
     })
     .await;
     h.set_clock(1);

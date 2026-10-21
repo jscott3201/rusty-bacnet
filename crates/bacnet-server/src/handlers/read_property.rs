@@ -88,7 +88,7 @@ pub fn handle_read_property(
     buf: &mut BytesMut,
 ) -> Result<(), Error> {
     let request = ReadPropertyRequest::decode(service_data).map_err(Error::into_request_reject)?;
-    let lookup_oid = resolve_read_target(db, &request.object_identifier, None);
+    let lookup_oid = resolve_read_target(db, &request.object_identifier, None, None);
     let plan = plan_read_property(
         db,
         None,
@@ -135,8 +135,8 @@ pub(crate) fn read_property_value(
     let property = reference.property_identifier;
     let array_index = reference.property_array_index;
     let object = read_target_object(db, &lookup_oid).ok_or(Error::Protocol {
-        class: ErrorClass::OBJECT.to_raw() as u32,
-        code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
+        class: ErrorClass::OBJECT,
+        code: ErrorCode::UNKNOWN_OBJECT,
     })?;
 
     let served = view.map(|view| view.object(object));
@@ -149,8 +149,8 @@ pub(crate) fn read_property_value(
     // to the trait query.
     if array_index.is_some() && !object.is_array_property(property) {
         return Err(Error::Protocol {
-            class: ErrorClass::PROPERTY.to_raw() as u32,
-            code: ErrorCode::PROPERTY_IS_NOT_AN_ARRAY.to_raw() as u32,
+            class: ErrorClass::PROPERTY,
+            code: ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
         });
     }
 
@@ -202,14 +202,17 @@ pub(crate) fn resolve_read_target(
     db: &ObjectDatabase,
     oid: &ObjectIdentifier,
     registered_port: Option<ObjectIdentifier>,
+    frozen_device: Option<ObjectIdentifier>,
 ) -> ObjectIdentifier {
     if oid.object_type() == ObjectType::NETWORK_PORT && oid.instance_number() == 4194303 {
         return registered_port
-            .filter(|selected| Some(*selected) == db.registered_bip_port_internal())
+            .filter(|selected| Some(*selected) == db.registered_port_internal())
             .unwrap_or(*oid);
     }
     if is_device_wildcard(oid) {
-        if let Some(device) = db.selected_device() {
+        // A configured executor never rebinds to another Device after mutation.
+        // Returning a missing frozen OID preserves UNKNOWN_OBJECT downstream.
+        if let Some(device) = frozen_device.or_else(|| db.selected_device()) {
             return device;
         }
     }
@@ -301,7 +304,7 @@ pub fn handle_read_property_multiple(
     for spec in &request.list_of_read_access_specs {
         let mut elements = Vec::new();
 
-        let lookup_oid = resolve_read_target(db, &spec.object_identifier, None);
+        let lookup_oid = resolve_read_target(db, &spec.object_identifier, None, None);
         match read_target_object(db, &lookup_oid) {
             Some(object) => {
                 for prop_ref in &spec.list_of_property_references {
@@ -370,10 +373,7 @@ pub fn handle_read_property_multiple(
                             }
                             Err(e) => {
                                 let (err_class, err_code) = match &e {
-                                    Error::Protocol { class, code } => (
-                                        ErrorClass::from_raw(*class as u16),
-                                        ErrorCode::from_raw(*code as u16),
-                                    ),
+                                    Error::Protocol { class, code } => (*class, *code),
                                     _ => (ErrorClass::PROPERTY, ErrorCode::UNKNOWN_PROPERTY),
                                 };
                                 elements.push(ReadResultElement {

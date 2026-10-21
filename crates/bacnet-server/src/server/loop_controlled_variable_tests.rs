@@ -11,7 +11,7 @@ use bacnet_objects::loop_obj::LoopObject;
 use bacnet_services::cov::{
     COVNotificationRequest, SubscribeCOVPropertyRequest, SubscribeCOVRequest,
 };
-use bacnet_types::enums::ObjectType;
+use bacnet_types::enums::{EngineeringUnits, ObjectType};
 
 const CVV: PropertyIdentifier = PropertyIdentifier::CONTROLLED_VARIABLE_VALUE;
 const SETPOINT: PropertyIdentifier = PropertyIdentifier::SETPOINT;
@@ -23,8 +23,10 @@ fn loop1() -> ObjectIdentifier {
 
 async fn start() -> Harness {
     Harness::start_with(ServerConfig::default(), |db| {
-        db.add(Box::new(LoopObject::new(1, "LOOP-1", 62).unwrap()))
-            .unwrap();
+        db.add(Box::new(
+            LoopObject::new(1, "LOOP-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+        ))
+        .unwrap();
     })
     .await
 }
@@ -101,7 +103,7 @@ async fn set_out_of_service(h: &Harness, value: bool) {
 fn assert_error(error: Error, class: ErrorClass, code: ErrorCode) {
     assert!(
         matches!(error, Error::Protocol { class: c, code: e }
-            if c == class.to_raw() as u32 && e == code.to_raw() as u32),
+            if c == class && e == code),
         "expected {class:?}/{code:?}, got {error:?}"
     );
 }

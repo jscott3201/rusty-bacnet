@@ -110,6 +110,9 @@ fn mstp_python_wrapper_owns_one_serial_and_returns_none() {
         None,
         None,
         None,
+        None,
+        None,
+        None,
     )
     .unwrap();
     endpoint.config.serial_opener = Some(Arc::new({
@@ -323,6 +326,9 @@ fn mstp_python_wrapper_applies_its_read_work_limit() {
         0,
         false,
         false,
+        None,
+        None,
+        None,
         None,
         None,
         None,

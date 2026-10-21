@@ -15,9 +15,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use bacnet_mstp_codec::BROADCAST_MAC;
+use bacnet_mstp_core::npdu::NetworkPriority;
 use bacnet_mstp_core::{
-    DequeuedNpdu, Instant, NetworkPriority, QueueCounters, QueueItemInfo, QueueKind, QueueRefusal,
-    QueueStorage,
+    DequeuedNpdu, Instant, QueueCounters, QueueItemInfo, QueueKind, QueueRefusal, QueueStorage,
 };
 
 /// What the wrapper saw, shared with the checker.

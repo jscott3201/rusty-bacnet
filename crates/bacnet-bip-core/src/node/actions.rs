@@ -99,6 +99,17 @@ impl<const X: usize> Actions<X> {
         self.register = Some((exchange, to, ttl));
     }
 
+    /// Drop a queued registration attempt for `exchange`, which ended
+    /// before the caller polled it.
+    pub(crate) fn forget_register(&mut self, exchange: ExchangeId) {
+        if self
+            .register
+            .is_some_and(|(queued, _, _)| queued == exchange)
+        {
+            self.register = None;
+        }
+    }
+
     pub(crate) fn poll(&mut self) -> Action {
         for (slot, ended) in self.ended.iter_mut().enumerate() {
             if let Some(generation) = ended.take() {

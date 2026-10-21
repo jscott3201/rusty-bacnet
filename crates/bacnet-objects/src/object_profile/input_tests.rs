@@ -7,7 +7,7 @@ use crate::binary::BinaryInputObject;
 use crate::multistate::MultiStateInputObject;
 use crate::property_metadata::{PropertyConformance, PropertyWriteCapability};
 use crate::traits::BACnetObject;
-use bacnet_types::enums::ObjectType;
+use bacnet_types::enums::{EngineeringUnits, ObjectType};
 use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Duration;
@@ -49,7 +49,7 @@ fn object(kind: ObjectType, store: Option<Arc<Memory>>) -> Result<Box<dyn Profil
         };
     }
     match kind {
-        ObjectType::ANALOG_INPUT => build!(AnalogInputObject, 95),
+        ObjectType::ANALOG_INPUT => build!(AnalogInputObject, EngineeringUnits::NO_UNITS),
         ObjectType::BINARY_INPUT => build!(BinaryInputObject),
         ObjectType::MULTI_STATE_INPUT => build!(MultiStateInputObject, 3),
         _ => unreachable!(),
@@ -282,7 +282,7 @@ fn preserves(mut object: Box<dyn ProfileInput>, properties: &[P]) {
 
 #[test]
 fn profiles_preserve_input_engineering_polarity_and_state_configuration() {
-    let mut analog = AnalogInputObject::new(1, "AI", 95).unwrap();
+    let mut analog = AnalogInputObject::new(1, "AI", EngineeringUnits::NO_UNITS).unwrap();
     analog.set_min_pres_value(1.0);
     analog.set_max_pres_value(99.0);
     analog.configure_fault_out_of_range(10.0, 90.0).unwrap();

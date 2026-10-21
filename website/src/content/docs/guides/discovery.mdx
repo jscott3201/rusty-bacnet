@@ -39,25 +39,13 @@ bacnet --foreign-bbmd 192.168.1.1 --ttl 300 discover --wait 3
 
 Use a BBMD designated by the site owner. Registration changes BBMD foreign-device state. It is not a generic VPN or NAT workaround, and it is not part of BACnet/SC or IPv6 setup.
 
-`discover --dnet 2` requests discovery for a remote BACnet network. It does **not** establish that every other command supports `2:1234` as a routed target. The one-shot commands reject that target form. A direct router IP is not automatically equivalent to the downstream device's BACnet address.
+`discover --dnet 2` requests discovery for a remote BACnet network. It does **not** establish that every other command supports `2:1234` as a routed target. The one-shot `read`, `readm`, `write`, `writem` and `subscribe` commands take it, and the other one-shot commands refuse it. A direct router IP is not automatically equivalent to the downstream device's BACnet address.
 
 ## Keep discovery and device-instance lookup in one session
 
-```sh
-bacnet shell
-```
+Plain `bacnet` on a terminal opens the terminal UI, whose device list keeps what it discovers for the session; [discover devices in the TUI](/rusty-bacnet/tui/discovery/) walks through it. The interactive shell of earlier releases is gone.
 
-Inside the shell:
-
-```text
-discover 1000-2000
-devices
-target 1234
-read ai:1 pv
-status
-```
-
-Use an instance that the current session actually discovered. A discovery run in another process is not a documented persistent cache for this shell or a later one-shot process.
+A discovery run in another process is not a documented persistent cache for a later one-shot process. A one-shot command takes an explicit target address instead.
 
 ## Find an object by name
 
@@ -67,7 +55,7 @@ For a one-shot command, use the parser-backed option:
 bacnet find --name "Zone Temp" --wait 3
 ```
 
-The one-shot command takes the name only through `--name`. Shell grammar is a separate surface and must not be assumed identical to the one-shot command line.
+The one-shot command takes the name through `--name` or as a plain word, `bacnet find "Zone Temp"`; giving both is a usage error. The terminal UI's `:find` is a separate surface and must not be assumed identical to the one-shot command line.
 
 ## When discovery is empty
 

@@ -29,7 +29,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use bacnet_encoding::apdu::{decode_apdu, Apdu};
 use bacnet_encoding::npdu::{decode_npdu, Npdu};
-use bacnet_transport::port::{BipPort, ReceivedNpdu, TransportPort};
+use bacnet_transport::port::{Bip6Port, BipPort, ReceivedNpdu, TransportPort};
 use bacnet_types::bip_port::BipPortMode;
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
@@ -296,6 +296,8 @@ pub(crate) struct TestTransport {
     number_controls: bool,
     /// See [`TestTransportBuilder::bip_port`].
     bip_port: Option<BipPort>,
+    /// See [`TestTransportBuilder::bip6_port`].
+    bip6_port: Option<Bip6Port>,
     /// A registered Network Port's lease, held until the transport drops.
     port_lease: Option<Arc<()>>,
 }
@@ -333,6 +335,7 @@ impl TestTransport {
                 shared: Arc::default(),
                 number_controls: false,
                 bip_port: None,
+                bip6_port: None,
                 port_lease: None,
             },
         }
@@ -396,13 +399,17 @@ impl TransportPort for TestTransport {
         self.bip_port.clone()
     }
 
+    fn bip6_port(&self) -> Option<Bip6Port> {
+        self.bip6_port.clone()
+    }
+
     fn retain_network_port_lease_internal(&mut self, lease: Arc<()>) -> Result<(), Error> {
-        match self.bip_port {
-            Some(_) => {
+        match (&self.bip_port, &self.bip6_port) {
+            (Some(_), _) | (_, Some(_)) => {
                 self.port_lease = Some(lease);
                 Ok(())
             }
-            None => Err(Error::Encoding("not a B/IP test link".into())),
+            (None, None) => Err(Error::Encoding("not a B/IP test link".into())),
         }
     }
 
@@ -558,10 +565,7 @@ impl TestTransportBuilder {
     /// Report `endpoint` as a NORMAL B/IP bind, so a server can register a
     /// Network Port on this link; the transport then holds the port's lease.
     pub(crate) fn normal_bip(self, endpoint: SocketAddrV4) -> Self {
-        self.bip_port(BipPort {
-            endpoint,
-            mode: BipPortMode::Normal,
-        })
+        self.bip_port(BipPort::new(endpoint, BipPortMode::Normal))
     }
 
     /// Report `port`, a B/IP bind in any mode, for a server to register a
@@ -569,6 +573,13 @@ impl TestTransportBuilder {
     /// mode's tables are whatever view the test lends.
     pub(crate) fn bip_port(mut self, port: BipPort) -> Self {
         self.transport.bip_port = Some(port);
+        self
+    }
+
+    /// Report `port`, a B/IPv6 bind in any mode, as
+    /// [`bip_port`](Self::bip_port) does a B/IP one.
+    pub(crate) fn bip6_port(mut self, port: Bip6Port) -> Self {
+        self.transport.bip6_port = Some(port);
         self
     }
 

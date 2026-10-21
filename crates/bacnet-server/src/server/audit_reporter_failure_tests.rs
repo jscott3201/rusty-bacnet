@@ -292,7 +292,8 @@ async fn audit_reporter_policy_denial_of_invalid_values_never_enters_execution()
         if deny_all {
             fixture.server.config_mut().mutation_policy = crate::mutation::MutationPolicy::DenyAll;
         } else {
-            fixture.server.config_mut().mutation_authorizer = Some(Arc::new(|_| false));
+            fixture.server.config_mut().policy =
+                Some(Arc::new(crate::FnPolicy::new().mutation(|_| false)));
         }
         assert!(matches!(
             failed_value_write(&fixture.server, None).await,
@@ -482,8 +483,8 @@ async fn audit_reporter_execution_error_mapping_matches_response_but_unknown_out
     for (error, expected) in [
         (
             Error::Protocol {
-                class: 128,
-                code: 512,
+                class: ErrorClass::from_raw(128),
+                code: ErrorCode::from_raw(512),
             },
             Some((ErrorClass::from_raw(128), ErrorCode::from_raw(512))),
         ),
@@ -494,13 +495,13 @@ async fn audit_reporter_execution_error_mapping_matches_response_but_unknown_out
         (Error::Timeout(Duration::from_secs(1)), None),
         (
             Error::Reject {
-                reason: RejectReason::OTHER.to_raw(),
+                reason: RejectReason::OTHER,
             },
             None,
         ),
         (
             Error::Abort {
-                reason: AbortReason::OTHER.to_raw(),
+                reason: AbortReason::OTHER,
             },
             None,
         ),

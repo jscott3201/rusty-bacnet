@@ -2,7 +2,7 @@ use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::event::{EventStateChange, EventTransition, EventTransitionCommit};
 use bacnet_services::enrollment_summary::GetEnrollmentSummaryRequest;
 use bacnet_types::bitstring::EventTransitionBits;
-use bacnet_types::enums::{AcknowledgmentFilter, EventType};
+use bacnet_types::enums::{AcknowledgmentFilter, EngineeringUnits, EventType};
 use bacnet_types::primitives::BACnetTimeStamp;
 
 use super::enrollment_summary_support::*;
@@ -33,7 +33,8 @@ fn database(candidate: SummaryFixture) -> ObjectDatabase {
 
 #[test]
 fn intrinsic_rejected_detection_write_preserves_summary_transition_coordinate() {
-    let mut object = AnalogInputObject::new(1, "AI-preserved", 62).unwrap();
+    let mut object =
+        AnalogInputObject::new(1, "AI-preserved", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     object
         .write_property(
             PropertyIdentifier::NOTIFICATION_CLASS,

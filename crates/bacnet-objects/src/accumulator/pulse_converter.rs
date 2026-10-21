@@ -33,7 +33,9 @@
 //! sets the baseline again.
 
 use bacnet_types::constructed::BACnetObjectPropertyReference;
-use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier, Reliability};
+use bacnet_types::enums::{
+    EngineeringUnits, EventState, ObjectType, PropertyIdentifier, Reliability,
+};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlags, Time};
 use std::borrow::Cow;
@@ -68,7 +70,7 @@ pub struct PulseConverterObject {
     /// Present_Value while Out_Of_Service is TRUE. In service, Present_Value
     /// is derived from Count and this copy is unused.
     decoupled_present_value: f32,
-    units: u32,
+    units: EngineeringUnits,
     scale_factor: f32,
     adjust_value: f32,
     /// Count; `count` times `scale_factor` always fits a finite REAL.
@@ -94,7 +96,11 @@ pub struct PulseConverterObject {
 
 impl PulseConverterObject {
     /// Create a new Pulse Converter object with default values.
-    pub fn new(instance: u32, name: impl Into<String>, units: u32) -> Result<Self, Error> {
+    pub fn new(
+        instance: u32,
+        name: impl Into<String>,
+        units: EngineeringUnits,
+    ) -> Result<Self, Error> {
         let oid = ObjectIdentifier::new(ObjectType::PULSE_CONVERTER, instance)?;
         Ok(Self {
             oid,
@@ -265,7 +271,9 @@ impl BACnetObject for PulseConverterObject {
             p if p == PropertyIdentifier::PRESENT_VALUE => {
                 Ok(PropertyValue::Real(self.present_value()))
             }
-            p if p == PropertyIdentifier::UNITS => Ok(PropertyValue::Enumerated(self.units)),
+            p if p == PropertyIdentifier::UNITS => {
+                Ok(PropertyValue::Enumerated(self.units.to_raw()))
+            }
             p if p == PropertyIdentifier::SCALE_FACTOR => {
                 Ok(PropertyValue::Real(self.scale_factor))
             }

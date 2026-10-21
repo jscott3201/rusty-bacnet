@@ -1,5 +1,6 @@
 //! BACnet/SC hub for Docker stress topology with required caller-provided mTLS.
 #![allow(clippy::print_stdout, clippy::print_stderr)] // benchmark binaries report progress and results on the console
+#![forbid(unsafe_code)]
 
 #[path = "sc/credentials.rs"]
 mod credentials;

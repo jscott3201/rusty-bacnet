@@ -56,7 +56,7 @@ async fn endpoint_egress_discards_expired_and_canceled_commands_before_transport
                     destination_mac: MacAddr::from_slice(&[mac]),
                 },
                 false,
-                NetworkPriority::NORMAL,
+                NetworkPriority::Normal,
                 Vec::new(),
                 deadline,
             )
@@ -115,7 +115,7 @@ async fn network_number_egress_cancellation_retracts_queued_and_in_progress_comm
                     destination_mac: MacAddr::from_slice(&[mac]),
                 },
                 false,
-                NetworkPriority::NORMAL,
+                NetworkPriority::Normal,
                 vec![],
                 None,
             )

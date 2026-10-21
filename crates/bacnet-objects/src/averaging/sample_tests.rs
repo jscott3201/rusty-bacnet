@@ -5,7 +5,7 @@
 //! produced no value, so a running server can feed the object without
 //! reaching its concrete type.
 use super::*;
-use bacnet_types::enums::{ErrorClass, ErrorCode};
+use bacnet_types::enums::{EngineeringUnits, ErrorClass, ErrorCode};
 
 fn read(avg: &AveragingObject, property: PropertyIdentifier) -> PropertyValue {
     avg.read_property(property, None).unwrap()
@@ -25,7 +25,7 @@ fn statistics(avg: &AveragingObject) -> [PropertyValue; 5] {
 fn assert_error(error: Error, class: ErrorClass, code: ErrorCode) {
     assert!(
         matches!(error, Error::Protocol { class: c, code: e }
-            if c == class.to_raw() as u32 && e == code.to_raw() as u32),
+            if c == class && e == code),
         "expected {class:?}/{code:?}, got {error:?}"
     );
 }
@@ -97,7 +97,9 @@ fn averaging_sample_hook_refuses_other_datatypes_and_non_finite_reals() {
 
 #[test]
 fn averaging_sample_hook_is_refused_by_other_objects() {
-    let mut av = crate::analog::AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let mut av =
+        crate::analog::AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS)
+            .unwrap();
     let error = av
         .add_averaging_sample_internal(Some(PropertyValue::Real(1.0)))
         .unwrap_err();
@@ -124,7 +126,8 @@ fn averaging_takes_property_cov_subscriptions_but_not_subscribe_cov() {
     }
     // Objects that take SubscribeCOV keep taking property subscriptions, and
     // objects that take neither still refuse both.
-    let av = crate::analog::AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let av = crate::analog::AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS)
+        .unwrap();
     assert!(av.supports_cov() && av.supports_subscribe_cov_property());
     let file = crate::file::FileObject::new(1, "FILE-1", "text/plain").unwrap();
     assert!(!file.supports_cov() && !file.supports_subscribe_cov_property());

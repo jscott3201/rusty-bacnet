@@ -95,9 +95,7 @@ pub fn handle_write_property_multiple(
             crate::command_lists::end_unmade(db, &committed_oids);
             Err(error)
         }
-        WritePropertyMultipleOutcome::Reject { reason } => Err(Error::Reject {
-            reason: reason.to_raw(),
-        }),
+        WritePropertyMultipleOutcome::Reject { reason } => Err(Error::Reject { reason }),
     }
 }
 
@@ -349,10 +347,7 @@ fn semantic_failure(
 }
 
 fn protocol_error(class: ErrorClass, code: ErrorCode) -> Error {
-    Error::Protocol {
-        class: class.to_raw() as u32,
-        code: code.to_raw() as u32,
-    }
+    Error::Protocol { class, code }
 }
 
 /// At the existing indexed-write gate, effective absence takes precedence over
@@ -470,10 +465,14 @@ pub(crate) fn decode_write_property_value(
     // Output decodes its Lighting_Command whole too, so a command keeps its
     // fields together and any other datatype is the object's to refuse
     // (#1263), and so do Color and Color Temperature their Color_Command
-    // (#1386).
+    // (#1386), and a Network Port its BDT (#1578), a foreign device's
+    // BBMD address (#1825) and a BBMD's global address behind NAT (#940).
     if matches!(
         property,
         PropertyIdentifier::RECIPIENT_LIST
+            | PropertyIdentifier::BBMD_BROADCAST_DISTRIBUTION_TABLE
+            | PropertyIdentifier::FD_BBMD_ADDRESS
+            | PropertyIdentifier::BACNET_IP_GLOBAL_ADDRESS
             | PropertyIdentifier::SUBSCRIBED_RECIPIENTS
             | PropertyIdentifier::VALUE_SOURCE
             | PropertyIdentifier::EFFECTIVE_PERIOD

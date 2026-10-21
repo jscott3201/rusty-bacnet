@@ -31,6 +31,11 @@ name: CI
 # PR), and the merge result itself is tested (#904). After a green run on dev,
 # Prune caches deletes the entries no run will restore again, so the Linux and
 # native caches stay under the repository's 10 GB (#1471).
+#
+# Plan — pushes to dev only: when the merge could have been a fast-forward
+#        to its PR head, the PR's own ci.yml run tested that same tree, so
+#        if its CI OK passed and no cache-key input changed, the Lean jobs
+#        skip and CI OK still passes (#1466; scripts/ci/plan-skip.sh).
 
 on:
   pull_request:
@@ -72,14 +77,46 @@ env:
   # on PATH.
   PYO3_PYTHON: /usr/bin/python3
   # Every optional feature that builds on Linux, including per-crate features
-  # such as bacnet-endpoint/sc-tls and bacnet-cli/{sc-tls,pcap,tui} that nothing
-  # else in the workspace turns on (#906). bacnet-benchmarks/console is left
-  # out: it needs tokio_unstable.
-  LINUX_FEATURES: bacnet-types/serde,bacnet-mstp-codec/bytes,bacnet-mstp-codec/heapless,bacnet-mstp-core/alloc,bacnet-bip-codec/bytes,bacnet-bip-codec/heapless,bacnet-router-core/bip,bacnet-router-core/mstp,bacnet-transport/ipv6,bacnet-transport/sc-tls,bacnet-transport/serial,bacnet-transport/serial-gpio,bacnet-transport/ethernet,bacnet-client/ipv6,bacnet-client/sc-tls,bacnet-server/sc-tls,bacnet-endpoint/sc-tls,bacnet-integration-tests/ipv6,bacnet-integration-tests/ethernet,bacnet-cli/sc-tls,bacnet-cli/pcap,bacnet-cli/tui
+  # such as bacnet-endpoint/sc-tls and bacnet-cli/{sc-tls,pcap,serial} that nothing
+  # else in the workspace turns on (#906). bacnet-cli's `tui` is a default
+  # feature (#974), so every workspace run has it. bacnet-benchmarks/console
+  # is left out: it needs tokio_unstable.
+  LINUX_FEATURES: bacnet-types/serde,bacnet-encoding/heapless,bacnet-mstp-codec/bytes,bacnet-mstp-codec/heapless,bacnet-mstp-core/alloc,bacnet-bip-codec/bytes,bacnet-bip-codec/heapless,bacnet-router-core/bip,bacnet-router-core/mstp,bacnet-transport/ipv6,bacnet-transport/sc-tls,bacnet-transport/serial,bacnet-transport/serial-gpio,bacnet-transport/ethernet,bacnet-client/ipv6,bacnet-client/sc-tls,bacnet-server/sc-tls,bacnet-endpoint/sc-tls,bacnet-integration-tests/ipv6,bacnet-integration-tests/ethernet,bacnet-cli/sc-tls,bacnet-cli/pcap,bacnet-cli/serial
 
 jobs:
+  # Whether this push to dev can skip the Lean jobs (#1466): see
+  # scripts/ci/plan-skip.sh for the conditions. Any other event skips this
+  # job, so its output is empty and everything runs; so does any error.
+  plan:
+    name: Plan
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/dev' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    # Workflow runs, check runs and the compare API, read only.
+    permissions:
+      actions: read
+      checks: read
+      contents: read
+    outputs:
+      skip: ${{ steps.plan.outputs.skip }}
+    steps:
+      # Depth 2 fetches both parents of the merge.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Skip if the PR's run already tested this tree
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/plan-skip.sh "CI OK" .github/workflows/ci.yml
+
   lint:
     name: Lint
+    # The Lean jobs run unless plan skips them; !cancelled() runs them when
+    # plan itself was skipped (every other event) or failed.
+    needs: plan
+    if: ${{ !cancelled() && needs.plan.outputs.skip != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -155,6 +192,8 @@ jobs:
         run: |
           bash scripts/ci/test-check-no-secrets.sh
           bash scripts/ci/check-no-secrets.sh
+      - name: Plan script regressions
+        run: bash scripts/ci/test-plan-skip.sh
       - name: MSRV script regressions
         run: python3 scripts/ci/test-check-msrv.py
       - name: Firmware size script regressions
@@ -172,6 +211,8 @@ jobs:
 
   clippy:
     name: Clippy
+    needs: plan
+    if: ${{ !cancelled() && needs.plan.outputs.skip != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -201,7 +242,9 @@ jobs:
           echo "missing: ${missing[*]:-none}"
           if [ ${#missing[@]} -gt 0 ]; then
             sudo apt-get update -qq
-            sudo apt-get install -y -qq --no-install-recommends "${missing[@]}"
+            # wireshark-common (tshark, #971) asks a debconf question; sudo
+            # drops the environment, so the front end goes on its line.
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "${missing[@]}"
           fi
       - *toolchain
       # Only their standard libraries: neither clippy nor rustdoc links.
@@ -222,7 +265,7 @@ jobs:
       - name: Clippy (PyO3 bindings)
         if: ${{ !cancelled() }}
         run: cargo clippy -p rusty-bacnet --all-targets --locked -- -D warnings
-      # bacnet-cli without its opt-in `tui` feature, which LINUX_FEATURES turns on.
+      # The lean bacnet-cli: one-shot commands only, without the default `tui`.
       - name: Clippy (bacnet-cli, no default features)
         if: ${{ !cancelled() }}
         run: cargo clippy -p bacnet-cli --no-default-features --all-targets --locked -- -D warnings
@@ -251,6 +294,10 @@ jobs:
       - name: Clippy (no_std crates with alloc, all targets)
         if: ${{ !cancelled() }}
         run: cargo clippy -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --features alloc --all-targets --locked -- -D warnings
+      # And without alloc either, the allocation-free profile (#1614).
+      - name: Clippy (no_std crates without alloc, all targets)
+        if: ${{ !cancelled() }}
+        run: cargo clippy -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --all-targets --locked -- -D warnings
       # Clippy doesn't link, so this builds the stacks into bare-metal images
       # (firmware/link), one per stack, for each target, and checks their
       # sizes against the budget: MS/TP (extended frames off and on), the
@@ -294,10 +341,15 @@ jobs:
 
   test:
     name: Test (Linux, full features)
+    needs: plan
+    if: ${{ !cancelled() && needs.plan.outputs.skip != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      APT_PACKAGES: libpcap-dev
+      # tshark reads the Capture screen's pcap exports (#971); with
+      # REQUIRE_TSHARK its test fails rather than skips without it.
+      APT_PACKAGES: libpcap-dev tshark
+      REQUIRE_TSHARK: "1"
     steps:
       - *checkout
       - *apt
@@ -320,9 +372,9 @@ jobs:
       # sc-tls and pcap); LINUX_FEATURES compiles them out.
       - name: bacnet-cli tests (default features)
         run: cargo nextest run -p bacnet-cli --locked --profile ci
-      # And with no default features at all. Until `tui` is on by default again
-      # (0.14.0, #975) this matches the run above; both keep `bacnet tui`'s
-      # rebuild advice tested.
+      # And with no default features at all: the lean CLI without the TUI,
+      # whose plain `bacnet` prints the usage and `bacnet tui` the rebuild
+      # advice (#974).
       - name: bacnet-cli tests (no default features)
         if: ${{ !cancelled() }}
         run: cargo nextest run -p bacnet-cli --no-default-features --locked --profile ci
@@ -336,10 +388,22 @@ jobs:
       - name: no_std crates' doctests (alloc, without std)
         if: ${{ !cancelled() }}
         run: cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --features alloc --locked
+      # Without alloc either (#1614): the allocation-free profile's code, and
+      # tests/no_alloc_subset.rs, which counts the subset's allocations: none.
+      - name: no_std crates' tests (without alloc)
+        if: ${{ !cancelled() }}
+        run: cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --locked --profile ci
+      # The examples that build values with alloc are gated on it, or write
+      # to sinks, so the allocation-free profile's doctests run too (#1779).
+      - name: no_std crates' doctests (without alloc)
+        if: ${{ !cancelled() }}
+        run: cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --locked
       - *disk
 
   python:
     name: Python bindings
+    needs: plan
+    if: ${{ !cancelled() && needs.plan.outputs.skip != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -432,20 +496,26 @@ jobs:
   ci-ok:
     name: CI OK
     if: ${{ always() }}
-    needs: [lint, clippy, test, python, msrv, audit-deny]
+    needs: [plan, lint, clippy, test, python, msrv, audit-deny]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       # Only the Heavy jobs may be skipped, by their tier; a skipped Lean job
-      # fails it.
-      - name: All required jobs succeeded or were skipped by tier
+      # fails it, unless plan succeeded and said skip (#1466). Then this job
+      # still runs and passes, so a skipped merge's commit shows CI OK green
+      # like any other: its tree is the one the PR's run tested. Plan's
+      # own result counts for nothing else: if it failed, the Lean jobs ran.
+      - name: All required jobs succeeded or were skipped by tier or plan
         env:
           NEEDS: ${{ toJSON(needs) }}
         run: |
           echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
-          echo "$NEEDS" | jq -e 'all(to_entries[];
-            .value.result == "success"
-            or (.value.result == "skipped" and (.key == "msrv" or .key == "audit-deny")))' >/dev/null
+          echo "$NEEDS" | jq -r 'if .plan.result == "success" and .plan.outputs.skip == "true"
+            then "plan: skipped the Lean jobs; the PR run tested this tree" else empty end'
+          echo "$NEEDS" | jq -e '(.plan.result == "success" and .plan.outputs.skip == "true") as $planned
+            | all(to_entries[] | select(.key != "plan");
+              .value.result == "success"
+              or (.value.result == "skipped" and (.key == "msrv" or .key == "audit-deny" or $planned)))' >/dev/null
 
   # After a green run on dev (a merge, the schedule or a manual run), delete
   # the cache entries no run will restore again (#1471). native-tests.yml runs

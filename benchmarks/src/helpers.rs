@@ -10,6 +10,7 @@ use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_server::server::BACnetServer;
 use bacnet_transport::bip::BipTransport;
 use bacnet_transport::bip6::Bip6Transport;
+use bacnet_types::enums::EngineeringUnits;
 use bacnet_types::error::Error;
 
 /// Create a populated ObjectDatabase for benchmarking.
@@ -18,22 +19,24 @@ pub fn make_benchmark_db(device_instance: u32) -> ObjectDatabase {
     let mut db = ObjectDatabase::new();
 
     let device = DeviceObject::new(DeviceConfig {
-        instance: device_instance,
-        name: "Benchmark Device".into(),
+        identity: bacnet_objects::DeviceIdentity::new(device_instance, 555)
+            .expect("valid Device identity")
+            .with_name("Benchmark Device"),
         vendor_name: "Rusty BACnet".into(),
-        vendor_id: 555,
         ..DeviceConfig::default()
     })
     .unwrap();
     db.add(Box::new(device)).unwrap();
 
     for i in 1..=10 {
-        let mut ai = AnalogInputObject::new(i, format!("AI-{}", i), 62).unwrap();
+        let mut ai =
+            AnalogInputObject::new(i, format!("AI-{}", i), EngineeringUnits::DEGREES_CELSIUS)
+                .unwrap();
         ai.set_present_value(20.0 + i as f32);
         db.add(Box::new(ai)).unwrap();
     }
 
-    let ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
+    let ao = AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     db.add(Box::new(ao)).unwrap();
 
     let bv = BinaryValueObject::new(1, "BV-1").unwrap();
@@ -47,6 +50,7 @@ pub async fn make_bip_server() -> Result<BACnetServer<BipTransport>, Error> {
     let db = make_benchmark_db(1234);
 
     BACnetServer::bip_builder()
+        .device(bacnet_objects::DeviceIdentity::new(1234, 555)?)
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
         .broadcast_address(Ipv4Addr::LOCALHOST)
@@ -73,6 +77,7 @@ pub async fn make_bip6_server() -> Result<BACnetServer<Bip6Transport>, Error> {
     let transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, Some(2345));
 
     BACnetServer::<Bip6Transport>::generic_builder()
+        .device(bacnet_objects::DeviceIdentity::new(2345, 555)?)
         .transport(transport)
         .database(db)
         .build()

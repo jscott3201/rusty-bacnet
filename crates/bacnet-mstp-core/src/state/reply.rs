@@ -19,11 +19,7 @@ const REPLY_GUARD: Duration = Duration::from_millis(1);
 
 impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
     /// Hand a request to the application and open its reply window.
-    pub(super) fn begin_request(
-        &mut self,
-        frame: Frame<'_>,
-        now: Instant,
-    ) -> Result<(), CoreError> {
+    pub(super) fn begin_request(&mut self, frame: Frame<'_>, now: Instant) {
         let id = RequestId::new(self.next_request_generation);
         self.next_request_generation = self.next_request_generation.wrapping_add(1);
         let window = self.reply_window(now);
@@ -36,10 +32,10 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
         self.pending_request = Some(request);
         self.set_state(MasterState::AnswerDataRequest);
         self.protocol_deadline = Some(request.decide_by);
-        if self.deliver(frame, Some(id)) {
-            Ok(())
-        } else {
-            self.complete_request(id, ReplyDecision::Postponed, now)
+        if !self.deliver(frame, Some(id)) {
+            // The request was just made and its window is open, so Reply
+            // Postponed is always taken.
+            let _ = self.complete_request(id, ReplyDecision::Postponed, now);
         }
     }
 
@@ -48,7 +44,7 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
     /// A [`ReplyDecision::Data`] answer has to arrive before the decision
     /// deadline: T_reply_delay less
     /// [`MstpCoreConfig::reply_transmit_margin`] after the request. A later
-    /// one is refused with [`CoreError::RequestExpired`], and the core keeps
+    /// one is refused with [`RequestError::Expired`], and the core keeps
     /// the request and sends Reply Postponed when [`Self::on_deadline`] runs.
     ///
     /// Once the requester may have stopped waiting (the shortest
@@ -59,7 +55,7 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
     ///
     /// A data answer longer than this station sends
     /// ([`MstpCoreConfig::max_npdu`]) is refused with
-    /// [`CoreError::ReplyOversize`]. With extended frames on, one of 502
+    /// [`RequestError::Oversize`]. With extended frames on, one of 502
     /// octets or more goes out as BACnet Extended Data Not Expecting Reply
     /// (Type 33), whatever the type of the request.
     pub fn complete_request(
@@ -67,22 +63,22 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
         id: RequestId,
         decision: ReplyDecision<'_>,
         now: Instant,
-    ) -> Result<(), CoreError> {
+    ) -> Result<(), RequestError> {
         let now = self.observe_time(now);
-        let request = self.pending_request.ok_or(CoreError::NoPendingRequest)?;
+        let request = self.pending_request.ok_or(RequestError::NoPending)?;
         if request.id != id {
-            return Err(CoreError::StaleRequest);
+            return Err(RequestError::Stale);
         }
         if now >= request.window.give_up {
-            self.release_unanswered_request(now)?;
-            return Err(CoreError::RequestExpired);
+            self.release_unanswered_request(now);
+            return Err(RequestError::Expired);
         }
         let (frame_type, payload) = match decision {
             ReplyDecision::Data(_) if now >= request.decide_by => {
-                return Err(CoreError::RequestExpired);
+                return Err(RequestError::Expired);
             }
             ReplyDecision::Data(data) if data.len() > self.config.max_npdu() => {
-                return Err(CoreError::ReplyOversize {
+                return Err(RequestError::Oversize {
                     length: data.len(),
                     maximum: self.config.max_npdu(),
                 });
@@ -94,7 +90,8 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
             ReplyDecision::Postponed => (FrameType::REPLY_POSTPONED, &[][..]),
             ReplyDecision::Abandoned => {
                 self.pending_request = None;
-                return self.enter_idle(now);
+                self.enter_idle(now);
+                return Ok(());
             }
         };
         self.queue_frame(
@@ -104,22 +101,20 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
             PostTransmit::Idle,
             Origin::Answer(request.window),
             now,
-        )?;
+        );
         self.pending_request = None;
         Ok(())
     }
 
     /// The decision deadline has passed without an answer: send Reply
     /// Postponed, however late, unless the requester may have stopped waiting.
-    pub(super) fn reply_deadline(&mut self, now: Instant) -> Result<(), CoreError> {
+    pub(super) fn reply_deadline(&mut self, now: Instant) {
         let Some(request) = self.pending_request else {
             return self.enter_idle(now);
         };
-        match self.complete_request(request.id, ReplyDecision::Postponed, now) {
-            // Too late to send anything; the request was dropped and counted.
-            Err(CoreError::RequestExpired) => Ok(()),
-            result => result,
-        }
+        // Reply Postponed for the waiting request is refused only as too
+        // late, when the request was dropped and counted.
+        let _ = self.complete_request(request.id, ReplyDecision::Postponed, now);
     }
 
     /// The window for answering a frame that asked for a reply (a data
@@ -147,7 +142,7 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
 
     /// Drop a request unanswered because its requester may have stopped
     /// waiting, and count it.
-    pub(super) fn release_unanswered_request(&mut self, now: Instant) -> Result<(), CoreError> {
+    pub(super) fn release_unanswered_request(&mut self, now: Instant) {
         self.pending_request = None;
         self.counters.record_expired_request();
         self.enter_idle(now)

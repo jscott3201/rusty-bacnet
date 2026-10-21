@@ -231,3 +231,27 @@ async fn a_panic_in_another_task_stops_drawing_and_ends_the_loop() {
         "nothing drawn after the terminal was restored"
     );
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_full_command_channel_does_not_falsely_admit_disconnect() {
+    let mut h = harness();
+    for op in 0..16 {
+        h.io.commands.try_send(Command::Cancel { op }).unwrap();
+    }
+    h.keys.send(press_event(KeyCode::Char('x'))).unwrap();
+    h.keys.send(press_event(KeyCode::Char('q'))).unwrap();
+    let mut app = connected_app();
+    let prior = app.link.clone();
+    run_app(&mut app, &mut h.io).await;
+    assert_eq!(app.link, prior);
+    assert!(app
+        .flash
+        .as_ref()
+        .unwrap()
+        .text
+        .contains("Command not admitted"));
+    assert!(matches!(
+        h.commands.try_recv().unwrap(),
+        Command::Cancel { .. }
+    ));
+}

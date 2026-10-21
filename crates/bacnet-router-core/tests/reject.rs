@@ -3,8 +3,8 @@
 
 mod fixture;
 
-use bacnet_router_core::message::{MessageType, RejectReason};
 use bacnet_router_core::npdu::Npdu;
+use bacnet_router_core::npdu::{NetworkMessageType, RejectMessageReason};
 use bacnet_router_core::router::{ControlClass, Discard, Event, Kind};
 use bacnet_router_core::table::{Reachability, RejectEffect};
 use fixture::{
@@ -86,7 +86,7 @@ fn reject_path_follows_the_origin() {
     assert_eq!(
         sent_reject(&reject),
         (
-            RejectReason::NOT_DIRECTLY_CONNECTED,
+            RejectMessageReason::NOT_DIRECTLY_CONNECTED,
             44,
             Some((7, OWN_1.to_vec()))
         )
@@ -106,7 +106,7 @@ fn reject_path_follows_the_origin() {
     assert_eq!(
         sent_reject(&reject),
         (
-            RejectReason::NOT_DIRECTLY_CONNECTED,
+            RejectMessageReason::NOT_DIRECTLY_CONNECTED,
             44,
             Some((7, vec![1, 2, 3]))
         )
@@ -123,8 +123,8 @@ fn received_rejects_relay_by_their_destination() {
     let mut host = Recorder::default();
     learn_9_via_r7(&mut router, at(0));
     let reject = |dnet: Option<(u16, &[u8])>| {
-        let data = reject_data(RejectReason::NOT_DIRECTLY_CONNECTED, 9);
-        let mut npdu = Npdu::message(MessageType::REJECT_MESSAGE_TO_NETWORK, &data);
+        let data = reject_data(RejectMessageReason::NOT_DIRECTLY_CONNECTED, 9);
+        let mut npdu = Npdu::message(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK, &data);
         npdu.destination = dnet.map(|(network, mac)| addr(network, mac));
         bytes(&npdu)
     };
@@ -153,7 +153,7 @@ fn received_rejects_relay_by_their_destination() {
     );
     assert_eq!(
         parsed.message_type,
-        Some(MessageType::REJECT_MESSAGE_TO_NETWORK)
+        Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK)
     );
 
     // For a node behind R7: passed to R7 though 9 is unreachable, since a
@@ -199,8 +199,8 @@ fn other_reasons_relay_and_keep_the_route() {
     let mut router = router();
     let mut host = Recorder::default();
     learn_9_via_r7(&mut router, at(0));
-    let data = reject_data(RejectReason::MESSAGE_TOO_LONG, 9);
-    let mut reject = Npdu::message(MessageType::REJECT_MESSAGE_TO_NETWORK, &data);
+    let data = reject_data(RejectMessageReason::MESSAGE_TOO_LONG, 9);
+    let mut reject = Npdu::message(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK, &data);
     reject.destination = Some(addr(1, NODE_A));
     let (outcome, sent) = deliver(&mut router, &mut host, 1, R7, &bytes(&reject), at(1));
     assert_eq!(outcome, Outcome::Handled);
@@ -215,7 +215,7 @@ fn other_reasons_relay_and_keep_the_route() {
         host.events,
         [Event::RejectReceived {
             network: 9,
-            reason: RejectReason::MESSAGE_TOO_LONG,
+            reason: RejectMessageReason::MESSAGE_TOO_LONG,
             effect: RejectEffect::Kept,
         }]
     );
@@ -231,8 +231,8 @@ fn denied_and_malformed_rejects_do_nothing() {
         ..Recorder::default()
     };
     learn_9_via_r7(&mut router, at(0));
-    let data = reject_data(RejectReason::NOT_DIRECTLY_CONNECTED, 9);
-    let mut npdu = Npdu::message(MessageType::REJECT_MESSAGE_TO_NETWORK, &data);
+    let data = reject_data(RejectMessageReason::NOT_DIRECTLY_CONNECTED, 9);
+    let mut npdu = Npdu::message(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK, &data);
     npdu.destination = Some(addr(1, NODE_A));
     let (outcome, sent) = deliver(&mut router, &mut host, 1, R7, &bytes(&npdu), at(1));
     assert_eq!(outcome, Outcome::Discarded(Discard::Denied));
@@ -244,11 +244,39 @@ fn denied_and_malformed_rejects_do_nothing() {
     assert_eq!(host.asked[0].targets, [9]);
     assert_eq!(host.asked[0].dnet, Some(1));
 
-    let short = fixture::message(MessageType::REJECT_MESSAGE_TO_NETWORK, &[1, 0]);
+    let short = fixture::message(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK, &[1, 0]);
     let (outcome, _) = deliver(&mut router, &mut host, 1, R7, &short, at(1));
     assert_eq!(outcome, Outcome::Discarded(Discard::BadMessage));
     assert_eq!(host.asked.len(), 1);
     assert_eq!(router.counters().denied, 1);
+}
+
+/// A reject padded past its three octets is refused whole, before the host
+/// is asked: the route stays, nothing is sent, and it counts as malformed.
+#[test]
+fn a_padded_reject_is_a_bad_message() {
+    let mut router = router();
+    let mut host = Recorder::default();
+    learn_9_via_r7(&mut router, at(0));
+    let before = router.counters().bad_messages;
+    let padded = fixture::message(
+        NetworkMessageType::REJECT_MESSAGE_TO_NETWORK,
+        &[
+            RejectMessageReason::NOT_DIRECTLY_CONNECTED.to_raw(),
+            0,
+            9,
+            0,
+        ],
+    );
+    let (outcome, sent) = deliver(&mut router, &mut host, 1, R7, &padded, at(1));
+    assert_eq!(outcome, Outcome::Discarded(Discard::BadMessage));
+    assert!(sent.is_empty());
+    assert!(host.asked.is_empty());
+    assert_eq!(router.counters().bad_messages, before + 1);
+    assert_eq!(
+        router.table().lookup(9).unwrap().reachability(),
+        Reachability::Reachable
+    );
 }
 
 /// A reject the router sends for an unknown DNET also starts a search, and
@@ -270,7 +298,7 @@ fn unusable_routes_draw_their_reasons() {
     assert_eq!(sent.len(), 1);
     assert_eq!(
         sent_reject(&sent[0]).0,
-        RejectReason::NOT_DIRECTLY_CONNECTED
+        RejectMessageReason::NOT_DIRECTLY_CONNECTED
     );
     // The lookup still counts as use, as the hosted lookup touches first.
     assert_eq!(router.table().lookup(9).unwrap().last_used(), Some(at(1)));
@@ -285,6 +313,6 @@ fn unusable_routes_draw_their_reasons() {
         &apdu_to(9, &[5], CONFIRMED),
         at(2),
     );
-    assert_eq!(sent_reject(&sent[0]).0, RejectReason::ROUTER_BUSY);
+    assert_eq!(sent_reject(&sent[0]).0, RejectMessageReason::ROUTER_BUSY);
     assert_eq!(router.counters().solicitations, 0);
 }

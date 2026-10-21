@@ -41,7 +41,7 @@ fn reporter_delay_pair_is_optional_typed_scalar_and_nonnullable_relinquishment()
             );
             for index in [0, 1] {
                 assert!(
-                    matches!(reporter.write_property(property,Some(index),PropertyValue::Null,None),Err(Error::Protocol{code,..}) if code==ErrorCode::PROPERTY_IS_NOT_AN_ARRAY.to_raw() as u32)
+                    matches!(reporter.write_property(property,Some(index),PropertyValue::Null,None),Err(Error::Protocol{code,..}) if code==ErrorCode::PROPERTY_IS_NOT_AN_ARRAY)
                 );
                 assert!(reporter.read_property(property, Some(index)).is_err());
             }

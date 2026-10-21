@@ -53,6 +53,7 @@ fn encoded(hour: u8) -> Bytes {
 }
 fn received(kind: u8) -> ReceivedApdu {
     ReceivedApdu {
+        router_response: None,
         direct_response: None,
         apdu: Bytes::new(),
         source_mac: MacAddr::from_slice(if kind == 2 { &[2, 3, 4, 5, 6, 7] } else { &[1] }),

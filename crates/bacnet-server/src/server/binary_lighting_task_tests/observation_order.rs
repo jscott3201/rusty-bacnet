@@ -32,11 +32,12 @@ async fn cov_order_supplied_terminal_snapshot_orders_preparation_not_object_age(
     let old_snapshot = {
         let mut db = server.db.write().await;
         let obj = db.get_mut(&oid).unwrap();
-        obj.write_property(
+        obj.write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Enumerated(3),
             Some(8),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
         assert!(

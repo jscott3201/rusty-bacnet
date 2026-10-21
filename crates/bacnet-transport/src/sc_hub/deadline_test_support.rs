@@ -270,29 +270,21 @@ impl TestTls {
 /// in the same process, so headroom is reserved for them too. A hard limit
 /// that is too low fails here instead of as EMFILE in some later socket call.
 #[cfg(unix)]
-#[allow(unsafe_code)]
-pub(super) fn reserve_descriptors(needed: libc::rlim_t) {
-    const SIBLING_HEADROOM: libc::rlim_t = 1024;
-    let mut limit = libc::rlimit {
-        rlim_cur: 0,
-        rlim_max: 0,
-    };
-    // SAFETY: getrlimit only writes the rlimit it is given.
-    let read = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) };
-    assert_eq!(read, 0, "{}", std::io::Error::last_os_error());
+pub(super) fn reserve_descriptors(needed: nix::sys::resource::rlim_t) {
+    use nix::sys::resource::{getrlimit, rlim_t, setrlimit, Resource};
+
+    const SIBLING_HEADROOM: rlim_t = 1024;
+    let (soft, hard) = getrlimit(Resource::RLIMIT_NOFILE).expect("getrlimit");
     let wanted = needed.saturating_add(SIBLING_HEADROOM);
-    if limit.rlim_cur >= wanted {
+    if soft >= wanted {
         return;
     }
-    limit.rlim_cur = wanted.min(limit.rlim_max);
-    // SAFETY: setrlimit only reads the rlimit it is given. Raising the soft
-    // limit up to the hard limit needs no privilege.
-    let raised = unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) };
-    assert_eq!(raised, 0, "{}", std::io::Error::last_os_error());
+    // Raising the soft limit up to the hard limit needs no privilege.
+    let raised = wanted.min(hard);
+    setrlimit(Resource::RLIMIT_NOFILE, raised, hard).expect("setrlimit");
     assert!(
-        limit.rlim_cur >= needed,
-        "test needs {needed} descriptors but the hard limit is {}",
-        limit.rlim_max
+        raised >= needed,
+        "test needs {needed} descriptors but the hard limit is {hard}"
     );
 }
 

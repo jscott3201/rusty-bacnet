@@ -3,7 +3,7 @@ use crate::command_source::CommandOrigin;
 use bacnet_encoding::constructed::decode_value_source;
 use bacnet_encoding::primitives::decode_timestamp_choice;
 use bacnet_types::constructed::{BACnetDeviceObjectReference, BACnetValueSource};
-use bacnet_types::enums::{EventState, EventType, Reliability};
+use bacnet_types::enums::{EngineeringUnits, EventState, EventType, Reliability};
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier};
 
 fn origin(device: u32) -> CommandOrigin {
@@ -307,7 +307,7 @@ fn profile_writes_preserve_command_failure_and_out_of_range_transitions() {
 
 #[test]
 fn profile_writes_preserve_output_engineering_polarity_and_state_configuration() {
-    let mut analog = AnalogOutputObject::new(1, "AO", 62).unwrap();
+    let mut analog = AnalogOutputObject::new(1, "AO", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     analog.set_min_pres_value(-5.0);
     analog.set_max_pres_value(5.0);
     let mut binary = BinaryOutputObject::new(1, "BO").unwrap();

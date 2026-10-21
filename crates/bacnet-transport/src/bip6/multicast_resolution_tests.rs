@@ -23,15 +23,10 @@ const EVIDENCE_OS: bool = cfg!(target_os = "macos");
 const NPDU: &[u8] = &[0x01, 0x00, 0x10, 0x08];
 
 /// The loopback interface's index, looked up by its usual names.
-#[allow(unsafe_code)]
 fn loopback_index() -> Option<u32> {
-    ["lo0", "lo"].into_iter().find_map(|name| {
-        let name = std::ffi::CString::new(name).unwrap();
-        // SAFETY: `name` is a NUL-terminated string that outlives the call,
-        // which only reads it.
-        let index = unsafe { libc::if_nametoindex(name.as_ptr()) };
-        (index != 0).then_some(index)
-    })
+    ["lo0", "lo"]
+        .into_iter()
+        .find_map(|name| nix::net::if_::if_nametoindex(name).ok())
 }
 
 /// A socket bound to FF02::BAC0 at `port` that joined it on interface

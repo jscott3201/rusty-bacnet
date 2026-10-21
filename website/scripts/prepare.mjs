@@ -16,7 +16,7 @@ await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });
 await mkdir(join(root, 'public/examples'), { recursive: true });
 await copyFile(join(root, 'examples/python/loopback_lab.py'), join(root, 'public/examples/loopback_lab.py'));
-const links = ['# Rusty BACnet', '', `> Guides for the v${release} release; pre-1.0 APIs and partial conformance.`, '', `Use start/ to install and make a first read, development/ to integrate (shared endpoints, Network Port and Number controls, transports, BACnet/SC, source builds), guides/ to operate the CLI, and project/upgrading for the move from the previous release. A dev checkout may differ from v${release}; record its commit. The local lab is loopback-only.`, '', '## Guides', ''];
+const links = ['# Rusty BACnet', '', `> Guides for the v${release} release; pre-1.0 APIs and partial conformance.`, '', `Use start/ to install and make a first read, development/ to integrate (shared endpoints, Network Port and Number controls, transports, BACnet/SC, source builds), guides/ to operate the CLI, tui/ for the terminal UI on the development branch, and project/upgrading for the move from the previous release. A dev checkout may differ from v${release}; record its commit. The local lab is loopback-only.`, '', '## Guides', ''];
 let count = 0;
 for (const file of await walk(docs)) {
   if (!isGuideFile(file)) continue;

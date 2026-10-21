@@ -75,7 +75,7 @@ async fn assert_active_initial_abort(
     assert!(matches!(
         result,
         Err(Error::Abort { reason })
-            if reason == AbortReason::INVALID_APDU_IN_THIS_STATE.to_raw()
+            if reason == AbortReason::INVALID_APDU_IN_THIS_STATE
     ));
     {
         let mut tsm = client.tsm.lock().await;

@@ -444,9 +444,11 @@ async fn audit_reporter_auditing_failure_excludes_nonresource_failures_under_loa
                 .unwrap()
         })
         .collect();
-    fixture.server.config_mut().max_apdu_length = 1;
-    writes(&fixture, 2).await;
-    fixture.server.config_mut().max_apdu_length = 1476;
+    // An invalid receive ceiling is rejected while constructing the identity,
+    // before a running reporter or its admission budget can observe it.
+    assert!(bacnet_objects::DeviceIdentity::default()
+        .with_max_apdu(1)
+        .is_err());
     fixture.server.config_mut().mutation_policy = crate::mutation::MutationPolicy::DenyAll;
     assert!(matches!(
         write_value(&fixture.server, None).await,
@@ -540,8 +542,8 @@ async fn audit_reporter_auditing_failure_counts_execution_error_but_not_normal_a
         })
         .collect();
     *fixture.execution_error.lock().unwrap() = Some(Error::Protocol {
-        class: ErrorClass::PROPERTY.to_raw() as u32,
-        code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
+        class: ErrorClass::PROPERTY,
+        code: ErrorCode::WRITE_ACCESS_DENIED,
     });
     assert!(matches!(
         write_value(&fixture.server, None).await,

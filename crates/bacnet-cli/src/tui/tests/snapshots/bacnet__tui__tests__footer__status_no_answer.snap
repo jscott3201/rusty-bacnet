@@ -1,0 +1,13 @@
+---
+source: crates/bacnet-cli/src/tui/tests/footer.rs
+expression: chrome_at_sizes(&mut app)
+---
+80x24
+ 1 2 3 [4 Network] 7 | BIP | up | READ-ONLY | FD no answer | drop 12     ? help 
+ r read tables  m survey BBMDs  Tab tables  Esc back  ? help  q quit            
+120x40
+ bacnet | 1 2 3 [4 Network] 7 | BIP 10.0.0.1:47808 | up | READ-ONLY | COV 0 | FD no answer | drop 12             ? help 
+ r read tables  m survey BBMDs  Tab BDT/FDT/matrix/networks  :bbmd ADDRESS  Esc back  ? help  q quit                    
+200x50
+ bacnet | 1 Devices 2 Browse 3 Watch [4 Network] 7 Capture | BIP 10.0.0.1:47808 | up | READ-ONLY | COV 0 | FD no answer | drop 12                                                                ? help 
+ r read tables  m survey BBMDs  Tab focus pane/networks  :bbmd ADDRESS  Esc back  ? help  q quit

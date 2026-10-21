@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
@@ -43,8 +43,8 @@ pub(crate) fn metadata_row_reads(object: &dyn BACnetObject, property: PropertyId
     ) && property == PropertyIdentifier::LOG_BUFFER
     {
         return matches!(result, Err(Error::Protocol { class, code })
-            if class == ErrorClass::PROPERTY.to_raw() as u32
-                && code == ErrorCode::READ_ACCESS_DENIED.to_raw() as u32);
+            if class == ErrorClass::PROPERTY
+                && code == ErrorCode::READ_ACCESS_DENIED);
     }
     result.is_ok()
 }
@@ -290,7 +290,10 @@ fn property_metadata_contract_all_migrated_rows_are_readable() {
         Box::new(MultiStateInputObject::new(1, "MSI-1", 3).unwrap()),
         Box::new(MultiStateValueObject::new(1, "MSV-1", 3).unwrap()),
         Box::new(MultiStateOutputObject::new(1, "MSO-1", 3).unwrap()),
-        Box::new(crate::loop_obj::LoopObject::new(1, "LOOP-1", 62).unwrap()),
+        Box::new(
+            crate::loop_obj::LoopObject::new(1, "LOOP-1", EngineeringUnits::DEGREES_CELSIUS)
+                .unwrap(),
+        ),
         Box::new(crate::program::ProgramObject::new(1, "PRG-1").unwrap()),
         Box::new(crate::file::FileObject::new(1, "FILE-1", "raw").unwrap()),
         Box::new(crate::trend::TrendLogObject::new(1, "TL-1", 3).unwrap()),
@@ -327,8 +330,18 @@ fn property_metadata_contract_all_migrated_rows_are_readable() {
         Box::new(crate::elevator::LiftObject::new(1, "LIFT-1", 3).unwrap()),
         Box::new(crate::lighting::LightingOutputObject::new(1, "LO-1").unwrap()),
         Box::new(crate::lighting::BinaryLightingOutputObject::new(1, "BLO-1").unwrap()),
-        Box::new(crate::accumulator::AccumulatorObject::new(1, "ACC-1", 95).unwrap()),
-        Box::new(crate::accumulator::PulseConverterObject::new(1, "PC-1", 62).unwrap()),
+        Box::new(
+            crate::accumulator::AccumulatorObject::new(1, "ACC-1", EngineeringUnits::NO_UNITS)
+                .unwrap(),
+        ),
+        Box::new(
+            crate::accumulator::PulseConverterObject::new(
+                1,
+                "PC-1",
+                EngineeringUnits::DEGREES_CELSIUS,
+            )
+            .unwrap(),
+        ),
         Box::new(crate::color::ColorObject::new(1, "CLR-1").unwrap()),
         Box::new(crate::color::ColorTemperatureObject::new(1, "CT-1").unwrap()),
         Box::new(AccessDoorObject::new(1, "DOOR-1").unwrap()),

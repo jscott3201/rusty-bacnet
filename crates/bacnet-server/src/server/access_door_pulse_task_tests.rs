@@ -19,8 +19,9 @@ async fn start_server() -> (BACnetServer<TestTransport>, ObjectIdentifier, SendL
     door.set_door_extended_pulse_time(40);
     let oid = door.object_identifier();
     let device = DeviceObject::new(DeviceConfig {
-        instance: 100,
-        name: "Access-door-pulse-device".into(),
+        identity: bacnet_objects::DeviceIdentity::new(100, 0)
+            .expect("valid Device identity")
+            .with_name("Access-door-pulse-device"),
         ..DeviceConfig::default()
     })
     .unwrap();
@@ -28,6 +29,7 @@ async fn start_server() -> (BACnetServer<TestTransport>, ObjectIdentifier, SendL
     db.add(Box::new(device)).unwrap();
     db.add(Box::new(door)).unwrap();
     let config = ServerConfig {
+        device: bacnet_objects::DeviceIdentity::new(100, 0).unwrap(),
         enable_event_enrollment: false,
         ..ServerConfig::default()
     };

@@ -85,7 +85,7 @@ fn command_source_decorator_forwards_exact_origin_and_preserves_active_gate() {
             )
         };
         assert!(
-            matches!(result, Err(Error::Protocol { code, .. }) if code == u32::from(ErrorCode::WRITE_ACCESS_DENIED.to_raw()))
+            matches!(result, Err(Error::Protocol { code, .. }) if code == ErrorCode::WRITE_ACCESS_DENIED)
         );
     }
     assert_eq!(seen.lock().unwrap().len(), 1);

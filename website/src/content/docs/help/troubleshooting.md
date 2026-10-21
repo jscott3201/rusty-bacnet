@@ -6,7 +6,7 @@ description: "Start with the layer that failed, not with a larger scan or a long
 Capture the exact program version, command or API call, transport, host platform, and failure symptom. Keep a sanitized record of the local address/port, target address, object/property, and whether a smaller operation works.
 
 :::caution[Check the version before applying a fix]
-These guides describe **v0.13.0**. Commands and APIs from earlier releases differ in places, notably BACnet/IPv6 addressing (VMACs) and MS/TP timing. If you are moving an existing setup, read the [upgrade guide](/rusty-bacnet/project/upgrading/) rather than combining commands from different versions.
+These guides describe **v0.14.0**. Commands and APIs from earlier releases differ in places, notably the CLI's interactive front end and write guard, server authorization policy and BACnet/SC admission. If you are moving an existing setup, read the [upgrade guide](/rusty-bacnet/project/upgrading/) rather than combining commands from different versions.
 :::
 
 ## The executable or module does not start
@@ -21,11 +21,11 @@ Try a directed Who-Is to one known device, then a read of a known property. Veri
 
 An empty discovery result does not prove that a building has no devices. A successful directed read does not prove that broadcasts can traverse the same path.
 
-## A device instance works in the shell but not in a script
+## A device instance works in the terminal UI but not in a script
 
-The shell can retain discovered devices in its session. A separate process does not inherit that session's cache. Use an explicit target address for a one-shot operation, or keep discovery and device-instance lookup within the same supported session.
+The terminal UI can retain discovered devices in its session. A separate process does not inherit that session's cache. Use an explicit target address for a one-shot operation, or keep discovery and device-instance lookup within the same supported session.
 
-Do not promise a one-shot read to `DNET:instance`; the one-shot commands reject that target form. A routed network requires more than finding a router's IP address.
+Only the one-shot `read`, `readm`, `write`, `writem` and `subscribe` commands take a `DNET:instance` target; the other one-shot commands refuse it. A routed network requires more than finding a router's IP address.
 
 ## The socket is already in use
 
@@ -63,6 +63,6 @@ Describe the task, version/build features, platform and transport, minimal repro
 
 ## Sources and release scope
 
-These instructions target **v0.13.0**. Source review is not a claim of hardware qualification.
+These instructions target **v0.14.0**. Source review is not a claim of hardware qualification.
 
-[CLI behavior](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/crates/bacnet-cli/src/main.rs) · [SC error and trust implementation](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/crates/bacnet-cli/src/transport.rs) · [Versioned API](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/docs/python-api.md) · [MS/TP timing work](https://github.com/jscott3201/rusty-bacnet/issues/502).
+[CLI behavior](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/crates/bacnet-cli/src/main.rs) · [SC error and trust implementation](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/crates/bacnet-cli/src/transport.rs) · [Versioned API](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/python-api.md) · [MS/TP timing work](https://github.com/jscott3201/rusty-bacnet/issues/502).

@@ -3,7 +3,7 @@
 use super::*;
 
 impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
-    pub(super) fn enter_no_token(&mut self, now: Instant) -> Result<(), CoreError> {
+    pub(super) fn enter_no_token(&mut self, now: Instant) {
         self.set_state(MasterState::NoToken);
         self.retry_token_count = 0;
         // Clause 9.5.6.2 (LostToken): SawFrame counts events from here.
@@ -15,7 +15,7 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
     /// 9.5.6.7), or in a later window if the deadline came after the slot
     /// closed: the local recovery policy described on [`MasterCore`], counted
     /// in [`MstpCounters::missed_generation_slots`].
-    pub(super) fn generate_token_if_in_slot(&mut self, now: Instant) -> Result<(), CoreError> {
+    pub(super) fn generate_token_if_in_slot(&mut self, now: Instant) {
         let cycle = T_SLOT.saturating_mul(u32::from(self.config.max_master) + 1);
         let first =
             self.last_activity + T_NO_TOKEN + T_SLOT.saturating_mul(u32::from(self.config.station));
@@ -34,7 +34,7 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
         }
         if now < start {
             self.protocol_deadline = Some(start);
-            return Ok(());
+            return;
         }
         if start != first {
             self.counters.record_missed_generation_slot();
@@ -46,14 +46,14 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
         self.queue_poll(Origin::NoToken, now)
     }
 
-    pub(super) fn pass_token_timeout(&mut self, now: Instant) -> Result<(), CoreError> {
+    pub(super) fn pass_token_timeout(&mut self, now: Instant) {
         if self.event_count > u32::from(N_MIN_OCTETS) {
             self.set_state(MasterState::Idle);
             self.protocol_deadline = Some(now + T_NO_TOKEN);
         } else if self.retry_token_count < N_RETRY_TOKEN {
             self.retry_token_count = self.retry_token_count.saturating_add(1);
             self.counters.record_token_retry();
-            self.queue_token(self.next_station, Origin::PassToken, now)?;
+            self.queue_token(self.next_station, Origin::PassToken, now);
         } else {
             let failed = self.next_station;
             self.next_station = self.config.station;
@@ -63,12 +63,11 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
             }
             self.retry_token_count = 0;
             self.token_count = 0;
-            self.queue_poll(Origin::PassToken, now)?;
+            self.queue_poll(Origin::PassToken, now);
         }
-        Ok(())
     }
 
-    pub(super) fn poll_timeout(&mut self, now: Instant) -> Result<(), CoreError> {
+    pub(super) fn poll_timeout(&mut self, now: Instant) {
         if self.sole_master {
             self.frame_count = 0;
             self.set_state(MasterState::UseToken);
@@ -89,16 +88,16 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
         self.queue_poll(Origin::NextPoll, now)
     }
 
-    pub(super) fn drive_token(&mut self, now: Instant) -> Result<(), CoreError> {
+    pub(super) fn drive_token(&mut self, now: Instant) {
         if self.active_transmit.is_some() || self.pending_send.is_some() {
-            return Ok(());
+            return;
         }
         let frame_limit = u16::from(self.config.max_info_frames)
             .saturating_mul(u16::from(self.config.multiple_frame_ratio))
             .div_ceil(100)
             .clamp(1, u16::from(self.config.max_info_frames)) as u8;
-        if self.frame_count < frame_limit && self.dequeue_and_send(now)? {
-            return Ok(());
+        if self.frame_count < frame_limit && self.dequeue_and_send(now) {
+            return;
         }
         self.set_state(MasterState::DoneWithToken);
         self.done_with_token(now)
@@ -116,15 +115,15 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
     /// an `NPDU`-octet delivery slot holds) is dropped, counted as oversize,
     /// and the next one is tried, so it never holds the token. The attempts
     /// are bounded in case a [`QueueStorage`] fails to drop it.
-    fn dequeue_and_send(&mut self, now: Instant) -> Result<bool, CoreError> {
+    fn dequeue_and_send(&mut self, now: Instant) -> bool {
         self.queues.expire(now);
         for _ in 0..=self.queues.total_depth() {
             let Some(kind) = self.next_queue_kind(now) else {
-                return Ok(false);
+                return false;
             };
             let item = match self.queues.dequeue_kind(kind, now, NPDU) {
                 Ok(Some(item)) => item,
-                Ok(None) => return Ok(false),
+                Ok(None) => return false,
                 // Longer than NPDU: the queue dropped and counted it.
                 Err(_) => continue,
             };
@@ -164,16 +163,14 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
             };
             // The lent NPDU borrows the queues, and the frame buffer is the
             // action buffers': the two never overlap.
-            self.actions.encode_frame(Frame::new(
-                frame_type,
-                item.destination,
-                self.config.station,
-                data,
-            ))?;
-            self.send_encoded(post, Origin::Holder, now)?;
-            return Ok(true);
+            let frame = Frame::new(frame_type, item.destination, self.config.station, data);
+            if !pending::encode(&mut self.actions, &mut self.counters, frame) {
+                continue;
+            }
+            self.send_encoded(post, Origin::Holder, now);
+            return true;
         }
-        Ok(false)
+        false
     }
 
     /// The queue to serve next under the broadcast/unicast ratio.
@@ -191,7 +188,7 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
         }
     }
 
-    fn done_with_token(&mut self, now: Instant) -> Result<(), CoreError> {
+    fn done_with_token(&mut self, now: Instant) {
         loop {
             let next_ts = next_addr(self.config.station, self.config.max_master);
             let next_ps = next_addr(self.poll_station, self.config.max_master);
@@ -204,8 +201,8 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
                 if self.sole_master {
                     self.frame_count = 0;
                     self.set_state(MasterState::UseToken);
-                    if self.dequeue_and_send(now)? {
-                        return Ok(());
+                    if self.dequeue_and_send(now) {
+                        return;
                     }
                     continue;
                 }
@@ -236,12 +233,7 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
 
     /// Pass the token to `destination` and enter PASS_TOKEN; a station that
     /// would pass to itself polls for a successor instead.
-    pub(super) fn queue_token(
-        &mut self,
-        destination: u8,
-        origin: Origin,
-        now: Instant,
-    ) -> Result<(), CoreError> {
+    pub(super) fn queue_token(&mut self, destination: u8, origin: Origin, now: Instant) {
         if destination == self.config.station {
             self.poll_station = next_addr(self.config.station, self.config.max_master);
             return self.queue_poll(origin, now);
@@ -253,14 +245,13 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
             PostTransmit::PassToken,
             origin,
             now,
-        )?;
+        );
         self.set_state(MasterState::PassToken);
         self.event_count = 0;
-        Ok(())
     }
 
     /// Poll `poll_station` for a master and enter POLL_FOR_MASTER.
-    fn queue_poll(&mut self, origin: Origin, now: Instant) -> Result<(), CoreError> {
+    fn queue_poll(&mut self, origin: Origin, now: Instant) {
         self.queue_frame(
             FrameType::POLL_FOR_MASTER,
             self.poll_station,
@@ -268,8 +259,7 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
             PostTransmit::PollForMaster,
             origin,
             now,
-        )?;
+        );
         self.set_state(MasterState::PollForMaster);
-        Ok(())
     }
 }

@@ -585,8 +585,9 @@ async fn active_cov_multiple_wire_rpm_rp_and_local_reads_agree_within_scope() {
     // standalone default list, as do raw object reads.
     let other = ObjectIdentifier::new(ObjectType::DEVICE, 900).unwrap();
     let config = DeviceConfig {
-        instance: 900,
-        name: "Other Device".into(),
+        identity: bacnet_objects::DeviceIdentity::new(900, 0)
+            .expect("valid Device identity")
+            .with_name("Other Device"),
         ..DeviceConfig::default()
     };
     wire.server
@@ -595,8 +596,12 @@ async fn active_cov_multiple_wire_rpm_rp_and_local_reads_agree_within_scope() {
         .await
         .add(Box::new(DeviceObject::new(config).unwrap()))
         .unwrap();
-    let selected =
-        handlers::resolve_read_target(&*wire.server.database().read().await, &wildcard(), None);
+    let selected = handlers::resolve_read_target(
+        &*wire.server.database().read().await,
+        &wildcard(),
+        None,
+        None,
+    );
     assert_eq!(
         selected,
         device(),

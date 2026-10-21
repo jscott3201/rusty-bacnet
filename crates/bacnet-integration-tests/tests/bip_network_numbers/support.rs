@@ -12,6 +12,7 @@ use bacnet_transport::{
     mstp::LoopbackSerial,
     port::{ReceivedNpdu, TransportPort},
 };
+use bacnet_types::enums::EngineeringUnits;
 use bacnet_types::error::Error;
 use std::{
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
@@ -215,7 +216,8 @@ pub async fn start(transport: BipTransport, gates: Option<Arc<Gates>>) -> (Serve
         .unwrap(),
     ))
     .unwrap();
-    let mut analog = AnalogInputObject::new(1, "Number progress", 0).unwrap();
+    let mut analog =
+        AnalogInputObject::new(1, "Number progress", EngineeringUnits::SQUARE_METERS).unwrap();
     analog.set_present_value(42.0);
     db.add(Box::new(analog)).unwrap();
     let server = bounded(BACnetServer::start(
@@ -248,8 +250,11 @@ pub fn observer() -> (UdpSocket, u16) {
     let port = socket.local_addr().unwrap().port();
     (socket, port)
 }
-pub async fn stopped(mut server: Server, local: SocketAddrV4) {
+/// Stops `server`, and rebinds its port to show it released its wildcard
+/// socket. Run under `rerun_on_lost_port`: another process can take the
+/// freed port first (#1419).
+pub async fn stopped(mut server: Server, local: SocketAddrV4) -> std::io::Result<()> {
     bounded(server.stop()).await.unwrap();
     drop(server);
-    let _rebound = std::net::UdpSocket::bind(local).expect("server released wildcard socket");
+    std::net::UdpSocket::bind(local).map(drop)
 }

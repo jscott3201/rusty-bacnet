@@ -4,7 +4,7 @@
 //! harness router has direct routes to 1000 on port 0 and 2000 on port 1.
 
 use bacnet_encoding::npdu::{decode_npdu, Npdu, NpduAddress};
-use bacnet_types::enums::NetworkMessageType;
+use bacnet_npdu::NetworkMessageType;
 use bacnet_types::MacAddr;
 use bytes::Bytes;
 
@@ -235,31 +235,51 @@ async fn each_learning_cap_counts_its_inspected_stop_without_changing_tail_handl
                 claim_counts(|c| c.learned_cap_ignored = 1)
             );
         }
-        // Existing per-message cap behavior is preserved, including ACK's cap
-        // before refresh.
+        // A held network still takes claims at the cap, from either message
+        // (#1698): hardened, its move needs a second.
         let existing: &[u8] = if message_type == NetworkMessageType::I_AM_ROUTER_TO_NETWORK {
             &[0, 1]
         } else {
             &[1, 0, 1, 0, 0]
         };
         deliver(&mut h, 1, &[2], message_type, existing).await;
-        if message_type == NetworkMessageType::I_AM_ROUTER_TO_NETWORK {
-            assert_eq!(h.table().lookup(1).unwrap().port(), PortId(0));
-            deliver(&mut h, 1, &[2], message_type, existing).await;
-        }
+        assert_eq!(h.table().lookup(1).unwrap().port(), PortId(0));
+        deliver(&mut h, 1, &[2], message_type, existing).await;
         let table = h.table();
-        let refreshed = message_type == NetworkMessageType::I_AM_ROUTER_TO_NETWORK;
-        assert_eq!(table.lookup(1).unwrap().port(), PortId(u8::from(refreshed)));
-        assert_eq!(table.claim_counters().learned_ok, u64::from(refreshed));
-        assert_eq!(
-            table.claim_counters().learned_cap_ignored,
-            if message_type == NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK {
-                2
-            } else {
-                1
-            }
-        );
+        assert_eq!(table.lookup(1).unwrap().port(), PortId(1));
+        assert_eq!(table.claim_counters().learned_ok, 1);
+        assert_eq!(table.claim_counters().learned_cap_ignored, 1);
     }
+}
+
+/// A full table, then an Init-ACK naming a held network and a new one
+/// (#1698), as an I-Am-Router at the cap: network 1 moves to the sender's
+/// port at once (standard convergence), and 3000 is refused and counted.
+#[tokio::test]
+async fn an_init_ack_at_the_cap_refreshes_a_held_network_and_refuses_a_new_one() {
+    let mut h = Harness::two_port();
+    full(&h);
+    let entries = [2, 0, 1, 0, 0, 0x0b, 0xb8, 0, 0];
+    deliver(
+        &mut h,
+        1,
+        &[2],
+        NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK,
+        &entries,
+    )
+    .await;
+    let table = h.table();
+    assert_eq!(table.len(), 256);
+    assert_eq!(table.lookup(1).unwrap().port(), PortId(1));
+    assert_eq!(table.lookup(1).unwrap().next_hop().as_slice(), &[2]);
+    assert!(table.lookup(3000).is_none());
+    assert_eq!(
+        table.claim_counters(),
+        claim_counts(|c| {
+            c.learned_ok = 1;
+            c.learned_cap_ignored = 1;
+        })
+    );
 }
 
 #[tokio::test]
@@ -393,8 +413,7 @@ async fn dampened_table_transition_still_relays_every_reject() {
     };
     for reason in [1, 1, 2] {
         let npdu = Npdu {
-            is_network_message: true,
-            message_type: Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK.to_raw()),
+            message_type: Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK),
             destination: Some(origin.clone()),
             payload: Bytes::from(vec![reason, 0x0b, 0xb8]),
             ..Default::default()

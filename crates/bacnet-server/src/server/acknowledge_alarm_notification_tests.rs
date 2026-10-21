@@ -13,7 +13,7 @@ use bacnet_objects::traits::BACnetObject;
 use bacnet_services::alarm_event::{AcknowledgeAlarmRequest, EventNotificationRequest};
 use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
 use bacnet_types::constructed::{BACnetAddress, BACnetDestination, BACnetRecipient};
-use bacnet_types::enums::{EventState, EventType};
+use bacnet_types::enums::{EngineeringUnits, EventState, EventType};
 use bacnet_types::primitives::{BACnetTimeStamp, Date, Time};
 use bytes::Bytes;
 use std::sync::{Arc as StdArc, Mutex as StdMutex};
@@ -143,15 +143,17 @@ impl Harness {
         db.add(Box::new(class)).unwrap();
         db.add(Box::new(
             DeviceObject::new(DeviceConfig {
-                instance: 44,
-                name: "Device".into(),
+                identity: bacnet_objects::DeviceIdentity::new(44, 0)
+                    .expect("valid Device identity")
+                    .with_name("Device"),
                 ..DeviceConfig::default()
             })
             .unwrap(),
         ))
         .unwrap();
 
-        let mut object = AnalogInputObject::new(1, "AI-ack", 62).unwrap();
+        let mut object =
+            AnalogInputObject::new(1, "AI-ack", EngineeringUnits::DEGREES_CELSIUS).unwrap();
         object
             .write_property(
                 PropertyIdentifier::NOTIFICATION_CLASS,

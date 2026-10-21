@@ -105,10 +105,10 @@ fn decode_date_time(data: &[u8]) -> Result<(Date, Time), Error> {
     expect_end(data, time_end, time_end, WHAT)?;
     let date = Date::decode(date)?;
     let time = Time::decode(time)?;
-    validate_date_time(&date, &time).map_err(|error| {
+    validate_date_time(&date, &time).map_err(|_| {
         Error::decoding(
             0,
-            format!("BACnetAuditLogRecord timestamp is malformed: {error}"),
+            "BACnetAuditLogRecord timestamp contains an invalid Date or Time component",
         )
     })?;
     Ok((date, time))
@@ -161,9 +161,7 @@ fn validate_date_time(date: &Date, time: &Time) -> Result<(), Error> {
         && (time.second == Time::UNSPECIFIED || time.second <= 59)
         && (time.hundredths == Time::UNSPECIFIED || time.hundredths <= 99);
     if !date_valid || !time_valid {
-        return Err(Error::Encoding(
-            "BACnetAuditLogRecord timestamp contains an invalid Date or Time component".into(),
-        ));
+        return Err(Error::encode("BACnetAuditLogRecord timestamp contains an invalid Date or Time component"));
     }
     Ok(())
 }

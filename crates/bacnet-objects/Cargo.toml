@@ -1,5 +1,6 @@
 [package]
 name = "bacnet-objects"
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,6 +9,13 @@ repository.workspace = true
 description = "BACnet object model: traits, database, and standard object types"
 keywords = ["bacnet", "building-automation", "objects", "ashrae"]
 categories = ["network-programming"]
+
+[package.metadata.docs.rs]
+no-default-features = true
+features = []
+default-target = "x86_64-unknown-linux-gnu"
+targets = []
+rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
 bacnet-types = { workspace = true, features = ["std"] }

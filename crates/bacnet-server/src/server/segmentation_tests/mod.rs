@@ -198,6 +198,7 @@ async fn dispatch_test_apdu_from_network(
         source_mac.as_slice(),
         apdu,
         bacnet_network::layer::ReceivedApdu {
+            router_response: None,
             direct_response: None,
             apdu: Bytes::new(),
             source_mac: source_mac.clone(),
@@ -309,6 +310,7 @@ mod ack_window;
 mod control_limits;
 mod duplicate_window;
 mod get_event_information;
+mod refusal_warnings;
 mod request_byte_budget;
 mod request_byte_budget_failures;
 mod request_payload_detachment;

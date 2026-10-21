@@ -129,7 +129,7 @@ async fn recipient_preserves_all_source_preflight_failures_and_retry() {
         let (session, _peer, observed) = configured_session(SessionRole::Both);
         let mut db = database();
         let expected = match case {
-            "no database" => "attached local database",
+            "no database" => "provisioned built-in Device recipient",
             "no device" => {
                 db.remove(&oid(ObjectType::DEVICE, 123)).unwrap();
                 "concrete local Device"
@@ -143,9 +143,9 @@ async fn recipient_preserves_all_source_preflight_failures_and_retry() {
                     .build_database()
                     .unwrap();
                 db.add(other.remove(&lower).unwrap().unwrap()).unwrap();
-                "does not match session identity"
+                "must match identity"
             }
-            "identity mismatch" => "does not match session identity",
+            "identity mismatch" => "must match identity",
             "wrong selection type" => "must be an Audit Reporter",
             "missing reporter" => "absent from the database",
             "no capability" | "capability mismatch" => {
@@ -173,7 +173,7 @@ async fn recipient_preserves_all_source_preflight_failures_and_retry() {
             }
         };
         let mut session = session
-            .with_identity(
+            .device(
                 crate::identity::DeviceIdentity::new(
                     if case == "identity mismatch" {
                         456
@@ -198,7 +198,7 @@ async fn recipient_preserves_all_source_preflight_failures_and_retry() {
         assert_eq!(session.source_audit_bindings, bindings);
         session = session
             .with_database(database())
-            .with_identity(crate::identity::DeviceIdentity::new(123, 42).unwrap())
+            .device(crate::identity::DeviceIdentity::new(123, 42).unwrap())
             .with_source_audit_reporter(selected());
         session.start().await.unwrap();
         session.stop().await.unwrap();

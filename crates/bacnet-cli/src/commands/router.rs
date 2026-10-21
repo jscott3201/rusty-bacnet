@@ -2,30 +2,64 @@
 
 use std::net::Ipv4Addr;
 
-use bacnet_client::client::BACnetClient;
+use bacnet_client::client::{BACnetClient, DiscoveredRouter};
 use bacnet_transport::bip::BipTransport;
 use bacnet_transport::port::TransportPort;
+use serde::Serialize;
 
-use crate::output::{self, device_info, DeviceInfo, OutputFormat};
+use crate::core::target::AddressStyle;
+use crate::output::{self, OutputFormat};
 
-/// Display all cached discovered devices from the client's device table.
-pub async fn devices_cmd<T: TransportPort + 'static>(
-    client: &BACnetClient<T>,
-    format: OutputFormat,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let devices = client.discovered_devices().await;
-    let infos: Vec<DeviceInfo> = devices.iter().map(device_info).collect();
-    output::print_devices(&infos, format);
-    Ok(())
+/// A router `whois-router` heard from, as it prints it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RouterInfo {
+    /// The router's address on the local network, in the form a target
+    /// takes.
+    pub router: String,
+    /// The networks it reaches, ascending.
+    pub networks: Vec<u16>,
 }
 
-/// Send Who-Is-Router-To-Network.
+impl RouterInfo {
+    fn of(router: &DiscoveredRouter, style: AddressStyle) -> Self {
+        Self {
+            router: style.format(&router.mac),
+            networks: router.networks.clone(),
+        }
+    }
+}
+
+/// Broadcast a Who-Is-Router-To-Network, for `dnet` or every network, and
+/// print the routers that answer within `wait_secs`: a JSON array of
+/// `{router, networks}`, empty when none answered.
 pub async fn whois_router_cmd<T: TransportPort + 'static>(
-    _client: &BACnetClient<T>,
+    client: &BACnetClient<T>,
+    dnet: Option<u16>,
+    wait_secs: u64,
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // TODO: Send Who-Is-Router-To-Network (network layer message, not APDU).
-    output::print_success("Who-Is-Router-To-Network not yet implemented", format);
+    output::print_waiting(wait_secs);
+    let routers = client
+        .discover_routers(dnet, std::time::Duration::from_secs(wait_secs))
+        .await?;
+    let style = AddressStyle::of(client.transport());
+    let routers: Vec<RouterInfo> = routers.iter().map(|r| RouterInfo::of(r, style)).collect();
+    match format {
+        OutputFormat::Table if routers.is_empty() => println!("No routers found."),
+        OutputFormat::Table => {
+            let mut table = comfy_table::Table::new();
+            table.set_header(vec!["Router", "Networks"]);
+            for r in &routers {
+                let networks: Vec<String> = r.networks.iter().map(u16::to_string).collect();
+                table.add_row(vec![r.router.clone(), networks.join(", ")]);
+            }
+            println!("{table}");
+        }
+        OutputFormat::Json => println!(
+            "{}",
+            serde_json::to_string_pretty(&routers).expect("serialize routers")
+        ),
+    }
     Ok(())
 }
 
@@ -126,11 +160,8 @@ pub async fn register_cmd(
     ttl: u16,
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let result = client.register_foreign_device_bvlc(mac, ttl).await?;
-    output::print_success(
-        &format!("Register-Foreign-Device result: {result:?}"),
-        format,
-    );
+    client.register_foreign_device_bvlc(mac, ttl).await?;
+    output::print_success("Register-Foreign-Device accepted", format);
     Ok(())
 }
 
@@ -148,10 +179,7 @@ pub async fn unregister_cmd(
     }
     let ip = [local_mac[0], local_mac[1], local_mac[2], local_mac[3]];
     let port = u16::from_be_bytes([local_mac[4], local_mac[5]]);
-    let result = client.delete_fdt_entry(mac, ip, port).await?;
-    output::print_success(
-        &format!("Delete-Foreign-Device-Table-Entry result: {result:?}"),
-        format,
-    );
+    client.delete_fdt_entry(mac, ip, port).await?;
+    output::print_success("Delete-Foreign-Device-Table-Entry accepted", format);
     Ok(())
 }

@@ -41,6 +41,8 @@ from rusty_bacnet import (
     ScEndpoint,
 )
 
+from port_retry import rerun_on_lost_port
+
 
 def address_port(address: str) -> int:
     """The port of a started endpoint's "host:port" local address.
@@ -109,7 +111,13 @@ class BipConstructorTests(unittest.TestCase):
 
     def test_invalid_max_apdu_rejected(self):
         with self.assertRaisesRegex(ValueError, "max-APDU|APDU|apdu|invalid"):
-            BipEndpoint(**bip_kwargs(port=0, max_apdu=999))
+            BipEndpoint(**bip_kwargs(port=0, max_apdu=49))
+
+    def test_non_table_max_apdu_declarations_accepted(self):
+        for raw in (999, 1474):
+            with self.subTest(max_apdu=raw):
+                endpoint = BipEndpoint(**bip_kwargs(port=0, max_apdu=raw))
+                self.assertEqual(endpoint.device_instance, 1001)
 
     def test_bad_uuid_length_rejected(self):
         with self.assertRaisesRegex(ValueError, "16 bytes"):
@@ -295,6 +303,10 @@ class ScConstructorTests(unittest.TestCase):
 
 class BipLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_concurrent_start_context_and_none_cleanup(self):
+        # The release probe can lose the freed port to another process (#1419).
+        await rerun_on_lost_port(self.concurrent_start_context_and_none_cleanup)
+
+    async def concurrent_start_context_and_none_cleanup(self):
         endpoint = BipEndpoint(**bip_kwargs(port=0))
         results = await asyncio.gather(endpoint.start(), endpoint.start(), return_exceptions=True)
         self.assertEqual(sum(result is None for result in results), 1)

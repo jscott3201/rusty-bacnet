@@ -456,8 +456,8 @@ async fn audit_reporter_atomic_write_file_backend_mapping_and_unknown_outcome_si
         for (error, report) in [
             (
                 Error::Protocol {
-                    class: 128,
-                    code: 512,
+                    class: ErrorClass::from_raw(128),
+                    code: ErrorCode::from_raw(512),
                 },
                 true,
             ),
@@ -467,13 +467,13 @@ async fn audit_reporter_atomic_write_file_backend_mapping_and_unknown_outcome_si
             (Error::Timeout(Duration::from_secs(1)), false),
             (
                 Error::Reject {
-                    reason: RejectReason::OTHER.to_raw(),
+                    reason: RejectReason::OTHER,
                 },
                 false,
             ),
             (
                 Error::Abort {
-                    reason: AbortReason::OUT_OF_RESOURCES.to_raw(),
+                    reason: AbortReason::OUT_OF_RESOURCES,
                 },
                 false,
             ),
@@ -539,10 +539,14 @@ async fn audit_reporter_atomic_write_file_budget_and_authorization_are_silent() 
                     fixture.server.config_mut().mutation_policy =
                         crate::mutation::MutationPolicy::DenyAll
                 }
-                1 => fixture.server.config_mut().mutation_authorizer = Some(Arc::new(|_| false)),
+                1 => {
+                    fixture.server.config_mut().policy =
+                        Some(Arc::new(crate::FnPolicy::new().mutation(|_| false)))
+                }
                 2 => {
-                    fixture.server.config_mut().mutation_authorizer =
-                        Some(Arc::new(|_| panic!("fail closed")))
+                    fixture.server.config_mut().policy = Some(Arc::new(
+                        crate::FnPolicy::new().mutation(|_| panic!("fail closed")),
+                    ))
                 }
                 3 => {
                     fixture

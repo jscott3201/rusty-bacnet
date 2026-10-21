@@ -2,8 +2,9 @@ name: Emulation
 
 # Runs the firmware link test's images on emulated boards: QEMU, in the
 # Docker image scripts/emu/Dockerfile pins, runs the mstp, mstp-extended,
-# bip, node, bbmd and apdu images on a Cortex-M0, a Cortex-M3, a Cortex-M4F
-# and an RV32 core, and each checks its scenario's summary and reports its
+# bip, node, bbmd, router, device and apdu images on a Cortex-M0, a
+# Cortex-M3, a Cortex-M4F and an RV32 core (the router on the two larger
+# boards only), and each checks its scenario's summary and reports its
 # stack's high-water mark. See docs/ci.md, "Emulation (manual)".
 #
 # A manual check, run at intervals: workflow_dispatch is its only trigger,

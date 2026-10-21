@@ -147,9 +147,63 @@ fn a_foreign_device_on_the_public_side_reaches_both_sites() {
     );
 }
 
-/// The hosted transport today runs with its private socket address as its
-/// own (#940): the public row then reads as a peer, so the BBMD also sends
-/// to its own NAT, and a second, private own row is added.
+/// The private side when this BBMD is the only device of the network there
+/// (Annex J.4.5, #1668).
+const ALONE_BEHIND_NAT: LocalSubnet = {
+    let mut subnet = LocalSubnet::new(PRIVATE_BROADCAST);
+    subnet.alone = true;
+    subnet
+};
+
+/// Alone on its subnet, a BBMD sends a peer's forward to its foreign
+/// devices only, and a foreign device's broadcast to the peers and the other
+/// foreign devices only: never to the empty private side.
+#[test]
+fn a_bbmd_alone_behind_its_nat_skips_the_local_rebroadcast() {
+    let mut bbmd1 = site(NAT_A);
+    for device in [ROAMING, addr(198, 51, 100, 8, 47808)] {
+        let registered = bbmd1.fdt.register(
+            device,
+            300,
+            NOW,
+            &support::OPEN,
+            Reservation::Ordinary,
+            || true,
+        );
+        assert!(registered.result.is_ok());
+    }
+    let mut out = [Target::UNUSED; Site::MAX_TARGETS];
+    let forwarded = bbmd1
+        .forwarded_npdu(
+            &cx(),
+            &ALONE_BEHIND_NAT,
+            NAT_B,
+            Arrival::Unicast,
+            BEHIND_B,
+            &mut out,
+        )
+        .unwrap();
+    assert_eq!(
+        destinations(forwarded.targets),
+        [ROAMING, addr(198, 51, 100, 8, 47808)]
+    );
+
+    let distributed = bbmd1
+        .distribute_broadcast(&cx(), &ALONE_BEHIND_NAT, ROAMING, NPDU, &mut out)
+        .unwrap();
+    assert_eq!(
+        distributed.fanout.targets,
+        [
+            target(NAT_B, Via::Peer),
+            target(addr(198, 51, 100, 8, 47808), Via::ForeignDevice),
+        ]
+    );
+}
+
+/// Without [`Tables::set_nat`] a BBMD runs under the address it is given.
+/// Given its private socket address, the public row reads as a peer, so it
+/// also sends to its own NAT, and a second, private own row is added: what
+/// the NAT setting (`tests/nat_rules.rs`) is for.
 #[test]
 fn with_its_private_address_as_its_own_a_bbmd_also_sends_to_its_own_nat() {
     let bbmd1 = site(PRIVATE);

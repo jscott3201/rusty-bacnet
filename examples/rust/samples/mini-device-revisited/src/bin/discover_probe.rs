@@ -1,4 +1,5 @@
 //! One-shot probe for a running mini-device-revisited server.
+#![forbid(unsafe_code)]
 use std::net::Ipv4Addr;
 use std::time::Duration;
 

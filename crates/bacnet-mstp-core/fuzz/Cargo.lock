@@ -13,19 +13,24 @@ dependencies = [
 
 [[package]]
 name = "bacnet-mstp-codec"
-version = "0.13.0"
+version = "0.14.0"
 
 [[package]]
 name = "bacnet-mstp-core"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "bacnet-mstp-codec",
+ "bacnet-npdu",
  "bacnet-time",
 ]
 
 [[package]]
+name = "bacnet-npdu"
+version = "0.14.0"
+
+[[package]]
 name = "bacnet-time"
-version = "0.13.0"
+version = "0.13.1"
 
 [[package]]
 name = "cc"

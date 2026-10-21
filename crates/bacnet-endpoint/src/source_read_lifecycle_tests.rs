@@ -319,13 +319,19 @@ async fn source_read_stop_and_drop_cancel_owned_work_with_held_client_clones() {
 #[tokio::test]
 async fn source_read_and_target_reporting_remain_independent_over_bip() {
     use bacnet_server::server::{AuditReportersConfig, BACnetServer, DeviceBinding};
+    use bacnet_types::enums::EngineeringUnits;
     let (mut sink, mut records) = network().await;
     let mut db = crate::DeviceIdentity::new(456, 42)
         .unwrap()
         .build_database()
         .unwrap();
     db.add(Box::new(
-        bacnet_objects::analog::AnalogValueObject::new(7, "Target", 0).unwrap(),
+        bacnet_objects::analog::AnalogValueObject::new(
+            7,
+            "Target",
+            EngineeringUnits::SQUARE_METERS,
+        )
+        .unwrap(),
     ))
     .unwrap();
     let mut reporter = AuditReporterObject::new(1, "Target Reporter").unwrap();
@@ -350,6 +356,7 @@ async fn source_read_and_target_reporting_remain_independent_over_bip() {
         )))
         .unwrap();
     let mut target_server = BACnetServer::bip_builder()
+        .device(bacnet_objects::DeviceIdentity::new(456, 42).unwrap())
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
         .database(db)

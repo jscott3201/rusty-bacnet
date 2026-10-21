@@ -69,8 +69,7 @@ async fn start(zone: AccessZoneObject) -> (BACnetServer<TestTransport>, ObjectId
     db.add(Box::new(class)).unwrap();
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
-            instance: 1,
-            name: "Dev".into(),
+            identity: bacnet_objects::DeviceIdentity::default().with_name("Dev"),
             ..DeviceConfig::default()
         })
         .unwrap(),

@@ -28,6 +28,7 @@ use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetEventParameter, BACnetPropertyStates,
 };
+use bacnet_types::enums::EngineeringUnits;
 
 /// OUT_OF_RANGE fixture with configurable delays. `tdn` writes the EE
 /// object's optional Time_Delay_Normal property (`None` = absent, the
@@ -42,7 +43,7 @@ fn setup_oor(
 ) -> (ObjectDatabase, ObjectIdentifier, ObjectIdentifier) {
     let mut db = ObjectDatabase::new();
 
-    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ai.set_present_value(present_value);
     let ai_oid = ai.object_identifier();
     db.add(Box::new(ai)).unwrap();
@@ -663,7 +664,7 @@ fn retarget_mid_pending_cancels_and_regates() {
         .unwrap()
         .pending
         .expect("countdown seeded");
-    let mut ai2 = AnalogInputObject::new(2, "AI-2", 62).unwrap();
+    let mut ai2 = AnalogInputObject::new(2, "AI-2", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ai2.set_present_value(86.0);
     let ai2_oid = ai2.object_identifier();
     db.add(Box::new(ai2)).unwrap();

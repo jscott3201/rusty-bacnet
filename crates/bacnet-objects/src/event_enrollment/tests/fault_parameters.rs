@@ -420,8 +420,8 @@ fn fault_parameters_application_null_is_another_datatype() {
         .unwrap_err();
     assert!(
         matches!(err, Error::Protocol { class, code }
-            if class == ErrorClass::PROPERTY.to_raw() as u32
-                && code == ErrorCode::INVALID_DATA_TYPE.to_raw() as u32),
+            if class == ErrorClass::PROPERTY
+                && code == ErrorCode::INVALID_DATA_TYPE),
         "{err:?}"
     );
     let val = ee

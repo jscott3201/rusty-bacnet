@@ -6,6 +6,8 @@ on:
     paths:
       - 'website/**'
       - '.github/workflows/docs-pages.yml'
+      # The embedded page's size test reads the firmware budgets (#1771).
+      - 'firmware/link/*-budget.toml'
   workflow_dispatch:
     inputs:
       publish:

@@ -1,22 +1,21 @@
 //! The network-layer messages a router reads and sends (Clause 6.4).
 //!
-//! [`MessageType`] names their types and [`RejectReason`] the reasons a
-//! reject gives, as open sets of wire codes: the values `bacnet-types`
-//! gives them, with room for any other octet. The views below read a
-//! message's data, the payload of an [`Npdu`](crate::npdu::Npdu) whose
-//! message type names it, in place: each parses the whole payload or
-//! refuses it with a [`DataError`], so a router never acts on part of a
-//! malformed message. The writers fill the caller's buffer and return the
-//! length, or a [`DataError`] with nothing written.
+//! Their types and the reasons a reject gives are `bacnet-npdu`'s
+//! [`NetworkMessageType`](crate::npdu::NetworkMessageType) and
+//! [`RejectMessageReason`](crate::npdu::RejectMessageReason), and so is a
+//! reject's data,
+//! [`RejectMessageToNetwork`](crate::npdu::RejectMessageToNetwork). The
+//! views below read the other messages' data, the payload of an
+//! [`Npdu`](crate::npdu::Npdu) whose message type names it, in place: each
+//! parses the whole payload or refuses it with a
+//! [`DataError`], so a router never acts on part of a malformed message.
+//! The writers fill the caller's buffer and return the length, or a
+//! [`DataError`] with nothing written.
 //!
 //! The views check layout only. Policy, such as which network numbers a
 //! router may learn, stays with the router.
 
-mod codes;
-
 use core::fmt;
-
-pub use codes::{MessageType, RejectReason};
 
 /// Why a view refused a message's data, or a writer wrote nothing.
 ///
@@ -168,35 +167,6 @@ impl WhoIsRouter {
             [high, low] => Ok(Self::Network(u16::from_be_bytes([high, low]))),
             _ => Err(bad_length(payload)),
         }
-    }
-}
-
-/// A Reject-Message-To-Network's data: a reason and a network.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Reject {
-    /// The reason.
-    pub reason: RejectReason,
-    /// The network the refused message was for.
-    pub network: u16,
-}
-
-impl Reject {
-    /// Read exactly a reason octet and a network number.
-    pub const fn parse(payload: &[u8]) -> Result<Self, DataError> {
-        match *payload {
-            [reason, high, low] => Ok(Self {
-                reason: RejectReason::from_raw(reason),
-                network: u16::from_be_bytes([high, low]),
-            }),
-            _ => Err(bad_length(payload)),
-        }
-    }
-
-    /// The data, as sent.
-    #[must_use]
-    pub const fn to_bytes(self) -> [u8; 3] {
-        let [high, low] = self.network.to_be_bytes();
-        [self.reason.to_raw(), high, low]
     }
 }
 

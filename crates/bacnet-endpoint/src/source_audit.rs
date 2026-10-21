@@ -419,6 +419,115 @@ impl SourceAudit {
             .await
             .map_err(|_| Error::Encoding("endpoint shutdown".into()))?
     }
+
+    /// Report an operation a peer carried out on this device as a whole,
+    /// such as an accepted ReinitializeDevice reset, backup or restore step
+    /// (Clause 19.6, Table 19-5, #1564), with `source` as its requester.
+    ///
+    /// Clause 19.6.2 casts this Reporter as the source-side one; sending
+    /// these target-side records through it, the session's only Reporter,
+    /// is a local choice.
+    ///
+    /// The session's one Reporter filters it by its Audit_Level and
+    /// Auditable_Operations. The record names this Device as its target and
+    /// no object, property or value, carries the target timestamp, and has
+    /// no Result: only an operation carried out is reported. It goes to the
+    /// Device's recipient as the source records do, admitted before this
+    /// returns. Called under the database guard.
+    pub(crate) fn device_operation(
+        self: &Arc<Self>,
+        db: &mut ObjectDatabase,
+        operation: AuditOperation,
+        source: &bacnet_objects::device::AuditWriteSource,
+    ) {
+        if self.operations.is_closed() {
+            return;
+        }
+        let Some(runtime) = self
+            .runtime
+            .upgrade()
+            .filter(|runtime| runtime.owner.is_active())
+        else {
+            return;
+        };
+        let Some(reporter) = db
+            .get(&self.selected)
+            .and_then(|object| object.audit_reporter_internal())
+        else {
+            return;
+        };
+        let level = match reporter.read_property(PropertyIdentifier::AUDIT_LEVEL, None) {
+            Ok(PropertyValue::Enumerated(level)) => AuditLevel::from_raw(level),
+            _ => return,
+        };
+        let operations =
+            match reporter.read_property(PropertyIdentifier::AUDITABLE_OPERATIONS, None) {
+                Ok(PropertyValue::BitString { unused_bits, data }) => {
+                    match AuditOperationFlags::from_bacnet(unused_bits, &data) {
+                        Ok(operations) => operations,
+                        Err(_) => return,
+                    }
+                }
+                _ => return,
+            };
+        if level == AuditLevel::NONE || !operations.contains(operation) {
+            return;
+        }
+        let status = reporter.status_internal();
+        let confirmed = reporter.confirmed_internal();
+        let route = runtime.recipient_route(db);
+        status.set_configured(route.is_some());
+        let (Some(route), Some(owner)) = (route, self.notifications.upgrade()) else {
+            return;
+        };
+        let device = self.device;
+        if db.local_device().identifier() != Some(device) {
+            status.set_configured(false);
+            return;
+        }
+        let timestamp = match db
+            .clock_frame()
+            .filter(|frame| frame.is_valid_actual_datetime())
+        {
+            Some(frame) => BACnetTimeStamp::DateTime {
+                date: frame.local_date,
+                time: frame.local_time,
+            },
+            None => BACnetTimeStamp::SequenceNumber(db.next_event_sequence_number()),
+        };
+        let failure = status.auditing_failure_epoch().and_then(|epoch| {
+            self.failures.observe(AuditFailureContext {
+                status: Arc::clone(&status),
+                epoch,
+                device,
+                confirmed,
+                peer: CanonicalPeer::direct(route.as_slice()),
+                route: route.clone(),
+                max_apdu: u32::from(self.max_apdu),
+            })
+        });
+        let completion = delivery::Completion::new(Arc::clone(&status), status.begin_delivery());
+        let record = BACnetAuditNotification {
+            source_timestamp: None,
+            target_timestamp: Some(timestamp),
+            source_device: source.device.clone(),
+            source_object: None,
+            operation,
+            source_comment: None,
+            target_comment: None,
+            invoke_id: Some(source.invoke_id),
+            source_user_id: None,
+            source_user_role: None,
+            target_device: BACnetRecipient::Device(device),
+            target_object: None,
+            target_property: None,
+            target_priority: None,
+            target_value: None,
+            current_value: None,
+            result: None,
+        };
+        delivery::admit(self, &owner, confirmed, route, record, completion, failure);
+    }
 }
 
 #[cfg(test)]

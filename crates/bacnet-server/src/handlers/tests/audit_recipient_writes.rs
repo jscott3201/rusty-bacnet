@@ -179,8 +179,8 @@ fn invalid_values() -> Vec<Vec<u8>> {
 fn assert_invalid_encoding(error: Error) {
     assert!(
         matches!(error, Error::Protocol { class, code }
-            if class == ErrorClass::PROPERTY.to_raw() as u32
-                && code == ErrorCode::INVALID_DATA_ENCODING.to_raw() as u32),
+            if class == ErrorClass::PROPERTY
+                && code == ErrorCode::INVALID_DATA_ENCODING),
         "{error:?}"
     );
 }

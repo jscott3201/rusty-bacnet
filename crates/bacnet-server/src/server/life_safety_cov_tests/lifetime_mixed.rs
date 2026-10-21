@@ -31,8 +31,8 @@ impl BACnetObject for ReadProbe {
         }
         if property == PropertyIdentifier::OPERATION_EXPECTED && self.fail.load(Ordering::Acquire) {
             return Err(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::READ_ACCESS_DENIED.to_raw() as u32,
+                class: ErrorClass::PROPERTY,
+                code: ErrorCode::READ_ACCESS_DENIED,
             });
         }
         self.inner.read_property(property, index)

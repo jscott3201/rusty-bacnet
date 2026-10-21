@@ -11,9 +11,12 @@ fn every_served_property_follows_the_shared_collection_table() {
     let mut objects = supported_representatives();
     audit_object_type_coverage(&objects);
     // The representatives build a non-B/IP Network Port; a B/IP one serves
-    // IP_DNS_SERVER as well.
+    // IP_DNS_SERVER as well, and a B/IPv6 one IPV6_DNS_SERVER.
     objects.push(Box::new(
         NetworkPortObject::new_bip(2, "NP-BIP", Default::default()).unwrap(),
+    ));
+    objects.push(Box::new(
+        NetworkPortObject::new_bip6(3, "NP-BIP6", Default::default()).unwrap(),
     ));
     let mut failures = Vec::new();
     for object in &objects {
@@ -41,6 +44,9 @@ fn every_served_array_reads_its_size_at_index_zero() {
     let mut objects = supported_representatives();
     objects.push(Box::new(
         NetworkPortObject::new_bip(2, "NP-BIP", Default::default()).unwrap(),
+    ));
+    objects.push(Box::new(
+        NetworkPortObject::new_bip6(3, "NP-BIP6", Default::default()).unwrap(),
     ));
     let mut failures = Vec::new();
     for object in &objects {

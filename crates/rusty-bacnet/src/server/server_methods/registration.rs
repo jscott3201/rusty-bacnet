@@ -1,92 +1,65 @@
 use super::super::*;
+use bacnet_types::enums::EngineeringUnits;
 
 #[pymethods]
 impl BACnetServer {
-    /// Add an Analog Input object to the server (before starting).
-    #[pyo3(signature = (instance, name, units=62, present_value=0.0))]
-    fn add_analog_input(
-        &self,
-        instance: u32,
-        name: &str,
-        units: u32,
-        present_value: f32,
-    ) -> PyResult<()> {
-        let mut ai = AnalogInputObject::new(instance, name, units).map_err(to_py_err)?;
-        ai.set_present_value(present_value);
-        self.push_pending(Box::new(ai))
-    }
-
-    /// Add an Analog Output object to the server (before starting).
-    #[pyo3(signature = (instance, name, units=62))]
-    fn add_analog_output(&self, instance: u32, name: &str, units: u32) -> PyResult<()> {
-        let ao = AnalogOutputObject::new(instance, name, units).map_err(to_py_err)?;
-        self.push_pending(Box::new(ao))
-    }
-
-    /// Add a Binary Input object to the server (before starting).
-    #[pyo3(signature = (instance, name))]
-    fn add_binary_input(&self, instance: u32, name: &str) -> PyResult<()> {
-        let bi = BinaryInputObject::new(instance, name).map_err(to_py_err)?;
-        self.push_pending(Box::new(bi))
-    }
-
-    /// Add a Binary Output object to the server (before starting).
-    #[pyo3(signature = (instance, name))]
-    fn add_binary_output(&self, instance: u32, name: &str) -> PyResult<()> {
-        let bo = BinaryOutputObject::new(instance, name).map_err(to_py_err)?;
-        self.push_pending(Box::new(bo))
-    }
-
-    /// Add a Multi-State Input object to the server (before starting).
-    #[pyo3(signature = (instance, name, number_of_states))]
-    fn add_multistate_input(
-        &self,
-        instance: u32,
-        name: &str,
-        number_of_states: u32,
-    ) -> PyResult<()> {
-        let msi =
-            MultiStateInputObject::new(instance, name, number_of_states).map_err(to_py_err)?;
-        self.push_pending(Box::new(msi))
-    }
-
-    /// Add a Multi-State Output object to the server (before starting).
-    #[pyo3(signature = (instance, name, number_of_states))]
-    fn add_multistate_output(
-        &self,
-        instance: u32,
-        name: &str,
-        number_of_states: u32,
-    ) -> PyResult<()> {
-        let mso =
-            MultiStateOutputObject::new(instance, name, number_of_states).map_err(to_py_err)?;
-        self.push_pending(Box::new(mso))
-    }
-
-    /// Add a Multi-State Value object to the server (before starting).
-    #[pyo3(signature = (instance, name, number_of_states))]
-    fn add_multistate_value(
-        &self,
-        instance: u32,
-        name: &str,
-        number_of_states: u32,
-    ) -> PyResult<()> {
-        let msv =
-            MultiStateValueObject::new(instance, name, number_of_states).map_err(to_py_err)?;
-        self.push_pending(Box::new(msv))
-    }
-
     /// Add a Calendar object to the server (before starting).
-    #[pyo3(signature = (instance, name))]
-    fn add_calendar(&self, instance: u32, name: &str) -> PyResult<()> {
-        let cal = CalendarObject::new(instance, name).map_err(to_py_err)?;
+    ///
+    /// `date_list` seeds Date_List with calendar entry mappings, the form a
+    /// typed read of it gives (#1499): `kind` `date` with `date`,
+    /// `date_range` with `start_date` and `end_date`, or `week_n_day` with
+    /// `month`, `week_of_month` and `day_of_week`. An entry the Calendar
+    /// refuses raises BacnetProtocolError and nothing is registered.
+    #[pyo3(signature = (instance, name, *, date_list=None))]
+    fn add_calendar(
+        &self,
+        instance: u32,
+        name: &str,
+        date_list: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
+        let entries = date_list
+            .map(crate::types::calendar_entries_from_py)
+            .transpose()?
+            .unwrap_or_default();
+        let mut cal = CalendarObject::new(instance, name).map_err(to_py_err)?;
+        for entry in entries {
+            cal.add_date_entry(entry).map_err(to_py_err)?;
+        }
         self.push_pending(Box::new(cal))
     }
 
     /// Add a Schedule object to the server (before starting).
-    #[pyo3(signature = (instance, name))]
-    fn add_schedule(&self, instance: u32, name: &str) -> PyResult<()> {
-        let sched = ScheduleObject::new(instance, name, PropertyValue::Null).map_err(to_py_err)?;
+    ///
+    /// The keywords take the forms typed reads of the properties give
+    /// (#1499): `weekly_schedule` seven lists of `(time, value)` pairs,
+    /// Monday first; `exception_schedule` a list of mappings of `period` (a
+    /// calendar entry mapping or a Calendar's ObjectIdentifier),
+    /// `time_values` and `priority`; `effective_period` a `(start_date,
+    /// end_date)` pair. What the Schedule refuses, such as a time given
+    /// twice in a day or a priority outside 1 to 16, raises
+    /// BacnetProtocolError and nothing is registered.
+    #[pyo3(signature = (
+        instance, name, *, weekly_schedule=None, exception_schedule=None, effective_period=None
+    ))]
+    fn add_schedule(
+        &self,
+        instance: u32,
+        name: &str,
+        weekly_schedule: Option<&Bound<'_, PyAny>>,
+        exception_schedule: Option<&Bound<'_, PyAny>>,
+        effective_period: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
+        let week = weekly_schedule
+            .map(crate::types::weekly_schedule_from_py)
+            .transpose()?;
+        let exceptions = exception_schedule
+            .map(crate::types::special_events_from_py)
+            .transpose()?
+            .unwrap_or_default();
+        let period = effective_period
+            .map(|period| crate::types::date_range_from_py(period, "effective_period"))
+            .transpose()?;
+        let sched = schedule(instance, name, week, exceptions, period).map_err(to_py_err)?;
         self.push_pending(Box::new(sched))
     }
 
@@ -134,23 +107,6 @@ impl BACnetServer {
             nc.add_destination(destination).map_err(to_py_err)?;
         }
         self.push_pending(Box::new(nc))
-    }
-
-    /// Add a Trend Log object to the server (before starting).
-    /// `total_record_count` seeds Total_Record_Count: the first record is
-    /// numbered one past it, going from 2^32 - 1 on to 1 (#1537).
-    #[pyo3(signature = (instance, name, buffer_size=100, *, total_record_count=0))]
-    fn add_trend_log(
-        &self,
-        instance: u32,
-        name: &str,
-        buffer_size: u32,
-        total_record_count: u32,
-    ) -> PyResult<()> {
-        let mut tl = TrendLogObject::new(instance, name, buffer_size).map_err(to_py_err)?;
-        tl.restore_log_buffer(total_record_count, [])
-            .map_err(to_py_err)?;
-        self.push_pending(Box::new(tl))
     }
 
     /// Add an Audit Log object to the server (before starting).
@@ -224,33 +180,6 @@ impl BACnetServer {
         self.push_pending(Box::new(obj))
     }
 
-    /// Add a Lighting Output object to the server (before starting).
-    ///
-    /// Its Lighting_Command reads and writes as `application_data` holding
-    /// the context-tagged BACnetLightingCommand, operation NONE until written
-    /// (#1263). The object carries each command out (#1384): fades and ramps
-    /// move Tracking_Value to the new level over time, steps change the level
-    /// at once, and the warn commands blink and hold the level for
-    /// Egress_Time when Blink_Warn_Enable is TRUE.
-    ///
-    /// A Present_Value or Relinquish_Default level above 0.0 and below 1.0 is
-    /// stored as 1.0, and one outside 0.0 to 100.0 is refused with
-    /// VALUE_OUT_OF_RANGE (#1385), but for Present_Value's warn values -1.0,
-    /// -2.0 and -3.0. Tracking_Value reads the same level as Present_Value
-    /// whenever no fade or ramp is running.
-    #[pyo3(signature = (instance, name))]
-    fn add_lighting_output(&self, instance: u32, name: &str) -> PyResult<()> {
-        let obj = LightingOutputObject::new(instance, name).map_err(to_py_err)?;
-        self.push_pending(Box::new(obj))
-    }
-
-    /// Add a Binary Lighting Output object to the server (before starting).
-    #[pyo3(signature = (instance, name))]
-    fn add_binary_lighting_output(&self, instance: u32, name: &str) -> PyResult<()> {
-        let obj = BinaryLightingOutputObject::new(instance, name).map_err(to_py_err)?;
-        self.push_pending(Box::new(obj))
-    }
-
     /// Add a Life Safety Point object to the server (before starting).
     #[pyo3(signature = (instance, name))]
     fn add_life_safety_point(&self, instance: u32, name: &str) -> PyResult<()> {
@@ -286,9 +215,25 @@ impl BACnetServer {
     }
 
     /// Add a Global Group object to the server (before starting).
-    #[pyo3(signature = (instance, name))]
-    fn add_global_group(&self, instance: u32, name: &str) -> PyResult<()> {
-        let obj = GlobalGroupObject::new(instance, name).map_err(to_py_err)?;
+    ///
+    /// `members` seeds Group_Members with property references, each a
+    /// `(object, property)` or `(object, property, array_index)` tuple or a
+    /// `DeviceObjectPropertyReference` mapping, the form a typed read of it
+    /// gives (#1499). A member naming this server's Device is stored in its
+    /// local form; a device identifier that isn't a Device raises ValueError.
+    #[pyo3(signature = (instance, name, *, members=None))]
+    fn add_global_group(
+        &self,
+        instance: u32,
+        name: &str,
+        members: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
+        let members = members
+            .map(|members| self.members_from_py(members, "members"))
+            .transpose()?
+            .unwrap_or_default();
+        let mut obj = GlobalGroupObject::new(instance, name).map_err(to_py_err)?;
+        obj.set_group_members(members).map_err(to_py_err)?;
         self.push_pending(Box::new(obj))
     }
 
@@ -448,7 +393,8 @@ impl BACnetServer {
         scale: Option<&Bound<'_, PyAny>>,
         prescale: Option<(u32, u32)>,
     ) -> PyResult<()> {
-        let mut obj = AccumulatorObject::new(instance, name, units).map_err(to_py_err)?;
+        let mut obj = AccumulatorObject::new(instance, name, EngineeringUnits::from_raw(units))
+            .map_err(to_py_err)?;
         if let Some(scale) = scale {
             obj.set_scale(crate::types::scale_from_py(scale)?);
         }
@@ -470,7 +416,8 @@ impl BACnetServer {
     /// Add a Pulse Converter object to the server (before starting).
     #[pyo3(signature = (instance, name, units=62))]
     fn add_pulse_converter(&self, instance: u32, name: &str, units: u32) -> PyResult<()> {
-        let obj = PulseConverterObject::new(instance, name, units).map_err(to_py_err)?;
+        let obj = PulseConverterObject::new(instance, name, EngineeringUnits::from_raw(units))
+            .map_err(to_py_err)?;
         self.push_pending(Box::new(obj))
     }
 
@@ -483,7 +430,9 @@ impl BACnetServer {
 
     /// Add an Event Enrollment object to the server (before starting).
     ///
-    /// `event_type` defaults to `EventType.CHANGE_OF_BITSTRING`.
+    /// `event_type` defaults to `EventType.CHANGE_OF_BITSTRING`. Event_Type
+    /// follows Event_Parameters; this type applies only while the legacy
+    /// octet-string parameters, which name no algorithm, are held (#1868).
     #[pyo3(signature = (
         instance,
         name,
@@ -548,12 +497,19 @@ impl BACnetServer {
     /// `log_received_notifications` it also records the event notifications
     /// the server receives, a few per source each second.
     /// `total_record_count` seeds Total_Record_Count, as on `add_trend_log`.
+    /// With `storage_path` (a `str`) the log is kept in that file pair, as
+    /// on `add_trend_log`: a log reopened from it keeps its saved records
+    /// and settings, ignores `total_record_count`, and appends a
+    /// LOG_INTERRUPTED record (#1541); `buffer_size` wins over the saved
+    /// Buffer_Size.
+    /// `log_received_notifications` isn't saved and applies on every start.
     #[pyo3(signature = (
         instance,
         name,
         buffer_size=100,
         log_received_notifications=false,
         *,
+        storage_path=None,
         total_record_count=0
     ))]
     fn add_event_log(
@@ -562,12 +518,23 @@ impl BACnetServer {
         name: &str,
         buffer_size: u32,
         log_received_notifications: bool,
+        storage_path: Option<&str>,
         total_record_count: u32,
     ) -> PyResult<()> {
-        let mut obj = EventLogObject::new(instance, name, buffer_size).map_err(to_py_err)?;
+        let mut obj = match storage_path {
+            Some(path) => {
+                let storage = bacnet_objects::log_persistence::FileLogPersistence::new(path)
+                    .map_err(to_py_err)?;
+                EventLogObject::with_persistence(instance, name, buffer_size, Arc::new(storage))
+            }
+            None => EventLogObject::new(instance, name, buffer_size),
+        }
+        .map_err(to_py_err)?;
         obj.set_log_received_notifications(log_received_notifications);
-        obj.restore_log_buffer(total_record_count, [])
-            .map_err(to_py_err)?;
+        if !obj.reopened() {
+            obj.restore_log_buffer(total_record_count, [])
+                .map_err(to_py_err)?;
+        }
         self.push_pending(Box::new(obj))
     }
 }
@@ -584,7 +551,7 @@ fn staging_config(
     StagingConfig {
         present_value,
         min_present_value,
-        units,
+        units: EngineeringUnits::from_raw(units),
         priority_for_writing,
         stages: stages
             .into_iter()
@@ -617,6 +584,28 @@ fn elevator_group(
         obj.set_machine_room_id(oid)?;
     }
     Ok(obj)
+}
+
+/// Build a Schedule, applying the optional Weekly_Schedule, Exception_Schedule
+/// and Effective_Period through the object's own validating setters.
+fn schedule(
+    instance: u32,
+    name: &str,
+    week: Option<Vec<Vec<bacnet_types::constructed::BACnetTimeValue>>>,
+    exceptions: Vec<bacnet_types::constructed::BACnetSpecialEvent>,
+    period: Option<bacnet_types::constructed::BACnetDateRange>,
+) -> Result<ScheduleObject, bacnet_types::error::Error> {
+    let mut sched = ScheduleObject::new(instance, name, PropertyValue::Null)?;
+    for (day, entries) in week.into_iter().flatten().enumerate() {
+        sched.set_weekly_schedule(day, entries)?;
+    }
+    for event in exceptions {
+        sched.add_exception(event)?;
+    }
+    if let Some(period) = period {
+        sched.set_effective_period(period)?;
+    }
+    Ok(sched)
 }
 
 /// Build a Command, applying the optional Action lists and Action_Text through

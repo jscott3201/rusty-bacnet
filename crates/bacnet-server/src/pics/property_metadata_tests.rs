@@ -9,7 +9,7 @@ use bacnet_objects::{
     value_types::TimeValueObject,
 };
 use bacnet_types::constructed::BACnetStageLimitValue;
-use bacnet_types::enums::{EventType, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{EngineeringUnits, EventType, ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::ObjectIdentifier;
 
 use super::*;
@@ -96,7 +96,7 @@ fn pics_projects_migrated_property_metadata() {
             StagingConfig {
                 present_value: 0.0,
                 min_present_value: -1.0,
-                units: 62,
+                units: EngineeringUnits::DEGREES_CELSIUS,
                 priority_for_writing: 8,
                 stages: vec![
                     BACnetStageLimitValue {
@@ -294,6 +294,10 @@ fn pics_projects_migrated_property_metadata() {
             (PropertyIdentifier::ACKED_TRANSITIONS, false, false),
             (PropertyIdentifier::NOTIFY_TYPE, false, true),
             (PropertyIdentifier::EVENT_TIME_STAMPS, false, false),
+            (PropertyIdentifier::EVENT_MESSAGE_TEXTS, true, false),
+            (PropertyIdentifier::EVENT_MESSAGE_TEXTS_CONFIG, true, true),
+            (PropertyIdentifier::EVENT_ALGORITHM_INHIBIT_REF, true, true),
+            (PropertyIdentifier::EVENT_ALGORITHM_INHIBIT, true, true),
             (PropertyIdentifier::PROPERTY_LIST, false, false),
         ])
     );
@@ -360,6 +364,7 @@ fn pics_audit_reporter_metadata_is_complete_and_exact() {
 #[test]
 fn pics_analog_property_metadata_is_exact_for_each_configuration() {
     use bacnet_objects::traits::BACnetObject;
+    use bacnet_types::enums::EngineeringUnits;
     use PropertyIdentifier as P;
 
     // Expected (identifier, optional, writable) rows, not generated from metadata.
@@ -398,9 +403,9 @@ fn pics_analog_property_metadata_is_exact_for_each_configuration() {
         (P::PROPERTY_LIST, false, false),
     ];
     for configuration in 0..8 {
-        let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
-        let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
-        let mut ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
+        let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
+        let mut av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
+        let mut ao = AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
         if configuration & 1 != 0 {
             ai.configure_fault_out_of_range(-10.0, 100.0).unwrap();
             av.configure_fault_out_of_range(-10.0, 100.0).unwrap();

@@ -1,4 +1,4 @@
-use bacnet_types::error::Error;
+use bacnet_types::error::{DecodeError, DecodingKind, Error};
 
 use super::{ScFunction, ScMessage, SC_MIN_HEADER};
 
@@ -66,10 +66,13 @@ pub fn decode_sc_bvlc_result(msg: &ScMessage) -> Result<ScBvlcResult, Error> {
                 error_details: details,
             })
         }
-        code => Err(Error::decoding(
+        code => Err(DecodeError::new(
+            DecodingKind::InvalidEncoding,
             1,
-            format!("unknown BACnet/SC BVLC-Result code {code:#04x}"),
-        )),
+            "unknown BACnet/SC BVLC-Result code {:#04X}",
+        )
+        .with_value(code.into())
+        .into()),
     }
 }
 
@@ -194,5 +197,27 @@ mod tests {
             payload: Bytes::from_static(&[0x0C, 0x00]),
         };
         assert!(decode_sc_bvlc_result(&data_option_msg).is_err());
+    }
+
+    /// An unknown result code prints as an upper-case, two-digit octet
+    /// (#1803).
+    #[test]
+    fn unknown_result_code_prints_a_padded_octet() {
+        let msg = ScMessage {
+            function: ScFunction::Result,
+            message_id: 1,
+            originating_vmac: None,
+            destination_vmac: None,
+            dest_options: Vec::new(),
+            data_options: Vec::new(),
+            payload: Bytes::from_static(&[0x06, 0x0B]),
+        };
+        match decode_sc_bvlc_result(&msg) {
+            Err(Error::Decoding(refused)) => assert_eq!(
+                refused.message().to_string(),
+                "unknown BACnet/SC BVLC-Result code 0x0B"
+            ),
+            other => panic!("expected a decoding error, got {other:?}"),
+        }
     }
 }

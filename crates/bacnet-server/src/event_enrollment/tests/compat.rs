@@ -10,6 +10,7 @@ use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetEventParameter, ChangeOfValueCriteria,
 };
+use bacnet_types::enums::EngineeringUnits;
 
 // ---- Extended / Opaque (compat) tests ----
 
@@ -17,7 +18,7 @@ use bacnet_types::constructed::{
 fn extended_algorithm_produces_no_transition() {
     let mut db = ObjectDatabase::new();
 
-    let mut ai = AnalogInputObject::new(93, "AI-93", 62).unwrap();
+    let mut ai = AnalogInputObject::new(93, "AI-93", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ai.set_present_value(85.0);
     let ai_oid = ai.object_identifier();
     db.add(Box::new(ai)).unwrap();
@@ -51,7 +52,7 @@ fn extended_algorithm_produces_no_transition() {
 fn legacy_le_out_of_range_fallback_round_trip() {
     let mut db = ObjectDatabase::new();
 
-    let mut ai = AnalogInputObject::new(94, "AI-94", 62).unwrap();
+    let mut ai = AnalogInputObject::new(94, "AI-94", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ai.set_present_value(85.0); // above high_limit 80 → HIGH_LIMIT
     let ai_oid = ai.object_identifier();
     db.add(Box::new(ai)).unwrap();
@@ -116,7 +117,7 @@ fn legacy_le_change_of_state_fallback() {
 fn framed_unmodeled_alternative_is_never_le_evaluated() {
     let mut db = ObjectDatabase::new();
 
-    let mut ai = AnalogInputObject::new(96, "AI-96", 62).unwrap();
+    let mut ai = AnalogInputObject::new(96, "AI-96", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ai.set_present_value(85.0); // would exceed a 0.0/0.0 LE-decoded band
     let ai_oid = ai.object_identifier();
     db.add(Box::new(ai)).unwrap();
@@ -320,7 +321,7 @@ fn no_reference_is_skipped() {
 fn empty_parameters_is_skipped() {
     let mut db = ObjectDatabase::new();
 
-    let mut ai = AnalogInputObject::new(92, "AI-92", 62).unwrap();
+    let mut ai = AnalogInputObject::new(92, "AI-92", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ai.set_present_value(100.0);
     let ai_oid = ai.object_identifier();
     db.add(Box::new(ai)).unwrap();
@@ -348,10 +349,11 @@ fn empty_parameters_is_skipped() {
 #[test]
 fn evaluation_does_not_use_network_write_route() {
     use bacnet_objects::event_enrollment::EventEnrollmentObject;
+    use bacnet_types::enums::EngineeringUnits;
 
     let mut db = ObjectDatabase::new();
 
-    let mut ai = AnalogInputObject::new(77, "AI-77", 62).unwrap();
+    let mut ai = AnalogInputObject::new(77, "AI-77", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ai.set_present_value(85.0); // above high_limit 80 → HIGH_LIMIT
     let ai_oid = ai.object_identifier();
     db.add(Box::new(ai)).unwrap();

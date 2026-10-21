@@ -96,8 +96,8 @@ fn a_trigger_on_a_trend_log_without_a_reference_logs_a_failure() {
         [
             LogDatum::LogStatus(LogStatus::BUFFER_PURGED),
             LogDatum::Failure {
-                error_class: ErrorClass::PROPERTY.to_raw().into(),
-                error_code: ErrorCode::NO_PROPERTY_SPECIFIED.to_raw().into(),
+                error_class: ErrorClass::PROPERTY,
+                error_code: ErrorCode::NO_PROPERTY_SPECIFIED,
             },
         ]
     );

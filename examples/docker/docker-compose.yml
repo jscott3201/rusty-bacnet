@@ -1,18 +1,30 @@
 # BACnet stress test topology.
 #
-# 5 networks:
+# 6 networks:
 #   bacnet-a    172.20.0.0/24   BIP subnet A
 #   bacnet-b    172.20.1.0/24   BIP subnet B
 #   bacnet-ipv6 fd00:bacnet::/64  BIP6 subnet
 #   bacnet-sc   172.20.3.0/24   SC hub + devices
-#   foreign     172.20.4.0/24   Foreign device subnet
+#   foreign     172.20.4.0/24   Foreign device subnet, joined to subnet A
+#                               by the ip-router service (an IP router)
+#   discovery   172.20.5.0/24   A fleet of devices on one broadcast domain
 #
 # Usage:
 #   Provision caller-owned PEM credentials first; see README.md.
 #   docker compose build
 #   docker compose up -d
-#   docker compose exec orchestrator stress-orchestrator
+#   docker compose logs orchestrator
+#   # The foreign-device scenario, after the orchestrator has finished:
+#   docker compose run --rm foreign-bench
 #   docker compose down
+#
+# foreign-bench is in the `foreign` profile, so a plain `up` doesn't run it
+# alongside the orchestrator; `run` (or `--profile foreign`) starts it.
+#
+# Docker doesn't route IP between bridge networks. The foreign-device
+# scenario needs it, so ip-router forwards between foreign and bacnet-a, and
+# the hosts on its path add routes through it at start (net-entrypoint.sh,
+# which needs NET_ADMIN).
 
 services:
 
@@ -21,6 +33,10 @@ services:
     build:
       context: ../..
       dockerfile: examples/docker/Dockerfile
+    entrypoint: [bacnet-net]
+    cap_add: [NET_ADMIN]
+    environment:
+      BACNET_ROUTES: 172.20.4.0/24 via 172.20.0.3
     command:
       - bacnet-device
       - --transport=bip
@@ -37,6 +53,10 @@ services:
     build:
       context: ../..
       dockerfile: examples/docker/Dockerfile
+    entrypoint: [bacnet-net]
+    cap_add: [NET_ADMIN]
+    environment:
+      BACNET_ROUTES: 172.20.4.0/24 via 172.20.0.3
     command:
       - bacnet-bbmd
       - --interface=172.20.0.2
@@ -178,27 +198,70 @@ services:
         condition: service_healthy
 
   # ── Foreign device subnet ────────────────────────────────────────────────
-  foreign-client:
+  # An IP router between the foreign subnet and subnet A, as a site's own
+  # router would be.
+  ip-router:
+    build:
+      context: ../..
+      dockerfile: examples/docker/Dockerfile
+    command: [tail, -f, /dev/null]
+    init: true
+    sysctls:
+      net.ipv4.ip_forward: 1
+    networks:
+      foreign:
+        ipv4_address: 172.20.4.1
+      bacnet-a:
+        ipv4_address: 172.20.0.3
+
+  # A foreign device on the foreign subnet only: it registers with bbmd-a,
+  # finds server-a with a Who-Is the BBMD distributes, and reads from it.
+  # Runs once and exits; only when asked for (the `foreign` profile).
+  foreign-bench:
+    profiles: [foreign]
+    build:
+      context: ../..
+      dockerfile: examples/docker/Dockerfile
+    entrypoint: [bacnet-net]
+    cap_add: [NET_ADMIN]
+    environment:
+      BACNET_ROUTES: 172.20.0.0/24 via 172.20.4.1
+    command:
+      - stress-orchestrator
+      - --wait-for-ready=10
+      - --only=foreign
+    networks:
+      foreign:
+        ipv4_address: 172.20.4.10
+    depends_on:
+      - server-a
+      - bbmd-a
+      - ip-router
+
+  # ── Discovery fleet: devices on one broadcast domain ─────────────────────
+  # Each replica takes its own address and, from it, its own Device instance
+  # (100000 plus the address's low 16 bits). Scale with `--scale fleet=N`
+  # and pass the orchestrator `--fleet N`.
+  fleet:
     build:
       context: ../..
       dockerfile: examples/docker/Dockerfile
     command:
       - bacnet-device
       - --transport=bip
-      - --interface=172.20.4.10
+      - --interface=auto
       - --port=47808
-      - --broadcast=172.20.4.255
-      - --device-instance=7000
+      - --broadcast=172.20.5.255
+      - --device-instance=100000
+      - --instance-from-address
       - --objects=10
-      - --foreign-bbmd=172.20.0.2:47808
-      - --foreign-ttl=300
+    deploy:
+      replicas: 20
     networks:
-      foreign:
-        ipv4_address: 172.20.4.10
-      bacnet-a:
-        ipv4_address: 172.20.0.20
+      - discovery
 
-  # ── Orchestrator (connected to all networks) ─────────────────────────────
+  # ── Orchestrator ─────────────────────────────────────────────────────────
+  # Runs every scenario but the foreign-device one, which foreign-bench runs.
   orchestrator:
     build:
       context: ../..
@@ -213,8 +276,8 @@ services:
         ipv4_address: 172.20.1.100
       bacnet-sc:
         ipv4_address: 172.20.3.100
-      foreign:
-        ipv4_address: 172.20.4.100
+      discovery:
+        ipv4_address: 172.20.5.100
     depends_on:
       - server-a
       - server-b
@@ -223,7 +286,7 @@ services:
       - router
       - sc-hub
       - sc-server
-      - foreign-client
+      - fleet
 
 # ── Networks ─────────────────────────────────────────────────────────────────
 networks:
@@ -261,3 +324,10 @@ networks:
       config:
         - subnet: 172.20.4.0/24
           gateway: 172.20.4.254
+
+  discovery:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.5.0/24
+          gateway: 172.20.5.254

@@ -17,6 +17,7 @@ from rusty_bacnet import (
     ObjectIdentifier,
     ObjectType,
     PropertyIdentifier,
+    PropertyValue,
 )
 
 
@@ -78,12 +79,23 @@ class EventEnrollmentApiTests(unittest.IsolatedAsyncioTestCase):
 
         await server.start()
         try:
-            for instance, expected in ((1, 0), (2, 5), (3, 600)):
+            # Event_Type follows Event_Parameters (#1868): NONE while unset.
+            for instance in (1, 2, 3):
                 with self.subTest(instance=instance):
                     value = await server.read_property(
                         ObjectIdentifier(ObjectType.EVENT_ENROLLMENT, instance),
                         PropertyIdentifier.EVENT_TYPE,
                     )
+                    self.assertEqual(value.value, 20)
+            # The legacy octet layout names no algorithm, so it serves the
+            # type the enrollment was added with.
+            for instance, expected in ((1, 0), (2, 5), (3, 600)):
+                with self.subTest(instance=instance, legacy=True):
+                    oid = ObjectIdentifier(ObjectType.EVENT_ENROLLMENT, instance)
+                    await server.write_property_local(
+                        oid, PropertyIdentifier.EVENT_PARAMETERS,
+                        PropertyValue.octet_string(b"\x01"), source_object=None)
+                    value = await server.read_property(oid, PropertyIdentifier.EVENT_TYPE)
                     self.assertEqual(value.value, expected)
         finally:
             await server.stop()

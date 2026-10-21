@@ -27,8 +27,7 @@ fn populated() -> App {
             WorkerEvent::Discovered(row(instance, address, vendor, seen)),
         );
     }
-    let mut routed = row(2001, "05 via 10.0.1.1:47808", 24, 7);
-    routed.network = Some(2);
+    let mut routed = routed_row(2001, (2, &[5]), "10.0.1.1:47808", 24, 7);
     routed.max_apdu = 480;
     routed.segmentation = bacnet_types::enums::Segmentation::BOTH;
     worker(&mut app, WorkerEvent::Discovered(routed));
@@ -133,6 +132,8 @@ fn who_is_form_on_bip6_hints_vmac_targets() {
             style: AddressStyle::Bip6,
             color: false,
             picker: None,
+            join: None,
+            passive: false,
             now: t0(),
         },
         LogRing::new(100),

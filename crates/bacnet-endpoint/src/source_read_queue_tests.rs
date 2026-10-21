@@ -85,7 +85,7 @@ async fn source_read_queued_egress_is_owned_before_caller_cancellation() {
                 destination_mac: peer_mac.into_iter().collect(),
             },
             false,
-            NetworkPriority::NORMAL,
+            NetworkPriority::Normal,
             Vec::new(),
             None,
         )
@@ -124,7 +124,7 @@ async fn source_read_queued_egress_is_owned_before_caller_cancellation() {
     let (invoke, rp) = read_request(&request);
     let mut encoded = BytesMut::new();
     encode_apdu(&mut encoded, &ack(invoke, &rp)).unwrap();
-    peer.send_apdu(&encoded, &source_mac, false, NetworkPriority::NORMAL)
+    peer.send_apdu(&encoded, &source_mac, false, NetworkPriority::Normal)
         .await
         .unwrap();
     let (record, _) = notification(&receive(&mut received).await, false);
@@ -181,7 +181,7 @@ async fn source_recipient_full_egress_fails_one_sibling_after_commit_without_ret
                 destination_mac: MacAddr::from_slice(&peer_mac),
             },
             false,
-            NetworkPriority::NORMAL,
+            NetworkPriority::Normal,
             Vec::new(),
             None,
         )

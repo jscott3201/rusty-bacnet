@@ -1,5 +1,6 @@
 use super::*;
 use bacnet_objects::analog::AnalogOutputObject;
+use bacnet_types::enums::EngineeringUnits;
 
 async fn reap_after_ingress_closure(hold_request: bool) {
     let (mut server, ingress, mut started) = fixture().await;
@@ -114,8 +115,10 @@ async fn fire_event(server: &BACnetServer<TestTransport>) {
     nc.add_destination(destination_for(address_recipient(0, &[1]), true))
         .unwrap();
     db.add(Box::new(nc)).unwrap();
-    db.add(Box::new(AnalogInputObject::new(1, "AI-1", 0).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AnalogInputObject::new(1, "AI-1", EngineeringUnits::SQUARE_METERS).unwrap(),
+    ))
+    .unwrap();
     BACnetServer::<TestTransport>::build_and_send_event_notification_with_bindings(
         &EventDelivery {
             db: &Arc::new(RwLock::new(db)),
@@ -146,7 +149,9 @@ async fn fire_cov(server: &BACnetServer<TestTransport>, kind: CovNotificationKin
         .db
         .write()
         .await
-        .add(Box::new(AnalogOutputObject::new(1, "AO-1", 62).unwrap()))
+        .add(Box::new(
+            AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+        ))
         .unwrap();
     server
         .cov_table

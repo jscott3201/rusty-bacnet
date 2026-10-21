@@ -28,14 +28,10 @@ async fn read_nonexistent_object_returns_unknown_object_error() {
 
     match result {
         Err(Error::Protocol { class, code }) => {
-            assert_eq!(
-                class,
-                ErrorClass::OBJECT.to_raw() as u32,
-                "Expected OBJECT error class"
-            );
+            assert_eq!(class, ErrorClass::OBJECT, "Expected OBJECT error class");
             assert_eq!(
                 code,
-                ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
+                ErrorCode::UNKNOWN_OBJECT,
                 "Expected UNKNOWN_OBJECT error code"
             );
         }
@@ -74,14 +70,10 @@ async fn read_nonexistent_property_returns_unknown_property_error() {
 
     match result {
         Err(Error::Protocol { class, code }) => {
-            assert_eq!(
-                class,
-                ErrorClass::PROPERTY.to_raw() as u32,
-                "Expected PROPERTY error class"
-            );
+            assert_eq!(class, ErrorClass::PROPERTY, "Expected PROPERTY error class");
             assert_eq!(
                 code,
-                ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+                ErrorCode::UNKNOWN_PROPERTY,
                 "Expected UNKNOWN_PROPERTY error code"
             );
         }
@@ -127,14 +119,10 @@ async fn write_read_only_property_returns_write_access_denied() {
 
     match result {
         Err(Error::Protocol { class, code }) => {
-            assert_eq!(
-                class,
-                ErrorClass::PROPERTY.to_raw() as u32,
-                "Expected PROPERTY error class"
-            );
+            assert_eq!(class, ErrorClass::PROPERTY, "Expected PROPERTY error class");
             assert_eq!(
                 code,
-                ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
+                ErrorCode::WRITE_ACCESS_DENIED,
                 "Expected WRITE_ACCESS_DENIED error code"
             );
         }
@@ -179,14 +167,10 @@ async fn write_invalid_value_type_returns_invalid_data_type() {
 
     match result {
         Err(Error::Protocol { class, code }) => {
-            assert_eq!(
-                class,
-                ErrorClass::PROPERTY.to_raw() as u32,
-                "Expected PROPERTY error class"
-            );
+            assert_eq!(class, ErrorClass::PROPERTY, "Expected PROPERTY error class");
             assert_eq!(
                 code,
-                ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
+                ErrorCode::INVALID_DATA_TYPE,
                 "Expected INVALID_DATA_TYPE error code"
             );
         }
@@ -205,21 +189,24 @@ async fn write_invalid_value_type_returns_invalid_data_type() {
 #[tokio::test]
 async fn cov_subscribe_then_cancel() {
     use bacnet_objects::analog::AnalogOutputObject;
+    use bacnet_types::enums::EngineeringUnits;
     use tokio::time::Duration;
 
     // Build a server with an AnalogOutput (writable present-value)
     let mut db = ObjectDatabase::new();
-    let ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
+    let ao = AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     db.add(Box::new(ao)).unwrap();
     let dev = DeviceObject::new(DeviceConfig {
-        instance: 1234,
-        name: "COV-Cancel-Dev".into(),
+        identity: bacnet_objects::DeviceIdentity::new(1234, 0)
+            .expect("valid Device identity")
+            .with_name("COV-Cancel-Dev"),
         ..DeviceConfig::default()
     })
     .unwrap();
     db.add(Box::new(dev)).unwrap();
 
     let mut server = BACnetServer::bip_builder()
+        .device(bacnet_objects::DeviceIdentity::new(1234, 0).unwrap())
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
         .database(db)

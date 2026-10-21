@@ -7,6 +7,7 @@
 use super::*;
 use bacnet_objects::analog::AnalogValueObject;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
+use bacnet_types::enums::EngineeringUnits;
 use tokio::time::Instant;
 
 const ATTEMPTED: PropertyIdentifier = PropertyIdentifier::ATTEMPTED_SAMPLES;
@@ -125,7 +126,9 @@ async fn averaging_server_counts_a_missing_reference_as_a_missed_attempt() {
         .database()
         .write()
         .await
-        .add(Box::new(AnalogValueObject::new(9, "AV-9", 62).unwrap()))
+        .add(Box::new(
+            AnalogValueObject::new(9, "AV-9", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+        ))
         .unwrap();
     advance_to(origin, 4_000).await;
     assert_eq!(counts(&h).await, (2, 1));

@@ -2,12 +2,13 @@
 //! core needs.
 
 use bacnet_mstp_codec::{Frame, FrameType};
+use bacnet_mstp_core::npdu::NetworkPriority;
 use bacnet_mstp_core::{
-    Action, CoreError, Direction, HeaplessQueues, Instant, MasterCore, MasterState, MstpCoreConfig,
-    NetworkPriority, TransmitId, MIN_RX_STORAGE,
+    Action, ConfigError, Direction, FixedQueues, Instant, MasterCore, MasterState, MstpCoreConfig,
+    TransmitError, TransmitId, MIN_RX_STORAGE,
 };
 
-type Queues = HeaplessQueues<4, 4>;
+type Queues = FixedQueues<4, 4>;
 type Actions = bacnet_mstp_core::ActionBuffers;
 
 fn config() -> MstpCoreConfig {
@@ -22,10 +23,9 @@ fn config() -> MstpCoreConfig {
 fn queue_a_transmit(core: &mut MasterCore<'_, Queues>) -> Instant {
     core.enqueue_npdu(2, &[1, 0], NetworkPriority::Normal, Instant::ZERO)
         .unwrap();
-    core.on_validated_frame(Frame::new(FrameType::TOKEN, 1, 2, &[]), Instant::ZERO)
-        .unwrap();
+    core.on_validated_frame(Frame::new(FrameType::TOKEN, 1, 2, &[]), Instant::ZERO);
     let due = core.next_deadline().unwrap();
-    core.on_deadline(due).unwrap();
+    core.on_deadline(due);
     due
 }
 
@@ -41,10 +41,10 @@ fn poll_transmit(core: &mut MasterCore<'_, Queues>) -> TransmitId {
 }
 
 #[test]
-fn completion_without_a_confirmed_start_is_refused_and_counted() {
+fn completion_without_a_confirmed_start_is_ignored_and_counted() {
     let mut rx = [0; 64];
     let mut actions = Actions::new();
-    let mut core = MasterCore::new(
+    let mut core = MasterCore::from_parts(
         config(),
         Queues::new(),
         &mut rx,
@@ -54,10 +54,7 @@ fn completion_without_a_confirmed_start_is_refused_and_counted() {
     .unwrap();
     let due = queue_a_transmit(&mut core);
     let id = poll_transmit(&mut core);
-    assert_eq!(
-        core.on_transmit_complete(id, due),
-        Err(CoreError::TransmitNotStarted)
-    );
+    core.on_transmit_complete(id, due);
     assert_eq!(core.counters().adapter_errors, 1);
     assert_eq!(core.snapshot().transmit_id, Some(id));
     assert_eq!(core.counters().frames_transmitted, 0);
@@ -66,10 +63,10 @@ fn completion_without_a_confirmed_start_is_refused_and_counted() {
     core.on_transmit_started(id, due).unwrap();
     assert_eq!(
         core.on_transmit_started(id, due),
-        Err(CoreError::TransmitAlreadyStarted)
+        Err(TransmitError::AlreadyStarted)
     );
     assert_eq!(core.counters().adapter_errors, 2);
-    core.on_transmit_complete(id, due).unwrap();
+    core.on_transmit_complete(id, due);
     assert_eq!(core.counters().frames_transmitted, 1);
     assert_eq!(core.poll_action(), Action::SetDirection(Direction::Receive));
 }
@@ -79,7 +76,7 @@ fn an_aborted_transmit_leaves_no_stale_actions() {
     // The adapter never polls the transmit; the watchdog aborts it.
     let mut rx = [0; 64];
     let mut actions = Actions::new();
-    let mut core = MasterCore::new(
+    let mut core = MasterCore::from_parts(
         config(),
         Queues::new(),
         &mut rx,
@@ -89,7 +86,7 @@ fn an_aborted_transmit_leaves_no_stale_actions() {
     .unwrap();
     queue_a_transmit(&mut core);
     let watchdog = core.next_deadline().unwrap();
-    core.on_deadline(watchdog).unwrap();
+    core.on_deadline(watchdog);
     assert_eq!(core.snapshot().transmit_id, None);
     assert_eq!(core.state(), MasterState::Idle);
     // Only the switch back to receive is left: no driver enable and no frame
@@ -100,7 +97,7 @@ fn an_aborted_transmit_leaves_no_stale_actions() {
     // Polled up to the direction change only: the frame is still withdrawn.
     let mut rx = [0; 64];
     let mut actions = Actions::new();
-    let mut core = MasterCore::new(
+    let mut core = MasterCore::from_parts(
         config(),
         Queues::new(),
         &mut rx,
@@ -114,7 +111,7 @@ fn an_aborted_transmit_leaves_no_stale_actions() {
         Action::SetDirection(Direction::Transmit)
     );
     let watchdog = core.next_deadline().unwrap();
-    core.on_deadline(watchdog).unwrap();
+    core.on_deadline(watchdog);
     assert_eq!(core.poll_action(), Action::SetDirection(Direction::Receive));
     assert_eq!(core.poll_action(), Action::Idle);
 }
@@ -126,13 +123,13 @@ fn receive_storage_must_hold_a_header() {
         let mut rx = vec![0u8; length];
         let mut actions = Actions::new();
         assert!(matches!(
-            MasterCore::new(config(), Queues::new(), &mut rx, &mut actions, Instant::ZERO),
-            Err(CoreError::ReceiveStorageTooSmall { length: got, minimum: 8 }) if got == length
+            MasterCore::from_parts(config(), Queues::new(), &mut rx, &mut actions, Instant::ZERO),
+            Err(ConfigError::ReceiveStorageTooSmall { length: got, minimum: 8 }) if got == length
         ));
     }
     let mut rx = [0u8; MIN_RX_STORAGE];
     let mut actions = Actions::new();
-    assert!(MasterCore::new(
+    assert!(MasterCore::from_parts(
         config(),
         Queues::new(),
         &mut rx,

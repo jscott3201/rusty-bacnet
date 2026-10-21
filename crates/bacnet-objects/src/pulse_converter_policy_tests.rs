@@ -4,8 +4,8 @@ use bacnet_types::enums::{ErrorClass, ErrorCode};
 fn assert_write_access_denied(result: Result<(), Error>) {
     match result {
         Err(Error::Protocol { class, code }) => {
-            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
-            assert_eq!(code, ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32);
+            assert_eq!(class, ErrorClass::PROPERTY);
+            assert_eq!(code, ErrorCode::WRITE_ACCESS_DENIED);
         }
         other => panic!("expected PROPERTY/WRITE_ACCESS_DENIED, got {other:?}"),
     }
@@ -18,7 +18,7 @@ fn present_value(pc: &PulseConverterObject) -> PropertyValue {
 
 #[test]
 fn present_value_is_denied_in_service_before_value_validation() {
-    let mut pc = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+    let mut pc = PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     assert!(pc.is_writable_property(PropertyIdentifier::PRESENT_VALUE));
 
     for value in [
@@ -38,7 +38,7 @@ fn present_value_is_denied_in_service_before_value_validation() {
 
 #[test]
 fn present_value_round_trips_while_out_of_service() {
-    let mut pc = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+    let mut pc = PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     pc.write_property(
         PropertyIdentifier::OUT_OF_SERVICE,
         None,

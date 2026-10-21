@@ -9,7 +9,7 @@ use crate::schedule::{ScheduleObject, ScheduleTargetOutcome};
 use crate::traits::BACnetObject;
 use bacnet_types::calendar::SpecificDate;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
-use bacnet_types::enums::PropertyIdentifier;
+use bacnet_types::enums::{EngineeringUnits, PropertyIdentifier};
 use bacnet_types::primitives::{PropertyValue, Time};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -63,15 +63,22 @@ fn adding_a_refused_object_queues_its_retry_and_wakes_the_server() {
     // AV-1 took the value and AV-2 is named nowhere: nothing to retry.
     for instance in [1, 2] {
         db.add(Box::new(
-            AnalogValueObject::new(instance, format!("AV-{instance}"), 62).unwrap(),
+            AnalogValueObject::new(
+                instance,
+                format!("AV-{instance}"),
+                EngineeringUnits::DEGREES_CELSIUS,
+            )
+            .unwrap(),
         ))
         .unwrap();
     }
     assert!(db.take_membership_work_internal().is_empty());
     assert_eq!(wakes.load(Ordering::SeqCst), 0);
 
-    db.add(Box::new(AnalogValueObject::new(9, "AV-9", 62).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AnalogValueObject::new(9, "AV-9", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+    ))
+    .unwrap();
     assert_eq!(wakes.load(Ordering::SeqCst), 1);
     let work = db.take_membership_work_internal();
     assert_eq!(work.schedule_retries, [(sch1(), av(9))]);
@@ -81,10 +88,14 @@ fn adding_a_refused_object_queues_its_retry_and_wakes_the_server() {
     // stands, so a removal queues nothing and a new add queues it again.
     db.remove(&av(9)).unwrap();
     assert!(db.take_membership_work_internal().is_empty());
-    db.add(Box::new(AnalogValueObject::new(9, "AV-9", 62).unwrap()))
-        .unwrap();
-    db.add(Box::new(AnalogValueObject::new(9, "AV-9", 62).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AnalogValueObject::new(9, "AV-9", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+    ))
+    .unwrap();
+    db.add(Box::new(
+        AnalogValueObject::new(9, "AV-9", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+    ))
+    .unwrap();
     assert_eq!(
         db.take_membership_work_internal().schedule_retries,
         [(sch1(), av(9))],

@@ -550,8 +550,7 @@ fn delete_object_unknown_fails() {
 fn delete_device_object_fails() {
     let mut db = ObjectDatabase::new();
     let device = bacnet_objects::device::DeviceObject::new(bacnet_objects::device::DeviceConfig {
-        instance: 1,
-        name: "Dev".into(),
+        identity: bacnet_objects::DeviceIdentity::default().with_name("Dev"),
         ..Default::default()
     })
     .unwrap();

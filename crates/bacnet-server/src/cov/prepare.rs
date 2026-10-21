@@ -22,8 +22,8 @@ impl PreparedCovValue {
 }
 fn property_error(code: ErrorCode) -> Error {
     Error::Protocol {
-        class: ErrorClass::PROPERTY.to_raw() as u32,
-        code: code.to_raw() as u32,
+        class: ErrorClass::PROPERTY,
+        code,
     }
 }
 /// Caller has already performed the selected read, preserving its error precedence.
@@ -46,25 +46,9 @@ pub(crate) fn prepare_value(
     })
 }
 
-/// Sole increment rule: an explicit subscription override wins; otherwise only a
-/// numeric Present_Value inherits the object's current `COV_Increment`.
-///
-/// The subscription's override is a REAL on the wire; the object's own
-/// increment may be wider (a Large Analog Value's Double), so the result is an
-/// `f64`.
-pub(crate) fn effective_increment(
-    object: &dyn BACnetObject,
-    property: PropertyIdentifier,
-    numeric: bool,
-    explicit: Option<f32>,
-) -> Option<f64> {
-    let explicit = explicit.map(f64::from);
-    if numeric && property == PropertyIdentifier::PRESENT_VALUE {
-        explicit.or_else(|| object.cov_increment())
-    } else {
-        explicit
-    }
-}
+/// Sole increment rule, shared with Trend Log COV acquisition (#1480): see
+/// [`bacnet_objects::cov_change::effective_increment`].
+pub(crate) use bacnet_objects::cov_change::effective_increment;
 
 /// Admission shares coordinate/retention checks without querying threshold policy.
 pub(crate) fn validate_sample(
@@ -83,14 +67,7 @@ pub(crate) fn validate_sample(
     {
         return Err(property_error(ErrorCode::NOT_COV_PROPERTY));
     }
-    let numeric = !(array && (index.is_none() || index == Some(0)))
-        && matches!(
-            value,
-            PropertyValue::Real(_)
-                | PropertyValue::Double(_)
-                | PropertyValue::Signed(_)
-                | PropertyValue::Unsigned(_)
-        );
+    let numeric = bacnet_objects::cov_change::is_numeric(object, property, index, value);
     Ok((CovSample::new(value)?, numeric))
 }
 

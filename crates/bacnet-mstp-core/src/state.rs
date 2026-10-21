@@ -7,7 +7,7 @@ use bacnet_mstp_codec::{
     HEADER_LENGTH, MAX_EXTENDED_FRAME_LENGTH, MAX_EXTENDED_MPDU_DATA, MAX_STANDARD_MPDU_DATA,
     PREAMBLE,
 };
-use bacnet_time::{Duration, Instant};
+use bacnet_time::{earliest, Duration, Instant};
 
 use crate::actions::{
     carries_npdu, Action, ActionBuffers, ActionQueue, RequestId, TransmitFailure, TransmitId,
@@ -17,7 +17,10 @@ use crate::config::{
     N_POLL, N_RETRY_TOKEN, T_NO_TOKEN, T_SLOT,
 };
 use crate::counters::{MstpCounters, QueueCounters};
-use crate::queue::{NetworkPriority, QueueKind, QueueRefusal, QueueStorage};
+use crate::errors::{RequestError, TransmitError};
+use crate::queue::{QueueKind, QueueRefusal, QueueStorage};
+use crate::storage::{receive_window, Storage};
+use bacnet_npdu::NetworkPriority;
 
 mod input;
 mod pending;
@@ -31,11 +34,6 @@ use pending::{Origin, PendingSend};
 /// The smallest receive storage [`MasterCore::new`] accepts: a preamble and
 /// a header, the size of the shortest frame.
 pub const MIN_RX_STORAGE: usize = PREAMBLE.len() + HEADER_LENGTH;
-
-/// A deadline serviced at least this long after it fell due counts in
-/// [`MstpCounters::deadline_misses`]. Smaller lateness is normal for an
-/// adapter driven by a timer tick.
-pub const LATE_DEADLINE: Duration = Duration::from_millis(1);
 
 /// Token-passing master state names from Clause 9.5.6.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -82,102 +80,6 @@ pub enum ReplyDecision<'a> {
     Postponed,
     /// Abandon the bound request without emitting a wire response.
     Abandoned,
-}
-
-/// A core event was rejected without performing the requested operation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum CoreError {
-    /// Invalid core configuration.
-    Config(ConfigError),
-    /// A frame could not be encoded, or a frame handed to
-    /// [`MasterCore::on_validated_frame`] is not a standard frame.
-    Frame(FrameError),
-    /// No application request is pending.
-    NoPendingRequest,
-    /// The request identifier is stale or belongs to another transaction.
-    StaleRequest,
-    /// Too late for this reply. Either a data reply came after the decision
-    /// deadline (the core still owns the request and sends Reply Postponed),
-    /// or the requester may have stopped waiting, so the request was released
-    /// unanswered.
-    RequestExpired,
-    /// The reply is longer than this station sends: 501 octets, or 1497
-    /// with [`MstpCoreConfig::extended_frames`] on.
-    ReplyOversize {
-        /// Supplied reply length.
-        length: usize,
-        /// Maximum supported reply length.
-        maximum: usize,
-    },
-    /// The transmit identifier is stale or does not match the active transfer.
-    /// A frame the core took back before its start was confirmed (see
-    /// [`MasterCore::on_transmit_started`]) is stale too.
-    StaleTransmit,
-    /// The line was active within T_turnaround of the reported start, so the
-    /// frame was taken back to wait for a quiet line again (Clause 9.5.5.1).
-    /// Send nothing for this id; the frame comes back as a new
-    /// [`Action::Transmit`] unless its waiting rules drop it.
-    TransmitDeferred,
-    /// A transmit-start event was reported more than once.
-    TransmitAlreadyStarted,
-    /// A start was reported for a transmit whose [`Action::Transmit`] has
-    /// not been polled yet, so the adapter cannot have its octets. An
-    /// adapter bug; unlike the other errors it leaves the id live: poll the
-    /// frame, then start it.
-    TransmitNotPolled,
-    /// Completion was reported for a transmit whose start was never confirmed.
-    TransmitNotStarted,
-    /// The receive storage cannot hold even the shortest frame.
-    ReceiveStorageTooSmall {
-        /// Supplied storage length.
-        length: usize,
-        /// [`MIN_RX_STORAGE`].
-        minimum: usize,
-    },
-}
-
-impl fmt::Display for CoreError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Config(error) => write!(f, "invalid configuration: {error}"),
-            Self::Frame(error) => write!(f, "frame refused: {error}"),
-            Self::NoPendingRequest => f.write_str("no request is waiting for an answer"),
-            Self::StaleRequest => f.write_str("the request id is not the waiting request's"),
-            Self::RequestExpired => f.write_str("too late to answer the request"),
-            Self::ReplyOversize { length, maximum } => {
-                write!(
-                    f,
-                    "a reply of {length} octets is over the {maximum} this station sends"
-                )
-            }
-            Self::StaleTransmit => f.write_str("the transmit id is not the active transmit's"),
-            Self::TransmitDeferred => {
-                f.write_str("the line was active within T_turnaround; the frame waits again")
-            }
-            Self::TransmitAlreadyStarted => f.write_str("the transmit was already started"),
-            Self::TransmitNotPolled => f.write_str("the transmit has not been polled yet"),
-            Self::TransmitNotStarted => f.write_str("the transmit was never started"),
-            Self::ReceiveStorageTooSmall { length, minimum } => write!(
-                f,
-                "receive storage of {length} octets is under the {minimum} of the shortest frame"
-            ),
-        }
-    }
-}
-
-impl core::error::Error for CoreError {}
-
-impl From<ConfigError> for CoreError {
-    fn from(error: ConfigError) -> Self {
-        Self::Config(error)
-    }
-}
-
-impl From<FrameError> for CoreError {
-    fn from(error: FrameError) -> Self {
-        Self::Frame(error)
-    }
 }
 
 /// Copyable state for diagnostics without exposing mutable internals.
@@ -263,16 +165,17 @@ struct ActiveTransmit {
 /// dropped and counted in [`MstpCounters::delivery_drops`].
 ///
 /// A transmit goes through three calls. Poll [`Action::Transmit`]; when the
-/// driver is about to go on, call [`Self::on_transmit_started`] and drive the
-/// line only if it returns `Ok`; at the final stop bit, call
+/// driver is about to go on, call [`Self::on_transmit_started`], which hands
+/// over the frame's octets only if it confirms the start; at the final stop
+/// bit, call
 /// [`Self::on_transmit_complete`]. Until the start is confirmed, keep
 /// receiving and feed the core what arrives, draining the receive FIFO or
 /// DMA buffer right before the start call (octets stamped with the drain
 /// time are safe: a later stamp can only defer the start). Line activity in
 /// that time pushes the frame back (Clause 9.5.5.1), and the core may take
 /// the frame back on its own, queueing
-/// [`Direction::Receive`](crate::Direction::Receive) before the start; drop
-/// the frame then. Input after the confirmed start is taken for the
+/// [`Direction::Receive`](crate::Direction::Receive) before the start; forget
+/// the id then. Input after the confirmed start is taken for the
 /// station's own echo and ignored, whichever call reports it.
 ///
 /// Line activity only delays a frame the core waits to send. A frame is
@@ -373,8 +276,39 @@ impl<Q: QueueStorage, const NPDU: usize> fmt::Debug for MasterCore<'_, Q, NPDU> 
     }
 }
 
+impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, &'rx mut Q, NPDU> {
+    /// Construct a core over a [`Storage`] bundle, which it borrows for its
+    /// lifetime: its receive storage, its queues and its [`ActionBuffers`].
+    ///
+    /// The core uses as much of the receive storage as its configuration
+    /// takes: the longest extended frame with
+    /// [`MstpCoreConfig::extended_frames`] on, the longest standard frame
+    /// without (see [`Storage`]). With the flag on, every buffer must be
+    /// sized for extended frames, as
+    /// [`ExtendedStorage`](crate::ExtendedStorage)'s are; a smaller one is
+    /// refused with [`ConfigError::ExtendedStorageTooSmall`], naming it. An
+    /// invalid configuration is refused with the [`ConfigError`] that
+    /// [`MstpCoreConfig::validate`] returns.
+    pub fn new<const DELIVERIES: usize, const FRAME: usize>(
+        config: MstpCoreConfig,
+        storage: &'rx mut Storage<Q, DELIVERIES, NPDU, FRAME>,
+        now: Instant,
+    ) -> Result<Self, ConfigError> {
+        let Storage {
+            rx,
+            queues,
+            actions,
+        } = storage;
+        let window = receive_window(config.extended_frames, FRAME);
+        MasterCore::from_parts(config, queues, &mut rx[..window], actions, now)
+    }
+}
+
 impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
-    /// Construct a core over caller-owned storage.
+    /// Construct a core over its parts, for a caller that keeps them apart
+    /// rather than in a [`Storage`]: a receive storage of any length (a
+    /// test of a short one, say), or queues that aren't borrowed. Most
+    /// callers want [`MasterCore::new`].
     ///
     /// `rx_storage` is the stream decoder's buffer for [`Self::on_octet`].
     /// Size it for the largest frame this station accepts:
@@ -399,16 +333,16 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
     /// slot and a queue slot ([`QueueStorage::max_npdu`])
     /// [`MAX_EXTENDED_MPDU_DATA`]. A smaller one is refused with
     /// [`ConfigError::ExtendedStorageTooSmall`], naming it.
-    pub fn new<const DELIVERIES: usize, const FRAME: usize>(
+    pub fn from_parts<const DELIVERIES: usize, const FRAME: usize>(
         config: MstpCoreConfig,
         mut queues: Q,
         rx_storage: &'rx mut [u8],
         action_buffers: &'rx mut ActionBuffers<DELIVERIES, NPDU, FRAME>,
         now: Instant,
-    ) -> Result<Self, CoreError> {
+    ) -> Result<Self, ConfigError> {
         config.validate()?;
         if rx_storage.len() < MIN_RX_STORAGE {
-            return Err(CoreError::ReceiveStorageTooSmall {
+            return Err(ConfigError::ReceiveStorageTooSmall {
                 length: rx_storage.len(),
                 minimum: MIN_RX_STORAGE,
             });
@@ -429,11 +363,11 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
                 ),
             ] {
                 if length < minimum {
-                    return Err(CoreError::Config(ConfigError::ExtendedStorageTooSmall {
+                    return Err(ConfigError::ExtendedStorageTooSmall {
                         buffer,
                         length,
                         minimum,
-                    }));
+                    });
                 }
             }
         }
@@ -560,25 +494,24 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
     }
 
     /// Service the current absolute deadline. Early/stale callbacks are no-ops.
-    pub fn on_deadline(&mut self, now: Instant) -> Result<(), CoreError> {
+    pub fn on_deadline(&mut self, now: Instant) {
         let now = self.observe_time(now);
         if self.abort_partial_if_late(now) {
-            self.invalid_frame_event(now)?;
+            self.invalid_frame_event(now);
         }
         let Some(deadline) = self.next_deadline() else {
-            return Ok(());
+            return;
         };
         if now < deadline {
-            return Ok(());
+            return;
         }
-        if now - deadline >= LATE_DEADLINE {
-            self.counters.record_deadline_miss();
-        }
+        self.counters
+            .record_deadline(now - deadline, self.config.late_deadline);
         if let Some(tx) = self.active_transmit {
             if now >= tx.asserted_at + self.config.transmit_watchdog {
                 return self.on_transmit_aborted(tx.id, TransmitFailure::Timeout, now);
             }
-            return Ok(());
+            return;
         }
         if self.pending_send.is_some() {
             return self.dispatch_pending_send(now);
@@ -612,25 +545,19 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
     /// Return the earliest parser, protocol, or transmit-watchdog deadline.
     #[must_use]
     pub fn next_deadline(&self) -> Option<Instant> {
-        let mut deadline = self.protocol_deadline;
-        if self.parser_partial {
-            if let Some(last_octet) = self.last_octet {
-                // A partial frame is dropped once the silence is longer than
-                // T_frame_abort, so the deadline falls just past it: a whole
-                // microsecond, the value it had when the core counted
-                // microseconds, which keeps it on the whole-microsecond
-                // timeline the simulator and the fuzz model check.
-                let parser = last_octet + self.config.t_frame_abort + Duration::from_micros(1);
-                deadline = minimum(deadline, Some(parser));
-            }
-        }
-        if let Some(tx) = self.active_transmit {
-            deadline = minimum(
-                deadline,
-                Some(tx.asserted_at + self.config.transmit_watchdog),
-            );
-        }
-        deadline
+        // A partial frame is dropped once the silence is longer than
+        // T_frame_abort, so the deadline falls just past it: a whole
+        // microsecond, the value it had when the core counted microseconds,
+        // which keeps it on the whole-microsecond timeline the simulator and
+        // the fuzz model check.
+        let parser = self
+            .last_octet
+            .filter(|_| self.parser_partial)
+            .map(|last_octet| last_octet + self.config.t_frame_abort + Duration::from_micros(1));
+        let watchdog = self
+            .active_transmit
+            .map(|tx| tx.asserted_at + self.config.transmit_watchdog);
+        earliest([self.protocol_deadline, parser, watchdog])
     }
 
     /// The time a call is taken at: `now`, or the latest time passed in
@@ -644,7 +571,7 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
     /// toward EventCount (Clause 9.5.6). A frame of this station's that waits
     /// to go out takes it under its own rules (see the `pending` module);
     /// otherwise the current state's timers and transitions apply.
-    fn note_bus_activity(&mut self, now: Instant, events: u32) -> Result<(), CoreError> {
+    fn note_bus_activity(&mut self, now: Instant, events: u32) {
         self.last_activity = now;
         self.event_count = self.event_count.saturating_add(events);
         if self.pending_send.is_some() {
@@ -673,13 +600,12 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
             MasterState::UseToken | MasterState::DoneWithToken | MasterState::AnswerDataRequest => {
             }
         }
-        Ok(())
     }
 
     /// Go idle, with the token-loss timer running from the last activity on
     /// the line (Clause 9.5.6.2), then take up any Token that arrived while
     /// this station was answering a request.
-    fn enter_idle(&mut self, now: Instant) -> Result<(), CoreError> {
+    fn enter_idle(&mut self, now: Instant) {
         self.set_state(MasterState::Idle);
         self.protocol_deadline = Some(self.last_activity + T_NO_TOKEN);
         self.take_pending_token(now)
@@ -687,11 +613,9 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
 
     /// Act on a Token remembered while answering a request, as IDLE acts on
     /// a received one.
-    fn take_pending_token(&mut self, now: Instant) -> Result<(), CoreError> {
+    fn take_pending_token(&mut self, now: Instant) {
         if core::mem::take(&mut self.pending_token) {
-            self.use_received_token(now)
-        } else {
-            Ok(())
+            self.use_received_token(now);
         }
     }
 
@@ -743,12 +667,4 @@ fn merge_queues(
     counters.unicast = merge(unicast, core.unicast);
     counters.broadcast = merge(broadcast, core.broadcast);
     counters
-}
-
-fn minimum(left: Option<Instant>, right: Option<Instant>) -> Option<Instant> {
-    match (left, right) {
-        (Some(left), Some(right)) => Some(core::cmp::min(left, right)),
-        (Some(value), None) | (None, Some(value)) => Some(value),
-        (None, None) => None,
-    }
 }

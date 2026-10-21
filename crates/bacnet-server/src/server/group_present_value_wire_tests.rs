@@ -14,6 +14,7 @@ use bacnet_objects::group::GroupObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::rpm::{ReadPropertyMultipleACK, ReadPropertyMultipleRequest};
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
+use bacnet_types::enums::EngineeringUnits;
 use std::net::Ipv4Addr;
 
 fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
@@ -54,7 +55,7 @@ fn elements(present_value: &[u8]) -> Vec<Vec<u8>> {
 async fn group_present_value_bip_wire_rebuilds_from_members() {
     let device = oid(ObjectType::DEVICE, 100);
     let input = oid(ObjectType::ANALOG_INPUT, 1);
-    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ai.set_present_value(21.5);
     let mut group_object = GroupObject::new(7, "GRP-7").unwrap();
     let group = group_object.object_identifier();
@@ -78,8 +79,9 @@ async fn group_present_value_bip_wire_rebuilds_from_members() {
     database
         .add(Box::new(
             DeviceObject::new(DeviceConfig {
-                instance: 100,
-                name: "DEV-100".into(),
+                identity: bacnet_objects::DeviceIdentity::new(100, 0)
+                    .expect("valid Device identity")
+                    .with_name("DEV-100"),
                 ..DeviceConfig::default()
             })
             .unwrap(),
@@ -89,6 +91,7 @@ async fn group_present_value_bip_wire_rebuilds_from_members() {
     database.add(Box::new(group_object)).unwrap();
 
     let mut server = BACnetServer::bip_builder()
+        .device(bacnet_objects::DeviceIdentity::new(100, 0).unwrap())
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
         .database(database)

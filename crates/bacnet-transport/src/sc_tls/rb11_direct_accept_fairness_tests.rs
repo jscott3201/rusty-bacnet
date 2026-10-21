@@ -6,6 +6,7 @@
 //! that startup validation rejects bad limits before binding.
 
 use super::{DirectAcceptConfig, DirectListener};
+use crate::sc::npdu_admission::{DEFAULT_NPDU_PER_ORIGIN_LIMIT as QUOTA, SC_NPDU_QUEUE_CAPACITY};
 use crate::sc::{ScConnection, WebSocketPort};
 use crate::sc_frame::{decode_sc_message, encode_sc_message, ScFunction};
 use crate::sc_tls::ScNodeTlsConfig;
@@ -70,6 +71,16 @@ async fn start_listener(
     DirectListener,
     tokio::sync::mpsc::Receiver<crate::port::ReceivedNpdu>,
 ) {
+    start_listener_with(ca, |config| config).await
+}
+
+async fn start_listener_with(
+    ca: &TestCa,
+    configure: impl FnOnce(DirectAcceptConfig) -> DirectAcceptConfig,
+) -> (
+    DirectListener,
+    tokio::sync::mpsc::Receiver<crate::port::ReceivedNpdu>,
+) {
     let (chain, key) = {
         let issuer = rcgen::Issuer::from_params(&ca.params, &ca.key);
         let params =
@@ -89,7 +100,7 @@ async fn start_listener(
     )
     .unwrap();
     let config = DirectAcceptConfig::new(loopback_addr(), LISTENER_VMAC, LISTENER_UUID, tls);
-    DirectListener::start(config).await.unwrap()
+    DirectListener::start(configure(config)).await.unwrap()
 }
 
 async fn dialed_peer(
@@ -144,7 +155,7 @@ async fn bursty_peer_capped_while_other_peer_progresses() {
     let (ws_b, mut conn_b) = dialed_peer(&addr, &ca, PEER_B_VMAC).await;
     // Bursty peer floods: only its quota survives, whatever the interleave
     // with the legitimate peer (distinct keys, room in the queue).
-    for seq in 0..20u8 {
+    for seq in 0..(QUOTA + 16) as u8 {
         send_direct_npdu(&ws_a, &mut conn_a, &[0x01, 0x00, 0xA0, seq]).await;
     }
     send_direct_npdu(&ws_b, &mut conn_b, &[0x01, 0x00, 0xB0, 0]).await;
@@ -154,7 +165,7 @@ async fn bursty_peer_capped_while_other_peer_progresses() {
     drop(ws_a);
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            if listener.active_connections() == 1 && rx.len() == 6 {
+            if listener.active_connections() == 1 && rx.len() == QUOTA + 2 {
                 break;
             }
             tokio::task::yield_now().await;
@@ -168,8 +179,8 @@ async fn bursty_peer_capped_while_other_peer_progresses() {
     assert_eq!(counts.closed_drops, 0);
     let mut from_a = 0;
     let mut from_b = 0;
-    for _ in 0..6 {
-        let received = rx.try_recv().expect("6 queued NPDUs must drain");
+    for _ in 0..QUOTA + 2 {
+        let received = rx.try_recv().expect("the queued NPDUs must drain");
         assert!(received.provenance.is_direct_peer());
         assert!(received.reply_tx.is_none());
         assert!(!received.link_layer_group);
@@ -181,7 +192,7 @@ async fn bursty_peer_capped_while_other_peer_progresses() {
             panic!("unexpected source {:?}", received.source_mac);
         }
     }
-    assert_eq!((from_a, from_b), (4, 2));
+    assert_eq!((from_a, from_b), (QUOTA, 2));
     drop(ws_b);
     listener.stop().await;
     // Counters survive stop.
@@ -189,9 +200,41 @@ async fn bursty_peer_capped_while_other_peer_progresses() {
 }
 
 #[tokio::test]
+async fn the_listener_control_rate_limit_drops_a_peers_excess_control_messages() {
+    let ca = TestCa::generate();
+    let (mut listener, mut rx) = start_listener_with(&ca, |config| {
+        config.with_control_rate_limit(crate::sc::ScControlRateLimit::new(2, 1))
+    })
+    .await;
+    let addr = listener.local_addr();
+    let (ws, mut conn) = dialed_peer(&addr, &ca, PEER_A_VMAC).await;
+    // Five route announcements, then one APDU.
+    for _ in 0..5 {
+        send_direct_npdu(&ws, &mut conn, &[0x01, 0x80, 0x01, 0x03, 0xe8]).await;
+    }
+    send_direct_npdu(&ws, &mut conn, &[0x01, 0x00, 0x10, 0x08]).await;
+    let mut received = Vec::new();
+    while received.len() < 3 {
+        let npdu = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("listener made no progress")
+            .unwrap();
+        received.push(npdu.npdu[1] & 0x80 != 0);
+    }
+    assert_eq!(
+        received,
+        [true, true, false],
+        "two control messages, then the APDU"
+    );
+    assert_eq!(listener.npdu_drop_counts().control_rate_drops, 3);
+    drop(ws);
+    listener.stop().await;
+}
+
+#[tokio::test]
 async fn invalid_per_origin_limit_rejected_before_bind() {
     let ca = TestCa::generate();
-    for limit in [0, 65, usize::MAX] {
+    for limit in [0, SC_NPDU_QUEUE_CAPACITY + 1, usize::MAX] {
         let tls = ca.node_config(vec!["localhost".into(), "127.0.0.1".into()]);
         let config = DirectAcceptConfig::new(loopback_addr(), LISTENER_VMAC, LISTENER_UUID, tls)
             .with_npdu_per_origin_limit(limit);

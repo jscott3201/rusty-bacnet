@@ -54,8 +54,8 @@ fn read(log: &AuditLogObject, property: PropertyIdentifier) -> PropertyValue {
 fn assert_operational_problem(error: Error) {
     assert!(
         matches!(error, Error::Protocol { class, code }
-            if class == ErrorClass::DEVICE.to_raw() as u32
-                && code == ErrorCode::OPERATIONAL_PROBLEM.to_raw() as u32),
+            if class == ErrorClass::DEVICE
+                && code == ErrorCode::OPERATIONAL_PROBLEM),
         "expected DEVICE / OPERATIONAL_PROBLEM, got {error:?}"
     );
 }
@@ -63,8 +63,8 @@ fn assert_operational_problem(error: Error) {
 fn assert_property_error(error: Error, expected: ErrorCode) {
     assert!(
         matches!(error, Error::Protocol { class, code }
-            if class == ErrorClass::PROPERTY.to_raw() as u32
-                && code == expected.to_raw() as u32),
+            if class == ErrorClass::PROPERTY
+                && code == expected),
         "expected PROPERTY / {expected:?}, got {error:?}"
     );
 }
@@ -545,8 +545,8 @@ fn an_object_without_a_log_refuses_a_purge() {
     let error = writes.commit_purge().unwrap_err();
     assert!(
         matches!(error, Error::Protocol { class, code }
-            if class == ErrorClass::OBJECT.to_raw() as u32
-                && code == ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32),
+            if class == ErrorClass::OBJECT
+                && code == ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED),
         "{error:?}"
     );
 }

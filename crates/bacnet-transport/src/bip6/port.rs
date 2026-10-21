@@ -2,15 +2,17 @@ use std::net::{Ipv6Addr, SocketAddrV6};
 use std::sync::Arc;
 use std::time::Duration;
 
+use bacnet_types::bip_port::{BipPortMode, ForeignRegistration};
 use bacnet_types::error::Error;
 use bytes::BytesMut;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
-use crate::port::{ReceivedNpdu, TransportPort};
+use crate::port::{Bip6Port, ReceivedNpdu, TransportPort};
 
 use super::collision_probe::Probe;
+use super::foreign_target::ForeignTarget;
 use super::frame::encoded;
 use super::receive::Receiver;
 use super::receive_counters::{Bip6ReceiveCounters, ReceiveDrops};
@@ -71,17 +73,26 @@ pub struct Bip6Transport {
     /// Broadcast scope for send_broadcast.
     broadcast_scope: Bip6BroadcastScope,
     /// Foreign device BBMD configuration (optional).
-    foreign_device: Option<Bip6ForeignDeviceConfig>,
+    /// The foreign-device registration, shared with the Network Port
+    /// object, which can move it ([`ForeignTarget`]).
+    foreign_device: Option<Arc<ForeignTarget>>,
     /// Foreign device re-registration task handle.
     registration_task: Option<JoinHandle<()>>,
+    /// The registered Network Port's lease, handed to the socket at start
+    /// so every task that owns the socket keeps the port registered.
+    network_port_lease: Option<Arc<()>>,
+    /// Set by the first start: a lease can be retained only before it.
+    registration_closed: bool,
     /// See [`Self::forwarded_group_origin_drops`].
     forwarded_group_origin_drops: Arc<std::sync::atomic::AtomicU64>,
     /// See [`Self::receive_counters`].
     receive_drops: Arc<ReceiveDrops>,
+    /// See [`Self::frame_tap`].
+    frame_tap: crate::tap::FrameTap,
 }
 
 /// Configuration for BIPv6 foreign device registration.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Bip6ForeignDeviceConfig {
     /// BBMD IPv6 address to register with.
     pub bbmd_ip: Ipv6Addr,
@@ -141,8 +152,11 @@ impl Bip6Transport {
             broadcast_scope: Bip6BroadcastScope::SiteLocal,
             foreign_device: None,
             registration_task: None,
+            network_port_lease: None,
+            registration_closed: false,
             forwarded_group_origin_drops: Arc::default(),
             receive_drops: Arc::default(),
+            frame_tap: crate::tap::FrameTap::new(),
         }
     }
 
@@ -160,8 +174,27 @@ impl Bip6Transport {
     /// VMAC startup is rejected until BBMD-assisted collision resolution is
     /// implemented.
     /// Must be called before `start()`.
+    ///
+    /// A registered Network Port can move the registration while the
+    /// transport runs (FD_BBMD_Address and FD_Subscription_Lifetime, on
+    /// ReinitializeDevice ACTIVATE_CHANGES or WARMSTART): the transport
+    /// then registers with the new BBMD at once, sends its broadcasts and
+    /// resolutions there, and trusts its Forwarded-NPDUs only.
     pub fn register_as_foreign_device(&mut self, config: Bip6ForeignDeviceConfig) {
-        self.foreign_device = Some(config);
+        self.foreign_device = Some(Arc::new(ForeignTarget::new(config)));
+    }
+
+    /// The foreign-device registration in effect: the one configured, or
+    /// the one a Network Port activation moved it to. `None` outside
+    /// foreign-device mode.
+    pub fn foreign_device_config(&self) -> Option<Bip6ForeignDeviceConfig> {
+        self.foreign_device.as_ref().map(|target| target.config())
+    }
+
+    /// The foreign-device target, for a test's gate.
+    #[cfg(test)]
+    pub(super) fn foreign_target(&self) -> Option<&Arc<ForeignTarget>> {
+        self.foreign_device.as_ref()
     }
 
     /// Forwarded-NPDUs dropped since this transport was created because
@@ -171,6 +204,13 @@ impl Bip6Transport {
     pub fn forwarded_group_origin_drops(&self) -> u64 {
         self.forwarded_group_origin_drops
             .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// This transport's frame tap: every BVLL message it sends and
+    /// receives, address resolution and registrations included, for
+    /// whoever subscribes. See [`crate::tap`].
+    pub fn frame_tap(&self) -> &crate::tap::FrameTap {
+        &self.frame_tap
     }
 
     /// The datagrams the receive path dropped since this transport was
@@ -212,7 +252,50 @@ impl TransportPort for Bip6Transport {
         true
     }
 
+    /// NORMAL, or FOREIGN with a live view of its registration, which a
+    /// Network Port activation can move while the transport runs. This
+    /// transport can't act as a BBMD.
+    fn bip6_port(&self) -> Option<Bip6Port> {
+        let (endpoint, vmac) = match self.local_address {
+            Some(bound) => (*bound.ip(), Some(self.source_vmac.octets())),
+            None => (
+                self.interface,
+                self.device_instance
+                    .and_then(|instance| vmac_from_device_instance(instance).ok())
+                    .map(Bip6Vmac::octets),
+            ),
+        };
+        let port = self.local_address.map_or(self.port, |bound| bound.port());
+        let mode = match &self.foreign_device {
+            Some(target) => BipPortMode::Foreign {
+                registration: Arc::clone(target) as Arc<dyn ForeignRegistration>,
+            },
+            None => BipPortMode::Normal,
+        };
+        Some(Bip6Port {
+            endpoint: SocketAddrV6::new(endpoint, port, 0, 0),
+            vmac,
+            multicast_group: self.broadcast_scope.multicast_addr(),
+            mode,
+        })
+    }
+
+    fn retain_network_port_lease_internal(&mut self, lease: Arc<()>) -> Result<(), Error> {
+        if self.registration_closed
+            || self.socket.is_some()
+            || self.recv_task.is_some()
+            || self.network_port_lease.is_some()
+        {
+            return Err(Error::Encoding(
+                "registered B/IPv6 lease requires an unstarted transport".into(),
+            ));
+        }
+        self.network_port_lease = Some(lease);
+        Ok(())
+    }
+
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
+        self.registration_closed = true;
         if self.recv_task.is_some() {
             return Err(Error::Transport(std::io::Error::new(
                 std::io::ErrorKind::AlreadyExists,
@@ -232,14 +315,13 @@ impl TransportPort for Bip6Transport {
 
         // Resolve and prepare privately. No identity, port, VMAC or socket is
         // published until joins and the required collision exchange succeed.
-        let foreign = self
-            .foreign_device
-            .as_ref()
-            .map(|fd| SocketAddrV6::new(fd.bbmd_ip, fd.bbmd_port, 0, 0));
+        let foreign = self.foreign_device.as_ref().map(|fd| fd.bbmd_addr());
         let socket = Arc::new(
             Bip6Socket::bind(self.interface, self.port, foreign)
                 .await
-                .map_err(Error::Transport)?,
+                .map_err(Error::Transport)?
+                .tapped(self.frame_tap.clone())
+                .leased(self.network_port_lease.clone()),
         );
         let bound = socket.local_address().map_err(Error::Transport)?;
         let local_port = bound.port();
@@ -324,10 +406,11 @@ impl TransportPort for Bip6Transport {
         // Do the only foreign-device startup I/O before spawning owned tasks,
         // so cancellation cannot orphan an unpublished receive worker.
         if let Some(fd) = &self.foreign_device {
+            let config = fd.config();
             send_register_foreign_device_v6(
                 &socket,
-                SocketAddrV6::new(fd.bbmd_ip, fd.bbmd_port, 0, 0),
-                fd.ttl,
+                SocketAddrV6::new(config.bbmd_ip, config.bbmd_port, 0, 0),
+                config.ttl,
                 source_vmac,
             )
             .await;
@@ -347,10 +430,7 @@ impl TransportPort for Bip6Transport {
             local_ip,
             unicast_ips: local_unicast_ips,
             wildcard_bind,
-            foreign_bbmd: self
-                .foreign_device
-                .as_ref()
-                .map(|fd| (fd.bbmd_ip, fd.bbmd_port)),
+            foreign_bbmd: self.foreign_device.clone(),
             neighbours: Arc::clone(&self.resolver),
             forwarded_group_origin_drops: Arc::clone(&self.forwarded_group_origin_drops),
             drops: Arc::clone(&self.receive_drops),
@@ -361,15 +441,12 @@ impl TransportPort for Bip6Transport {
         // Address-Resolutions go where a broadcast would: to the BBMD for a
         // foreign device, which passes them on (U.4.4), and otherwise to
         // the scope's group at this node's port.
-        let resolution_to = match &self.foreign_device {
-            Some(fd) => SocketAddrV6::new(fd.bbmd_ip, fd.bbmd_port, 0, 0),
-            None => SocketAddrV6::new(collision_group, local_port, 0, 0),
-        };
         let driver = Driver {
             socket: Arc::clone(&socket),
             resolver: Arc::clone(&self.resolver),
             source: source_vmac,
-            resolution_to,
+            resolution_to: SocketAddrV6::new(collision_group, local_port, 0, 0),
+            foreign: self.foreign_device.clone(),
         };
         let resolve_task = tokio::spawn(driver.run());
 
@@ -382,19 +459,25 @@ impl TransportPort for Bip6Transport {
 
         // Start foreign device registration if configured
         if let Some(fd) = &self.foreign_device {
-            let bbmd_addr = SocketAddrV6::new(fd.bbmd_ip, fd.bbmd_port, 0, 0);
-            let ttl = fd.ttl;
+            fd.attach(local_address);
+            let target = Arc::clone(fd);
             let sock = Arc::clone(&socket);
             let source_vmac = self.source_vmac;
 
-            // Re-register at TTL/2 interval
-            let interval = std::time::Duration::from_secs(((ttl as u64) / 2).max(30));
+            // Re-register every half time-to-live, and at once with the new
+            // values when an activation moves the registration. Each pass
+            // reads the target afresh; no lock is held across an await.
             let reg_task = tokio::spawn(async move {
-                let mut ticker = tokio::time::interval(interval);
-                ticker.tick().await; // Skip first immediate tick
                 loop {
-                    ticker.tick().await;
-                    send_register_foreign_device_v6(&sock, bbmd_addr, ttl, source_vmac).await;
+                    tokio::select! {
+                        () = tokio::time::sleep(target.renewal_interval()) => {}
+                        () = target.changed() => {}
+                    }
+                    let config = target.config();
+                    #[cfg(test)]
+                    target.in_flight().await;
+                    let bbmd = SocketAddrV6::new(config.bbmd_ip, config.bbmd_port, 0, 0);
+                    send_register_foreign_device_v6(&sock, bbmd, config.ttl, source_vmac).await;
                 }
             });
             self.registration_task = Some(reg_task);
@@ -404,6 +487,11 @@ impl TransportPort for Bip6Transport {
     }
 
     async fn stop(&mut self) -> Result<(), Error> {
+        // Refuse changes first, so none is accepted while the tasks stop
+        // and leaves a permit no task will take.
+        if let Some(fd) = &self.foreign_device {
+            fd.detach();
+        }
         if let Some(task) = self.registration_task.take() {
             task.abort();
             let _ = task.await;
@@ -422,6 +510,8 @@ impl TransportPort for Bip6Transport {
         self.source_vmac = Bip6Vmac::new([0; 3]);
         self.resolver.clear();
         self.resolver.set_own(None);
+        // Every task that owned the socket has ended.
+        self.network_port_lease = None;
         Ok(())
     }
 
@@ -476,7 +566,7 @@ impl TransportPort for Bip6Transport {
 
         // In foreign device mode, use Distribute-Broadcast-To-Network via BBMD
         if let Some(fd) = &self.foreign_device {
-            let bbmd_addr = SocketAddrV6::new(fd.bbmd_ip, fd.bbmd_port, 0, 0);
+            let bbmd_addr = fd.bbmd_addr();
             let mut buf = BytesMut::new();
             encode_bvll6(
                 &mut buf,

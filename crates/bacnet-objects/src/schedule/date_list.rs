@@ -39,8 +39,8 @@ pub(crate) const MAX_DATE_LIST_ENTRIES: usize = 1024;
 /// The error for one entry more than [`MAX_DATE_LIST_ENTRIES`].
 pub(super) fn no_space_error() -> Error {
     Error::Protocol {
-        class: ErrorClass::RESOURCES.to_raw() as u32,
-        code: ErrorCode::NO_SPACE_TO_WRITE_PROPERTY.to_raw() as u32,
+        class: ErrorClass::RESOURCES,
+        code: ErrorCode::NO_SPACE_TO_WRITE_PROPERTY,
     }
 }
 

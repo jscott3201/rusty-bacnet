@@ -4,19 +4,19 @@
 
 use bacnet_bip_codec::BvlcResultCode;
 use bacnet_bip_core::node::{
-    Admission, AttemptOutcome, Discard, ExchangeCounters, NodeCounters, RegistrationEvent,
-    SendRefusal,
+    Admission, AttemptOutcome, Discard, ExchangeCounters, NodeCounters, SendRefusal,
 };
 use bacnet_bip_core::{Duration, Instant};
 
 use super::{Attempt, Expected, Registration, Summary, BBMD, ORIGIN, PEER, TTL};
 use crate::tally::Sent;
 
-/// The hash over every datagram the node sends and where it goes. It was
+/// The hash over every datagram the port sends and where it goes. It was
 /// worked out apart from the codec, from the 17 datagrams written out by
 /// hand from the Annex J.2 layouts (120 octets): the six NAKs, eight
 /// Register-Foreign-Device requests, and three Distribute-Broadcast-To-
-/// Network messages.
+/// Network messages. The port sends what the scenario sent by hand before
+/// it (#1766), in the same order.
 const SENT_FNV: u32 = 0x8F8B_EFDE;
 
 const fn at(millis: u64) -> Instant {
@@ -56,11 +56,12 @@ fn counters() -> NodeCounters {
 pub fn expected() -> Expected {
     let summary = Summary {
         // A 4-octet header for a unicast; for a broadcast, 6 octets more, the
-        // originating address a BBMD adds when it forwards it. The budget of
-        // 1507 octets leaves room for 1497 either way.
-        max_npdu: [1497, 1497],
-        // Each request only a BBMD serves draws its own NAK, sent back to
-        // the peer.
+        // originating address a BBMD adds when it forwards it, out of the
+        // 64-octet budget. The hosted transport's 1507 leaves room for 1497
+        // either way.
+        max_npdu: [60, 54],
+        // Each request only a BBMD serves draws its own NAK, which the
+        // port sends back to the peer.
         naks: [
             Some((PEER, BvlcResultCode::WRITE_BROADCAST_DISTRIBUTION_TABLE_NAK)),
             Some((PEER, BvlcResultCode::READ_BROADCAST_DISTRIBUTION_TABLE_NAK)),
@@ -82,9 +83,6 @@ pub fn expected() -> Expected {
         // copy is dropped.
         forwarded: Some((ORIGIN, true)),
         untrusted: Some(Discard::ForwardedUntrusted),
-        // The DBTN NAK answers none of the node's exchanges, and comes long
-        // after the last one ended.
-        hint: Some((Some(DBTN_NAK), false)),
         // At 0, and its renewal one 30 s interval into the lease. The DBTN
         // NAK at 40 s brings the next one forward from 60 s to then. Then
         // the BBMD goes quiet: 70 s, and after each 3 s timeout a wait that
@@ -104,23 +102,14 @@ pub fn expected() -> Expected {
             Some(at(100_010)),
         ],
         // Each lease runs one time-to-live, 60 s, from the earliest send its
-        // success could answer.
-        events: [
-            Some(RegistrationEvent::Registered {
-                since: at(0),
-                until: at(60_000),
-            }),
-            Some(RegistrationEvent::Renewed { until: at(90_000) }),
-            Some(RegistrationEvent::Renewed { until: at(100_000) }),
-            Some(RegistrationEvent::Unanswered),
-            Some(RegistrationEvent::Unanswered),
-            Some(RegistrationEvent::Unanswered),
-            Some(RegistrationEvent::Lapsed),
-            Some(RegistrationEvent::Registered {
-                since: at(70_000),
-                until: at(130_000),
-            }),
-            Some(RegistrationEvent::Renewed { until: at(160_000) }),
+        // success could answer. The three attempts in between go unanswered
+        // and the lease lapses: the counters' three timeouts and one lapse.
+        leases: [
+            Some((at(0), at(60_000))),
+            Some((at(30_000), at(90_000))),
+            Some((at(40_000), at(100_000))),
+            Some((at(70_000), at(130_000))),
+            Some((at(100_000), at(160_000))),
             None,
         ],
         // In `Expected::registration`.
@@ -133,6 +122,7 @@ pub fn expected() -> Expected {
             octets: 120,
             fnv: SENT_FNV,
         },
+        refused: 0,
         errors: 0,
     };
     Expected {

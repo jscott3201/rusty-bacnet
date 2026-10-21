@@ -14,7 +14,9 @@ use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_services::cov::SubscribeCOVRequest;
 use bacnet_services::read_property::ReadPropertyRequest;
 use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};
-use bacnet_types::enums::{ConfirmedServiceChoice, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{
+    ConfirmedServiceChoice, EngineeringUnits, ObjectType, PropertyIdentifier,
+};
 use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::MacAddr;
 use bytes::{Bytes, BytesMut};
@@ -102,13 +104,14 @@ fn subscribe_cov(invoke_id: u8) -> Bytes {
 async fn a_confirmed_request_from_a_group_source_is_ignored_and_counted() {
     let mut db = ObjectDatabase::new();
     let device = DeviceObject::new(DeviceConfig {
-        instance: 1234,
-        name: "Group source".into(),
+        identity: bacnet_objects::DeviceIdentity::new(1234, 0)
+            .expect("valid Device identity")
+            .with_name("Group source"),
         ..DeviceConfig::default()
     })
     .unwrap();
     db.add(Box::new(device)).unwrap();
-    let input = AnalogInputObject::new(1, "Input", 62).unwrap();
+    let input = AnalogInputObject::new(1, "Input", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     db.add(Box::new(input)).unwrap();
     let (tx, rx) = mpsc::channel(8);
     let transport = TestTransport::builder()
@@ -117,9 +120,16 @@ async fn a_confirmed_request_from_a_group_source_is_ignored_and_counted() {
         .inbound(rx)
         .build();
     let sent = transport.sent();
-    let mut server = BACnetServer::start(ServerConfig::default(), db, transport)
-        .await
-        .unwrap();
+    let mut server = BACnetServer::start(
+        ServerConfig {
+            device: bacnet_objects::DeviceIdentity::new(1234, 0).unwrap(),
+            ..Default::default()
+        },
+        db,
+        transport,
+    )
+    .await
+    .unwrap();
 
     // From the group: a read and a subscription for confirmed
     // notifications. From the peer last: a subscription and a read, whose

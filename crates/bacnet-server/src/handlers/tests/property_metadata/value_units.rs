@@ -116,8 +116,8 @@ fn numeric_value_units_read_over_the_wire_and_refuse_writes() {
             assert!(matches!(
                 handle_write_property(&mut db, &request),
                 Err(Error::Protocol { class, code })
-                    if class == ErrorClass::PROPERTY.to_raw() as u32
-                        && code == ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32
+                    if class == ErrorClass::PROPERTY
+                        && code == ErrorCode::WRITE_ACCESS_DENIED
             ));
             assert_eq!(read_units(&db, oid), expected, "{oid:?}");
         }

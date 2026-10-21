@@ -140,6 +140,23 @@ class LightingPresentValueTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(await self.server.read_property(LO, PV), PropertyValue.real(0.0))
 
+    async def test_a_local_command_names_the_device_as_its_value_source(self) -> None:
+        # Lighting Output serves Value_Source and Last_Command_Time (#1866).
+        before = await self.server.read_property(LO, PropertyIdentifier.LAST_COMMAND_TIME)
+        source = await self.server.read_property(LO, PropertyIdentifier.VALUE_SOURCE)
+        self.assertEqual((source.tag, source.value), ("value_source", None))
+        await self.server.write_property_local(
+            LO, PV, PropertyValue.real(40.0), priority=8, source_object=None
+        )
+        source = await self.server.read_property(LO, PropertyIdentifier.VALUE_SOURCE)
+        self.assertEqual(
+            (source.tag, source.value),
+            ("value_source", ObjectIdentifier(ObjectType.DEVICE, 1_385_001)),
+        )
+        after = await self.server.read_property(LO, PropertyIdentifier.LAST_COMMAND_TIME)
+        self.assertEqual(after.tag, "timestamp")
+        self.assertNotEqual(after.value, before.value)
+
 
 if __name__ == "__main__":
     unittest.main()

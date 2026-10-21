@@ -6,7 +6,14 @@ The time the portable cores of
 `bacnet-mstp-core`, `bacnet-bip-core` and `bacnet-router-core` take it, so
 firmware that runs several of them feeds them one clock.
 
-- `#![no_std]`, no allocator, no dependencies, no features.
+- `#![no_std]`, no allocator, no dependencies, and no features by default.
+- The `std` feature adds `HostClock`, which maps a host's
+  `std::time::Instant` onto the timeline and back, exactly. It reads the
+  host clock through a function you choose, so an async runtime's paused
+  test time drives the cores too.
+- `earliest` merges optional deadlines with `None` as no deadline, where
+  `Option::min` would let `None` win.
+- It versions on its own, taking a new version only when its API changes.
 - The epoch is yours: the cores read no clock, and each call that depends on
   time takes `now`. A `u64` of nanoseconds lasts about 584 years.
 - `+` and `-` saturate, and every operation has a `checked_*` form that

@@ -26,8 +26,8 @@ fn read(zone: &AccessZoneObject, property: P) -> PropertyValue {
 fn assert_value_out_of_range(result: Result<(), Error>) {
     assert!(
         matches!(result, Err(Error::Protocol { class, code })
-            if class == ErrorClass::PROPERTY.to_raw() as u32
-                && code == ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32),
+            if class == ErrorClass::PROPERTY
+                && code == ErrorCode::VALUE_OUT_OF_RANGE),
         "expected PROPERTY / VALUE_OUT_OF_RANGE, got {result:?}"
     );
 }
@@ -65,7 +65,7 @@ fn access_zone_entry_and_exit_points_serve_device_object_references() {
         let result = zone.write_property(property, None, served.clone(), None);
         assert!(
             matches!(result, Err(Error::Protocol { code, .. })
-                if code == ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32),
+                if code == ErrorCode::WRITE_ACCESS_DENIED),
             "{property:?}: {result:?}"
         );
         assert_eq!(read(&zone, property), served);

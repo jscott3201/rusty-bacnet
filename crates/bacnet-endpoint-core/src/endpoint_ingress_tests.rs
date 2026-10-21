@@ -2,9 +2,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress};
+use bacnet_npdu::NetworkPriority;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::{DataAttribute, ReceivedNpdu, TransportPort, TransportProvenance};
-use bacnet_types::enums::NetworkPriority;
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 use bytes::{Bytes, BytesMut};
@@ -155,9 +155,8 @@ impl TransportPort for BlockingTransport {
 
 fn npdu_bytes(apdu: &[u8]) -> Bytes {
     let npdu = Npdu {
-        is_network_message: false,
         expecting_reply: false,
-        priority: NetworkPriority::NORMAL,
+        priority: NetworkPriority::Normal,
         payload: Bytes::copy_from_slice(apdu),
         ..Npdu::default()
     };
@@ -241,7 +240,7 @@ async fn direct_egress_preserves_npdu_flags_priority_and_destination() {
             vec![0x20, 0x2a, 0x0c],
             MacAddr::from_slice(&[0x44, 0x55]),
             true,
-            NetworkPriority::URGENT,
+            NetworkPriority::Urgent,
         )
         .await
         .unwrap();
@@ -250,7 +249,7 @@ async fn direct_egress_preserves_npdu_flags_priority_and_destination() {
     let decoded = decode_npdu(Bytes::from(npdu)).unwrap();
     assert_eq!(destination, [0x44, 0x55]);
     assert!(decoded.expecting_reply);
-    assert_eq!(decoded.priority, NetworkPriority::URGENT);
+    assert_eq!(decoded.priority, NetworkPriority::Urgent);
     assert_eq!(decoded.payload.as_ref(), &[0x20, 0x2a, 0x0c]);
 
     endpoint.stop().await.unwrap();
@@ -260,7 +259,7 @@ async fn direct_egress_preserves_npdu_flags_priority_and_destination() {
                 vec![0x20, 0x2b, 0x0c],
                 MacAddr::from_slice(&[0x44]),
                 false,
-                NetworkPriority::NORMAL,
+                NetworkPriority::Normal,
             )
             .await,
         Err(Error::Encoding(message)) if message == "endpoint shutdown"
@@ -281,7 +280,7 @@ async fn saturated_egress_is_bounded_and_stop_cancels_accepted_commands() {
                 vec![0x20, 0x01, 0x0c],
                 MacAddr::from_slice(&[0x01]),
                 false,
-                NetworkPriority::NORMAL,
+                NetworkPriority::Normal,
             )
             .await
     });
@@ -294,7 +293,7 @@ async fn saturated_egress_is_bounded_and_stop_cancels_accepted_commands() {
                 vec![0x20, 0x02, 0x0c],
                 MacAddr::from_slice(&[0x01]),
                 false,
-                NetworkPriority::NORMAL,
+                NetworkPriority::Normal,
             )
             .await
     });
@@ -306,7 +305,7 @@ async fn saturated_egress_is_bounded_and_stop_cancels_accepted_commands() {
                 vec![0x20, 0x03, 0x0c],
                 MacAddr::from_slice(&[0x01]),
                 false,
-                NetworkPriority::NORMAL,
+                NetworkPriority::Normal,
             )
             .await,
         Err(Error::Encoding(message)) if message == "endpoint egress queue is full"
@@ -406,9 +405,8 @@ async fn request_route_preserves_the_complete_envelope_and_reply_sender() {
         mac_address: MacAddr::new(),
     };
     let npdu = Npdu {
-        is_network_message: false,
         expecting_reply: true,
-        priority: NetworkPriority::URGENT,
+        priority: NetworkPriority::Urgent,
         destination: Some(destination),
         source: Some(source_network.clone()),
         hop_count: 255,

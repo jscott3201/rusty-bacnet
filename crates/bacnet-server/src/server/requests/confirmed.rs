@@ -24,11 +24,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         reply_tx: Option<tokio::sync::oneshot::Sender<Bytes>>,
     ) {
         let RequestServices { network, .. } = services;
-        let services = &RequestServices {
+        let services = &Arc::new(RequestServices {
             dcc_outcomes: Arc::new(dcc_outcomes::DccOutcomes::default()),
             mutation_decisions: Arc::new(crate::mutation::MutationDecisions::default()),
             ..services.clone()
-        };
+        });
         // LSO-only replay path mirrors dispatch admission (server level,
         // separate budget). Retransmitted already-executed LSO replays
         // byte-identically; pending in-flight duplicates discard.

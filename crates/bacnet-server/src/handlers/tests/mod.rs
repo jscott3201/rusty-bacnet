@@ -2,10 +2,11 @@ use super::*;
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::wpm::WritePropertyMultipleRequest;
+use bacnet_types::enums::EngineeringUnits;
 
 fn make_db_with_ai() -> ObjectDatabase {
     let mut db = ObjectDatabase::new();
-    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ai.set_present_value(72.5);
     db.add(Box::new(ai)).unwrap();
     db
@@ -23,14 +24,15 @@ fn make_db_with_msi() -> ObjectDatabase {
 fn make_db_with_device_and_ai() -> ObjectDatabase {
     let mut db = crate::server::clocked_test_database();
     let device = bacnet_objects::device::DeviceObject::new(bacnet_objects::device::DeviceConfig {
-        instance: 1,
-        name: "TestDevice".into(),
+        identity: bacnet_objects::DeviceIdentity::default().with_name("TestDevice"),
         ..Default::default()
     })
     .unwrap();
     db.add(Box::new(device)).unwrap();
-    db.add(Box::new(AnalogInputObject::new(1, "AI-1", 62).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+    ))
+    .unwrap();
     db
 }
 
@@ -89,11 +91,7 @@ fn list_refusal(result: Result<(), Error>) -> (ErrorClass, ErrorCode, u32) {
         },
         other => panic!("expected a protocol refusal, got {other:?}"),
     };
-    (
-        ErrorClass::from_raw(class as u16),
-        ErrorCode::from_raw(code as u16),
-        element,
-    )
+    (class, code, element)
 }
 
 mod access_control_arrays;
@@ -170,6 +168,7 @@ mod loop_reference_follow;
 mod multi_element_writes;
 mod noncommandable_null_writes;
 mod noncommandable_value_source;
+mod none_enrollment_fault;
 mod passwords;
 mod property_metadata;
 mod pulse_converter_input_reference;
@@ -220,8 +219,6 @@ fn sourced_wpm(db: &mut ObjectDatabase, data: &[u8]) -> Result<Vec<ObjectIdentif
     ) {
         WritePropertyMultipleOutcome::Success { committed_oids } => Ok(committed_oids),
         WritePropertyMultipleOutcome::Error { error, .. } => Err(error),
-        WritePropertyMultipleOutcome::Reject { reason } => Err(Error::Reject {
-            reason: reason.to_raw(),
-        }),
+        WritePropertyMultipleOutcome::Reject { reason } => Err(Error::Reject { reason }),
     }
 }

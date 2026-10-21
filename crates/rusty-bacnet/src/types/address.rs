@@ -114,6 +114,7 @@ impl PeerAddresses {
 fn value_error(error: Error) -> PyErr {
     match error {
         Error::Encoding(message) | Error::OutOfRange(message) => PyValueError::new_err(message),
+        Error::Range(refused) => PyValueError::new_err(refused.message().to_string()),
         other => PyValueError::new_err(other.to_string()),
     }
 }

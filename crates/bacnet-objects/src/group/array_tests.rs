@@ -105,8 +105,8 @@ fn assert_invalid_index(group: &GlobalGroupObject, property: PropertyIdentifier,
         matches!(
             group.read_property(property, Some(index)),
             Err(Error::Protocol { class, code })
-                if class == ErrorClass::PROPERTY.to_raw() as u32
-                    && code == ErrorCode::INVALID_ARRAY_INDEX.to_raw() as u32
+                if class == ErrorClass::PROPERTY
+                    && code == ErrorCode::INVALID_ARRAY_INDEX
         ),
         "{property:?}[{index}]"
     );

@@ -10,7 +10,7 @@ use crate::property_metadata::PropertyWriteCapability;
 use crate::traits::BACnetObject;
 use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
 use bacnet_types::enums::{
-    ErrorClass, ErrorCode, EventState, EventType, ObjectType, PropertyIdentifier,
+    EngineeringUnits, ErrorClass, ErrorCode, EventState, EventType, ObjectType, PropertyIdentifier,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue};
@@ -26,10 +26,19 @@ fn objects() -> Vec<Box<dyn BACnetObject>> {
             device_identifier: None,
         }))
         .unwrap();
+    // An unset enrollment serves `none` and generates no events (#1868).
+    enrollment.set_event_parameters(
+        bacnet_types::constructed::BACnetEventParameter::OutOfRange {
+            time_delay: 0,
+            low_limit: 0.0,
+            high_limit: 100.0,
+            deadband: 1.0,
+        },
+    );
     vec![
-        Box::new(AnalogInputObject::new(1, "AI", 62).unwrap()),
-        Box::new(AnalogOutputObject::new(1, "AO", 62).unwrap()),
-        Box::new(AnalogValueObject::new(1, "AV", 62).unwrap()),
+        Box::new(AnalogInputObject::new(1, "AI", EngineeringUnits::DEGREES_CELSIUS).unwrap()),
+        Box::new(AnalogOutputObject::new(1, "AO", EngineeringUnits::DEGREES_CELSIUS).unwrap()),
+        Box::new(AnalogValueObject::new(1, "AV", EngineeringUnits::DEGREES_CELSIUS).unwrap()),
         Box::new(BinaryInputObject::new(1, "BI").unwrap()),
         Box::new(BinaryOutputObject::new(1, "BO").unwrap()),
         Box::new(BinaryValueObject::new(1, "BV").unwrap()),
@@ -65,8 +74,8 @@ fn assert_denied(object: &mut dyn BACnetObject, value: PropertyValue, priority: 
         .unwrap_err();
     assert!(
         matches!(error, Error::Protocol { class, code }
-            if class == ErrorClass::PROPERTY.to_raw() as u32
-                && code == ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32),
+            if class == ErrorClass::PROPERTY
+                && code == ErrorCode::WRITE_ACCESS_DENIED),
         "{}: {error:?}",
         object.object_name()
     );

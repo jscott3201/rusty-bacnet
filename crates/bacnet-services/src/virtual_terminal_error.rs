@@ -103,8 +103,8 @@ impl TryFrom<&ErrorPdu> for VTCloseError {
 impl From<VTCloseError> for Error {
     fn from(error: VTCloseError) -> Self {
         Error::protocol(
-            error.error_class.to_raw() as u32,
-            error.error_code.to_raw() as u32,
+            error.error_class,
+            error.error_code,
             error
                 .list_of_vt_session_identifiers
                 .map(ErrorDetail::VtSessionIdentifiers),
@@ -153,11 +153,11 @@ mod tests {
     fn only_a_present_list_is_a_detail() {
         assert!(matches!(
             Error::from(sample(None)),
-            Error::Protocol { class: 5, code: 39 }
+            Error::Protocol { class: ErrorClass::SERVICES, code: ErrorCode::VT_SESSION_TERMINATION_FAILURE }
         ));
         assert!(matches!(
             Error::from(sample(Some(vec![1, 4]))),
-            Error::Structured { class: 5, code: 39, detail }
+            Error::Structured { class: ErrorClass::SERVICES, code: ErrorCode::VT_SESSION_TERMINATION_FAILURE, detail }
                 if *detail == ErrorDetail::VtSessionIdentifiers(vec![1, 4])
         ));
     }

@@ -20,10 +20,12 @@ async fn durable_duplicate_is_silent_after_reopen_with_fresh_tracker() {
     let observed = Arc::clone(&authorizations);
     let config = ServerConfig {
         audit_notification_sink: Some(sink),
-        audit_notification_authorizer: Some(Arc::new(move |_| {
-            observed.fetch_add(1, Ordering::AcqRel);
-            true
-        })),
+        policy: Some(Arc::new(crate::FnPolicy::new().audit_notification(
+            move |_| {
+                observed.fetch_add(1, Ordering::AcqRel);
+                true
+            },
+        ))),
         ..ServerConfig::default()
     };
     let bytes = request_bytes(vec![notification(AuditOperation::WRITE)]);
@@ -74,10 +76,12 @@ async fn changed_exact_identity_fields_are_admitted_after_reopen() {
     let observed = Arc::clone(&authorizations);
     let config = ServerConfig {
         audit_notification_sink: Some(sink),
-        audit_notification_authorizer: Some(Arc::new(move |_| {
-            observed.fetch_add(1, Ordering::AcqRel);
-            true
-        })),
+        policy: Some(Arc::new(crate::FnPolicy::new().audit_notification(
+            move |_| {
+                observed.fetch_add(1, Ordering::AcqRel);
+                true
+            },
+        ))),
         ..ServerConfig::default()
     };
     let payload = request_bytes(vec![notification(AuditOperation::WRITE)]);
@@ -178,14 +182,16 @@ async fn concurrent_exact_admission_authorizes_and_commits_once_without_locking_
     let callback_db = Arc::clone(&db);
     let config = ServerConfig {
         audit_notification_sink: Some(sink),
-        audit_notification_authorizer: Some(Arc::new(move |_| {
-            let guard = callback_db
-                .try_write()
-                .expect("database lock must not be held across authorization");
-            drop(guard);
-            observed.fetch_add(1, Ordering::AcqRel);
-            true
-        })),
+        policy: Some(Arc::new(crate::FnPolicy::new().audit_notification(
+            move |_| {
+                let guard = callback_db
+                    .try_write()
+                    .expect("database lock must not be held across authorization");
+                drop(guard);
+                observed.fetch_add(1, Ordering::AcqRel);
+                true
+            },
+        ))),
         ..ServerConfig::default()
     };
     let tracker = Arc::new(ConfirmedRequestTracker::default());
@@ -218,7 +224,9 @@ async fn failed_confirmed_commit_writes_no_receipt_and_fresh_retry_succeeds() {
     let db = database(Arc::clone(&persistence), 7);
     let config = ServerConfig {
         audit_notification_sink: Some(sink),
-        audit_notification_authorizer: Some(Arc::new(|_| true)),
+        policy: Some(Arc::new(
+            crate::FnPolicy::new().audit_notification(|_| true),
+        )),
         ..ServerConfig::default()
     };
     let bytes = request_bytes(vec![notification(AuditOperation::WRITE)]);

@@ -26,7 +26,7 @@ fn device_description_full_handler_null_is_noop_and_priority_range_is_typed() {
         let result = handle_write_property(&mut db, &bytes);
         if matches!(priority, Some(0 | 17)) {
             assert!(
-                matches!(result, Err(Error::Protocol {class,code}) if class == ErrorClass::SERVICES.to_raw() as u32 && code == ErrorCode::PARAMETER_OUT_OF_RANGE.to_raw() as u32)
+                matches!(result, Err(Error::Protocol {class,code}) if class == ErrorClass::SERVICES && code == ErrorCode::PARAMETER_OUT_OF_RANGE)
             );
         } else {
             assert_eq!(result.unwrap(), oid);

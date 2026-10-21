@@ -1,7 +1,7 @@
 use super::*;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 
-fn code(error: Error) -> (u32, u32) {
+fn code(error: Error) -> (ErrorClass, ErrorCode) {
     match error {
         Error::Protocol { class, code } => (class, code),
         other => panic!("expected protocol error, got {other:?}"),
@@ -34,12 +34,7 @@ fn unknown_writes_classify_every_builtin_with_null_and_ordinary_values() {
                         .write_property(property, None, value.clone(), None)
                         .unwrap_err(),
                 );
-                if actual
-                    != (
-                        ErrorClass::PROPERTY.to_raw() as u32,
-                        expected.to_raw() as u32,
-                    )
-                {
+                if actual != (ErrorClass::PROPERTY, expected) {
                     failures.push(format!(
                         "{:?} {property:?} {value:?}: {actual:?}, expected {expected:?}",
                         object.object_identifier()
@@ -68,7 +63,7 @@ fn unknown_writes_classify_every_builtin_with_null_and_ordinary_values() {
                         )
                         .unwrap_err()
                 ),
-                (2, expected.to_raw() as u32),
+                (ErrorClass::PROPERTY, expected),
                 "{:?}",
                 object.object_identifier()
             );
@@ -92,7 +87,7 @@ fn unknown_writes_optional_staging_names_use_current_presence() {
                     .write_property(PropertyIdentifier::STAGE_NAMES, None, value, None)
                     .unwrap_err()
             ),
-            (2, ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32)
+            (ErrorClass::PROPERTY, ErrorCode::UNKNOWN_PROPERTY)
         );
     }
     // Indexed precedence is deliberately unchanged by this unindexed correction.
@@ -107,7 +102,7 @@ fn unknown_writes_optional_staging_names_use_current_presence() {
                 )
                 .unwrap_err()
         ),
-        (2, ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32)
+        (ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED)
     );
     let mut present = StagingObject::new(2, "present", staging_config()).unwrap();
     assert_eq!(
@@ -121,7 +116,7 @@ fn unknown_writes_optional_staging_names_use_current_presence() {
                 )
                 .unwrap_err()
         ),
-        (2, ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32)
+        (ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED)
     );
     let names = PropertyValue::List(vec![PropertyValue::CharacterString("new".into()); 3]);
     present
@@ -161,7 +156,7 @@ fn unknown_writes_file_record_count_distinguishes_absence_from_read_only() {
                     file.write_property(PropertyIdentifier::RECORD_COUNT, None, value, None)
                         .unwrap_err()
                 ),
-                (2, expected.to_raw() as u32)
+                (ErrorClass::PROPERTY, expected)
             );
         }
         assert_eq!(
@@ -174,7 +169,7 @@ fn unknown_writes_file_record_count_distinguishes_absence_from_read_only() {
                 )
                 .unwrap_err()
             ),
-            (2, ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32)
+            (ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED)
         );
     }
 }

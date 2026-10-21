@@ -14,6 +14,7 @@ use super::cov_wire_test_support::*;
 use super::*;
 use bacnet_objects::analog::AnalogValueObject;
 use bacnet_services::cov_multiple::COVNotificationMultipleRequest;
+use bacnet_types::enums::EngineeringUnits;
 use bacnet_types::primitives::Time;
 use tokio::time::Instant as TokioInstant;
 
@@ -116,7 +117,9 @@ async fn take_unconfirmed(
 #[tokio::test(start_paused = true)]
 async fn unconfirmed_history_beyond_one_apdu_goes_out_in_several_notifications() {
     let mut h = Harness::start(ServerConfig {
-        max_apdu_length: u32::from(SMALL_APDU),
+        device: bacnet_objects::DeviceIdentity::default()
+            .with_max_apdu(u16::try_from(u32::from(SMALL_APDU)).expect("Device APDU fits u16"))
+            .expect("valid Device APDU"),
         ..ServerConfig::default()
     })
     .await;
@@ -148,7 +151,9 @@ async fn notifications_fit_the_maximum_apdu_the_subscriber_advertised() {
 #[tokio::test(start_paused = true)]
 async fn history_beyond_the_bound_drops_the_oldest_changes_and_counts_them() {
     let mut h = Harness::start(ServerConfig {
-        max_apdu_length: u32::from(SMALL_APDU),
+        device: bacnet_objects::DeviceIdentity::default()
+            .with_max_apdu(u16::try_from(u32::from(SMALL_APDU)).expect("Device APDU fits u16"))
+            .expect("valid Device APDU"),
         ..ServerConfig::default()
     })
     .await;
@@ -176,8 +181,10 @@ fn av2() -> ObjectIdentifier {
 #[tokio::test(start_paused = true)]
 async fn untimestamped_values_go_in_the_last_notification() {
     let mut h = Harness::start_with(ServerConfig::default(), |db| {
-        db.add(Box::new(AnalogValueObject::new(2, "AV-2", 62).unwrap()))
-            .unwrap();
+        db.add(Box::new(
+            AnalogValueObject::new(2, "AV-2", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+        ))
+        .unwrap();
     })
     .await;
     h.request_max_apdu = SMALL_APDU;
@@ -237,7 +244,9 @@ async fn untimestamped_values_go_in_the_last_notification() {
 #[tokio::test(start_paused = true)]
 async fn confirmed_history_chunks_go_out_one_per_acknowledgment() {
     let mut h = Harness::start(ServerConfig {
-        max_apdu_length: u32::from(SMALL_APDU),
+        device: bacnet_objects::DeviceIdentity::default()
+            .with_max_apdu(u16::try_from(u32::from(SMALL_APDU)).expect("Device APDU fits u16"))
+            .expect("valid Device APDU"),
         ..ServerConfig::default()
     })
     .await;
@@ -276,7 +285,9 @@ const HOLD_OFF: Duration = Duration::from_millis(10 * (DEFAULT_APDU_RETRIES as u
 #[tokio::test(start_paused = true)]
 async fn a_failed_confirmed_chunk_goes_out_again_before_the_rest() {
     let mut h = Harness::start(ServerConfig {
-        max_apdu_length: u32::from(SMALL_APDU),
+        device: bacnet_objects::DeviceIdentity::default()
+            .with_max_apdu(u16::try_from(u32::from(SMALL_APDU)).expect("Device APDU fits u16"))
+            .expect("valid Device APDU"),
         cov_retry_timeout_ms: 10,
         ..ServerConfig::default()
     })
@@ -502,8 +513,10 @@ async fn hold_interleaved(h: &Harness) -> (Vec<Row>, Vec<Row>) {
 
 async fn two_object_harness(confirmed: bool) -> Harness {
     let mut h = Harness::start_with(ServerConfig::default(), |db| {
-        db.add(Box::new(AnalogValueObject::new(2, "AV-2", 62).unwrap()))
-            .unwrap();
+        db.add(Box::new(
+            AnalogValueObject::new(2, "AV-2", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+        ))
+        .unwrap();
     })
     .await;
     h.request_max_apdu = SMALL_APDU;

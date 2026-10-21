@@ -151,7 +151,7 @@ fn xy_color_is_two_application_reals() {
         &[0x0C, 0x3E, 0xA0, 0x1A, 0x37, 0x1C, 0x3E, 0xA8, 0x72, 0xB0][..],
     ] {
         match decode_xy_color(value, 0) {
-            Err(Error::Decoding { .. }) => {}
+            Err(Error::Decoding(_)) => {}
             other => panic!("{value:02X?}: {other:?}"),
         }
     }
@@ -184,7 +184,7 @@ fn color_command_decodes_at_an_offset_and_stops_at_the_next_other_tag() {
     for (data, end) in cases {
         assert_eq!(decode_color_command(data, 0).unwrap().1, end);
         match decode_color_command_value(data) {
-            Err(Error::Decoding { .. }) => {}
+            Err(Error::Decoding(_)) => {}
             other => panic!("{data:02X?}: {other:?}"),
         }
     }
@@ -204,7 +204,7 @@ fn color_command_cut_inside_a_field_is_a_short_buffer() {
             assert_eq!(result.unwrap().1, cut);
         } else if unclosed.contains(&cut) {
             assert!(
-                matches!(result, Err(Error::Decoding { .. })),
+                matches!(result, Err(Error::Decoding(_))),
                 "cut at {cut}: {result:?}"
             );
         } else {
@@ -249,7 +249,7 @@ fn color_command_wrong_tags_and_lengths_are_malformed() {
     ];
     for value in malformed {
         match decode_color_command(value, 0) {
-            Err(Error::Decoding { .. }) => {}
+            Err(Error::Decoding(_)) => {}
             other => panic!("{value:02X?}: {other:?}"),
         }
     }
@@ -286,7 +286,8 @@ fn color_command_fields_too_wide_for_their_type_are_out_of_range() {
             decode_color_command_value(value),
         ] {
             match result {
-                Err(Error::OutOfRange(message)) => {
+                Err(Error::Range(refused)) => {
+                    let message = refused.label;
                     assert_eq!(message, format!("color command {field}"));
                 }
                 other => panic!("{value:02X?}: {other:?}"),
@@ -299,16 +300,16 @@ fn color_command_fields_too_wide_for_their_type_are_out_of_range() {
     let broken = [&wide[..], &[0x38]].concat();
     assert!(matches!(
         decode_color_command(&broken, 0),
-        Err(Error::Decoding { .. })
+        Err(Error::Decoding(_))
     ));
     let trailing = [&wide[..], &[0x21, 0x01]].concat();
     assert!(matches!(
         decode_color_command(&trailing, 0),
-        Err(Error::OutOfRange(_))
+        Err(Error::Range(_))
     ));
     assert!(matches!(
         decode_color_command_value(&trailing),
-        Err(Error::Decoding { .. })
+        Err(Error::Decoding(_))
     ));
 }
 
@@ -320,7 +321,7 @@ fn color_command_unsigned_past_four_octets_with_a_leading_zero_is_malformed() {
         &[0x09, 0x02, 0x2D, 0x05, 0x00, 0x00, 0x00, 0x0A, 0x8C],
     ] {
         match decode_color_command(value, 0) {
-            Err(Error::Decoding { .. }) => {}
+            Err(Error::Decoding(_)) => {}
             other => panic!("{value:02X?}: {other:?}"),
         }
     }

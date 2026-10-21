@@ -175,8 +175,8 @@ mod tests {
                     let before = object.read_property(p, index).unwrap();
                     assert!(
                         matches!(object.write_property_from(p, index, PropertyValue::Unsigned(invalid), Some(8), &crate::command_source::test_origin()),
-                        Err(Error::Protocol { class, code }) if class == u32::from(ErrorClass::PROPERTY.to_raw())
-                            && code == u32::from(ErrorCode::VALUE_OUT_OF_RANGE.to_raw()))
+                        Err(Error::Protocol { class, code }) if class == ErrorClass::PROPERTY
+                            && code == ErrorCode::VALUE_OUT_OF_RANGE)
                     );
                     assert_eq!(object.read_property(p, index).unwrap(), before);
                 }
@@ -192,8 +192,8 @@ mod tests {
             }
             assert!(
                 matches!(object.write_property(P::PRIORITY_ARRAY, None, PropertyValue::Null, None),
-                Err(Error::Protocol { class, code }) if class == u32::from(ErrorClass::PROPERTY.to_raw())
-                    && code == u32::from(ErrorCode::WRITE_ACCESS_DENIED.to_raw()))
+                Err(Error::Protocol { class, code }) if class == ErrorClass::PROPERTY
+                    && code == ErrorCode::WRITE_ACCESS_DENIED)
             );
             object
                 .write_property_from(

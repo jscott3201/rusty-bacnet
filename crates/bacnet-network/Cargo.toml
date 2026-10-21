@@ -8,12 +8,22 @@ repository.workspace = true
 description = "BACnet network layer: routing, router tables, priority channels"
 keywords = ["bacnet", "building-automation", "network", "routing"]
 categories = ["network-programming"]
+readme = "README.md"
+
+[package.metadata.docs.rs]
+no-default-features = true
+features = []
+default-target = "x86_64-unknown-linux-gnu"
+targets = []
+rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
+bacnet-npdu = { workspace = true }
 bacnet-types = { workspace = true, features = ["std"] }
 bacnet-encoding = { workspace = true, features = ["std"] }
 bacnet-transport.workspace = true
 bacnet-router-core.workspace = true
+bacnet-time = { workspace = true, features = ["std"] }
 bytes = { workspace = true, features = ["std"] }
 tracing.workspace = true
 tokio = { workspace = true, features = ["sync", "time"] }

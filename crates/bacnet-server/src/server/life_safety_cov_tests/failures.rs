@@ -46,7 +46,7 @@ async fn denied_invalid_and_panicking_operations_emit_no_cov() {
         )],
     )
     .await;
-    Arc::make_mut(&mut denied.config).life_safety_operation_authorizer = None;
+    Arc::make_mut(&mut denied.config).policy = None;
     denied
         .dispatch(
             1,

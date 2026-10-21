@@ -8,12 +8,12 @@ use std::time::Instant;
 use bytes::BytesMut;
 use tracing::{debug, warn};
 
-use bacnet_bip_codec::{BdtEntries, BvlcFunction, BvlcResultCode, Bvll, FdtEntries};
+use bacnet_bip_codec::{BvlcFunction, BvlcResultCode, Bvll};
 use bacnet_bip_core::bbmd::ForwardRefusal;
 use bacnet_bip_core::node::ForBbmd;
 use bacnet_bip_core::Arrival;
 
-use crate::bbmd::{self, Forward};
+use crate::bbmd::{self, Forward, Reply};
 use crate::bvll::encode_bvll;
 
 use super::io::{hand_up, send_bvlc_result, RecvContext};
@@ -94,37 +94,16 @@ pub(super) async fn handle(share: ForBbmd<'_>, ctx: &RecvContext) {
 
         ForBbmd::Distribute { sender, npdu } => distribute_broadcast(npdu, sender, ctx).await,
 
-        ForBbmd::Register { sender, ttl } => {
-            let result =
-                bbmd::lock(bbmd).register_foreign_device(sender.ip().octets(), sender.port(), ttl);
-            debug!(%sender, ttl, "Foreign device registered");
-            send_bvlc_result(ctx.socket(), sender, result).await;
-        }
-
-        ForBbmd::ReadBdt { sender } => {
-            let rows = bbmd::lock(bbmd).bdt_wire_entries();
-            let ack = Bvll::ReadBroadcastDistributionTableAck(BdtEntries::from_entries(&rows));
-            send_table_ack(ack, sender, ctx).await;
-        }
-
-        ForBbmd::ReadFdt { sender } => {
-            let rows = bbmd::lock(bbmd).fdt_wire_entries();
-            let ack = Bvll::ReadForeignDeviceTableAck(FdtEntries::from_entries(&rows));
-            send_table_ack(ack, sender, ctx).await;
-        }
-
-        ForBbmd::DeleteFdtEntry { sender, entry } => {
-            let result = {
-                // Check management ACL before accepting Delete-FDT-Entry
-                let mut state = bbmd::lock(bbmd);
-                if state.is_management_allowed(&sender.ip().octets()) {
-                    state.delete_foreign_device(entry.ip().octets(), entry.port())
-                } else {
-                    debug!(%sender, "Rejecting Delete-FDT-Entry from non-ACL sender");
-                    BvlcResultCode::DELETE_FOREIGN_DEVICE_TABLE_ENTRY_NAK
-                }
-            };
-            send_bvlc_result(ctx.socket(), sender, result).await;
+        ForBbmd::Management(request) => {
+            // The core decides under the lock; the answer is encoded and sent
+            // once the lock is released.
+            let reply = bbmd::lock(bbmd).serve(request, Instant::now());
+            let sender = request.sender();
+            debug!(?request, "Answering a BBMD management request");
+            match reply {
+                Reply::Result(code) => send_bvlc_result(ctx.socket(), sender, code).await,
+                ack => send_table_ack(ack.message(), sender, ctx).await,
+            }
         }
     }
 }

@@ -3,6 +3,7 @@ use super::*;
 use bacnet_objects::analog::AnalogValueObject;
 use bacnet_objects::object_profile::ObjectProfile;
 use bacnet_types::constructed::BACnetNameValue;
+use bacnet_types::enums::EngineeringUnits;
 
 const TAGS: PropertyIdentifier = PropertyIdentifier::TAGS;
 const LOCATION: PropertyIdentifier = PropertyIdentifier::PROFILE_LOCATION;
@@ -19,15 +20,17 @@ fn database(mask: u8) -> ObjectDatabase {
     // Higher identity is inserted first; the profiled Device must still own views.
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
-            instance: 900,
-            name: "Higher Device".into(),
+            identity: bacnet_objects::DeviceIdentity::new(900, 0)
+                .expect("valid Device identity")
+                .with_name("Higher Device"),
             ..Default::default()
         })
         .unwrap(),
     ))
     .unwrap();
     let mut object = DeviceObject::new(DeviceConfig {
-        instance: device().instance_number(),
+        identity: bacnet_objects::DeviceIdentity::new(device().instance_number(), 0)
+            .expect("valid Device identity"),
         ..Default::default()
     })
     .unwrap();
@@ -40,8 +43,10 @@ fn database(mask: u8) -> ObjectDatabase {
         })
         .unwrap();
     db.add(Box::new(object)).unwrap();
-    db.add(Box::new(AnalogValueObject::new(1, "AV-1", 62).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+    ))
+    .unwrap();
     assert_eq!(db.selected_device(), Some(device()));
     db
 }

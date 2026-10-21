@@ -1,10 +1,10 @@
 use super::NetworkLayer;
 use bacnet_encoding::npdu::{encode_npdu, Npdu};
+use bacnet_npdu::NetworkPriority;
 use bacnet_transport::sc::{LoopbackWebSocket, ScTransport, WebSocketPort};
 use bacnet_transport::sc_frame::{
     decode_sc_message, encode_sc_message, ScFunction, ScMessage, ScOption, Vmac,
 };
-use bacnet_types::enums::NetworkPriority;
 use bytes::{Bytes, BytesMut};
 use tokio::time::{timeout, Duration};
 
@@ -50,9 +50,8 @@ async fn sc_data_options_reach_received_apdu_data_attributes() {
 
     let apdu = Bytes::from_static(&[0x10, 0x08]);
     let npdu = Npdu {
-        is_network_message: false,
         expecting_reply: false,
-        priority: NetworkPriority::NORMAL,
+        priority: NetworkPriority::Normal,
         destination: None,
         source: None,
         payload: apdu.clone(),

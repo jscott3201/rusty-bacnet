@@ -1,10 +1,13 @@
 //! Wire-level tests for the DADR/SADR length bound (#1141): a DLEN or SLEN
-//! past [`NpduAddress::MAX_MAC_LEN`] is refused in both directions, the
+//! past [`MAX_MAC_LEN`] is refused in both directions, the
 //! lengths up to it still work, and both addresses behave the same way.
 
 use super::*;
+use bacnet_npdu::AddressField;
+use bacnet_types::constructed::BACnetAddress;
+use bacnet_types::error::DecodingKind;
 
-const FIELDS: [NpduAddressField; 2] = [NpduAddressField::Destination, NpduAddressField::Source];
+const FIELDS: [AddressField; 2] = [AddressField::Destination, AddressField::Source];
 const DNET: u16 = 2000;
 const SNET: u16 = 3000;
 const APDU: [u8; 2] = [0x10, 0x08];
@@ -13,17 +16,17 @@ const APDU: [u8; 2] = [0x10, 0x08];
 /// The `field` address announces `length` octets but holds only `present` of
 /// them; the other address, when the frame has one, is a valid 1-octet MAC.
 /// A source-field frame also carries a destination when `routed` is set.
-fn frame(field: NpduAddressField, length: u8, present: u8, routed: bool) -> Vec<u8> {
+fn frame(field: AddressField, length: u8, present: u8, routed: bool) -> Vec<u8> {
     let address = |first: u8| (0..present).map(move |i| first.wrapping_add(i));
-    let mut out = vec![BACNET_PROTOCOL_VERSION];
+    let mut out = vec![bacnet_npdu::VERSION];
     match field {
-        NpduAddressField::Destination => {
+        AddressField::Destination => {
             out.push(0x20);
             out.extend_from_slice(&DNET.to_be_bytes());
             out.push(length);
             out.extend(address(0xD0));
         }
-        NpduAddressField::Source => {
+        AddressField::Source => {
             if routed {
                 out.push(0x28);
                 out.extend_from_slice(&DNET.to_be_bytes());
@@ -36,7 +39,7 @@ fn frame(field: NpduAddressField, length: u8, present: u8, routed: bool) -> Vec<
             out.extend(address(0x50));
         }
     }
-    if field == NpduAddressField::Destination || routed {
+    if field == AddressField::Destination || routed {
         out.push(255); // hop count
     }
     out.extend_from_slice(&APDU);
@@ -44,7 +47,7 @@ fn frame(field: NpduAddressField, length: u8, present: u8, routed: bool) -> Vec<
 }
 
 /// A complete frame whose `field` address is `length` octets long.
-fn full(field: NpduAddressField, length: u8) -> Vec<u8> {
+fn full(field: AddressField, length: u8) -> Vec<u8> {
     frame(field, length, length, false)
 }
 
@@ -52,22 +55,22 @@ fn decode(bytes: Vec<u8>) -> Result<Npdu, NpduDecodeError> {
     decode_npdu(Bytes::from(bytes))
 }
 
-fn expected_dnet(field: NpduAddressField) -> Option<u16> {
-    (field == NpduAddressField::Destination).then_some(DNET)
+fn expected_dnet(field: AddressField) -> Option<u16> {
+    (field == AddressField::Destination).then_some(DNET)
 }
 
-fn address_of(npdu: &Npdu, field: NpduAddressField) -> &NpduAddress {
+fn address_of(npdu: &Npdu, field: AddressField) -> &NpduAddress {
     match field {
-        NpduAddressField::Destination => npdu.destination.as_ref(),
-        NpduAddressField::Source => npdu.source.as_ref(),
+        AddressField::Destination => npdu.destination.as_ref(),
+        AddressField::Source => npdu.source.as_ref(),
     }
     .expect("decoded NPDU carries the address under test")
 }
 
 #[test]
 fn npdu_address_bound_matches_the_recipient_bound() {
-    assert_eq!(NpduAddress::MAX_MAC_LEN, 18);
-    assert_eq!(NpduAddress::MAX_MAC_LEN, BACnetAddress::MAX_MAC_LEN);
+    assert_eq!(MAX_MAC_LEN, 18);
+    assert_eq!(MAX_MAC_LEN, BACnetAddress::MAX_MAC_LEN);
 }
 
 #[test]
@@ -135,12 +138,12 @@ fn boundary_address_lengths_decode_and_round_trip_for_either_field() {
 
 #[test]
 fn source_refusal_reports_the_npdu_dnet() {
-    let refused = decode(frame(NpduAddressField::Source, 19, 19, true)).unwrap_err();
+    let refused = decode(frame(AddressField::Source, 19, 19, true)).unwrap_err();
     assert!(
         matches!(
             refused,
             NpduDecodeError::AddressTooLong {
-                field: NpduAddressField::Source,
+                field: AddressField::Source,
                 length: 19,
                 dnet: Some(DNET),
                 source: None,
@@ -148,7 +151,7 @@ fn source_refusal_reports_the_npdu_dnet() {
         ),
         "{refused:?}"
     );
-    let accepted = decode(frame(NpduAddressField::Source, 18, 18, true)).unwrap();
+    let accepted = decode(frame(AddressField::Source, 18, 18, true)).unwrap();
     assert_eq!(accepted.destination.unwrap().network, DNET);
     assert_eq!(accepted.source.unwrap().mac_address.len(), 18);
 }
@@ -156,7 +159,7 @@ fn source_refusal_reports_the_npdu_dnet() {
 /// A frame toward DNET whose DADR announces `dlen` octets and holds `held` of
 /// them, followed by `source` written as raw (SNET, SLEN, SADR octets held).
 fn behind_long_dadr(dlen: u8, held: u8, source: Option<(u16, u8, u8)>) -> Vec<u8> {
-    let mut out = vec![BACNET_PROTOCOL_VERSION, 0x20];
+    let mut out = vec![bacnet_npdu::VERSION, 0x20];
     out.extend_from_slice(&DNET.to_be_bytes());
     out.push(dlen);
     out.extend((0..held).map(|i| 0xD0u8.wrapping_add(i)));
@@ -174,7 +177,7 @@ fn behind_long_dadr(dlen: u8, held: u8, source: Option<(u16, u8, u8)>) -> Vec<u8
 fn reported_source(bytes: Vec<u8>) -> Option<NpduAddress> {
     match decode(bytes) {
         Err(NpduDecodeError::AddressTooLong {
-            field: NpduAddressField::Destination,
+            field: AddressField::Destination,
             dnet: Some(DNET),
             source,
             ..
@@ -227,21 +230,32 @@ fn address_too_long_reads_as_out_of_range() {
             text.contains(&format!("{}=19", field.length_octet())),
             "{text}"
         );
-        assert!(matches!(Error::from(refused), Error::OutOfRange(_)));
+        let converted = Error::from(refused);
+        assert!(matches!(converted, Error::Range(_)));
+        assert_eq!(converted.to_string(), format!("value out of range: {text}"));
     }
-    let malformed = decode(vec![BACNET_PROTOCOL_VERSION]).unwrap_err();
-    assert!(matches!(
-        Error::from(malformed),
-        Error::BufferTooShort { .. }
-    ));
+    let malformed = decode(vec![bacnet_npdu::VERSION]).unwrap_err();
+    assert_eq!(
+        malformed,
+        NpduDecodeError::Malformed(bacnet_npdu::Malformed::Truncated)
+    );
+    let converted = Error::from(malformed);
+    assert_eq!(
+        converted.decode_fault().map(|(_, kind)| kind),
+        Some(DecodingKind::Missing)
+    );
+    assert_eq!(
+        converted.to_string(),
+        "decoding error at offset 0: NPDU truncated"
+    );
 }
 
 #[test]
 fn encoder_refuses_an_address_past_the_bound_for_either_field() {
     for field in FIELDS {
-        for length in [NpduAddress::MAX_MAC_LEN, NpduAddress::MAX_MAC_LEN + 1] {
+        for length in [MAX_MAC_LEN, MAX_MAC_LEN + 1] {
             let address = NpduAddress {
-                network: if field == NpduAddressField::Destination {
+                network: if field == AddressField::Destination {
                     DNET
                 } else {
                     SNET
@@ -249,17 +263,17 @@ fn encoder_refuses_an_address_past_the_bound_for_either_field() {
                 mac_address: MacAddr::from_slice(&vec![0x42; length]),
             };
             let npdu = match field {
-                NpduAddressField::Destination => Npdu {
+                AddressField::Destination => Npdu {
                     destination: Some(address),
                     ..Npdu::default()
                 },
-                NpduAddressField::Source => Npdu {
+                AddressField::Source => Npdu {
                     source: Some(address),
                     ..Npdu::default()
                 },
             };
             let result = encode_npdu(&mut BytesMut::new(), &npdu);
-            if length > NpduAddress::MAX_MAC_LEN {
+            if length > MAX_MAC_LEN {
                 let text = result.unwrap_err().to_string();
                 assert!(
                     text.contains(&format!("{field} address of 19 octets")),

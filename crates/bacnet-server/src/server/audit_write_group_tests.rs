@@ -9,7 +9,7 @@
 //! from `STRANGER` comes from an address no Device is bound to. Device 20 is
 //! the Audit recipient, bound at `LOGGER`.
 use super::*;
-use crate::mutation::{MutationAuthorizer, MutationService, MutationTarget};
+use crate::mutation::{MutationService, MutationTarget};
 use bacnet_objects::channel::ChannelObject;
 use bacnet_services::write_group::{GroupChannelValue, WriteGroupRequest};
 use bacnet_types::constructed::BACnetAuditNotification;
@@ -66,6 +66,7 @@ fn write_group() -> Vec<u8> {
 /// records go out.
 async fn send(fixture: &Fixture, source_mac: &[u8]) {
     let received = bacnet_network::layer::ReceivedApdu {
+        router_response: None,
         direct_response: None,
         apdu: Bytes::new(),
         source_mac: MacAddr::from_slice(source_mac),
@@ -172,10 +173,10 @@ async fn write_group_is_audited_once_per_channel_from_the_requester() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_channel_write_the_authorizer_denies_makes_no_record() {
+async fn a_channel_write_the_policy_denies_makes_no_record() {
     let mut fixture = start().await;
     // Only CH-2 may be written; each decision sees an unconfirmed request.
-    let authorizer: MutationAuthorizer = Arc::new(|context| {
+    let authorizer = crate::FnPolicy::new().mutation(|context| {
         assert_eq!(context.invoke_id, None);
         assert_eq!(
             context.service_choice,
@@ -186,7 +187,7 @@ async fn a_channel_write_the_authorizer_denies_makes_no_record() {
         };
         target.channel.instance_number() == 2
     });
-    fixture.server.config_mut().mutation_authorizer = Some(authorizer);
+    fixture.server.config_mut().policy = Some(Arc::new(authorizer));
     send(&fixture, SOURCE).await;
     let device30 = BACnetRecipient::Device(oid(ObjectType::DEVICE, 30));
     assert_eq!(untimed(records(&fixture)), [expected(2, device30)]);

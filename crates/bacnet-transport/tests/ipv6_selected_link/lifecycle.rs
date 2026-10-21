@@ -94,36 +94,37 @@ async fn explicit_random_collision_reseeds_and_configured_collision_is_transacti
 #[tokio::test]
 #[ignore = "requires an explicitly supplied isolated IPv6 multicast link"]
 async fn explicit_cancel_start_then_restart_stop_and_drop_reclaim_owner() {
-    let (selected, index) = fixture();
-    let (observer, port) = observer(index, true);
-    let mut transport = Bip6Transport::new(selected, port, None);
-    {
-        let startup = transport.start();
-        tokio::pin!(startup);
-        tokio::select! {
-            probe = control(&observer, 3) => {
-                assert_eq!((*probe.source.ip(), probe.source.port()), (selected, port));
+    crate::port_retry::rerun_on_lost_port(async || {
+        let (selected, index) = fixture();
+        let (observer, port) = observer(index, true);
+        let mut transport = Bip6Transport::new(selected, port, None);
+        {
+            let startup = transport.start();
+            tokio::pin!(startup);
+            tokio::select! {
+                probe = control(&observer, 3) => {
+                    assert_eq!((*probe.source.ip(), probe.source.port()), (selected, port));
+                }
+                result = &mut startup => panic!("startup completed before its observed collision probe: {result:?}"),
             }
-            result = &mut startup => panic!("startup completed before its observed collision probe: {result:?}"),
+            // Drop the startup future after the actual probe, before publication.
         }
-        // Drop the startup future after the actual probe, before publication.
-    }
-    assert_eq!(transport.local_mac(), &[0; 3]);
-    assert!(transport.send_broadcast(NPDU).await.is_err());
-    let mut incoming = transport.start().await.unwrap();
-    transport.stop().await.unwrap();
-    assert!(incoming.recv().await.is_none());
-    let mut restarted = transport.start().await.unwrap();
-    drop(transport);
-    assert!(tokio::time::timeout(DEADLINE, restarted.recv())
-        .await
-        .unwrap()
-        .is_none());
-    drop(observer);
-    // An exclusive bind after receiver teardown proves no owner kept the port.
-    let exclusive =
-        std::net::UdpSocket::bind(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, port, 0, 0)).unwrap();
-    drop(exclusive);
+        assert_eq!(transport.local_mac(), &[0; 3]);
+        assert!(transport.send_broadcast(NPDU).await.is_err());
+        let mut incoming = transport.start().await.unwrap();
+        transport.stop().await.unwrap();
+        assert!(incoming.recv().await.is_none());
+        let mut restarted = transport.start().await.unwrap();
+        drop(transport);
+        assert!(tokio::time::timeout(DEADLINE, restarted.recv())
+            .await
+            .unwrap()
+            .is_none());
+        drop(observer);
+        // An exclusive bind after receiver teardown proves no owner kept the port.
+        std::net::UdpSocket::bind(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, port, 0, 0)).map(drop)
+    })
+    .await;
 }
 
 #[tokio::test]

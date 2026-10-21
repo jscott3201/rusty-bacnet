@@ -16,9 +16,9 @@
 //! data attributes the refused frame arrived with (#1289).
 
 use bacnet_encoding::npdu::decode_npdu;
+use bacnet_npdu::NetworkMessageType;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::{DataAttribute, ReceivedNpdu, TransportPort};
-use bacnet_types::enums::NetworkMessageType;
 use bacnet_types::MacAddr;
 use bytes::Bytes;
 
@@ -27,13 +27,14 @@ use crate::loopback_fixture::{
     ORIGIN, REMOTE, TOO_LONG,
 };
 use crate::router::{BACnetRouter, RouterOptions, RouterPort, StartedRouter};
-use crate::router_table::{Mac, PortId, Reachability};
+use crate::router_table::{PortId, Reachability};
+use bacnet_npdu::Mac;
 
 /// A network the fixture router has no route to.
 const UNKNOWN: u16 = 5000;
-const WHO_IS: u8 = NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK.to_raw();
+const WHO_IS: NetworkMessageType = NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK;
 /// A reserved network message type, which the router answers with reason 3.
-const RESERVED_TYPE: u8 = 0x14;
+const RESERVED_TYPE: NetworkMessageType = NetworkMessageType::from_raw(0x14);
 
 /// One way the router refuses an NPDU from peer A: the frame, built with the
 /// SNET/SADR it is given, and the reject payload it draws (reason, network).
@@ -92,7 +93,7 @@ fn refusals() -> [Refusal; 6] {
 async fn fixture(busy: bool) -> RouterFixture {
     let mut fixture = RouterFixture::start().await;
     if busy {
-        let busy = Some(NetworkMessageType::ROUTER_BUSY_TO_NETWORK.to_raw());
+        let busy = Some(NetworkMessageType::ROUTER_BUSY_TO_NETWORK);
         fixture
             .peer_b
             .send_broadcast(&wire(None, None, busy))
@@ -198,7 +199,7 @@ async fn next_unicast(rx: &mut FromRouter) -> (ReceivedNpdu, MacAddr) {
         }
         assert_eq!(
             frame.npdu[..],
-            [0x01, 0x80, WHO_IS, 0x13, 0x88],
+            [0x01, 0x80, WHO_IS.to_raw(), 0x13, 0x88],
             "a solicitation"
         );
     }
@@ -268,7 +269,7 @@ async fn router_rejects_with_the_ingress_data_attributes() {
             let npdu = decode_npdu(reject.npdu).unwrap();
             assert_eq!(
                 npdu.message_type,
-                Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK.to_raw()),
+                Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK),
                 "{what}"
             );
             assert_eq!(npdu.payload[..], refusal.reject, "{what}");

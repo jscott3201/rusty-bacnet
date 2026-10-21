@@ -403,8 +403,8 @@ impl BACnetObject for ScheduleObject {
                 read_property_list_property(&self.property_list(), array_index)
             }
             _ => Err(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+                class: ErrorClass::PROPERTY,
+                code: ErrorCode::UNKNOWN_PROPERTY,
             }),
         }
     }
@@ -477,8 +477,8 @@ impl BACnetObject for ScheduleObject {
                 return Ok(());
             }
             return Err(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
+                class: ErrorClass::PROPERTY,
+                code: ErrorCode::INVALID_DATA_TYPE,
             });
         }
         if let Some(result) = common::write_out_of_service_with_reliability_restore(

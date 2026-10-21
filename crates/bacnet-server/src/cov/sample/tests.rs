@@ -85,7 +85,7 @@ fn nested(levels: usize) -> PropertyValue {
 }
 fn resource(result: Result<CovSample, Error>) {
     assert!(
-        matches!(result, Err(Error::Protocol { class,code }) if class==ErrorClass::RESOURCES.to_raw() as u32 && code==ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT.to_raw() as u32)
+        matches!(result, Err(Error::Protocol { class,code }) if class==ErrorClass::RESOURCES && code==ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT)
     );
 }
 #[test]

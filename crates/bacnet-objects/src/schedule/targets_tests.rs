@@ -100,8 +100,8 @@ fn commanding() -> ScheduleObject {
 fn assert_code(result: Result<(), Error>, class: ErrorClass, code: ErrorCode, what: &str) {
     match result {
         Err(Error::Protocol { class: c, code: e }) => {
-            assert_eq!(c, class.to_raw() as u32, "{what}: class");
-            assert_eq!(e, code.to_raw() as u32, "{what}: expected {code:?}");
+            assert_eq!(c, class, "{what}: class");
+            assert_eq!(e, code, "{what}: expected {code:?}");
         }
         other => panic!("{what}: expected {code:?}, got {other:?}"),
     }

@@ -11,7 +11,7 @@ use bacnet_encoding::constructed::tagged::{
 };
 use bacnet_encoding::{primitives, tags};
 use bacnet_types::enums::{ConfirmedServiceChoice, ErrorClass, ErrorCode};
-use bacnet_types::error::Error;
+use bacnet_types::error::{DecodeError, DecodingKind, Error};
 use bytes::BytesMut;
 
 /// Encode `[0]` around the error class and code.
@@ -27,8 +27,8 @@ pub(crate) fn encode_error_in(
     code: ErrorCode,
 ) {
     tags::encode_opening_tag(buf, tag_number);
-    primitives::encode_app_enumerated(buf, class.to_raw() as u32);
-    primitives::encode_app_enumerated(buf, code.to_raw() as u32);
+    primitives::encode_app_enumerated(buf, u32::from(class.to_raw()));
+    primitives::encode_app_enumerated(buf, u32::from(code.to_raw()));
     tags::encode_closing_tag(buf, tag_number);
 }
 
@@ -37,7 +37,7 @@ pub(crate) fn encode_error_in(
 /// production in errors.
 pub(crate) fn decode_error_type(
     data: &[u8],
-    what: &str,
+    what: &'static str,
 ) -> Result<((ErrorClass, ErrorCode), usize), Error> {
     decode_error_in(data, 0, 0, what)
 }
@@ -48,7 +48,7 @@ pub(crate) fn decode_error_in(
     data: &[u8],
     offset: usize,
     tag_number: u8,
-    what: &str,
+    what: &'static str,
 ) -> Result<((ErrorClass, ErrorCode), usize), Error> {
     let (body, end) = decode_ctx_constructed(data, offset, tag_number, what)?;
     let (class, position) = decode_app_enumerated::<u16>(body, 0, what)?;
@@ -78,8 +78,8 @@ pub(crate) fn encode_element_error(
 /// a body that decodes builds no label (#1645).
 pub(crate) fn decode_element_error(
     data: &[u8],
-    what: &str,
-    number: &str,
+    what: &'static str,
+    number: &'static str,
 ) -> Result<(ErrorClass, ErrorCode, u32), Error> {
     let ((class, code), offset) = decode_error_type(data, what)?;
     let (number, end) = decode_ctx_unsigned::<u32>(data, offset, 1, number)?;
@@ -113,22 +113,29 @@ pub(crate) fn error_pdu(
 pub(crate) fn decode_error_pdu<T>(
     pdu: &ErrorPdu,
     services: &[ConfirmedServiceChoice],
-    what: &str,
+    what: &'static str,
     decode: impl FnOnce(&[u8]) -> Result<T, Error>,
     pair: impl FnOnce(&T) -> (ErrorClass, ErrorCode),
 ) -> Result<T, Error> {
     if !services.contains(&pdu.service_choice) {
-        return Err(Error::decoding(
+        return Err(DecodeError::new(
+            DecodingKind::InvalidEncoding,
             0,
-            format!("ErrorPdu for {:?} is not a {what}", pdu.service_choice),
-        ));
+            "ErrorPdu answers confirmed service {}, which this error does not",
+        )
+        .within(what)
+        .with_value(pdu.service_choice.to_raw().into())
+        .into());
     }
     let decoded = decode(&pdu.error_data)?;
     if pair(&decoded) != (pdu.error_class, pdu.error_code) {
-        return Err(Error::decoding(
+        return Err(DecodeError::new(
+            DecodingKind::InvalidEncoding,
             0,
-            format!("{what} body disagrees with ErrorPdu class/code"),
-        ));
+            "body disagrees with ErrorPdu class/code",
+        )
+        .within(what)
+        .into());
     }
     Ok(decoded)
 }

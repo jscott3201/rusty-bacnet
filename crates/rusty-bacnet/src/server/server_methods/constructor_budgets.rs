@@ -8,16 +8,16 @@ use pyo3::prelude::*;
 use super::super::server;
 
 /// Reject a registered Network Port instance outside 1..255, or one given for
-/// a transport other than B/IP.
+/// a transport other than B/IP or B/IPv6.
 pub(super) fn registered_network_port(port: Option<u32>, transport: &str) -> PyResult<()> {
     if port.is_some_and(|instance| !(1..=255).contains(&instance)) {
         return Err(PyValueError::new_err(
             "registered_network_port must be 1..255",
         ));
     }
-    if port.is_some() && transport != "bip" {
+    if port.is_some() && !matches!(transport, "bip" | "ipv6") {
         return Err(PyValueError::new_err(
-            "registered_network_port requires B/IP",
+            "registered_network_port requires B/IP or B/IPv6",
         ));
     }
     Ok(())

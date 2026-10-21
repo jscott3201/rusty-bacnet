@@ -11,8 +11,8 @@ const LC: PropertyIdentifier = PropertyIdentifier::LIGHTING_COMMAND;
 fn assert_error<T: std::fmt::Debug>(result: Result<T, Error>, expected: ErrorCode) {
     match result {
         Err(Error::Protocol { class, code }) => {
-            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
-            assert_eq!(code, expected.to_raw() as u32, "expected {expected:?}");
+            assert_eq!(class, ErrorClass::PROPERTY);
+            assert_eq!(code, expected, "expected {expected:?}");
         }
         other => panic!("expected PROPERTY/{expected:?}, got {other:?}"),
     }
@@ -34,7 +34,14 @@ fn lighting_output_lighting_command_starts_at_none_and_serves_what_was_written()
     let mut lo = LightingOutputObject::new(1, "LO-1").unwrap();
     assert_eq!(lo.lighting_command(), command(Op::NONE));
     assert_eq!(lo.read_property(LC, None).unwrap(), octets(&[0x09, 0x00]));
-    lo.write_property(LC, None, octets(&FADE), None).unwrap();
+    lo.write_property_from(
+        LC,
+        None,
+        octets(&FADE),
+        None,
+        &crate::command_source::test_origin(),
+    )
+    .unwrap();
     assert_eq!(lo.read_property(LC, None).unwrap(), octets(&FADE));
     assert_eq!(
         lo.lighting_command(),
@@ -88,7 +95,7 @@ fn lighting_output_lighting_command_refuses_other_datatypes() {
         octets(&FADE[2..7]),
     ] {
         assert_error(
-            lo.write_property(LC, None, value, None),
+            lo.write_property_from(LC, None, value, None, &crate::command_source::test_origin()),
             ErrorCode::INVALID_DATA_TYPE,
         );
     }
@@ -105,7 +112,13 @@ fn lighting_output_lighting_command_refuses_other_datatypes() {
         &wide_then_trailing[..],
     ] {
         assert_error(
-            lo.write_property(LC, None, octets(broken), None),
+            lo.write_property_from(
+                LC,
+                None,
+                octets(broken),
+                None,
+                &crate::command_source::test_origin(),
+            ),
             ErrorCode::INVALID_DATA_ENCODING,
         );
     }
@@ -235,7 +248,14 @@ fn lighting_output_takes_a_lighting_command_a_channel_passes_on() {
     let target = MemberDatatype::of(ObjectType::LIGHTING_OUTPUT, LC, current.as_ref());
     assert_eq!(target, MemberDatatype::LightingCommand);
     let value = coerce_channel_value(&PropertyValue::ApplicationData(framed), target).unwrap();
-    lo.write_property(LC, None, value, Some(10)).unwrap();
+    lo.write_property_from(
+        LC,
+        None,
+        value,
+        Some(10),
+        &crate::command_source::test_origin(),
+    )
+    .unwrap();
     assert_eq!(lo.read_property(LC, None).unwrap(), octets(&FADE));
 }
 

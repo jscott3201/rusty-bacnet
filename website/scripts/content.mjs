@@ -52,6 +52,9 @@ export async function plainBody(body, file, downloads) {
     return `\n\n\`\`\`${attr(tag, 'lang')}\n${raws.get(name).trim()}\n\`\`\`\n\n`;
   });
   text = text.replace(/<DownloadList\s*\/>/g, () => downloads.map(item => `- [${item.os} · ${item.architecture}](${releaseAsset(item.file)}) — \`${item.file}\`; ${item.features}; ${item.runtime}.`).join('\n'));
+  // Screenshots under src/assets are built to hashed URLs the export can't
+  // name, so the export keeps their alt text.
+  text = outsideFences(text, part => part.replace(/!\[([^\]]*)\]\((?:\.\.\/)+assets\/[^)\s]+\)/g, (_, alt) => `*Screenshot: ${alt}*`));
   text = text.replace(/<Diagram\b[^>]*\/>/g, tag => `\n\n![${attr(tag, 'description')}](/rusty-bacnet/diagrams/${attr(tag, 'file')})\n\n**${attr(tag, 'title')}**\n\n`);
   text = text.replace(/<NextStep\b[^>]*\/>/g, tag => `\n\n[Continue: ${attr(tag, 'label')}](${attr(tag, 'href')}) — ${attr(tag, 'description')}\n\n`);
   text = text.replace(/<Checkpoint\b[^>]*>/g, tag => `\n\n**${attr(tag, 'title') || 'What success looks like'}**\n\n`).replace(/<\/Checkpoint>/g, '');

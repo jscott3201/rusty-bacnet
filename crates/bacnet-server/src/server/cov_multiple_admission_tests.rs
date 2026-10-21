@@ -10,6 +10,7 @@ use crate::cov::{CovRecipient, MultipleContextKey};
 use bacnet_objects::analog::AnalogValueObject;
 use bacnet_services::cov_multiple::COVNotificationMultipleRequest;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
+use bacnet_types::enums::EngineeringUnits;
 use bacnet_types::error::ErrorDetail;
 
 const OOS: PropertyIdentifier = PropertyIdentifier::OUT_OF_SERVICE;
@@ -20,8 +21,10 @@ fn av(instance: u32) -> ObjectIdentifier {
 }
 
 fn with_av2(db: &mut ObjectDatabase) {
-    db.add(Box::new(AnalogValueObject::new(2, "AV-2", 62).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AnalogValueObject::new(2, "AV-2", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+    ))
+    .unwrap();
 }
 
 /// `(object, [property])` specifications, none timestamped.

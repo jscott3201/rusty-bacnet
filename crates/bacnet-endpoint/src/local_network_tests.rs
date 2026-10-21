@@ -92,10 +92,10 @@ impl TransportPort for Capture {
         true
     }
     fn bip_port(&self) -> Option<bacnet_transport::port::BipPort> {
-        Some(bacnet_transport::port::BipPort {
-            endpoint: host(SELF),
-            mode: bacnet_types::bip_port::BipPortMode::Normal,
-        })
+        Some(bacnet_transport::port::BipPort::new(
+            host(SELF),
+            bacnet_types::bip_port::BipPortMode::Normal,
+        ))
     }
     fn retain_network_port_lease_internal(&mut self, lease: Arc<()>) -> Result<(), Error> {
         self.lease = Some(lease);
@@ -497,7 +497,7 @@ async fn a_registered_ports_configured_number_is_local_from_startup() {
     endpoint.session = endpoint
         .session
         .with_database(db)
-        .with_identity(identity)
+        .device(identity)
         .with_registered_network_port(port);
     // No Number control arrives: the port's number is published at startup.
     endpoint.start(false).await;

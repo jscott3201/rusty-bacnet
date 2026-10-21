@@ -65,6 +65,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                     .get_or_insert_with(|| Arc::new(RwLock::new(ObjectDatabase::new())));
                 let mut responder = EndpointResponder::new(Arc::clone(db), egress.clone())
                     .with_read_work_limit(self.config.read_work_limit);
+                if let Some(identity) = &self.identity {
+                    responder = responder.with_device(identity.clone());
+                }
                 if let Some(oid) = self.registered_network_port {
                     responder =
                         responder.with_registered_port(oid, self.registered_port_lease.clone());
@@ -76,6 +79,18 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                 }
                 if let Some(handler) = self.reinitialize.clone() {
                     responder = responder.with_reinitialize(handler, self.reinit_password.clone());
+                    // The session's Reporter records an accepted reset,
+                    // backup or restore step (#1564). Weak, so the
+                    // responder never keeps the source owner alive.
+                    if let Some(source) = source_audit.as_ref().map(Arc::downgrade) {
+                        responder = responder.with_reinitialize_audit(Arc::new(
+                            move |db, operation, requester| {
+                                if let Some(source) = source.upgrade() {
+                                    source.device_operation(db, operation, requester);
+                                }
+                            },
+                        ));
+                    }
                 }
                 let responder = Arc::new(responder);
                 let handle = ServerRoleHandle::new(

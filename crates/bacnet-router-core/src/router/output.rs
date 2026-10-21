@@ -12,9 +12,9 @@
 use super::counters::bump;
 use super::host::{Event, Host};
 use super::tasks::{Task, TaskKind};
-use super::Storage;
-use crate::message::{MessageType, RejectReason};
-use crate::npdu::Npdu;
+use super::{RejectOrigin, Storage};
+use crate::npdu::{NetworkMessageType, RejectMessageReason};
+use crate::npdu::{NetworkPriority, Npdu};
 use crate::{swap_apart, Mac, PortId};
 
 /// What to do next. Poll [`Router::poll_action`](super::Router::poll_action)
@@ -42,14 +42,16 @@ pub struct Send<'a> {
     pub to: Dest<'a>,
     /// The NPDU, in the router's scratch until the next poll.
     pub npdu: &'a [u8],
-    /// The NPDU's network priority, 0 (normal) to 3 (life safety), for a
-    /// port that queues by it: the control octet's two low bits, so never
-    /// more than 3.
-    pub priority: u8,
+    /// The NPDU's network priority, for a port that queues by it.
+    pub priority: NetworkPriority,
     /// Why the router sends it.
     pub kind: Kind,
     /// What prompted it.
     pub cause: Cause,
+    /// Return-path record for an eligible routed send. Retain it with a
+    /// queued send for [`Router::refused_later`](super::Router::refused_later).
+    /// It is absent for fan-outs, forwarded rejects and local messages.
+    pub reject_origin: Option<RejectOrigin>,
 }
 
 /// A link-layer destination.
@@ -77,16 +79,22 @@ pub enum Kind {
     /// A network message of this type passed on: an I-Am-Router, a
     /// Router-Busy or Router-Available, or a Who-Is-Router searching
     /// further.
-    Relay(MessageType),
+    Relay(NetworkMessageType),
     /// A reject this router sends, with this reason.
-    Reject(RejectReason),
+    Reject(RejectMessageReason),
     /// An answer of this type: I-Am-Router, Initialize-Routing-Table-Ack
     /// or Network-Number-Is.
-    Answer(MessageType),
+    Answer(NetworkMessageType),
     /// A startup announcement of this type.
-    Announce(MessageType),
+    Announce(NetworkMessageType),
     /// A Who-Is-Router for a network the router has no route to.
     Solicit,
+    /// The router's own Router-Busy or Router-Available, of this type, for
+    /// a port that clogged or drained (#1697).
+    Congestion(NetworkMessageType),
+    /// A request from the router's own application
+    /// ([`Router::originate`](super::Router::originate), #1699).
+    Originate,
 }
 
 /// What prompted a send.
@@ -95,7 +103,8 @@ pub enum Cause {
     /// A received frame: the send carries that frame's link data
     /// attributes, as every output an arrival prompts does today.
     Ingress,
-    /// The router itself (the startup announcements): no attributes.
+    /// The router itself (the startup announcements, its congestion
+    /// messages and its application's requests): no attributes.
     Local,
 }
 
@@ -107,7 +116,7 @@ pub enum Cause {
 pub enum SendRefusal {
     /// Its queue is full.
     Full,
-    /// The NPDU is too long for it.
+    /// The NPDU or its link envelope was refused as too long before sending.
     TooLong,
     /// It is down.
     PortDown,
@@ -125,6 +134,8 @@ enum Tag {
     Answer,
     Announce,
     Solicit,
+    Congestion,
+    Originate,
 }
 
 /// Where a written NPDU goes.
@@ -150,7 +161,7 @@ pub(super) struct Current {
     code: u8,
     /// [`Cause::Local`]; zero is [`Cause::Ingress`].
     local: bool,
-    priority: u8,
+    priority: NetworkPriority,
     /// To every port but `port`, rather than to `port`.
     fan_out: bool,
     port: PortId,
@@ -161,6 +172,7 @@ pub(super) struct Current {
     to: Mac,
     /// Written for a table answer, which a refusal ends.
     pub(super) table_ack: bool,
+    pub(super) reject_origin: RejectOrigin,
 }
 
 impl Current {
@@ -170,13 +182,14 @@ impl Current {
         tag: Tag::Forward,
         code: 0,
         local: false,
-        priority: 0,
+        priority: NetworkPriority::Normal,
         fan_out: false,
         port: PortId(0),
         next: 0,
         broadcast: false,
         to: Mac::EMPTY,
         table_ack: false,
+        reject_origin: RejectOrigin::NONE,
     };
 
     /// `len` octets in the scratch, going to `target`.
@@ -184,7 +197,7 @@ impl Current {
         len: usize,
         kind: Kind,
         cause: Cause,
-        priority: u8,
+        priority: NetworkPriority,
         target: Target<'_>,
     ) -> Self {
         let (tag, code) = match kind {
@@ -195,6 +208,8 @@ impl Current {
             Kind::Answer(code) => (Tag::Answer, code.to_raw()),
             Kind::Announce(code) => (Tag::Announce, code.to_raw()),
             Kind::Solicit => (Tag::Solicit, 0),
+            Kind::Congestion(code) => (Tag::Congestion, code.to_raw()),
+            Kind::Originate => (Tag::Originate, 0),
         };
         let mut current = Self {
             active: true,
@@ -241,11 +256,13 @@ impl Current {
         match self.tag {
             Tag::Forward => Kind::Forward,
             Tag::Global => Kind::Global,
-            Tag::Relay => Kind::Relay(MessageType::from_raw(self.code)),
-            Tag::Reject => Kind::Reject(RejectReason::from_raw(self.code)),
-            Tag::Answer => Kind::Answer(MessageType::from_raw(self.code)),
-            Tag::Announce => Kind::Announce(MessageType::from_raw(self.code)),
+            Tag::Relay => Kind::Relay(NetworkMessageType::from_raw(self.code)),
+            Tag::Reject => Kind::Reject(RejectMessageReason::from_raw(self.code)),
+            Tag::Answer => Kind::Answer(NetworkMessageType::from_raw(self.code)),
+            Tag::Announce => Kind::Announce(NetworkMessageType::from_raw(self.code)),
             Tag::Solicit => Kind::Solicit,
+            Tag::Congestion => Kind::Congestion(NetworkMessageType::from_raw(self.code)),
+            Tag::Originate => Kind::Originate,
         }
     }
 }
@@ -261,6 +278,8 @@ pub(super) struct Outputs {
     len: usize,
     /// The last send polled came from a table answer.
     last_table_ack: bool,
+    /// The port of the last send polled.
+    last_port: PortId,
 }
 
 impl Outputs {
@@ -269,6 +288,7 @@ impl Outputs {
         tasks: [Task::EMPTY; QUEUE],
         len: 0,
         last_table_ack: false,
+        last_port: PortId(0),
     };
 
     /// How many outputs wait on a router of `ports` ports: the current
@@ -312,14 +332,26 @@ impl Outputs {
     }
 }
 
-impl<const P: usize, const R: usize, const H: usize, const D: usize, const N: usize>
-    Storage<P, R, H, D, N>
+impl<
+        const P: usize,
+        const R: usize,
+        const H: usize,
+        const D: usize,
+        const N: usize,
+        G: super::GroupClassifier,
+        const B: usize,
+    > Storage<P, R, H, D, N, G, B>
 {
-    /// Drop whatever the caller left unpolled, counting each output.
+    /// Drop whatever the caller left unpolled, counting each output, a
+    /// waiting congestion announcement included.
     pub(super) fn drop_undrained(&mut self) {
-        let pending = self.out.pending(self.port_count);
+        let announcements = self.flows[..self.port_count]
+            .iter_mut()
+            .fold(0, |count, flow| count + usize::from(flow.take_pending()));
+        let pending = self.out.pending(self.port_count) + announcements;
         if pending > 0 {
-            self.counters.undrained = self.counters.undrained.saturating_add(pending as u64);
+            let pending = u32::try_from(pending).unwrap_or(u32::MAX);
+            self.counters.undrained = self.counters.undrained.saturating_add(pending);
             self.out = Outputs::NEW;
         }
     }
@@ -332,7 +364,7 @@ impl<const P: usize, const R: usize, const H: usize, const D: usize, const N: us
             0,
             "a frame's output comes first"
         );
-        match npdu.write(&mut self.scratch) {
+        match npdu.encode_into(&mut self.scratch) {
             Ok(len) => {
                 self.out.current = Current::new(len, kind, Cause::Ingress, npdu.priority, target);
                 true
@@ -381,6 +413,7 @@ impl<const P: usize, const R: usize, const H: usize, const D: usize, const N: us
         loop {
             if let Some((port, broadcast)) = self.next_target() {
                 self.out.last_table_ack = self.out.current.table_ack;
+                self.out.last_port = port;
                 let current = &self.out.current;
                 return Action::Send(Send {
                     port,
@@ -392,6 +425,7 @@ impl<const P: usize, const R: usize, const H: usize, const D: usize, const N: us
                     npdu: &self.scratch[..current.len],
                     priority: current.priority,
                     kind: current.kind(),
+                    reject_origin: current.reject_origin.as_option(),
                     cause: if current.local {
                         Cause::Local
                     } else {
@@ -443,10 +477,24 @@ impl<const P: usize, const R: usize, const H: usize, const D: usize, const N: us
         None
     }
 
-    /// Note that the caller refused the send just polled: count it, and end
-    /// the table answer it belonged to.
-    pub(super) fn refused(&mut self) {
-        bump(&mut self.counters.refused);
+    /// The send just polled was refused for a full queue: when its port is
+    /// clogged and it carries an origin, answer that origin with reason 2
+    /// (Clause 6.6.3.6).
+    pub(super) fn refused_while_clogged(&mut self) {
+        let port = usize::from(self.out.last_port.0);
+        let clogged = self.flows[..self.port_count]
+            .get(port)
+            .is_some_and(|flow| flow.clogged());
+        if let Some(origin) = self.out.current.reject_origin.as_option() {
+            if clogged {
+                self.queue_reject(origin, RejectMessageReason::ROUTER_BUSY);
+            }
+        }
+    }
+
+    /// The caller refused the send just polled: end the table answer it
+    /// belonged to. [`Router::refused`](super::Router::refused) counts it.
+    pub(super) fn end_refused_answer(&mut self) {
         if core::mem::take(&mut self.out.last_table_ack)
             && self
                 .out

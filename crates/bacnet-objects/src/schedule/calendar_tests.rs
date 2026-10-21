@@ -103,8 +103,8 @@ fn present_value(cal: &CalendarObject) -> PropertyValue {
 fn assert_error(result: Result<(), Error>, class: ErrorClass, code: ErrorCode, what: &str) {
     match result {
         Err(Error::Protocol { class: c, code: e }) => {
-            assert_eq!(c, class.to_raw() as u32, "{what}");
-            assert_eq!(e, code.to_raw() as u32, "{what}: expected {code:?}");
+            assert_eq!(c, class, "{what}");
+            assert_eq!(e, code, "{what}: expected {code:?}");
         }
         other => panic!("{what}: expected {class:?}/{code:?}, got {other:?}"),
     }

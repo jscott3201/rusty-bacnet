@@ -1,0 +1,18 @@
+---
+source: crates/bacnet-cli/src/tui/tests/help_keys.rs
+expression: out
+---
+""
+ :_  watch DEVICE OBJECT [PROPERTY] | csv on|off | writem…  Enter run  Esc close
+"w"
+ :w_  watch DEVICE OBJECT [PROPERTY] | writem DEVICE OBJE…  Enter run  Esc close
+"wa"
+ :wa_  watch DEVICE OBJECT [PROPERTY]  Enter run  Esc close                     
+"watch 100 "
+ :watch 100 _  watch DEVICE OBJECT [PROPERTY]  Enter run  Esc close             
+"mstp"
+ :mstp_  mstp rotation|hold MS | mstp listen SECS  Enter run  Esc close         
+"bb"
+ :bb_  bbmd [ADDRESS]  Enter run  Esc close                                     
+"zz"
+ :zz_  no such command  Enter run  Esc close

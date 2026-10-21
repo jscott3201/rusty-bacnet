@@ -76,8 +76,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .await
     }
 
-    /// Send a WhoHas broadcast to find an object by identifier or name, asking
-    /// the devices in `range`, or every device for `None` (Clause 16.9, #1483).
+    /// Send a WhoHas as a global broadcast, as [`Self::who_is`] does, so that
+    /// devices behind routers hear it too, to find an object by identifier
+    /// or name, asking the devices in `range`, or every device for `None`
+    /// (Clause 16.9, #1483).
     pub async fn who_has(
         &self,
         object: WhoHasObject,
@@ -86,7 +88,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let mut buf = BytesMut::new();
         WhoHasRequest { range, object }.encode(&mut buf)?;
 
-        self.broadcast_unconfirmed(UnconfirmedServiceChoice::WHO_HAS, &buf)
+        self.broadcast_global_unconfirmed(UnconfirmedServiceChoice::WHO_HAS, &buf)
             .await
     }
 
@@ -153,7 +155,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// such a registration returns [`Error::Encoding`] and the table is left
     /// unchanged (an empty SADR could never satisfy a routed lookup). A
     /// `remote_network` outside 1..=65534 or a `remote_mac` longer than
-    /// [`NpduAddress::MAX_MAC_LEN`] is refused the same way, since
+    /// [`MAX_MAC_LEN`](bacnet_npdu::MAX_MAC_LEN) is refused the same way, since
     /// [`BACnetClient::confirmed_request_routed`] refuses that destination.
     pub async fn add_routed_device(&self, config: RoutedDeviceConfig) -> Result<(), Error> {
         if config.router_mac.is_empty() {

@@ -133,8 +133,8 @@ impl BACnetObject for Declared {
         };
         if let Some(code) = error {
             return Err(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: code.to_raw() as u32,
+                class: ErrorClass::PROPERTY,
+                code,
             });
         }
         Ok(PropertyValue::Unsigned(if index == Some(0) {

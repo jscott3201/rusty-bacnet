@@ -21,7 +21,7 @@ async fn start_profiles(
     let mut db = ObjectDatabase::new();
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
-            instance: 10,
+            identity: bacnet_objects::DeviceIdentity::new(10, 0).expect("valid Device identity"),
             ..Default::default()
         })
         .unwrap(),
@@ -41,6 +41,7 @@ async fn start_profiles(
     db.add(Box::new(reporter())).unwrap();
     BACnetServer::start_with_clock_mode_and_bindings(
         ServerConfig {
+            device: bacnet_objects::DeviceIdentity::new(10, 0).unwrap(),
             audit_reporters: Some(AuditReportersConfig {
                 reporters: selected,
             }),
@@ -119,7 +120,7 @@ async fn audit_recipient_non_bip_six_byte_mac_is_not_an_address_capability() {
     // Six octets on a generic link do not establish the B/IP address grammar.
     let mut db = ObjectDatabase::new();
     let mut device = DeviceObject::new(DeviceConfig {
-        instance: 10,
+        identity: bacnet_objects::DeviceIdentity::new(10, 0).expect("valid Device identity"),
         ..Default::default()
     })
     .unwrap();
@@ -133,6 +134,7 @@ async fn audit_recipient_non_bip_six_byte_mac_is_not_an_address_capability() {
     db.add(Box::new(reporter())).unwrap();
     let result = BACnetServer::start_with_clock_mode_and_bindings(
         ServerConfig {
+            device: bacnet_objects::DeviceIdentity::new(10, 0).unwrap(),
             audit_reporters: Some(AuditReportersConfig {
                 reporters: vec![oid(ObjectType::AUDIT_REPORTER, 1)],
             }),

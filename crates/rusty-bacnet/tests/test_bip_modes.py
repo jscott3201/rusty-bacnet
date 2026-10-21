@@ -20,6 +20,40 @@ async def eventually(check, seconds=5.0):
         await asyncio.sleep(0.02)
 
 
+async def accepted_registration(client):
+    """Wait for the registration observations asserted by the loopback test."""
+    async def accepted():
+        status = await client.foreign_registration()
+        # The lease may survive while a later renewal is still pending.
+        return status if (status["registered"]
+                          and status["last_outcome"] == "accepted") else None
+    return await eventually(accepted, seconds=20)
+
+
+class RegistrationWaitTests(unittest.IsolatedAsyncioTestCase):
+    async def test_waits_for_a_live_lease_and_an_accepted_attempt(self):
+        accepted = {"registered": True, "last_outcome": "accepted",
+                    "last_result": 0, "accepted": 2, "lease_remaining": 59.0}
+        observations = iter([
+            {"registered": False, "last_outcome": "pending",
+             "last_result": None, "accepted": 0, "lease_remaining": None},
+            # An accepted attempt alone does not establish a live lease.
+            {"registered": False, "last_outcome": "accepted",
+             "last_result": 0, "accepted": 1, "lease_remaining": None},
+            # A renewal can be pending while an earlier lease remains live.
+            {"registered": True, "last_outcome": "pending",
+             "last_result": None, "accepted": 1, "lease_remaining": 49.0},
+            accepted,
+        ])
+
+        class Client:
+            async def foreign_registration(self):
+                return next(observations)
+
+        status = await accepted_registration(Client())
+        self.assertEqual(status, accepted)
+
+
 class OptionTests(unittest.TestCase):
     def test_foreign_device_keeps_its_settings(self):
         foreign = ForeignDevice("192.0.2.10", ttl=600, renewal=20)
@@ -56,6 +90,44 @@ class OptionTests(unittest.TestCase):
         self.assertEqual((default.bdt, default.accept_foreign_devices,
                           default.management_acl, default.bdt_persist_path),
                          ([], False, [], None))
+
+    def test_bbmd_alone_on_its_subnet_is_off_by_default(self):
+        # A BBMD alone behind its NAT skips the local rebroadcast (#1668).
+        self.assertFalse(Bbmd().alone_on_subnet)
+        self.assertTrue(Bbmd(alone_on_subnet=True).alone_on_subnet)
+
+    def test_bbmd_behind_nat_keeps_its_global_address(self):
+        # A BBMD behind a NAT router (#940).
+        self.assertIsNone(Bbmd().nat_global_address)
+        self.assertEqual(Bbmd().nat_private_ranges, [])
+        bbmd = Bbmd(["203.0.113.1:47809", "198.51.100.2:47809"],
+                    nat_global_address="203.0.113.1:47809",
+                    nat_private_ranges=["100.64.9.9/10"])
+        self.assertEqual(bbmd.nat_global_address, "203.0.113.1:47809")
+        self.assertEqual(bbmd.nat_private_ranges, ["100.64.0.0/10"])
+        self.assertEqual(Bbmd(nat_global_address="203.0.113.1")
+                         .nat_global_address, "203.0.113.1:47808")
+        # No peers: a BBMD that serves foreign devices only.
+        self.assertEqual(Bbmd([], nat_global_address="203.0.113.1:47809").bdt, [])
+        self.assertIn("nat_global_address='203.0.113.1:47809'", repr(bbmd))
+        for kwargs in ({"nat_global_address": "203.0.113"},
+                       {"nat_global_address": "203.0.113.1:0"},
+                       {"nat_global_address": "239.1.1.1"},
+                       {"nat_private_ranges": ["10.0.0.0/8"]},
+                       {"nat_global_address": "203.0.113.1",
+                        "nat_private_ranges": ["100.64.0.0/33"]},
+                       {"nat_global_address": "203.0.113.1",
+                        "nat_private_ranges": ["100.64.0.0"]},
+                       {"nat_global_address": "203.0.113.1",
+                        "nat_private_ranges": [f"100.{i}.0.0/16" for i in range(5)]},
+                       {"nat_global_address": "127.0.0.1:47809"},
+                       {"bdt": ["198.51.100.2:47809"],
+                        "nat_global_address": "203.0.113.1:47809"},
+                       {"bdt": ["203.0.113.1:47809",
+                                ("198.51.100.0:47809", "255.255.255.0")],
+                        "nat_global_address": "203.0.113.1:47809"}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                Bbmd(**kwargs)
 
     def test_bbmd_refuses_bad_settings(self):
         for kwargs in ({"bdt": ["10.0.5"]}, {"bdt": [("10.0.5.2", "mask")]},
@@ -94,16 +166,15 @@ class LoopbackTests(unittest.IsolatedAsyncioTestCase):
             foreign = ForeignDevice(address, ttl=60, renewal=10)
             async with BACnetClient(interface="127.0.0.1", port=0,
                                     foreign_device=foreign) as client:
-                async def registered():
-                    status = await client.foreign_registration()
-                    return status if status["registered"] else None
-                status = await eventually(registered, seconds=20)
+                status = await accepted_registration(client)
                 self.assertEqual(status["last_outcome"], "accepted")
                 self.assertEqual(status["last_result"], 0)
                 self.assertEqual(status["last_bbmd"], address)
                 self.assertGreaterEqual(status["accepted"], 1)
                 self.assertEqual((status["refused"], status["lapses"]), (0, 0))
-                self.assertGreater(status["lease_remaining"], 50)
+                # A lease counts down from the send, not this observation.
+                self.assertGreater(status["lease_remaining"], 0)
+                self.assertLessEqual(status["lease_remaining"], 60)
                 # Renewed every 10 s, not at half the 60 s TTL.
                 self.assertLessEqual(status["next_attempt_in"], 10.0)
 

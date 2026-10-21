@@ -24,7 +24,7 @@ pub struct AnalogValueObject {
     name: String,
     description: String,
     present_value: f32,
-    units: u32,
+    units: EngineeringUnits,
     out_of_service: bool,
     status_flags: StatusFlags,
     access: PresentValueAccess,
@@ -62,7 +62,11 @@ impl AnalogValueObject {
     }
 
     /// Create a new Analog Value object with a commandable Present_Value.
-    pub fn new(instance: u32, name: impl Into<String>, units: u32) -> Result<Self, Error> {
+    pub fn new(
+        instance: u32,
+        name: impl Into<String>,
+        units: EngineeringUnits,
+    ) -> Result<Self, Error> {
         Self::with_access(instance, name, units, PresentValueAccess::Commandable)
     }
 
@@ -70,7 +74,7 @@ impl AnalogValueObject {
     pub fn with_access(
         instance: u32,
         name: impl Into<String>,
-        units: u32,
+        units: EngineeringUnits,
         access: PresentValueAccess,
     ) -> Result<Self, Error> {
         let oid = ObjectIdentifier::new(ObjectType::ANALOG_VALUE, instance)?;
@@ -109,7 +113,7 @@ impl AnalogValueObject {
     pub fn with_tags_persistence(
         instance: u32,
         name: impl Into<String>,
-        units: u32,
+        units: EngineeringUnits,
         access: PresentValueAccess,
         persistence: Arc<dyn TagsPersistence>,
     ) -> Result<Self, Error> {
@@ -303,7 +307,9 @@ impl BACnetObject for AnalogValueObject {
             p if p == PropertyIdentifier::PRESENT_VALUE => {
                 Ok(PropertyValue::Real(self.present_value))
             }
-            p if p == PropertyIdentifier::UNITS => Ok(PropertyValue::Enumerated(self.units)),
+            p if p == PropertyIdentifier::UNITS => {
+                Ok(PropertyValue::Enumerated(self.units.to_raw()))
+            }
             p if p == PropertyIdentifier::PRIORITY_ARRAY => {
                 common::read_priority_array!(self, array_index, PropertyValue::Real)
             }
@@ -538,8 +544,8 @@ impl BACnetObject for AnalogValueObject {
     ) -> Result<(), Error> {
         if !self.event_detection_enable {
             return Err(Error::Protocol {
-                class: ErrorClass::OBJECT.to_raw() as u32,
-                code: ErrorCode::NO_ALARM_CONFIGURED.to_raw() as u32,
+                class: ErrorClass::OBJECT,
+                code: ErrorCode::NO_ALARM_CONFIGURED,
             });
         }
         self.event_history.acknowledge_correlated(
@@ -613,7 +619,7 @@ mod detection_enable_reset_tests {
     /// disabling event detection must still restore their Clause 13.2.2.1 initial conditions.
     #[test]
     fn av_disabling_detection_resets_event_history() {
-        let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+        let mut av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
         assert_eq!(
             av.read_property(PropertyIdentifier::EVENT_DETECTION_ENABLE, None)
                 .unwrap(),
@@ -674,21 +680,22 @@ mod detection_enable_reset_tests {
 #[cfg(test)]
 mod fault_out_of_range_non_finite_tests {
     use super::*;
-    use bacnet_types::enums::{ErrorClass, ErrorCode, Reliability};
+    use bacnet_types::enums::{EngineeringUnits, ErrorClass, ErrorCode, Reliability};
 
     fn assert_value_out_of_range(result: Result<ReliabilityEvaluation, Error>) {
         assert!(matches!(
             result,
             Err(Error::Protocol { class, code })
-                if class == ErrorClass::PROPERTY.to_raw() as u32
-                    && code == ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32
+                if class == ErrorClass::PROPERTY
+                    && code == ErrorCode::VALUE_OUT_OF_RANGE
         ));
     }
 
     #[test]
     fn av_non_finite_monitored_values_preserve_reliability_status_and_ownership() {
         for non_finite in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
-            let mut normal = AnalogValueObject::new(1, "AV-normal", 62).unwrap();
+            let mut normal =
+                AnalogValueObject::new(1, "AV-normal", EngineeringUnits::DEGREES_CELSIUS).unwrap();
             normal.configure_fault_out_of_range(10.0, 20.0).unwrap();
             let status_before = normal
                 .read_property(PropertyIdentifier::STATUS_FLAGS, None)
@@ -715,7 +722,8 @@ mod fault_out_of_range_non_finite_tests {
                 }
             );
 
-            let mut owned = AnalogValueObject::new(2, "AV-owned", 62).unwrap();
+            let mut owned =
+                AnalogValueObject::new(2, "AV-owned", EngineeringUnits::DEGREES_CELSIUS).unwrap();
             owned.configure_fault_out_of_range(10.0, 20.0).unwrap();
             owned.present_value = 9.0;
             owned.evaluate_reliability_internal().unwrap();

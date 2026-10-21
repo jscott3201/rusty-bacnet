@@ -22,7 +22,7 @@ use bacnet_objects::multistate::MultiStateValueObject;
 use bacnet_types::constructed::{
     BACnetActionCommand, BACnetActionList, BACnetDeviceObjectPropertyReference,
 };
-use bacnet_types::enums::{ObjectType, Reliability, WriteStatus};
+use bacnet_types::enums::{EngineeringUnits, ObjectType, Reliability, WriteStatus};
 
 use PropertyIdentifier as P;
 
@@ -74,8 +74,10 @@ fn member(
 }
 
 fn objects(db: &mut ObjectDatabase) {
-    db.add(Box::new(AnalogInputObject::new(1, "AI-1", 62).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+    ))
+    .unwrap();
     db.add(Box::new(BinaryValueObject::new(1, "BV-1").unwrap()))
         .unwrap();
     db.add(Box::new(MultiStateValueObject::new(1, "MSV-1", 3).unwrap()))
@@ -199,7 +201,7 @@ async fn write_local_checks_an_array_index_before_the_object_sees_the_value() {
             .unwrap_err();
         assert!(
             matches!(error, Error::Protocol { class: c, code: e }
-                if c == class.to_raw() as u32 && e == code.to_raw() as u32),
+                if c == class && e == code),
             "{object} {property:?} {index:?}: {error:?}"
         );
     }

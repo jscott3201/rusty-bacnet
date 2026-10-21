@@ -44,7 +44,7 @@ fn assert_protocol_error(error: Error, class: ErrorClass, code: ErrorCode) {
         Error::Protocol {
             class: actual_class,
             code: actual_code,
-        } if actual_class == class.to_raw() as u32 && actual_code == code.to_raw() as u32
+        } if actual_class == class && actual_code == code
     ));
 }
 

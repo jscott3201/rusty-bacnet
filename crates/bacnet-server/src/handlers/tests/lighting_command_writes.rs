@@ -26,7 +26,7 @@ fn write_raw(db: &mut ObjectDatabase, oid: ObjectIdentifier, value: &[u8]) -> Re
     }
     .encode(&mut request)
     .unwrap();
-    handle_write_property(db, &request).map(|_| ())
+    sourced_wp(db, &request).map(|_| ())
 }
 
 fn lighting_output() -> (ObjectDatabase, ObjectIdentifier) {

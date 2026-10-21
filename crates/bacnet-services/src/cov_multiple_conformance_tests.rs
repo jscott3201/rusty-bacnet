@@ -108,7 +108,7 @@ fn subscribe_encodes_false_timestamped_and_rejects_missing_required_booleans() {
     assert!(matches!(
         SubscribeCOVPropertyMultipleRequest::decode(&missing_confirmed),
         Err(Error::Reject { reason })
-            if reason == RejectReason::MISSING_REQUIRED_PARAMETER.to_raw()
+            if reason == RejectReason::MISSING_REQUIRED_PARAMETER
     ));
 
     let mut missing_timestamped = raw_subscription(PropertyIdentifier::PRESENT_VALUE).to_vec();
@@ -120,14 +120,14 @@ fn subscribe_encodes_false_timestamped_and_rejects_missing_required_booleans() {
     assert!(matches!(
         SubscribeCOVPropertyMultipleRequest::decode(&missing_timestamped),
         Err(Error::Reject { reason })
-            if reason == RejectReason::MISSING_REQUIRED_PARAMETER.to_raw()
+            if reason == RejectReason::MISSING_REQUIRED_PARAMETER
     ));
 
     let malformed_confirmed = [0x09, 0x01, 0x19, 0x02, 0x4e, 0x4f];
     assert!(matches!(
         SubscribeCOVPropertyMultipleRequest::decode(&malformed_confirmed),
         Err(Error::Reject { reason })
-            if reason == RejectReason::INVALID_DATA_ENCODING.to_raw()
+            if reason == RejectReason::INVALID_DATA_ENCODING
     ));
 
     let mut malformed_timestamped = raw_subscription(PropertyIdentifier::PRESENT_VALUE);
@@ -139,7 +139,7 @@ fn subscribe_encodes_false_timestamped_and_rejects_missing_required_booleans() {
     assert!(matches!(
         SubscribeCOVPropertyMultipleRequest::decode(&malformed_timestamped),
         Err(Error::Reject { reason })
-            if reason == RejectReason::INVALID_DATA_ENCODING.to_raw()
+            if reason == RejectReason::INVALID_DATA_ENCODING
     ));
 }
 
@@ -340,7 +340,7 @@ fn notification_requires_specific_actual_date_and_time_values() {
     assert!(matches!(
         COVNotificationMultipleRequest::decode(&encoded),
         Err(Error::Reject { reason })
-            if reason == RejectReason::INVALID_DATA_ENCODING.to_raw()
+            if reason == RejectReason::INVALID_DATA_ENCODING
     ));
 
     encoded.clear();
@@ -351,7 +351,7 @@ fn notification_requires_specific_actual_date_and_time_values() {
     assert!(matches!(
         COVNotificationMultipleRequest::decode(&encoded),
         Err(Error::Reject { reason })
-            if reason == RejectReason::INVALID_DATA_ENCODING.to_raw()
+            if reason == RejectReason::INVALID_DATA_ENCODING
     ));
 
     encoded.clear();
@@ -361,7 +361,7 @@ fn notification_requires_specific_actual_date_and_time_values() {
     assert!(matches!(
         COVNotificationMultipleRequest::decode(&encoded),
         Err(Error::Reject { reason })
-            if reason == RejectReason::INVALID_DATA_ENCODING.to_raw()
+            if reason == RejectReason::INVALID_DATA_ENCODING
     ));
 }
 
@@ -425,7 +425,7 @@ fn encoder_validation_is_atomic_and_caps_total_nested_items() {
     over_cap.splice(insert_at..insert_at, extra_reference);
     assert!(matches!(
         SubscribeCOVPropertyMultipleRequest::decode(&over_cap),
-        Err(Error::Reject { reason }) if reason == RejectReason::BUFFER_OVERFLOW.to_raw()
+        Err(Error::Reject { reason }) if reason == RejectReason::BUFFER_OVERFLOW
     ));
 
     let value = notification_with(PropertyIdentifier::PRESENT_VALUE).list_of_cov_notifications[0]
@@ -465,7 +465,7 @@ fn encoder_validation_is_atomic_and_caps_total_nested_items() {
     over_cap.splice(insert_at..insert_at, extra_value);
     assert!(matches!(
         COVNotificationMultipleRequest::decode(&over_cap),
-        Err(Error::Reject { reason }) if reason == RejectReason::BUFFER_OVERFLOW.to_raw()
+        Err(Error::Reject { reason }) if reason == RejectReason::BUFFER_OVERFLOW
     ));
     notification.list_of_cov_notifications[1]
         .list_of_values
@@ -542,7 +542,7 @@ fn notification_decoder_rejects_timestamp_presence_mismatch_and_accepts_propriet
     mismatched.drain(time_of_change..time_of_change + 5);
     assert!(matches!(
         COVNotificationMultipleRequest::decode(&mismatched),
-        Err(Error::Reject { reason }) if reason == RejectReason::PARAMETER_OUT_OF_RANGE.to_raw()
+        Err(Error::Reject { reason }) if reason == RejectReason::PARAMETER_OUT_OF_RANGE
     ));
 
     let proprietary = PropertyIdentifier::from_raw(512);
@@ -630,7 +630,7 @@ fn cov_multiple_public_encode_late_invalid_never_panics_or_appends() {
             result.is_ok(),
             "public request encoding must report errors instead of panicking"
         );
-        assert!(matches!(result.unwrap(), Err(Error::Encoding(_))));
+        assert!(matches!(result.unwrap(), Err(Error::Encode(_))));
         assert_eq!(bytes.as_ref(), b"sentinel");
     }
 }

@@ -62,8 +62,9 @@ fn database(instance: u32) -> ObjectDatabase {
     let mut db = ObjectDatabase::new();
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
-            instance,
-            name: format!("Device-{instance}"),
+            identity: bacnet_objects::DeviceIdentity::new(instance, 0)
+                .expect("valid Device identity")
+                .with_name(format!("Device-{instance}")),
             ..Default::default()
         })
         .unwrap(),
@@ -122,10 +123,14 @@ async fn start_logger(
     BACnetServer::bip_builder()
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
+        .device(bacnet_objects::DeviceIdentity::new(20, 0).unwrap())
         .database(logger_db)
         .audit_notification_sink(oid(ObjectType::AUDIT_LOG, 1))
-        .audit_notification_authorizer(move |_| policy.load(Ordering::Acquire))
-        .unconfirmed_audit_notification_authorizer(|_| true)
+        .policy(
+            bacnet_server::FnPolicy::new()
+                .audit_notification(move |_| policy.load(Ordering::Acquire))
+                .unconfirmed_audit_notification(|_| true),
+        )
         .build()
         .await
         .unwrap()
@@ -193,6 +198,7 @@ async fn exercise(confirmed: bool, selected: bool, lists: bool, files: bool) {
     let mut target = BACnetServer::bip_builder()
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
+        .device(bacnet_objects::DeviceIdentity::new(10, 0).unwrap())
         .database(target_db)
         .audit_reporters(AuditReportersConfig {
             reporters: vec![oid(ObjectType::AUDIT_REPORTER, 1)],
@@ -237,8 +243,8 @@ async fn exercise(confirmed: bool, selected: bool, lists: bool, files: bool) {
             .await
             .unwrap_err();
         assert!(matches!(error, Error::Protocol { class, code }
-            if class == ErrorClass::PROPERTY.to_raw() as u32
-                && code == ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32));
+            if class == ErrorClass::PROPERTY
+                && code == ErrorCode::VALUE_OUT_OF_RANGE));
         assert_eq!(
             target
                 .database()
@@ -337,8 +343,8 @@ async fn exercise(confirmed: bool, selected: bool, lists: bool, files: bool) {
         .await
         .unwrap_err();
     assert!(matches!(error, Error::Protocol { class, code }
-        if class == ErrorClass::PROPERTY.to_raw() as u32
-            && code == ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32));
+        if class == ErrorClass::PROPERTY
+            && code == ErrorCode::VALUE_OUT_OF_RANGE));
     wait_for_records(&logger, &persistence, 2).await;
     assert_eq!(
         target
@@ -462,10 +468,7 @@ async fn exercise(confirmed: bool, selected: bool, lists: bool, files: bool) {
                     }) if *detail
                         == bacnet_types::error::ErrorDetail::FirstFailedElementNumber(1) =>
                     {
-                        assert_eq!(
-                            (class, code),
-                            (not_found.0.to_raw() as u32, not_found.1.to_raw() as u32)
-                        )
+                        assert_eq!((class, code), not_found)
                     }
                     other => panic!("expected a ChangeList-Error, got {other:?}"),
                 }
@@ -542,7 +545,7 @@ async fn exercise(confirmed: bool, selected: bool, lists: bool, files: bool) {
                 .await;
             if failure {
                 assert!(
-                    matches!(result, Err(Error::Protocol { class, code }) if class == ErrorClass::SERVICES.to_raw() as u32 && code == ErrorCode::INVALID_FILE_START_POSITION.to_raw() as u32)
+                    matches!(result, Err(Error::Protocol { class, code }) if class == ErrorClass::SERVICES && code == ErrorCode::INVALID_FILE_START_POSITION)
                 );
             } else {
                 assert_eq!(

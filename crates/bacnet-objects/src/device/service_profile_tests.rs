@@ -35,7 +35,7 @@ fn standalone_device_cov_properties_follow_declared_service_profile() {
                 assert_eq!(result.unwrap(), PropertyValue::ApplicationData(vec![]));
             } else {
                 assert!(
-                    matches!(result, Err(Error::Protocol { class, code }) if class == ErrorClass::PROPERTY.to_raw() as u32 && code == ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32)
+                    matches!(result, Err(Error::Protocol { class, code }) if class == ErrorClass::PROPERTY && code == ErrorCode::UNKNOWN_PROPERTY)
                 );
             }
             let PropertyValue::List(list) = object

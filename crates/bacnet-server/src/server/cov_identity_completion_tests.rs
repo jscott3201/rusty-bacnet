@@ -2,6 +2,7 @@ use super::*;
 use crate::server::test_transport::{SendMode, SentFrame, TestTransport, BIP_LOCAL_MAC};
 use bacnet_encoding::{apdu::decode_apdu, npdu::decode_npdu};
 use bacnet_objects::analog::AnalogValueObject;
+use bacnet_types::enums::EngineeringUnits;
 use bytes::Bytes;
 use std::sync::Mutex as StdMutex;
 use tokio::sync::Notify;
@@ -99,7 +100,7 @@ struct Fixture {
 impl Fixture {
     fn new(hold: bool) -> Self {
         let mut db = clocked_test_database();
-        let mut av = AnalogValueObject::new(3, "value", 95).unwrap();
+        let mut av = AnalogValueObject::new(3, "value", EngineeringUnits::NO_UNITS).unwrap();
         av.set_relinquish_default(10.0).unwrap();
         db.add(Box::new(av)).unwrap();
         let sent = Arc::new(StdMutex::new(Vec::new()));
@@ -385,3 +386,7 @@ mod value_source_contract;
 mod completion_order;
 
 mod noncommandable_value_source;
+
+mod single_source_value_source;
+
+mod lighting_value_source;

@@ -1,0 +1,158 @@
+# B/IP across NAT routers (Annex J.7.5, #940, #942): a manual check.
+#
+# The layout follows the two-site example in Annex J.7.5 (Figure J-7),
+# written out here in our own terms. Two sites each hide a BBMD on a private
+# subnet behind a NAT router that port-forwards UDP 47809 to it; both BDTs
+# list the two routers' public addresses with all-ones masks, and each BBMD
+# runs under its router's address (--nat-global). A third site has only an
+# ordinary home-style router (no port forward) with a foreign device behind
+# it, and a fourth foreign device sits on the "internet" itself. Each
+# foreign device registers with site A's BBMD, broadcasts a Who-Is, and must
+# hear an I-Am from both BBMDs' devices (9001 at site A, 9002 at site B).
+# The devices broadcast their I-Am (--broadcast-i-am), so it reaches the
+# foreign devices through the BBMDs: a unicast one from site B would be
+# dropped by nat-c, which only lets in replies from site A's BBMD.
+#
+#   internet  198.18.0.0/24    nat-a .11, nat-b .12, nat-c .13, probe .50
+#   site-a    192.168.10.0/24  nat-a .1, bbmd-a .10
+#   site-b    192.168.20.0/24  nat-b .1, bbmd-b .10
+#   site-c    192.168.30.0/24  nat-c .1, probe-behind-nat .10
+#
+# Docker refuses two bridge networks with one subnet, so the sites use
+# different private ranges, where the standard's example reuses one. Each
+# network's Docker gateway is .254, leaving .1 to the site's NAT router.
+#
+# Run it with ./run.sh (it builds, starts, probes and tears down).
+
+x-no-masquerade: &no-masquerade
+  com.docker.network.bridge.enable_ip_masquerade: "false"
+
+x-image: &image
+  build:
+    context: ../../..
+    dockerfile: examples/docker/Dockerfile
+  init: true
+
+x-router: &router
+  <<: *image
+  entrypoint: [/bin/sh, /nat/nat-entrypoint.sh]
+  cap_add: [NET_ADMIN]
+  sysctls:
+    net.ipv4.ip_forward: 1
+  volumes:
+    - ./nat-entrypoint.sh:/nat/nat-entrypoint.sh:ro
+
+services:
+  nat-a:
+    <<: *router
+    environment:
+      NAT_PUBLIC: 198.18.0.11
+      NAT_PRIVATE_NET: 192.168.10.0/24
+      NAT_FORWARD_TO: 192.168.10.10
+    networks:
+      internet: { ipv4_address: 198.18.0.11 }
+      site-a: { ipv4_address: 192.168.10.1 }
+
+  nat-b:
+    <<: *router
+    environment:
+      NAT_PUBLIC: 198.18.0.12
+      NAT_PRIVATE_NET: 192.168.20.0/24
+      NAT_FORWARD_TO: 192.168.20.10
+    networks:
+      internet: { ipv4_address: 198.18.0.12 }
+      site-b: { ipv4_address: 192.168.20.1 }
+
+  nat-c:
+    <<: *router
+    environment:
+      NAT_PUBLIC: 198.18.0.13
+      NAT_PRIVATE_NET: 192.168.30.0/24
+    networks:
+      internet: { ipv4_address: 198.18.0.13 }
+      site-c: { ipv4_address: 192.168.30.1 }
+
+  bbmd-a:
+    <<: *image
+    entrypoint: [bacnet-net]
+    cap_add: [NET_ADMIN]
+    environment:
+      BACNET_ROUTES: default via 192.168.10.1
+    command:
+      - bacnet-bbmd
+      - --interface=192.168.10.10
+      - --port=47809
+      - --broadcast=192.168.10.255
+      - --bdt=198.18.0.11:47809,198.18.0.12:47809
+      - --nat-global=198.18.0.11:47809
+      - --alone-on-subnet
+      - --broadcast-i-am
+      - --device-instance=9001
+    networks:
+      site-a: { ipv4_address: 192.168.10.10 }
+    depends_on: [nat-a]
+
+  bbmd-b:
+    <<: *image
+    entrypoint: [bacnet-net]
+    cap_add: [NET_ADMIN]
+    environment:
+      BACNET_ROUTES: default via 192.168.20.1
+    command:
+      - bacnet-bbmd
+      - --interface=192.168.20.10
+      - --port=47809
+      - --broadcast=192.168.20.255
+      - --bdt=198.18.0.11:47809,198.18.0.12:47809
+      - --nat-global=198.18.0.12:47809
+      - --alone-on-subnet
+      - --broadcast-i-am
+      - --device-instance=9002
+    networks:
+      site-b: { ipv4_address: 192.168.20.10 }
+    depends_on: [nat-b]
+
+  # A foreign device on the internet side: no NAT of its own.
+  probe:
+    <<: *image
+    profiles: [probe]
+    command:
+      - nat-probe
+      - --bbmd=198.18.0.11:47809
+      - --expect=9001,9002
+    networks:
+      internet: { ipv4_address: 198.18.0.50 }
+
+  # A foreign device behind nat-c, which forwards nothing: it re-registers
+  # every 10 s so the router's mapping for the BBMD's replies stays open.
+  probe-behind-nat:
+    <<: *image
+    profiles: [probe]
+    entrypoint: [bacnet-net]
+    cap_add: [NET_ADMIN]
+    environment:
+      BACNET_ROUTES: default via 192.168.30.1
+    command:
+      - nat-probe
+      - --bbmd=198.18.0.11:47809
+      - --expect=9001,9002
+      - --renewal=10
+    networks:
+      site-c: { ipv4_address: 192.168.30.10 }
+
+networks:
+  # Docker masquerades traffic that crosses its bridges by default, so a
+  # BBMD would see the Docker gateway (.254) as every peer's source and
+  # answer it around the NAT router. Off here: only the routers translate.
+  internet:
+    ipam: { config: [{ subnet: 198.18.0.0/24, gateway: 198.18.0.254 }] }
+    driver_opts: *no-masquerade
+  site-a:
+    ipam: { config: [{ subnet: 192.168.10.0/24, gateway: 192.168.10.254 }] }
+    driver_opts: *no-masquerade
+  site-b:
+    ipam: { config: [{ subnet: 192.168.20.0/24, gateway: 192.168.20.254 }] }
+    driver_opts: *no-masquerade
+  site-c:
+    ipam: { config: [{ subnet: 192.168.30.0/24, gateway: 192.168.30.254 }] }
+    driver_opts: *no-masquerade

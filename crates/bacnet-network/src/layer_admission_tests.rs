@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_npdu::NetworkMessageType;
 use bacnet_transport::port::ReceivedNpdu;
 use tokio::sync::mpsc;
 use tokio::time::{timeout, Duration};
@@ -66,8 +67,7 @@ fn incoming(control: bool, id: u16) -> ReceivedNpdu {
         id.to_be_bytes().to_vec()
     };
     let npdu = Npdu {
-        is_network_message: control,
-        message_type: control.then_some(3),
+        message_type: control.then_some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK),
         expecting_reply: !control,
         source: Some(NpduAddress {
             network: 200,
@@ -265,24 +265,26 @@ async fn closed_control_stream_counts_once_then_resumes_discard_with_legacy_apdu
         .enable_network_control_receiver_with_admission()
         .unwrap();
     let counters = controls.counters();
-    let mut apdus: mpsc::Receiver<ReceivedApdu> = network.start().await.unwrap();
+    let mut apdus: crate::layer::ApduReceiver = network.start().await.unwrap();
     drop(controls);
+    let mut replies = Vec::new();
     for id in 0..3 {
         let (reply_tx, reply_rx) = oneshot::channel();
         let mut control = incoming(true, id);
         control.reply_tx = Some(reply_tx);
         tx.send(control).await.unwrap();
-        assert!(timeout(Duration::from_secs(1), reply_rx)
-            .await
-            .unwrap()
-            .is_err());
+        replies.push(reply_rx);
     }
     tx.send(incoming(false, 42)).await.unwrap();
+    // The raw receiver decodes the controls ahead of the APDU as it takes it.
     let apdu = timeout(Duration::from_secs(1), apdus.recv())
         .await
         .unwrap()
         .unwrap();
     assert_apdu(&apdu, 42);
+    for reply_rx in replies {
+        assert!(reply_rx.await.is_err());
+    }
     assert_eq!(network.network_control_ingress_sequence(), 1);
     assert_eq!(
         counters.snapshot(),
@@ -457,24 +459,29 @@ async fn cancelled_receive_does_not_consume_or_change_counters() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn legacy_receivers_also_drop_new_items_without_cross_queue_stalls() {
+async fn raw_receiver_decodes_controls_as_it_takes_apdus() {
     let (mut network, tx, _wire) = fixture();
     let mut controls: mpsc::Receiver<ReceivedNetworkControl> =
         network.enable_network_control_receiver().unwrap();
-    let mut apdus: mpsc::Receiver<ReceivedApdu> = network.start().await.unwrap();
+    let mut apdus: crate::layer::ApduReceiver = network.start().await.unwrap();
     for id in 0..257 {
         tx.send(incoming(false, id)).await.unwrap();
     }
     tx.send(incoming(true, 42)).await.unwrap();
-    let control = timeout(Duration::from_secs(1), controls.recv())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_control(&control, 42, 1);
-    assert_eq!(apdus.len(), 256);
-    for id in 0..256 {
+    // Nothing is decoded until the APDU receiver is polled (#1713): the
+    // control waits behind the APDUs in the transport's queue, which alone
+    // bounds what is held. The raw receiver has no 256-item queue of its own.
+    assert!(controls.try_recv().is_err());
+    for id in 0..257 {
         assert_apdu(&apdus.try_recv().unwrap(), id);
     }
+    assert_eq!(
+        apdus.try_recv().unwrap_err(),
+        mpsc::error::TryRecvError::Empty
+    );
+    let control = controls.try_recv().unwrap();
+    assert_control(&control, 42, 1);
+    // A full control queue drops new controls without stalling APDUs.
     for id in 0..257 {
         tx.send(incoming(true, id)).await.unwrap();
     }

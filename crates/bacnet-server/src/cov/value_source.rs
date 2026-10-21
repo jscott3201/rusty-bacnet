@@ -9,16 +9,29 @@ use bacnet_types::{
     primitives::PropertyValue as V,
 };
 
-const COMMANDABLE_FIELDS: [P; 5] = [
-    P::PRESENT_VALUE,
-    P::STATUS_FLAGS,
-    P::VALUE_SOURCE,
-    P::LAST_COMMAND_TIME,
-    P::CURRENT_COMMAND_PRIORITY,
-];
+/// The report's fields in Table 13-1a-2 order: Present_Value, Status_Flags
+/// when the object has it, Value_Source, then Last_Command_Time and
+/// Current_Command_Priority for a commandable object.
+fn fields(commandable: bool, flags: bool) -> &'static [P] {
+    match (commandable, flags) {
+        (true, _) => &[
+            P::PRESENT_VALUE,
+            P::STATUS_FLAGS,
+            P::VALUE_SOURCE,
+            P::LAST_COMMAND_TIME,
+            P::CURRENT_COMMAND_PRIORITY,
+        ],
+        (false, true) => &[P::PRESENT_VALUE, P::STATUS_FLAGS, P::VALUE_SOURCE],
+        // Color and Color Temperature have no Status_Flags to convey (#1582).
+        (false, false) => &[P::PRESENT_VALUE, P::VALUE_SOURCE],
+    }
+}
 
-const NONCOMMANDABLE_FIELDS: [P; 3] = [P::PRESENT_VALUE, P::STATUS_FLAGS, P::VALUE_SOURCE];
-
+/// Whether a subscription to `property` of `object` takes the specialized
+/// Table 13-1a-2 report. Commandable outputs and values, and the two
+/// lighting outputs (#1866), use the commandable row. The single-source
+/// objects that track Value_Source (#1552: the noncommandable value modes,
+/// Color and Color Temperature) use the noncommandable row (#1582).
 pub(crate) fn applies(object: &dyn BACnetObject, property: P) -> bool {
     if property != P::VALUE_SOURCE {
         return false;
@@ -26,10 +39,15 @@ pub(crate) fn applies(object: &dyn BACnetObject, property: P) -> bool {
     let properties = object.property_list();
     let commandable = properties.contains(&P::PRIORITY_ARRAY);
     match object.object_identifier().object_type() {
-        O::ANALOG_OUTPUT | O::BINARY_OUTPUT | O::MULTI_STATE_OUTPUT => commandable,
+        O::ANALOG_OUTPUT
+        | O::BINARY_OUTPUT
+        | O::MULTI_STATE_OUTPUT
+        | O::LIGHTING_OUTPUT
+        | O::BINARY_LIGHTING_OUTPUT => commandable,
         O::ANALOG_VALUE | O::BINARY_VALUE | O::MULTI_STATE_VALUE => {
             commandable || properties.contains(&P::VALUE_SOURCE)
         }
+        O::COLOR | O::COLOR_TEMPERATURE => properties.contains(&P::VALUE_SOURCE),
         _ => false,
     }
 }
@@ -39,15 +57,14 @@ pub(crate) fn applies(object: &dyn BACnetObject, property: P) -> bool {
 pub(crate) struct PreparedValueSource {
     properties: &'static [P],
     fields: Vec<PreparedCovValue>,
+    /// Index of Current_Command_Priority in `fields`, for a commandable object.
+    priority: Option<usize>,
     pub observation: CovObservation,
 }
 impl PreparedValueSource {
     pub fn read(object: &dyn BACnetObject, flags: &PreparedFlags) -> Result<Self, Error> {
-        let properties: &'static [P] = if object.property_list().contains(&P::PRIORITY_ARRAY) {
-            &COMMANDABLE_FIELDS
-        } else {
-            &NONCOMMANDABLE_FIELDS
-        };
+        let commandable = object.property_list().contains(&P::PRIORITY_ARRAY);
+        let properties = fields(commandable, flags.value.is_some());
         let mut fields = Vec::with_capacity(properties.len());
         for &property in properties {
             let value = if property == P::STATUS_FLAGS {
@@ -62,23 +79,29 @@ impl PreparedValueSource {
                 object, property, None, None, &value,
             )?);
         }
-        // Only analog PV uses the object's increment. A selected Value_Source
-        // increment must never replace the object's Table 13-1 criterion.
+        // Only an analog or Lighting Output PV uses the object's increment
+        // (Table 13-1). A selected Value_Source increment must never replace
+        // the object's Table 13-1 criterion. Color and Color Temperature are
+        // not in Table 13-1 and have no COV_Increment, so their Present_Value
+        // reports on any change.
         if !matches!(
             object.object_identifier().object_type(),
-            O::ANALOG_OUTPUT | O::ANALOG_VALUE
+            O::ANALOG_OUTPUT | O::ANALOG_VALUE | O::LIGHTING_OUTPUT
         ) {
             fields[0].increment = None;
         }
+        let source = position(properties, P::VALUE_SOURCE);
+        let priority = commandable.then(|| position(properties, P::CURRENT_COMMAND_PRIORITY));
         let observation = flags
-            .observation(fields[2].sample.clone())
+            .observation(fields[source].sample.clone())
             .with_source_companions(
                 fields[0].sample.clone(),
-                fields.get(4).map(|field| field.sample.clone()),
+                priority.map(|i| fields[i].sample.clone()),
             );
         Ok(Self {
             properties,
             fields,
+            priority,
             observation,
         })
     }
@@ -98,7 +121,7 @@ impl PreparedValueSource {
         self.fields[0].reports(Some(pv))
             || self.observation.flags_changed(Some(previous))
             || self.observation.sample() != previous.sample()
-            || self.fields.get(4).map(|field| &field.sample) != priority.as_ref()
+            || self.priority.map(|i| &self.fields[i].sample) != priority.as_ref()
     }
     pub fn values(&self) -> Vec<BACnetPropertyValue> {
         self.properties
@@ -114,6 +137,12 @@ impl PreparedValueSource {
             .collect()
     }
 }
+fn position(properties: &[P], property: P) -> usize {
+    properties
+        .iter()
+        .position(|p| *p == property)
+        .expect("every Table 13-1a-2 field list carries this property")
+}
 fn invalid() -> Error {
     Error::Encoding("Invalid Value_Source COV companion".into())
 }
@@ -121,7 +150,18 @@ fn validate(object: O, property: P, value: &V) -> Result<(), Error> {
     let valid = match property {
         P::PRESENT_VALUE => match object {
             O::ANALOG_OUTPUT | O::ANALOG_VALUE => matches!(value, V::Real(v) if v.is_finite()),
-            O::BINARY_OUTPUT | O::BINARY_VALUE => matches!(value, V::Enumerated(0..=1)),
+            // A level on the normalized 0.0 to 100.0 scale (Clause 12.54.4).
+            O::LIGHTING_OUTPUT => matches!(value, V::Real(v) if (0.0..=100.0).contains(v)),
+            // A Binary Lighting Output holds only OFF or ON; the warn and
+            // stop values are commands, never a Present_Value (Clause 12.55).
+            O::BINARY_OUTPUT | O::BINARY_VALUE | O::BINARY_LIGHTING_OUTPUT => {
+                matches!(value, V::Enumerated(0..=1))
+            }
+            // A BACnetxyColor: the two finite REAL coordinates.
+            O::COLOR => matches!(value, V::List(xy) if xy.len() == 2
+                && xy.iter().all(|c| matches!(c, V::Real(v) if v.is_finite()))),
+            // Kelvin, within the object's 1000 to 30000 range.
+            O::COLOR_TEMPERATURE => matches!(value, V::Unsigned(1000..=30_000)),
             _ => matches!(value, V::Unsigned(1..=0xffff_ffff)),
         },
         P::VALUE_SOURCE => {

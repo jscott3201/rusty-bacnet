@@ -6,13 +6,12 @@ use bacnet_endpoint_core::coordinator::{
     LeaseMetadata, OutboundTransactionCoordinator, TerminalPolicy,
 };
 use bacnet_endpoint_core::endpoint_ingress::EndpointIngress;
-use bacnet_network::layer::{NetworkLayer, ReceivedApdu};
+use bacnet_network::layer::NetworkLayer;
 use bacnet_objects::audit::AuditReporterObject;
 use bacnet_services::audit::AuditNotificationRequest;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_types::bitstring::BACnetPriorityFilter;
 use bacnet_types::enums::{ConfirmedServiceChoice, Reliability};
-use tokio::sync::mpsc;
 use tokio::time::{timeout, Duration};
 
 const WAIT: Duration = Duration::from_secs(1);
@@ -26,7 +25,7 @@ struct Fixture {
     coordinator: Arc<OutboundTransactionCoordinator>,
     ingress: EndpointIngress<LoopbackTransport>,
     peer: NetworkLayer<LoopbackTransport>,
-    records: mpsc::Receiver<ReceivedApdu>,
+    records: bacnet_network::layer::ApduReceiver,
     status: Arc<AuditReporterStatus>,
 }
 impl Fixture {

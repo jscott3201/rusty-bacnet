@@ -132,6 +132,7 @@ async fn sc_mtls_helpers_distinct_devices_read_property() {
         .await
         .with_device_uuid([1; 16]);
     let mut server = BACnetServer::generic_builder()
+        .device(bacnet_objects::DeviceIdentity::new(123, 555).unwrap())
         .transport(server_transport)
         .database(bacnet_benchmarks::helpers::make_benchmark_db(123))
         .build()

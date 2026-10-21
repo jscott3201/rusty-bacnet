@@ -13,6 +13,38 @@
 //!   local subnet, the peer subnets and the other foreign devices.
 //! - [`Tables::own_broadcast`]: a broadcast this BBMD's own device sends.
 //!
+//! A BBMD behind a NAT router ([`Tables::set_nat`], Annex J.7.5) runs under
+//! its global address, and names it as the origin of the Forwarded-NPDUs it
+//! builds ([`Nat`]).
+//!
+//! # A BBMD that serves a B/IP-M group (Annex J.8.3)
+//!
+//! A BBMD whose subnet is a multicast group ([`LocalSubnet::member`],
+//! [`LocalSubnet::is_group`]) serves that group: it is a member, and the
+//! group stands in for its subnet's broadcast address in every decision
+//! above. Its link takes broadcasts only through the group, as a member's
+//! does. Each rule, in our own words, with its test in
+//! `crates/bacnet-bip-core/tests/port_bbmd_multicast.rs`:
+//!
+//! | Rule | Clause | Test |
+//! | --- | --- | --- |
+//! | An Original-Broadcast-NPDU that came through the group goes to the other BDT entries and the foreign devices | J.8.3, J.4.5 | `a_broadcast_from_the_group_goes_to_the_bdt_and_the_fdt` |
+//! | A peer's Forwarded-NPDU goes to the group and the foreign devices (the subnet's mask isn't used, so a plain peer on the BBMD's IP subnet, which J.8.1 rules out, is tolerated in this direction only) | J.8.3 | `a_peers_forward_goes_to_the_group_and_the_fdt` |
+//! | A Forwarded-NPDU that came through the group goes to the foreign devices only, never back to the group | J.4.5, J.8.3 | `a_forward_from_the_group_never_goes_back_to_it` |
+//! | A foreign device's Distribute-Broadcast-To-Network goes to the group, the BDT and every other foreign device | J.8.3 | `a_foreign_devices_broadcast_goes_to_the_group_the_bdt_and_the_other_devices` |
+//! | The BBMD's own broadcast goes to the group, then to the BDT and the foreign devices | J.8.2, J.4.5 | `the_bbmds_own_broadcast_goes_to_the_group_then_the_bdt_and_fdt` |
+//! | Its own BDT row has the all-ones mask, so peers send it the network's broadcasts by unicast ([`Bdt::set_serves_group`], [`BdtError::OneHopForGroup`]) | J.8.3 | `a_bbmd_that_serves_a_group_needs_a_two_hop_own_row` |
+//! | Local: it may also run behind a NAT router; both rules want a two-hop own row | J.7.5, J.8.3 | `a_group_and_nat_traversal_compose` |
+//!
+//! The group is not a BDT entry: [`validate_entry`] still refuses a
+//! multicast address there. [`BbmdPort`](crate::port::BbmdPort) sets the
+//! BDT's group rule from its link; a caller that drives [`Tables`] itself
+//! calls [`Bdt::set_serves_group`] and passes the link's subnet to each
+//! decision.
+//!
+//! [`LocalSubnet::member`]: crate::LocalSubnet::member
+//! [`LocalSubnet::is_group`]: crate::LocalSubnet::is_group
+//!
 //! Each writes its destinations into storage the caller passes and returns
 //! the Forwarded-NPDU to send them ([`Distribution`]), or, for a received
 //! Forwarded-NPDU, which goes on unchanged, only where ([`Fanout`]). The tables read and
@@ -21,11 +53,18 @@
 //! for a Read-Broadcast-Distribution-Table-Ack, and [`Fdt::wire_entries`]
 //! gives the rows of a Read-Foreign-Device-Table-Ack.
 //!
+//! [`Tables::serve`] answers the four management requests a BBMD serves
+//! from its tables ([`Request`]): Register-Foreign-Device, the two table
+//! reads and Delete-Foreign-Device-Table-Entry, each with the answer Annex
+//! J gives it, under the host's own [`Rules`].
+//!
 //! The caller keeps everything else: the socket, delivering the NPDU to its
 //! network layer, its own echoes, access lists and rate limits (through
-//! [`Fdt::register`]'s `admit`), counters, and persistence. Registrations
-//! expire on the caller's clock: pass `now` to each call, and call
-//! [`Fdt::purge`] now and then to free the slots of lapsed ones.
+//! [`Rules`], or [`Fdt::register`]'s `admit`), counters, and persistence.
+//! Registrations expire on the caller's clock: pass `now` to each call, and
+//! call [`Fdt::purge`] now and then to free the slots of lapsed ones.
+//! [`port::BbmdPort`](crate::port::BbmdPort) does all of this but the
+//! persistence for a BBMD on one socket.
 //!
 //! ```
 //! use core::net::{Ipv4Addr, SocketAddrV4};
@@ -66,6 +105,8 @@
 mod bdt;
 mod fdt;
 mod forward;
+mod nat;
+mod serve;
 
 pub use bdt::{
     canonicalize, distribution_address, validate_entry, Bdt, BdtError, EntryError, TWO_HOP_MASK,
@@ -77,3 +118,5 @@ pub use fdt::{
 pub use forward::{
     Context, DistributeRefusal, Distribution, Fanout, ForwardRefusal, Tables, Target, Via,
 };
+pub use nat::{is_rfc1918, Nat, NatError, PrivateRange, MAX_PRIVATE_RANGES};
+pub use serve::{Answer, DeleteRefusal, Request, Rules, Served};

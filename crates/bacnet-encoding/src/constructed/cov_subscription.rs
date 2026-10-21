@@ -14,7 +14,7 @@ use bacnet_types::constructed::{
     BACnetCOVSubscriptionSpecification, BACnetRecipientProcess,
 };
 use bacnet_types::enums::PropertyIdentifier;
-use bacnet_types::error::Error;
+use bacnet_types::error::{DecodeError, DecodingKind, Error};
 use bytes::BytesMut;
 
 use crate::{primitives, tags};
@@ -193,10 +193,13 @@ pub fn decode_cov_multiple_subscription(
     let mut specifications = Vec::new();
     while !is_closing(data, pos, 4)? {
         if specifications.len() >= MAX_FRAMED_ITEMS {
-            return Err(Error::overflow(
+            return Err(DecodeError::new(
+                DecodingKind::Overflow,
                 pos,
-                format!("{what}: specification count exceeds limit"),
-            ));
+                "specification count exceeds limit",
+            )
+            .within(what)
+            .into());
         }
         let (specification, end) = decode_specification(data, pos, what)?;
         specifications.push(specification);
@@ -220,17 +223,20 @@ pub fn decode_cov_multiple_subscription(
 fn decode_specification(
     data: &[u8],
     offset: usize,
-    what: &str,
+    what: &'static str,
 ) -> Result<(BACnetCOVSubscriptionSpecification, usize), Error> {
     let (monitored_object_identifier, pos) = decode_ctx_object_id(data, offset, 0, what)?;
     let mut pos = expect_opening(data, pos, 1, what)?;
     let mut references = Vec::new();
     while !is_closing(data, pos, 1)? {
         if references.len() >= MAX_FRAMED_ITEMS {
-            return Err(Error::overflow(
+            return Err(DecodeError::new(
+                DecodingKind::Overflow,
                 pos,
-                format!("{what}: COV reference count exceeds limit"),
-            ));
+                "COV reference count exceeds limit",
+            )
+            .within(what)
+            .into());
         }
         let (reference, end) = decode_cov_reference(data, pos, what)?;
         references.push(reference);
@@ -250,7 +256,7 @@ fn decode_specification(
 fn decode_cov_reference(
     data: &[u8],
     offset: usize,
-    what: &str,
+    what: &'static str,
 ) -> Result<(BACnetCOVReference, usize), Error> {
     let pos = expect_opening(data, offset, 0, what)?;
     let (property_identifier, pos) = decode_ctx_unsigned::<u32>(data, pos, 0, what)?;
@@ -275,7 +281,7 @@ fn decode_cov_reference(
 fn decode_recipient_process(
     data: &[u8],
     offset: usize,
-    what: &str,
+    what: &'static str,
 ) -> Result<(BACnetRecipientProcess, usize), Error> {
     let pos = expect_opening(data, offset, 0, what)?;
     let pos = expect_opening(data, pos, 0, what)?;

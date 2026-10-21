@@ -8,7 +8,7 @@ fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
 fn assert_property_error(error: Error, code: ErrorCode) {
     assert!(
         matches!(error, Error::Protocol { class, code: c }
-            if class == ErrorClass::PROPERTY.to_raw() as u32 && c == code.to_raw() as u32),
+            if class == ErrorClass::PROPERTY && c == code),
         "expected PROPERTY / {code:?}, got {error:?}"
     );
 }

@@ -6,6 +6,9 @@ publish = false
 
 [dependencies]
 bacnet-types = { path = "../crates/bacnet-types" }
+bacnet-bip-codec = { path = "../crates/bacnet-bip-codec" }
+bacnet-mstp-codec = { path = "../crates/bacnet-mstp-codec" }
+bacnet-router-core = { path = "../crates/bacnet-router-core" }
 bacnet-encoding = { path = "../crates/bacnet-encoding" }
 bacnet-services = { path = "../crates/bacnet-services" }
 bacnet-transport = { path = "../crates/bacnet-transport", features = ["sc-tls", "ipv6"] }
@@ -20,7 +23,7 @@ criterion = { version = "0.8", features = ["async_tokio"] }
 bytes = "1"
 rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem"] }
 tokio-rustls = "0.26"
-rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "logging", "std", "tls12"] }
+rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs", "logging", "std", "tls12"] }
 sysinfo = "0.39"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
@@ -54,11 +57,19 @@ name = "bacnet-sc-hub"
 path = "src/bin/bacnet_sc_hub.rs"
 
 [[bin]]
+name = "nat-probe"
+path = "src/bin/nat_probe.rs"
+
+[[bin]]
 name = "stress-orchestrator"
 path = "src/bin/stress_orchestrator.rs"
 
 [[bench]]
 name = "encoding"
+harness = false
+
+[[bench]]
+name = "codecs"
 harness = false
 
 [[bench]]

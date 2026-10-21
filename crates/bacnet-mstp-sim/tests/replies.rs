@@ -19,7 +19,7 @@ fn requester_and_responder(policy: ReplyPolicy) -> Sim {
 fn requester_and_responder_with(config: SimConfig, policy: ReplyPolicy) -> Sim {
     let mut sim = Sim::new(config);
     sim.add_master(MasterSpec::new(0, 3, BAUD));
-    sim.add_master(MasterSpec::new(3, 3, BAUD).reply(policy));
+    sim.add_master(MasterSpec::new(3, 3, BAUD).application(policy));
     sim.enqueue(ms(1_000), 0, 3, &npdu(true, 7));
     sim
 }

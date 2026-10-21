@@ -20,7 +20,7 @@ fn config() -> StagingConfig {
     StagingConfig {
         present_value: 5.0,
         min_present_value: -1.0,
-        units: 62,
+        units: EngineeringUnits::DEGREES_CELSIUS,
         priority_for_writing: 8,
         stages: vec![
             stage(10.0, &[false, true], 1.0),
@@ -41,8 +41,8 @@ fn assert_protocol_error(error: Error, class: ErrorClass, code: ErrorCode) {
             class: actual_class,
             code: actual_code,
         } => {
-            assert_eq!(actual_class, class.to_raw() as u32);
-            assert_eq!(actual_code, code.to_raw() as u32);
+            assert_eq!(actual_class, class);
+            assert_eq!(actual_code, code);
         }
         other => panic!("expected {class:?} / {code:?}, got {other:?}"),
     }

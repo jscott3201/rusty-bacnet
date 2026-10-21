@@ -5,7 +5,7 @@ use bacnet_objects::analog::AnalogValueObject;
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::constructed::FaultParameters;
-use bacnet_types::enums::Reliability;
+use bacnet_types::enums::{EngineeringUnits, Reliability};
 use bacnet_types::primitives::BACnetTimeStamp;
 use std::sync::atomic::Ordering;
 
@@ -54,7 +54,12 @@ fn source_rejection_does_not_suppress_changed_reliability_fault_reentry() {
     notification_class.ack_required = EventTransitionBits::TO_FAULT;
     db.add(Box::new(notification_class)).unwrap();
 
-    let mut target = AnalogValueObject::new(307, "AV-reliability-source", 62).unwrap();
+    let mut target = AnalogValueObject::new(
+        307,
+        "AV-reliability-source",
+        EngineeringUnits::DEGREES_CELSIUS,
+    )
+    .unwrap();
     target
         .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,

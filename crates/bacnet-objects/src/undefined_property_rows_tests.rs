@@ -101,12 +101,8 @@ fn undefined_rows() -> Vec<(Box<dyn BACnetObject>, &'static [P])> {
 fn assert_unknown_property(result: Result<(), Error>, context: &str) {
     match result {
         Err(Error::Protocol { class, code }) => {
-            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32, "{context}");
-            assert_eq!(
-                code,
-                ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
-                "{context}"
-            );
+            assert_eq!(class, ErrorClass::PROPERTY, "{context}");
+            assert_eq!(code, ErrorCode::UNKNOWN_PROPERTY, "{context}");
         }
         other => panic!("{context}: expected PROPERTY / UNKNOWN_PROPERTY, got {other:?}"),
     }

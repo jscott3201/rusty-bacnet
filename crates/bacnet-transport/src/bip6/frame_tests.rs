@@ -332,6 +332,6 @@ fn bvlc6_function_codes_are_the_codecs() {
     assert!(!Bvlc6Function::from_raw(0x0B).is_defined());
     assert!(matches!(
         decode_bvll6(&raw_frame(0x0B, &[1, 2, 3])),
-        Err(bacnet_types::error::Error::Decoding { .. })
+        Err(bacnet_types::error::Error::Decoding(_))
     ));
 }

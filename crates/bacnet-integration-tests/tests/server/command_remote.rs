@@ -5,6 +5,7 @@ use bacnet_server::server::{DeviceBinding, ServerConfig};
 use bacnet_transport::bbmd::BdtEntry;
 use bacnet_transport::bvll::decode_bip_mac;
 use bacnet_types::constructed::{BACnetActionCommand, BACnetActionList};
+use bacnet_types::enums::EngineeringUnits;
 use bacnet_types::primitives::PropertyValue;
 use tokio::sync::RwLock;
 
@@ -23,8 +24,9 @@ fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
 
 fn device(instance: u32) -> DeviceObject {
     DeviceObject::new(DeviceConfig {
-        instance,
-        name: format!("Device {instance}"),
+        identity: bacnet_objects::DeviceIdentity::new(instance, 0)
+            .expect("valid Device identity")
+            .with_name(format!("Device {instance}")),
         ..DeviceConfig::default()
     })
     .unwrap()
@@ -46,7 +48,11 @@ fn remote(object: ObjectIdentifier, value: f32, quit_on_failure: bool) -> BACnet
 }
 
 async fn start(db: ObjectDatabase, binding: Option<DeviceBinding>) -> BACnetServer<BipTransport> {
+    let identity =
+        bacnet_objects::DeviceIdentity::new(db.selected_device().unwrap().instance_number(), 0)
+            .unwrap();
     let mut builder = BACnetServer::bip_builder()
+        .device(identity)
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
         .broadcast_address(Ipv4Addr::LOCALHOST)
@@ -120,10 +126,14 @@ async fn run(server: &BACnetServer<BipTransport>, list: u64) -> (bool, Vec<bool>
 async fn start_target() -> BACnetServer<BipTransport> {
     let mut db = ObjectDatabase::new();
     db.add(Box::new(device(20))).unwrap();
-    db.add(Box::new(AnalogOutputObject::new(1, "AO-1", 62).unwrap()))
-        .unwrap();
-    db.add(Box::new(AnalogInputObject::new(1, "AI-1", 62).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+    ))
+    .unwrap();
+    db.add(Box::new(
+        AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+    ))
+    .unwrap();
     start(db, None).await
 }
 
@@ -196,9 +206,16 @@ async fn command_finds_an_unbound_target_with_a_who_is_over_bip() {
         port,
         broadcast_mask: [255; 4],
     }]);
-    let mut commander = BACnetServer::start(ServerConfig::default(), commander_db(), transport)
-        .await
-        .unwrap();
+    let mut commander = BACnetServer::start(
+        ServerConfig {
+            device: bacnet_objects::DeviceIdentity::new(10, 0).unwrap(),
+            ..Default::default()
+        },
+        commander_db(),
+        transport,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(run(&commander, 1).await, (true, vec![true]));
     let slot8 = read(

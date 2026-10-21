@@ -1,7 +1,7 @@
 //! Following an Event_Algorithm_Inhibit_Ref (#1329).
 //!
-//! An intrinsic reporter can't see the object its reference names, so the
-//! database reads the property for it. The reference is a
+//! An intrinsic reporter, or an Event Enrollment (#1507), can't see the
+//! object its reference names, so the database reads the property for it. The reference is a
 //! BACnetObjectPropertyReference, which has no device member, so it only
 //! ever names a property of this device; there is nothing remote to read.
 //! The clauses that define the pair (Clause 12.2.31 and its counterparts)

@@ -7,14 +7,16 @@
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
 
+use bacnet_npdu::NpduLimits;
 use bacnet_transport::mstp::{LoopbackSerial, MstpConfig, MstpTransport};
-use bacnet_transport::port::{GroupDestinations, NpduLimits, ReceivedNpdu, TransportPort};
+use bacnet_transport::port::{GroupDestinations, ReceivedNpdu, TransportPort};
 use bacnet_types::error::Error;
 use tokio::sync::mpsc;
 use tokio::time::{timeout, Duration};
 
 use super::{BACnetRouter, RouterOptions, RouterPort, StartedRouter};
-use crate::router_table::{Mac, PortId};
+use crate::router_table::PortId;
+use bacnet_npdu::Mac;
 
 /// A station of masters 0 and 1 at 38400 baud, without extended frames.
 fn standard(station: u8) -> MstpConfig {

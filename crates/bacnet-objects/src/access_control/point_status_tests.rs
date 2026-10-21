@@ -30,7 +30,7 @@ fn set_out_of_service(point: &mut AccessPointObject, out_of_service: bool) {
 fn assert_value_out_of_range(result: Result<(), Error>) {
     assert!(
         matches!(result, Err(Error::Protocol { code, .. })
-            if code == ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32),
+            if code == ErrorCode::VALUE_OUT_OF_RANGE),
         "expected VALUE_OUT_OF_RANGE, got {result:?}"
     );
 }

@@ -48,7 +48,7 @@ async fn source_write_queued_egress_is_owned_before_caller_cancellation() {
                 destination_mac: peer_mac.into_iter().collect(),
             },
             false,
-            NetworkPriority::NORMAL,
+            NetworkPriority::Normal,
             Vec::new(),
             None,
         )
@@ -97,7 +97,7 @@ async fn source_write_queued_egress_is_owned_before_caller_cancellation() {
     let (invoke, rp) = write_request(&request);
     let mut encoded = BytesMut::new();
     encode_apdu(&mut encoded, &write_ack(invoke, &rp)).unwrap();
-    peer.send_apdu(&encoded, &source_mac, false, NetworkPriority::NORMAL)
+    peer.send_apdu(&encoded, &source_mac, false, NetworkPriority::Normal)
         .await
         .unwrap();
     let (record, _) = notification(&receive(&mut received).await, false);
@@ -141,7 +141,7 @@ async fn endpoint_write_unreported_cancel_retracts_queued_and_in_progress_sends(
                     vec![0x10, 8],
                     destination.clone(),
                     false,
-                    NetworkPriority::NORMAL,
+                    NetworkPriority::Normal,
                     Vec::new(),
                     None,
                 )
@@ -189,7 +189,7 @@ async fn endpoint_write_unreported_cancel_retracts_queued_and_in_progress_sends(
                 vec![0x10, 8],
                 destination,
                 false,
-                NetworkPriority::NORMAL,
+                NetworkPriority::Normal,
                 Vec::new(),
                 None,
             )

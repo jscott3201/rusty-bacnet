@@ -147,6 +147,12 @@ fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
 
 /// Report a HardFault and exit with [`FAULT`]. On these parts every fault
 /// escalates to it: the image enables no configurable fault handler.
+///
+/// # Safety
+///
+/// cortex-m-rt requires a HardFault handler to be an `unsafe fn`, and only
+/// the processor calls it, as the fault's exception entry, with `frame`
+/// pointing to the frame the exception pushed. Nothing else may call it.
 #[cfg(target_arch = "arm")]
 #[allow(unsafe_code)]
 #[cortex_m_rt::exception]

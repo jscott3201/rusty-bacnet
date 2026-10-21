@@ -187,10 +187,7 @@ fn states(received: &Received) -> Vec<ReinitializedState> {
 }
 
 fn protocol(class: ErrorClass, code: ErrorCode) -> Error {
-    Error::Protocol {
-        class: class.to_raw() as u32,
-        code: code.to_raw() as u32,
-    }
+    Error::Protocol { class, code }
 }
 
 #[tokio::test(start_paused = true)]
@@ -296,10 +293,10 @@ async fn reinitialize_device_handler_panic_is_answered_services_other() {
 #[tokio::test(start_paused = true)]
 async fn reinitialize_device_handler_reject_is_answered_services_other() {
     let reject = || Error::Reject {
-        reason: RejectReason::PARAMETER_OUT_OF_RANGE.to_raw(),
+        reason: RejectReason::PARAMETER_OUT_OF_RANGE,
     };
     let abort = || Error::Abort {
-        reason: AbortReason::OTHER.to_raw(),
+        reason: AbortReason::OTHER,
     };
     let encoding = || Error::Encoding("handler failure".into());
     for error in [reject, abort, encoding] {
@@ -317,8 +314,8 @@ async fn reinitialize_device_handler_reject_is_answered_services_other() {
     }
     let (config, _) = recording_config(None, || {
         Err(Error::Structured {
-            class: ErrorClass::DEVICE.to_raw() as u32,
-            code: ErrorCode::CONFIGURATION_IN_PROGRESS.to_raw() as u32,
+            class: ErrorClass::DEVICE,
+            code: ErrorCode::CONFIGURATION_IN_PROGRESS,
             detail: Box::new(bacnet_types::error::ErrorDetail::FirstFailedElementNumber(
                 1,
             )),

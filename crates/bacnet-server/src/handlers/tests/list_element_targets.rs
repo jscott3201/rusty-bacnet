@@ -12,6 +12,7 @@ use bacnet_objects::schedule::ScheduleObject;
 use bacnet_objects::value_types::DateTimeValueObject;
 use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
 use bacnet_types::constructed::{BACnetDestination, BACnetRecipient};
+use bacnet_types::enums::EngineeringUnits;
 use bacnet_types::primitives::{Date, Time};
 
 type ListService = fn(&mut ObjectDatabase, &[u8]) -> Result<(), Error>;
@@ -90,7 +91,7 @@ fn msv_db() -> (ObjectDatabase, ObjectIdentifier) {
 #[test]
 fn list_services_refuse_scalar_properties_as_not_a_list() {
     let (mut db, msv) = msv_db();
-    let ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let ai = {
         let oid = ai.object_identifier();
         db.add(Box::new(ai)).unwrap();

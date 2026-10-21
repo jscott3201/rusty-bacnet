@@ -7,8 +7,9 @@ use core::net::{Ipv4Addr, SocketAddrV4};
 use bacnet_bip_codec::{BvlcFunction, BvlcResultCode, Bvll, BvllFrame};
 use bacnet_bip_core::node::{
     Action, Addressed, Datagram, Foreign, Lease, Link, Mode, Node, Outgoing, Permissive, Policy,
-    Received,
+    Received, SendRefusal,
 };
+use bacnet_bip_core::port::Datagrams;
 use bacnet_bip_core::{Duration, Instant, LocalSubnet};
 
 /// The default B/IP port.
@@ -179,5 +180,35 @@ impl Policy for Recording {
     fn accept_table(&mut self, ack: &Bvll<'_>) -> bool {
         self.asked.push(ack.function());
         self.accept
+    }
+}
+
+/// A port's socket: it records each datagram it sends, and refuses every
+/// send with `refuse` when set.
+#[derive(Debug, Default)]
+pub struct Socket {
+    /// Each datagram sent: where, and the message, encoded.
+    pub sent: Vec<(SocketAddrV4, Vec<u8>)>,
+    /// Every call, refused ones included.
+    pub calls: usize,
+    /// Refuse every send with this.
+    pub refuse: Option<SendRefusal>,
+}
+
+impl Datagrams for Socket {
+    fn send(&mut self, to: SocketAddrV4, message: &Bvll<'_>) -> Result<(), SendRefusal> {
+        self.calls += 1;
+        if let Some(why) = self.refuse {
+            return Err(why);
+        }
+        self.sent.push((to, wire(*message)));
+        Ok(())
+    }
+}
+
+impl Socket {
+    /// Each datagram sent since the last take: where, and its octets.
+    pub fn take(&mut self) -> Vec<(SocketAddrV4, Vec<u8>)> {
+        core::mem::take(&mut self.sent)
     }
 }

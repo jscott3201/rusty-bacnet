@@ -6,7 +6,7 @@ use bacnet_types::enums::EventState;
 
 #[test]
 fn ai_read_present_value() {
-    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap(); // 62 = degrees-fahrenheit
+    let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(); // 62 = degrees-fahrenheit
     ai.set_present_value(72.5);
     let val = ai
         .read_property(PropertyIdentifier::PRESENT_VALUE, None)
@@ -16,14 +16,14 @@ fn ai_read_present_value() {
 
 #[test]
 fn ai_read_units() {
-    let ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let val = ai.read_property(PropertyIdentifier::UNITS, None).unwrap();
     assert_eq!(val, PropertyValue::Enumerated(62));
 }
 
 #[test]
 fn ai_write_present_value_denied_when_in_service() {
-    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let result = ai.write_property(
         PropertyIdentifier::PRESENT_VALUE,
         None,
@@ -35,7 +35,7 @@ fn ai_write_present_value_denied_when_in_service() {
 
 #[test]
 fn ai_write_present_value_allowed_when_out_of_service() {
-    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ai.write_property(
         PropertyIdentifier::OUT_OF_SERVICE,
         None,
@@ -58,14 +58,14 @@ fn ai_write_present_value_allowed_when_out_of_service() {
 
 #[test]
 fn ai_read_unknown_property() {
-    let ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let result = ai.read_property(PropertyIdentifier::PRIORITY_ARRAY, None);
     assert!(result.is_err());
 }
 
 #[test]
 fn ai_read_event_state_default_normal() {
-    let ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let val = ai
         .read_property(PropertyIdentifier::EVENT_STATE, None)
         .unwrap();
@@ -74,7 +74,7 @@ fn ai_read_event_state_default_normal() {
 
 #[test]
 fn ai_read_write_high_limit() {
-    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ai.write_property(
         PropertyIdentifier::HIGH_LIMIT,
         None,
@@ -91,7 +91,7 @@ fn ai_read_write_high_limit() {
 
 #[test]
 fn ai_read_write_low_limit() {
-    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ai.write_property(
         PropertyIdentifier::LOW_LIMIT,
         None,
@@ -108,7 +108,7 @@ fn ai_read_write_low_limit() {
 
 #[test]
 fn ai_read_write_deadband() {
-    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ai.write_property(
         PropertyIdentifier::DEADBAND,
         None,
@@ -125,7 +125,7 @@ fn ai_read_write_deadband() {
 
 #[test]
 fn ai_deadband_reject_negative() {
-    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let result = ai.write_property(
         PropertyIdentifier::DEADBAND,
         None,
@@ -137,7 +137,7 @@ fn ai_deadband_reject_negative() {
 
 #[test]
 fn ai_read_write_limit_enable() {
-    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let enable_both = LimitEnable::all().to_bacnet();
     ai.write_property(
         PropertyIdentifier::LIMIT_ENABLE,
@@ -161,7 +161,7 @@ fn ai_read_write_limit_enable() {
 
 #[test]
 fn ai_intrinsic_reporting_triggers_on_present_value_change() {
-    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     // Configure: high=80, low=20, deadband=2, both limits enabled
     ai.write_property(
         PropertyIdentifier::HIGH_LIMIT,
@@ -232,7 +232,7 @@ fn ai_intrinsic_reporting_triggers_on_present_value_change() {
 
 #[test]
 fn ai_read_reliability_default() {
-    let ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let val = ai
         .read_property(PropertyIdentifier::RELIABILITY, None)
         .unwrap();
@@ -241,7 +241,7 @@ fn ai_read_reliability_default() {
 
 #[test]
 fn ai_description_read_write() {
-    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     // Default description is empty
     let val = ai
         .read_property(PropertyIdentifier::DESCRIPTION, None)
@@ -266,7 +266,7 @@ fn ai_description_read_write() {
 
 #[test]
 fn ai_set_description_convenience() {
-    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ai.set_description("Supply air temperature");
     assert_eq!(
         ai.read_property(PropertyIdentifier::DESCRIPTION, None)
@@ -277,7 +277,7 @@ fn ai_set_description_convenience() {
 
 #[test]
 fn ai_description_in_property_list() {
-    let ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     assert!(ai
         .property_list()
         .contains(&PropertyIdentifier::DESCRIPTION));
@@ -286,14 +286,14 @@ fn ai_description_in_property_list() {
 #[test]
 fn ai_is_createable_matches_factory() {
     use crate::traits::BACnetObject;
-    let ai = AnalogInputObject::new(1, "ai-1", 95).unwrap();
+    let ai = AnalogInputObject::new(1, "ai-1", EngineeringUnits::NO_UNITS).unwrap();
     assert!(ai.is_createable(), "AnalogInput is factory-constructable");
 }
 
 #[test]
 fn ai_is_writable_property_mirrors_write_property() {
     use crate::traits::BACnetObject;
-    let ai = AnalogInputObject::new(1, "ai-1", 95).unwrap();
+    let ai = AnalogInputObject::new(1, "ai-1", EngineeringUnits::NO_UNITS).unwrap();
     // Event properties accepted via write_generic_event_properties! / write_analog_event_properties! — the old
     // heuristic omitted these (false-negatives).
     assert!(ai.is_writable_property(PropertyIdentifier::LIMIT_ENABLE));
@@ -316,7 +316,7 @@ fn ai_is_writable_property_mirrors_write_property() {
     // Asserted on both halves because this test is the mirror check: the #222 macro split
     // silently turned this write into Ok(()) on all three analog types, and nothing here
     // caught it.
-    let mut ai_mut = AnalogInputObject::new(2, "ai-2", 95).unwrap();
+    let mut ai_mut = AnalogInputObject::new(2, "ai-2", EngineeringUnits::NO_UNITS).unwrap();
     assert!(!ai.is_writable_property(PropertyIdentifier::ACKED_TRANSITIONS));
     assert!(ai_mut
         .write_property(
@@ -351,11 +351,8 @@ fn assert_property_error_code(result: Result<(), Error>, code: bacnet_types::enu
             class,
             code: actual,
         } => {
-            assert_eq!(
-                class,
-                bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
-            );
-            assert_eq!(actual, code.to_raw() as u32);
+            assert_eq!(class, bacnet_types::enums::ErrorClass::PROPERTY);
+            assert_eq!(actual, code);
         }
         other => panic!("expected protocol error, got {other:?}"),
     }
@@ -366,7 +363,7 @@ fn assert_property_error_code(result: Result<(), Error>, code: bacnet_types::enu
 /// VALUE_OUT_OF_RANGE (Clause 15.9.1.3) and leaves the stored value untouched.
 #[test]
 fn ai_notify_type_rejects_out_of_production_values() {
-    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     assert_eq!(
         ai.read_property(PropertyIdentifier::NOTIFY_TYPE, None)
             .unwrap(),
@@ -407,7 +404,7 @@ fn ai_notify_type_rejects_out_of_production_values() {
 /// value to mask and normalize.
 #[test]
 fn ai_event_enable_rejects_noncanonical_bit_strings() {
-    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let canonical = ai
         .read_property(PropertyIdentifier::EVENT_ENABLE, None)
         .unwrap();
@@ -461,7 +458,7 @@ fn ai_event_enable_rejects_noncanonical_bit_strings() {
 /// refused here as PROPERTY / INVALID_DATA_ENCODING.
 #[test]
 fn ai_limit_enable_rejects_noncanonical_bit_strings() {
-    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let canonical = ai
         .read_property(PropertyIdentifier::LIMIT_ENABLE, None)
         .unwrap();
@@ -520,11 +517,8 @@ fn assert_tdn_protocol_error(result: Result<(), Error>, code: bacnet_types::enum
             class,
             code: actual,
         } => {
-            assert_eq!(
-                class,
-                bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
-            );
-            assert_eq!(actual, code.to_raw() as u32);
+            assert_eq!(class, bacnet_types::enums::ErrorClass::PROPERTY);
+            assert_eq!(actual, code);
         }
         other => panic!("expected protocol error, got {other:?}"),
     }
@@ -538,15 +532,18 @@ fn assert_tdn_protocol_error(result: Result<(), Error>, code: bacnet_types::enum
 fn analog_time_delay_normal_round_trips_and_matches_pics() {
     for (mut object, label) in [
         (
-            Box::new(AnalogInputObject::new(1, "AI-1", 62).unwrap()) as Box<dyn BACnetObject>,
+            Box::new(AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap())
+                as Box<dyn BACnetObject>,
             "AI",
         ),
         (
-            Box::new(AnalogOutputObject::new(1, "AO-1", 62).unwrap()) as Box<dyn BACnetObject>,
+            Box::new(AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap())
+                as Box<dyn BACnetObject>,
             "AO",
         ),
         (
-            Box::new(AnalogValueObject::new(1, "AV-1", 62).unwrap()) as Box<dyn BACnetObject>,
+            Box::new(AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap())
+                as Box<dyn BACnetObject>,
             "AV",
         ),
     ] {
@@ -613,15 +610,18 @@ fn analog_time_delay_normal_round_trips_and_matches_pics() {
 fn analog_time_delay_normal_defaults_to_time_delay_when_unwritten() {
     for (mut object, label) in [
         (
-            Box::new(AnalogInputObject::new(1, "AI-1", 62).unwrap()) as Box<dyn BACnetObject>,
+            Box::new(AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap())
+                as Box<dyn BACnetObject>,
             "AI",
         ),
         (
-            Box::new(AnalogOutputObject::new(1, "AO-1", 62).unwrap()) as Box<dyn BACnetObject>,
+            Box::new(AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap())
+                as Box<dyn BACnetObject>,
             "AO",
         ),
         (
-            Box::new(AnalogValueObject::new(1, "AV-1", 62).unwrap()) as Box<dyn BACnetObject>,
+            Box::new(AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap())
+                as Box<dyn BACnetObject>,
             "AV",
         ),
     ] {
@@ -657,7 +657,7 @@ fn analog_time_delay_normal_defaults_to_time_delay_when_unwritten() {
 /// NORMAL indication (e) waits Time_Delay_Normal.
 #[test]
 fn ai_time_delay_normal_gates_the_return_to_normal() {
-    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     for (property, value) in [
         (PropertyIdentifier::HIGH_LIMIT, 80.0),
         (PropertyIdentifier::LOW_LIMIT, 20.0),

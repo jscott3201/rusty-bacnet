@@ -1,0 +1,13 @@
+---
+source: crates/bacnet-cli/src/tui/tests/footer.rs
+expression: chrome_at_sizes(&mut app)
+---
+80x24
+ 1 2 3 [4 Network] 7 | BIP | up | READ-ONLY | FD pending | drop 0        ? help 
+ unknown command 'bogus'; commands: watch DEVICE OBJE…  Esc back  ? help  q quit
+120x40
+ 1 Devices 2 Browse 3 Watch [4 Network] 7 Capture | BIP 10.0.0.1:47808 | up | READ-ONLY | FD pending | drop 0    ? help 
+ unknown command 'bogus'; commands: watch DEVICE OBJECT [PROPERTY] | csv on|off | writem DEVI…  Esc back  ? help  q quit
+200x50
+ bacnet | 1 Devices 2 Browse 3 Watch [4 Network] 7 Capture | BIP 10.0.0.1:47808 | up | READ-ONLY | COV 0 | FD pending | drop 0                                                                   ? help 
+ unknown command 'bogus'; commands: watch DEVICE OBJECT [PROPERTY] | csv on|off | writem DEVICE OBJECT PROPERTY VALUE[@P] ... | bbmd [ADDRESS] | find NAME | mstp rotation|ho…  Esc back  ? help  q quit

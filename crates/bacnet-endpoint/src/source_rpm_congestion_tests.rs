@@ -86,7 +86,7 @@ async fn congestion(mode: u8) {
                     destination_mac: MacAddr::from_slice(&peer_mac),
                 },
                 false,
-                NetworkPriority::NORMAL,
+                NetworkPriority::Normal,
                 Vec::new(),
                 None,
             )
@@ -97,7 +97,7 @@ async fn congestion(mode: u8) {
     unrelated.extend((0..16).map(|_| enqueue()));
     let mut encoded = BytesMut::new();
     encode_apdu(&mut encoded, &response(invoke, &success(&rpm))).unwrap();
-    peer.send_apdu(&encoded, &source_mac, false, NetworkPriority::NORMAL)
+    peer.send_apdu(&encoded, &source_mac, false, NetworkPriority::Normal)
         .await
         .unwrap();
     assert!(read.await.unwrap().is_ok());
@@ -179,7 +179,7 @@ async fn congestion(mode: u8) {
         let (invoke, rpm) = request(&env);
         let mut bytes = BytesMut::new();
         encode_apdu(&mut bytes, &response(invoke, &success(&rpm))).unwrap();
-        peer.send_apdu(&bytes, &source_mac, false, NetworkPriority::NORMAL)
+        peer.send_apdu(&bytes, &source_mac, false, NetworkPriority::Normal)
             .await
             .unwrap();
         read.await.unwrap().unwrap();

@@ -23,7 +23,7 @@ async fn wire_contract(writes: bool, custom: bool) {
         crate::bip::BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
             .role(SessionRole::ServerOnly)
             .database(db)
-            .identity(identity)
+            .device(identity)
             .build_session()
             .unwrap();
     if writes {
@@ -88,7 +88,7 @@ async fn wire_contract(writes: bool, custom: bool) {
             "RP-only endpoint must omit {property:?} from Property_List"
         );
         assert!(
-            matches!(result, Err(Error::Protocol { class, code }) if class == ErrorClass::PROPERTY.to_raw() as u32 && code == ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32),
+            matches!(result, Err(Error::Protocol { class, code }) if class == ErrorClass::PROPERTY && code == ErrorCode::UNKNOWN_PROPERTY),
             "nonexecuted COV property must be unknown"
         );
     }
@@ -113,6 +113,16 @@ impl BACnetObject for CustomDevice {
         property: PropertyIdentifier,
         _: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        match property {
+            PropertyIdentifier::OBJECT_IDENTIFIER => {
+                return Ok(PropertyValue::ObjectIdentifier(oid(123)))
+            }
+            PropertyIdentifier::VENDOR_IDENTIFIER => return Ok(PropertyValue::Unsigned(42)),
+            PropertyIdentifier::MAX_APDU_LENGTH_ACCEPTED => {
+                return Ok(PropertyValue::Unsigned(1476))
+            }
+            _ => {}
+        }
         // Startup validates the ordinary Device declaration. Execution-owned
         // service/COV properties below must still bypass the custom reader.
         if property == PropertyIdentifier::SEGMENTATION_SUPPORTED {
@@ -152,7 +162,7 @@ async fn endpoint_execution_profile_refusals_precede_ingress_and_allow_repair() 
             ],
         ] {
             let (session, _peer, starts) = session(role);
-            let mut session = session.with_database(database(&[123])).with_identity(
+            let mut session = session.with_database(database(&[123])).device(
                 crate::DeviceIdentity::new(123, 42)
                     .unwrap()
                     .with_services(&declared),
@@ -175,7 +185,7 @@ async fn endpoint_execution_profile_refusals_precede_ingress_and_allow_repair() 
 async fn endpoint_client_only_keeps_local_declaration_without_responder_claim() {
     let (session, _peer, starts) = session(SessionRole::ClientOnly);
     let declared = [ServiceSupported::SUBSCRIBE_COV];
-    let mut session = session.with_identity(
+    let mut session = session.device(
         crate::DeviceIdentity::new(123, 42)
             .unwrap()
             .with_services(&declared),
@@ -185,4 +195,143 @@ async fn endpoint_client_only_keeps_local_declaration_without_responder_claim() 
     assert_eq!(session.identity().unwrap().services(), declared);
     assert_eq!(starts.load(Ordering::SeqCst), 1);
     session.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn generated_identity_preflight_failure_can_change_identity_and_retry() {
+    let (session, _peer, starts) = session(SessionRole::Both);
+    let mut session = session.device(
+        crate::DeviceIdentity::new(123, 42)
+            .unwrap()
+            .with_max_apdu(1474)
+            .unwrap()
+            .with_services(&[]),
+    );
+    assert!(session.start().await.is_err());
+    assert_eq!(starts.load(Ordering::SeqCst), 0);
+    assert!(
+        session.database.is_none(),
+        "failed stock generation is not committed"
+    );
+    assert_eq!(session.identity().unwrap().max_apdu_length(), 1474);
+    session = session.device(
+        crate::DeviceIdentity::new(456, 99)
+            .unwrap()
+            .with_max_apdu(206)
+            .unwrap(),
+    );
+    session.start().await.unwrap();
+    assert_eq!(starts.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        session
+            .database
+            .as_ref()
+            .unwrap()
+            .read()
+            .await
+            .selected_device(),
+        Some(oid(456))
+    );
+    session.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn endpoint_wildcard_keeps_frozen_identity_and_identity_free_selection_stays_global() {
+    use std::net::Ipv4Addr;
+    for composed in [true, false] {
+        let identity = crate::DeviceIdentity::new(123, 42)
+            .unwrap()
+            .with_max_apdu(1474)
+            .unwrap();
+        let mut builder =
+            crate::bip::BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::LOCALHOST)
+                .role(SessionRole::ServerOnly)
+                .database(identity.build_database().unwrap());
+        if composed {
+            builder = builder.device(identity.clone());
+        }
+        let mut endpoint = builder.build_session().unwrap();
+        endpoint.start().await.unwrap();
+        let mut client = bacnet_client::client::BACnetClient::bip_builder()
+            .interface(Ipv4Addr::LOCALHOST)
+            .port(0)
+            .build()
+            .await
+            .unwrap();
+        let mac = bacnet_transport::bvll::encode_bip_mac(
+            [127, 0, 0, 1],
+            endpoint.bip_local_address().unwrap().port(),
+        );
+        let database = endpoint.database.as_ref().unwrap();
+        database
+            .write()
+            .await
+            .add(Box::new(
+                DeviceObject::new(DeviceConfig {
+                    identity: crate::DeviceIdentity::new(1, 17).unwrap(),
+                    ..Default::default()
+                })
+                .unwrap(),
+            ))
+            .unwrap();
+        assert_eq!(database.read().await.selected_device(), Some(oid(1)));
+        let wildcard = oid(ObjectIdentifier::MAX_INSTANCE);
+        for phase in 0..3 {
+            if phase == 1 {
+                database.write().await.remove(&oid(123)).unwrap();
+            } else if phase == 2 {
+                database
+                    .write()
+                    .await
+                    .add(Box::new(
+                        DeviceObject::new(DeviceConfig {
+                            identity: crate::DeviceIdentity::new(123, 99)
+                                .unwrap()
+                                .with_max_apdu(480)
+                                .unwrap(),
+                            ..Default::default()
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap();
+            }
+            for (property, expected) in [
+                (
+                    PropertyIdentifier::OBJECT_IDENTIFIER,
+                    PropertyValue::ObjectIdentifier(oid(if composed { 123 } else { 1 })),
+                ),
+                (
+                    PropertyIdentifier::VENDOR_IDENTIFIER,
+                    PropertyValue::Unsigned(if composed { 42 } else { 17 }),
+                ),
+                (
+                    PropertyIdentifier::MAX_APDU_LENGTH_ACCEPTED,
+                    PropertyValue::Unsigned(if composed { 1474 } else { 1476 }),
+                ),
+            ] {
+                let result = client.read_property(&mac, wildcard, property, None).await;
+                if composed && phase == 1 {
+                    assert!(
+                        matches!(result, Err(Error::Protocol { class, code })
+                        if class == ErrorClass::OBJECT && code == ErrorCode::UNKNOWN_OBJECT),
+                        "{result:?}"
+                    );
+                } else {
+                    let ack = result.unwrap();
+                    assert_eq!(ack.object_identifier, oid(if composed { 123 } else { 1 }));
+                    assert_eq!(
+                        bacnet_encoding::primitives::decode_application_value(
+                            &ack.property_value,
+                            0
+                        )
+                        .unwrap()
+                        .0,
+                        expected
+                    );
+                }
+            }
+        }
+        client.stop().await.unwrap();
+        endpoint.stop().await.unwrap();
+    }
 }

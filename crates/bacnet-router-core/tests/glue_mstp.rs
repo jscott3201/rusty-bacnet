@@ -6,25 +6,26 @@
 mod fixture;
 mod glue;
 
-use bacnet_mstp_codec::{Frame as MstpFrame, FrameType, BROADCAST_MAC};
+use bacnet_mstp_codec::{Frame as MstpFrame, FrameType, BROADCAST_MAC, MAX_EXTENDED_FRAME_LENGTH};
 use bacnet_mstp_core::{
-    Action, CoreError, Instant, NetworkPriority, QueueStorage, ReplyDecision, RequestId,
+    Action, DequeuedNpdu, ExtendedActionBuffers, Instant, MasterCore, QueueCounters, QueueItemInfo,
+    QueueKind, QueueRefusal, QueueStorage, ReplyDecision, RequestError, RequestId,
 };
-use bacnet_router_core::mstp::{group, MstpPort, NotExtended};
+use bacnet_router_core::mstp::{MstpPort, NotExtended, PortAction};
+use bacnet_router_core::npdu::Mac;
 use bacnet_router_core::npdu::Npdu;
-use bacnet_router_core::router::{Dest, Group, Limits, Options, Received, SendRefusal};
-use bacnet_router_core::{Mac, PortId};
+use bacnet_router_core::npdu::NpduLimits;
+use bacnet_router_core::router::{Dest, Group, GroupClassifier, Options, Received, SendRefusal};
+use bacnet_router_core::PortId;
 
+use bacnet_router_core::npdu::NetworkPriority;
 use fixture::*;
 use glue::*;
 
-/// The MS/TP port: port 1, on network 2. Port 0 is a B/IP-like port on
-/// network 1.
-const MSTP_PORT: MstpPort = MstpPort::new(PortId(1));
-
-/// The router, its MS/TP port configured from the core's configuration.
+/// The router, its MS/TP port (port 1, on network 2) configured from the
+/// core's configuration. Port 0 is a B/IP-like port on network 1.
 fn router() -> TestRouter {
-    let mstp = MstpPort::config(&config(true), 2).unwrap();
+    let mstp = bacnet_router_core::mstp::port_config(&config(true), 2).unwrap();
     router_with(&[port_on(1, OWN_0), mstp], Options::HOSTED)
 }
 
@@ -32,22 +33,31 @@ fn router() -> TestRouter {
 fn apdu_at(dnet: u16, dadr: &[u8], apdu: &[u8], priority: u8) -> Vec<u8> {
     let mut npdu = Npdu::apdu(apdu);
     npdu.destination = Some(addr(dnet, dadr));
-    npdu.priority = priority;
+    npdu.priority = NetworkPriority::try_from(priority).unwrap();
     bytes(&npdu)
 }
 
-/// What the core delivers next: its source, destination and request, and
-/// the NPDU.
-fn delivered<const U: usize>(core: &mut Core<'_, U>) -> (u8, u8, Option<RequestId>, Vec<u8>) {
+/// What the port hands the router next: the source station, the
+/// destination (255 for a link broadcast, else this station), the request
+/// and the NPDU.
+fn delivered<const U: usize>(port: &mut Port<'_, U>) -> (u8, u8, Option<RequestId>, Vec<u8>) {
     loop {
-        match core.poll_action() {
-            Action::DeliverNpdu {
-                source,
-                destination,
-                npdu,
-                request_id,
-            } => return (source, destination, request_id, npdu.to_vec()),
-            Action::SetDirection(_) => {}
+        match port.poll_action() {
+            PortAction::Arrived { arrived, request } => {
+                assert_eq!(arrived.port, PortId(1));
+                let destination = if arrived.link_group {
+                    BROADCAST_MAC
+                } else {
+                    STATION
+                };
+                return (
+                    arrived.source.as_slice()[0],
+                    destination,
+                    request,
+                    arrived.npdu.to_vec(),
+                );
+            }
+            PortAction::Core(Action::SetDirection(_)) => {}
             other => panic!("expected a delivery, got {other:?}"),
         }
     }
@@ -55,18 +65,75 @@ fn delivered<const U: usize>(core: &mut Core<'_, U>) -> (u8, u8, Option<RequestI
 
 #[test]
 fn config_needs_extended_frames() {
-    assert_eq!(MstpPort::config(&config(false), 2), Err(NotExtended));
-    let port = MstpPort::config(&config(true), 2).unwrap();
+    assert_eq!(
+        bacnet_router_core::mstp::port_config(&config(false), 2),
+        Err(NotExtended)
+    );
+    let port = bacnet_router_core::mstp::port_config(&config(true), 2).unwrap();
     assert_eq!(port.network, 2);
     assert_eq!(port.mac, Mac::from_array([STATION]));
-    assert_eq!(port.max_npdu, Limits::both(1497));
+    assert_eq!(port.max_npdu, NpduLimits::both(1497));
+}
+
+/// The port owns its core: built only over one with extended frames, it
+/// reads its configuration from it, hands each NPDU up as the router's
+/// frame and every other action as the core's, and gives the core back.
+#[test]
+fn the_port_owns_its_core() {
+    let mut bus = Bus::<1>::new();
+    assert!(matches!(
+        MstpPort::new(PortId(1), bus.core(false)),
+        Err(NotExtended)
+    ));
+    let mut port = bus.port();
+    assert_eq!(port.port(), PortId(1));
+    assert_eq!(
+        port.port_config(2),
+        bacnet_router_core::mstp::port_config(&config(true), 2).unwrap()
+    );
+    let now = Instant::from_millis(1);
+    let npdu = [0x01, 0x00, 0x10, 0x08];
+    let frame = MstpFrame::new(
+        FrameType::BACNET_DATA_NOT_EXPECTING_REPLY,
+        STATION,
+        7,
+        &npdu,
+    );
+    port.core_mut().on_validated_frame(frame, now);
+    assert_eq!(
+        port.poll_action(),
+        PortAction::Arrived {
+            arrived: mstp_arrived(7, STATION, &npdu),
+            request: None,
+        }
+    );
+    assert_eq!(port.poll_action(), PortAction::Core(Action::Idle));
+    assert_eq!(port.into_core().counters().npdus_delivered, 1);
 }
 
 #[test]
 fn the_broadcast_station_is_the_only_group() {
-    assert_eq!(group(&[BROADCAST_MAC]), Group::Broadcast);
-    assert_eq!(group(&[5]), Group::No);
-    assert_eq!(group(&[]), Group::No);
+    assert_eq!(
+        bacnet_router_core::mstp::port_config(&config(true), 2)
+            .unwrap()
+            .groups
+            .classify(&[BROADCAST_MAC]),
+        Group::Broadcast
+    );
+    assert_eq!(
+        bacnet_router_core::mstp::port_config(&config(true), 2)
+            .unwrap()
+            .groups
+            .classify(&[5]),
+        Group::No
+    );
+    assert_eq!(
+        bacnet_router_core::mstp::port_config(&config(true), 2)
+            .unwrap()
+            .groups
+            .classify(&[]),
+        Group::No
+    );
 }
 
 /// A broadcast on the MS/TP port reaches the router as a link broadcast
@@ -75,7 +142,7 @@ fn the_broadcast_station_is_the_only_group() {
 fn deliveries_become_frames() {
     let now = Instant::from_millis(1);
     let mut bus = Bus::<2>::new();
-    let mut core = bus.core(true);
+    let mut port = bus.port();
     let mut router = router();
     let mut host = Recorder::default();
 
@@ -86,9 +153,9 @@ fn deliveries_become_frames() {
         7,
         &global,
     );
-    core.on_validated_frame(frame, now).unwrap();
-    let (source, destination, request, npdu) = delivered(&mut core);
-    let arrived = MSTP_PORT.arrived(source, destination, &npdu);
+    port.core_mut().on_validated_frame(frame, now);
+    let (source, destination, request, npdu) = delivered(&mut port);
+    let arrived = mstp_arrived(source, destination, &npdu);
     assert_eq!(
         (
             arrived.port,
@@ -104,7 +171,7 @@ fn deliveries_become_frames() {
     ));
     assert_eq!(drain(&mut router).len(), 1, "relayed to network 1");
 
-    let directed = MSTP_PORT.arrived(7, STATION, &npdu);
+    let directed = mstp_arrived(7, STATION, &npdu);
     assert!(!directed.link_group);
 }
 
@@ -115,7 +182,7 @@ fn deliveries_become_frames() {
 fn relayed_requests_are_postponed() {
     let now = Instant::from_millis(1);
     let mut bus = Bus::<2>::new();
-    let mut core = bus.core(true);
+    let mut port = bus.port();
     let mut router = router();
     let mut host = Recorder::default();
 
@@ -124,10 +191,10 @@ fn relayed_requests_are_postponed() {
     request.expecting_reply = true;
     let request = bytes(&request);
     let frame = MstpFrame::new(FrameType::BACNET_DATA_EXPECTING_REPLY, STATION, 7, &request);
-    core.on_validated_frame(frame, now).unwrap();
-    let (source, destination, id, npdu) = delivered(&mut core);
+    port.core_mut().on_validated_frame(frame, now);
+    let (source, destination, id, npdu) = delivered(&mut port);
     assert!(id.is_some());
-    let arrived = MSTP_PORT.arrived(source, destination, &npdu);
+    let arrived = mstp_arrived(source, destination, &npdu);
     assert_eq!(
         router.receive(arrived.frame(), now, &mut host),
         Received::Handled
@@ -135,9 +202,9 @@ fn relayed_requests_are_postponed() {
     let sent = drain(&mut router);
     assert_eq!((sent[0].port, sent[0].to.as_deref()), (0, Some(NODE_A)));
 
-    MstpPort::release(&mut core, id, now).unwrap();
-    assert_eq!(core.snapshot().request_id, None);
-    let answer = next_frame(&mut core, now).unwrap();
+    port.release(id, now).unwrap();
+    assert_eq!(port.core_mut().snapshot().request_id, None);
+    let answer = next_frame(port.core_mut(), now).unwrap();
     assert_eq!(
         (answer.frame_type, answer.destination),
         (FrameType::REPLY_POSTPONED, 7)
@@ -149,19 +216,20 @@ fn relayed_requests_are_postponed() {
     let local = bytes(&local);
     let later = now + bacnet_router_core::Duration::from_millis(100);
     let frame = MstpFrame::new(FrameType::BACNET_DATA_EXPECTING_REPLY, STATION, 7, &local);
-    core.on_validated_frame(frame, later).unwrap();
-    let (source, destination, id, npdu) = delivered(&mut core);
-    let arrived = MSTP_PORT.arrived(source, destination, &npdu);
+    port.core_mut().on_validated_frame(frame, later);
+    let (source, destination, id, npdu) = delivered(&mut port);
+    let arrived = mstp_arrived(source, destination, &npdu);
     assert!(matches!(
         router.receive(arrived.frame(), later, &mut host),
         Received::Local(local) if local.expecting_reply
     ));
     let reply = [0x30, 0x05, 0x0C];
-    core.complete_request(id.unwrap(), ReplyDecision::Data(&reply), later)
+    port.core_mut()
+        .complete_request(id.unwrap(), ReplyDecision::Data(&reply), later)
         .unwrap();
-    MstpPort::release(&mut core, id, later).unwrap();
-    MstpPort::release(&mut core, None, later).unwrap();
-    let answer = next_frame(&mut core, later).unwrap();
+    port.release(id, later).unwrap();
+    port.release(None, later).unwrap();
+    let answer = next_frame(port.core_mut(), later).unwrap();
     assert_eq!(
         (answer.frame_type, answer.destination, answer.data),
         (
@@ -174,18 +242,15 @@ fn relayed_requests_are_postponed() {
     // time (the core's clock rule); a stale request is still nothing to
     // answer.
     let stale = RequestId::new(99);
-    MstpPort::release(&mut core, Some(stale), Instant::ZERO).unwrap();
+    port.release(Some(stale), Instant::ZERO).unwrap();
     // The core's other refusals come back as they are: a request released
     // once its requester may have stopped waiting.
     let late = later + bacnet_router_core::Duration::from_millis(10);
     let frame = MstpFrame::new(FrameType::BACNET_DATA_EXPECTING_REPLY, STATION, 7, &local);
-    core.on_validated_frame(frame, late).unwrap();
-    let (.., id, _) = delivered(&mut core);
+    port.core_mut().on_validated_frame(frame, late);
+    let (.., id, _) = delivered(&mut port);
     let gone = late + bacnet_router_core::Duration::from_millis(300);
-    assert_eq!(
-        MstpPort::release(&mut core, id, gone),
-        Err(CoreError::RequestExpired)
-    );
+    assert_eq!(port.release(id, gone), Err(RequestError::Expired));
 }
 
 /// The release of a request the application answered, made once the next
@@ -195,31 +260,36 @@ fn relayed_requests_are_postponed() {
 fn a_late_release_leaves_the_next_request_alone() {
     let now = Instant::from_millis(1);
     let mut bus = Bus::<2>::new();
-    let mut core = bus.core(true);
+    let mut port = bus.port();
     let mut local = Npdu::apdu(CONFIRMED);
     local.expecting_reply = true;
     let local = bytes(&local);
     let request = MstpFrame::new(FrameType::BACNET_DATA_EXPECTING_REPLY, STATION, 7, &local);
 
-    core.on_validated_frame(request, now).unwrap();
-    let (.., first, _) = delivered(&mut core);
+    port.core_mut().on_validated_frame(request, now);
+    let (.., first, _) = delivered(&mut port);
     let reply = [0x30, 0x05, 0x0C];
-    core.complete_request(first.unwrap(), ReplyDecision::Data(&reply), now)
+    port.core_mut()
+        .complete_request(first.unwrap(), ReplyDecision::Data(&reply), now)
         .unwrap();
-    let answer = next_frame(&mut core, now).unwrap();
+    let answer = next_frame(port.core_mut(), now).unwrap();
     assert_eq!(
         answer.frame_type,
         FrameType::BACNET_DATA_NOT_EXPECTING_REPLY
     );
 
     let later = now + bacnet_router_core::Duration::from_millis(100);
-    core.on_validated_frame(request, later).unwrap();
-    let (.., second, _) = delivered(&mut core);
+    port.core_mut().on_validated_frame(request, later);
+    let (.., second, _) = delivered(&mut port);
     assert_ne!(first, second);
-    MstpPort::release(&mut core, first, later).unwrap();
-    assert_eq!(core.snapshot().request_id, second, "still waiting");
-    MstpPort::release(&mut core, second, later).unwrap();
-    let answer = next_frame(&mut core, later).unwrap();
+    port.release(first, later).unwrap();
+    assert_eq!(
+        port.core_mut().snapshot().request_id,
+        second,
+        "still waiting"
+    );
+    port.release(second, later).unwrap();
+    let answer = next_frame(port.core_mut(), later).unwrap();
     assert_eq!(
         (answer.frame_type, answer.destination),
         (FrameType::REPLY_POSTPONED, 7)
@@ -235,21 +305,21 @@ fn priority_reaches_the_queue() {
     let normal = apdu_at(2, &[5], CONFIRMED, 0);
     let urgent = apdu_at(2, &[6], CONFIRMED, 3);
     {
-        let mut core = bus.core(true);
+        let mut port = bus.port();
         let mut router = router();
         let mut host = Recorder::default();
         for npdu in [&normal, &urgent] {
             let _ = router.receive(frame_on(0, NODE_A, npdu), now, &mut host);
-            let results = pump(&mut router, |send| MSTP_PORT.send(&mut core, send, now));
+            let results = pump(&mut router, |send| port.send(send, now));
             assert_eq!(results, [(1, Ok(()))]);
         }
     }
-    let first = bus.queues.dequeue(now, 1497).unwrap().unwrap();
+    let first = bus.queues().dequeue(now, 1497).unwrap().unwrap();
     assert_eq!(
         (first.destination, first.priority),
         (6, NetworkPriority::LifeSafety)
     );
-    let second = bus.queues.dequeue(now, 1497).unwrap().unwrap();
+    let second = bus.queues().dequeue(now, 1497).unwrap().unwrap();
     assert_eq!(
         (second.destination, second.priority),
         (5, NetworkPriority::Normal)
@@ -260,47 +330,50 @@ fn priority_reaches_the_queue() {
 #[test]
 fn refusals_map_to_the_routers() {
     let now = Instant::from_millis(1);
-    let mut router = router();
+    // Deliberately omit the group rule to exercise the link's defense too.
+    let mut mstp = bacnet_router_core::mstp::port_config(&config(true), 2).unwrap();
+    mstp.groups = bacnet_router_core::router::Groups::None;
+    let mut router = router_with(&[port_on(1, OWN_0), mstp], Options::HOSTED);
     let mut host = Recorder::default();
-    let mut route = |router: &mut TestRouter, npdu: &[u8], core: &mut Core<'_, 1>| {
+    let mut route = |router: &mut TestRouter, npdu: &[u8], port: &mut Port<'_, 1>| {
         let _ = router.receive(frame_on(0, NODE_A, npdu), now, &mut host);
-        pump(router, |send| MSTP_PORT.send(core, send, now))
+        pump(router, |send| port.send(send, now))
     };
 
     // One unicast slot: the second waits for none.
     let mut bus = Bus::<1>::new();
-    let mut core = bus.core(true);
+    let mut port = bus.port();
     let fits = apdu_at(2, &[5], CONFIRMED, 0);
-    assert_eq!(route(&mut router, &fits, &mut core), [(1, Ok(()))]);
+    assert_eq!(route(&mut router, &fits, &mut port), [(1, Ok(()))]);
     assert_eq!(
-        route(&mut router, &fits, &mut core),
+        route(&mut router, &fits, &mut port),
         [(1, Err(SendRefusal::Full))]
     );
     // Station 255 is no unicast destination, nor is a two-octet MAC.
     for dadr in [&[BROADCAST_MAC][..], &[1, 2]] {
         let npdu = apdu_at(2, dadr, CONFIRMED, 0);
         assert_eq!(
-            route(&mut router, &npdu, &mut core),
+            route(&mut router, &npdu, &mut port),
             [(1, Err(SendRefusal::Other))]
         );
     }
 
-    // A core without extended frames refuses an NPDU past 501 octets.
+    // No port is built over a core without extended frames, so none can
+    // take less than the 1,497 octets its configuration claims.
     let mut bus = Bus::<1>::new();
-    let mut core = bus.core(false);
-    let long = apdu_at(2, &[5], &[0x10; 510], 0);
-    assert_eq!(
-        route(&mut router, &long, &mut core),
-        [(1, Err(SendRefusal::TooLong))]
-    );
+    assert!(matches!(
+        MstpPort::new(PortId(1), bus.core(false)),
+        Err(NotExtended)
+    ));
     // A send for another port.
-    let other = MstpPort::new(PortId(0));
+    let mut bus = Bus::<1>::new();
+    let mut other = MstpPort::new(PortId(0), bus.core(true)).unwrap();
     let _ = router.receive(frame_on(0, NODE_A, &fits), now, &mut host);
-    let results = pump(&mut router, |send| other.send(&mut core, send, now));
+    let results = pump(&mut router, |send| other.send(send, now));
     assert_eq!(results, [(1, Err(SendRefusal::Other))]);
 
     let counts = router.counters();
-    assert_eq!((counts.refused, counts.egress_too_long), (5, 1));
+    assert_eq!((counts.refused, counts.egress_too_long), (4, 0));
 }
 
 /// A frame port `port` received from `source`, by unicast.
@@ -332,14 +405,14 @@ fn relayed_as(len: usize) -> Vec<u8> {
 fn relayed_in_one_extended_frame(len: usize) {
     let now = Instant::from_millis(1);
     let mut bus = Bus::<1>::new();
-    let mut core = bus.core(true);
+    let mut port = bus.port();
     let mut router = router();
     let npdu = relayed_as(len);
     let _ = router.receive(frame_on(0, NODE_A, &npdu), now, &mut Recorder::default());
-    let results = pump(&mut router, |send| MSTP_PORT.send(&mut core, send, now));
+    let results = pump(&mut router, |send| port.send(send, now));
     assert_eq!(results, [(1, Ok(()))]);
 
-    let wired = token_then_frame(&mut core, now).unwrap();
+    let wired = token_then_frame(port.core_mut(), now).unwrap();
     assert_eq!(
         (wired.frame_type, wired.destination, wired.data.len()),
         (
@@ -354,7 +427,7 @@ fn relayed_in_one_extended_frame(len: usize) {
     let mut peer_bus = Bus::<1>::new();
     let mut peer = peer_bus.core_at(NEXT, true);
     for &octet in &wired.octets {
-        peer.on_octet(octet, now).unwrap();
+        peer.on_octet(octet, now);
     }
     let delivered = loop {
         match peer.poll_action() {
@@ -393,11 +466,91 @@ fn extended_profile_admits_the_first_extended_boundary() {
     relayed_in_one_extended_frame(502);
 }
 
+/// Queues that claim extended slots but refuse an NPDU over 1,000 octets as
+/// oversize: queue storage of the caller's own whose limit is below what
+/// the router's port carries.
+struct Narrow(Queues<1>);
+
+impl QueueStorage for Narrow {
+    fn set_starvation_limit(&mut self, limit: u8) {
+        self.0.set_starvation_limit(limit);
+    }
+    fn max_npdu(&self) -> usize {
+        self.0.max_npdu()
+    }
+    fn enqueue_npdu(
+        &mut self,
+        destination: u8,
+        payload: &[u8],
+        priority: NetworkPriority,
+        now: Instant,
+        expires_at: Option<Instant>,
+    ) -> Result<(), QueueRefusal> {
+        if payload.len() > 1000 {
+            return Err(QueueRefusal::Oversize);
+        }
+        self.0
+            .enqueue_npdu(destination, payload, priority, now, expires_at)
+    }
+    fn expire(&mut self, now: Instant) -> usize {
+        self.0.expire(now)
+    }
+    fn peek(&self, now: Instant) -> Option<QueueItemInfo> {
+        self.0.peek(now)
+    }
+    fn peek_kind(&self, kind: QueueKind, now: Instant) -> Option<QueueItemInfo> {
+        self.0.peek_kind(kind, now)
+    }
+    fn dequeue_kind(
+        &mut self,
+        kind: QueueKind,
+        now: Instant,
+        max_len: usize,
+    ) -> Result<Option<DequeuedNpdu<'_>>, QueueRefusal> {
+        self.0.dequeue_kind(kind, now, max_len)
+    }
+    fn depth(&self, kind: QueueKind) -> usize {
+        self.0.depth(kind)
+    }
+    fn counters(&self, kind: QueueKind) -> QueueCounters {
+        self.0.counters(kind)
+    }
+    fn take_counters(&mut self, kind: QueueKind) -> QueueCounters {
+        self.0.take_counters(kind)
+    }
+}
+
+/// A queue refusal as oversize reaches the router as
+/// [`SendRefusal::TooLong`], and nothing is queued: here from queues of the
+/// caller's own that take less than the 1,497 octets the port carries.
+#[test]
+fn an_oversize_queue_refusal_is_too_long_for_the_router() {
+    let now = Instant::from_millis(1);
+    let mut router = router();
+    let mut rx = vec![0; MAX_EXTENDED_FRAME_LENGTH];
+    let mut actions: Box<ExtendedActionBuffers<1>> = Box::default();
+    let core = MasterCore::from_parts(
+        config(true),
+        Narrow(Queues::new()),
+        &mut rx,
+        &mut actions,
+        Instant::ZERO,
+    )
+    .unwrap();
+    let mut port = MstpPort::new(PortId(1), core).unwrap();
+    let npdu = relayed_as(1100);
+    let _ = router.receive(frame_on(0, NODE_A, &npdu), now, &mut Recorder::default());
+    let results = pump(&mut router, |send| port.send(send, now));
+    assert_eq!(results, [(1, Err(SendRefusal::TooLong))]);
+    assert_eq!(port.core().counters().unicast.depth, 0);
+    assert_eq!(router.counters().egress_too_long, 1);
+}
+
 /// A router's MS/TP port has no standard-frame profile: a core
 /// configuration without extended frames is refused (Clause 9.3). Where a
 /// port is held to 501 octets anyway, the router keeps a 502-octet NPDU from it
-/// with reject reason 4 to its sender (#1665), and a core without extended
-/// frames refuses one itself; either way nothing is queued.
+/// with reject reason 4 to its sender (#1665), and nothing is queued; a port
+/// over a core without extended frames is refused.
 ///
 /// Ported from ACE IoT's bacnet-router-adapters
 /// (ACE-IoT-Solutions/rusty-bacnet#5), thanks @acedrew, where it is
@@ -407,17 +560,18 @@ fn extended_profile_admits_the_first_extended_boundary() {
 fn standard_profile_rejects_502_bytes_before_queue_mutation() {
     let now = Instant::from_millis(1);
     let mut host = Recorder::default();
-    assert_eq!(MstpPort::config(&config(false), 2), Err(NotExtended));
+    assert_eq!(
+        bacnet_router_core::mstp::port_config(&config(false), 2),
+        Err(NotExtended)
+    );
     let npdu = relayed_as(502);
 
     // The router's own check, on a port held to 501 octets.
-    let held_to_501 = bacnet_router_core::router::PortConfig {
-        max_npdu: Limits::both(501),
-        ..MstpPort::config(&config(true), 2).unwrap()
-    };
+    let mut held_to_501 = bacnet_router_core::mstp::port_config(&config(true), 2).unwrap();
+    held_to_501.max_npdu = NpduLimits::both(501);
     let mut router = router_with(&[port_on(1, OWN_0), held_to_501], Options::HOSTED);
     let mut bus = Bus::<1>::new();
-    let mut core = bus.core(true);
+    let mut port = bus.port();
     let mut rejects = Vec::new();
     let _ = router.receive(frame_on(0, NODE_A, &npdu), now, &mut host);
     let results = pump(&mut router, |send| match send.port {
@@ -429,25 +583,23 @@ fn standard_profile_rejects_502_bytes_before_queue_mutation() {
             rejects.push((to, send.npdu.to_vec()));
             Ok(())
         }
-        _ => MSTP_PORT.send(&mut core, send, now),
+        _ => port.send(send, now),
     });
     assert_eq!(results, [(0, Ok(()))]);
     let (to, reject) = &rejects[0];
     assert_eq!(to.as_deref(), Some(NODE_A));
-    let reject = Npdu::parse(reject).unwrap();
+    let reject = Npdu::decode(reject).unwrap();
     assert_eq!(reject.payload, [4, 0, 2]);
     assert_eq!(router.counters().egress_too_long, 1);
-    assert_eq!(core.counters().unicast.depth, 0);
+    assert_eq!(port.core_mut().counters().unicast.depth, 0);
 
-    // A core without extended frames, behind a port that claims 1,497.
-    let mut router = self::router();
+    // A core without extended frames can't stand behind a port claiming
+    // 1,497: the port refuses it.
     let mut bus = Bus::<1>::new();
-    let mut core = bus.core(false);
-    let _ = router.receive(frame_on(0, NODE_A, &npdu), now, &mut host);
-    let results = pump(&mut router, |send| MSTP_PORT.send(&mut core, send, now));
-    assert_eq!(results, [(1, Err(SendRefusal::TooLong))]);
-    let counters = core.counters().unicast;
-    assert_eq!((counters.depth, counters.drops_oversize), (0, 1));
+    assert!(matches!(
+        MstpPort::new(PortId(1), bus.core(false)),
+        Err(NotExtended)
+    ));
 }
 
 /// A full MS/TP queue refuses the next part of a routing-table answer, and
@@ -467,22 +619,22 @@ fn saturated_queue_backpressures_network_control() {
         assert!(router.table_mut().add_learned(network, PortId(0), via, now));
     }
     let mut bus = Bus::<1>::new();
-    let mut core = bus.core(true);
+    let mut port = bus.port();
     let query = message(
-        bacnet_router_core::message::MessageType::INITIALIZE_ROUTING_TABLE,
+        bacnet_router_core::npdu::NetworkMessageType::INITIALIZE_ROUTING_TABLE,
         &[0],
     );
-    let arrived = MSTP_PORT.arrived(7, STATION, &query);
+    let arrived = mstp_arrived(7, STATION, &query);
     let _ = router.receive(arrived.frame(), now, &mut Recorder::default());
-    let results = pump(&mut router, |send| MSTP_PORT.send(&mut core, send, now));
+    let results = pump(&mut router, |send| port.send(send, now));
     assert_eq!(results, [(1, Ok(())), (1, Err(SendRefusal::Full))]);
     assert_eq!(router.counters().refused, 1);
-    assert_eq!(core.counters().unicast.depth, 1);
+    assert_eq!(port.core_mut().counters().unicast.depth, 1);
 
     // With room, the whole answer goes: three parts.
     let mut bus = Bus::<4>::new();
-    let mut core = bus.core(true);
+    let mut port = bus.port();
     let _ = router.receive(arrived.frame(), now, &mut Recorder::default());
-    let results = pump(&mut router, |send| MSTP_PORT.send(&mut core, send, now));
+    let results = pump(&mut router, |send| port.send(send, now));
     assert_eq!(results, [(1, Ok(())), (1, Ok(())), (1, Ok(()))]);
 }

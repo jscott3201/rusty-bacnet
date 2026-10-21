@@ -13,7 +13,7 @@ use bacnet_types::primitives::ObjectIdentifier;
 fn assert_code<T: std::fmt::Debug>(result: Result<T, Error>, expected: ErrorCode) {
     match result {
         Err(Error::Protocol { code, .. }) => {
-            assert_eq!(code, expected.to_raw() as u32, "expected {expected:?}")
+            assert_eq!(code, expected, "expected {expected:?}")
         }
         other => panic!("expected {expected:?}, got {other:?}"),
     }
@@ -298,7 +298,8 @@ fn objects() -> Vec<Case> {
         (
             Box::new(BinaryLightingOutputObject::new(1, "BLO-1").unwrap()),
             Box::new(binary),
-            P::CURRENT_COMMAND_PRIORITY,
+            // Table 12-69 lists the value-source rows (#1866) before Tags.
+            P::LAST_COMMAND_TIME,
         ),
     ]
 }

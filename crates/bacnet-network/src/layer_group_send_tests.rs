@@ -113,7 +113,7 @@ async fn an_unconfirmed_request_to_a_group_address_goes_out_as_a_local_broadcast
     let port = u16::from_be_bytes([mac[4], mac[5]]);
     let at_port = |ip: [u8; 4], port: u16| [&ip[..], &port.to_be_bytes()].concat();
     let at = |ip: [u8; 4]| at_port(ip, port);
-    let p = NetworkPriority::NORMAL;
+    let p = NetworkPriority::Normal;
     let groups = [
         at([192, 0, 2, 255]),
         at([255, 255, 255, 255]),
@@ -189,7 +189,7 @@ async fn the_group_rule_follows_the_port_bound_at_start() {
     let _rx = net.start().await.unwrap();
     let broadcast = net.transport().inner.local_mac().to_vec();
     assert!(net.transport().is_broadcast_mac(&broadcast));
-    net.send_apdu(&WHO_IS, &broadcast, false, NetworkPriority::NORMAL)
+    net.send_apdu(&WHO_IS, &broadcast, false, NetworkPriority::Normal)
         .await
         .unwrap();
     let local_broadcast = [&[0x01, 0x00][..], &WHO_IS].concat();

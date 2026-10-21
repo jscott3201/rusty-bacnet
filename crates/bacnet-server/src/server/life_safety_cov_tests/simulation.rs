@@ -287,8 +287,8 @@ async fn write_local_simulates_tracking_value_only_out_of_service() {
         .unwrap();
     let refused = write_tracking_value(&server).await.unwrap_err();
     assert!(matches!(refused, Error::Protocol { class, code }
-        if class == ErrorClass::PROPERTY.to_raw() as u32
-            && code == ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32));
+        if class == ErrorClass::PROPERTY
+            && code == ErrorCode::WRITE_ACCESS_DENIED));
     assert!(decode_sent(&sent).is_empty());
 
     server

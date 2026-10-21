@@ -65,7 +65,7 @@ fn audit_reporter_description_null_is_noop_and_indices_fail_before_value() {
                 .write_property(PropertyIdentifier::DESCRIPTION, Some(index), value, None)
                 .unwrap_err();
             assert!(
-                matches!(error, Error::Protocol { class, code } if class == ErrorClass::PROPERTY.to_raw() as u32 && code == ErrorCode::PROPERTY_IS_NOT_AN_ARRAY.to_raw() as u32)
+                matches!(error, Error::Protocol { class, code } if class == ErrorClass::PROPERTY && code == ErrorCode::PROPERTY_IS_NOT_AN_ARRAY)
             );
             assert_eq!(reporter.configuration_internal(), before);
         }
@@ -81,6 +81,6 @@ fn audit_reporter_description_null_is_noop_and_indices_fail_before_value() {
     assert_eq!(reporter.configuration_internal(), before);
     assert_eq!(status.begin_delivery(), generation);
     assert!(
-        matches!(reporter.write_property(PropertyIdentifier::DESCRIPTION,None,PropertyValue::Boolean(false),None),Err(Error::Protocol { code,.. }) if code == ErrorCode::INVALID_DATA_TYPE.to_raw() as u32)
+        matches!(reporter.write_property(PropertyIdentifier::DESCRIPTION,None,PropertyValue::Boolean(false),None),Err(Error::Protocol { code,.. }) if code == ErrorCode::INVALID_DATA_TYPE)
     );
 }

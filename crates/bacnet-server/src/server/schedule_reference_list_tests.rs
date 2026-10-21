@@ -28,7 +28,7 @@ use bacnet_objects::analog::AnalogValueObject;
 use bacnet_objects::binary::BinaryValueObject;
 use bacnet_services::list_manipulation::{ChangeListError, ListElementRequest};
 use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
-use bacnet_types::enums::ObjectType;
+use bacnet_types::enums::{EngineeringUnits, ObjectType};
 
 const ADD: ConfirmedServiceChoice = ConfirmedServiceChoice::ADD_LIST_ELEMENT;
 const REMOVE: ConfirmedServiceChoice = ConfirmedServiceChoice::REMOVE_LIST_ELEMENT;
@@ -75,10 +75,14 @@ const REAL: [u8; 5] = [0x44, 0x3F, 0x80, 0, 0];
 async fn start() -> Harness {
     let mut h = Harness::start_with(ServerConfig::default(), |db| {
         schedule(db);
-        db.add(Box::new(AnalogValueObject::new(2, "AV-2", 62).unwrap()))
-            .unwrap();
-        db.add(Box::new(AnalogValueObject::new(3, "AV-3", 62).unwrap()))
-            .unwrap();
+        db.add(Box::new(
+            AnalogValueObject::new(2, "AV-2", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+        ))
+        .unwrap();
+        db.add(Box::new(
+            AnalogValueObject::new(3, "AV-3", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+        ))
+        .unwrap();
         db.add(Box::new(BinaryValueObject::new(2, "BV-2").unwrap()))
             .unwrap();
     })

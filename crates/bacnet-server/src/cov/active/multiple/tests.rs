@@ -1,7 +1,7 @@
 use super::*;
 use bacnet_objects::analog::AnalogValueObject;
 use bacnet_objects::binary::BinaryValueObject;
-use bacnet_types::enums::ObjectType;
+use bacnet_types::enums::{EngineeringUnits, ObjectType};
 use std::time::Duration;
 
 const MULTIPLE: PropertyIdentifier = PropertyIdentifier::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS;
@@ -170,7 +170,7 @@ fn active_cov_multiple_entries_follow_context_refresh_without_purging_or_single(
 #[test]
 fn active_cov_multiple_projection_groups_contexts_and_omits_deleted_objects() {
     let mut db = ObjectDatabase::new();
-    let mut analog = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let mut analog = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     analog
         .write_property(
             PropertyIdentifier::COV_INCREMENT,

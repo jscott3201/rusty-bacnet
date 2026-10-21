@@ -2,12 +2,13 @@
 
 use super::*;
 use crate::analog::AnalogOutputObject;
+use bacnet_types::enums::EngineeringUnits;
 
 /// The fixture's Trend Log, retargeted at `property[index]` of AO-1, whose
 /// Priority_Array holds 61.5 at priority 8. Returns the log after one poll.
 fn polled_with(property: P, index: Option<u32>) -> (ObjectDatabase, ObjectIdentifier) {
     let (mut db, oid, _, _) = fixture(u32::MAX);
-    let mut output = AnalogOutputObject::new(1, "AO", 95).unwrap();
+    let mut output = AnalogOutputObject::new(1, "AO", EngineeringUnits::NO_UNITS).unwrap();
     output
         .write_property_from(
             P::PRESENT_VALUE,

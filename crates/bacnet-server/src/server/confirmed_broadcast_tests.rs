@@ -172,13 +172,13 @@ async fn a_segment_sent_by_broadcast_draws_no_segment_ack_or_abort() {
             .build();
         let sent = transport.sent();
         let config = ServerConfig {
-            segmentation_supported: segmentation,
+            device: bacnet_objects::DeviceIdentity::default().with_segmentation(segmentation),
             ..ServerConfig::default()
         };
         let mut db = ObjectDatabase::new();
         db.add(Box::new(
             bacnet_objects::device::DeviceObject::new(bacnet_objects::device::DeviceConfig {
-                segmentation_supported: segmentation,
+                identity: bacnet_objects::DeviceIdentity::default().with_segmentation(segmentation),
                 ..Default::default()
             })
             .unwrap(),

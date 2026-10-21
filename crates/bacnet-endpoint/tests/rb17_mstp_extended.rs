@@ -39,11 +39,9 @@ fn npdu(length: usize, expecting_reply: bool, tag: u8) -> Vec<u8> {
     npdu
 }
 
-/// Without the option the endpoint is as before: standard frames, and an
-/// identity advertising 1476 is refused. With it, the transport carries
-/// APDUs of 1476 and the same identity builds.
-#[test]
-fn the_option_lifts_the_identity_bound_to_1476() {
+/// Default identity resolves at startup to the owned standard/extended link.
+#[tokio::test]
+async fn the_option_lifts_the_identity_bound_to_1476() {
     let (serial, _peer) = LoopbackSerial::pair();
     let standard = MstpEndpointBuilder::new(serial, SESSION_MAC)
         .build_transport()
@@ -52,16 +50,17 @@ fn the_option_lifts_the_identity_bound_to_1476() {
     assert_eq!(standard.max_npdu_length(), MAX_STANDARD_MPDU_DATA);
     assert_eq!(standard.local_receive_apdu_capacity(), 480);
 
-    let (serial, _peer) = LoopbackSerial::pair();
-    let error = MstpEndpointBuilder::new(serial, SESSION_MAC)
-        .identity(identity(Frames::Extended))
-        .build_session()
-        .err()
-        .expect("a 1476 identity on standard frames is refused");
-    assert!(
-        error.to_string().contains("bound 480 (standard frames)"),
-        "{error}"
-    );
+    for (extended, expected) in [(false, 480), (true, 1476)] {
+        let (serial, _peer) = LoopbackSerial::pair();
+        let mut session = MstpEndpointBuilder::new(serial, SESSION_MAC)
+            .extended_frames(extended)
+            .device(identity(Frames::Extended))
+            .build_session()
+            .unwrap();
+        session.start().await.unwrap();
+        assert_eq!(session.identity().unwrap().max_apdu_length(), expected);
+        session.stop().await.unwrap();
+    }
 
     let (serial, _peer) = LoopbackSerial::pair();
     let extended = MstpEndpointBuilder::new(serial, SESSION_MAC)
@@ -79,7 +78,7 @@ fn the_option_lifts_the_identity_bound_to_1476() {
     assert!(MstpEndpointBuilder::new(serial, SESSION_MAC)
         .extended_frames(true)
         .database(db_with_analog(&id, 1, 1.0))
-        .identity(id)
+        .device(id)
         .build_session()
         .is_ok());
 }
@@ -216,5 +215,5 @@ async fn mstp_extended_long_answer_tokio() {
 
 #[tokio::test]
 async fn mstp_extended_long_answer_dedicated() {
-    long_answer_impl(MstpExecutionMode::DedicatedThread).await;
+    long_answer_impl(MstpExecutionMode::dedicated_thread()).await;
 }

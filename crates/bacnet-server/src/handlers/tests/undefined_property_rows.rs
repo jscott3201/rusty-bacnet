@@ -104,8 +104,8 @@ fn db_with(object: Box<dyn BACnetObject>) -> (ObjectDatabase, ObjectIdentifier) 
 fn assert_unknown_property<T: std::fmt::Debug>(result: Result<T, Error>, context: &str) {
     assert!(
         matches!(result, Err(Error::Protocol { class, code })
-            if class == ErrorClass::PROPERTY.to_raw() as u32
-                && code == ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32),
+            if class == ErrorClass::PROPERTY
+                && code == ErrorCode::UNKNOWN_PROPERTY),
         "{context}: expected PROPERTY/UNKNOWN_PROPERTY, got {result:?}"
     );
 }

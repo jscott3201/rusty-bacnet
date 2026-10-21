@@ -9,6 +9,7 @@ use super::*;
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_types::constructed::BACnetRecipient;
+use bacnet_types::enums::EngineeringUnits;
 
 const LOCAL_PEER: &[u8] = &[127, 0, 0, 2, 0xBA, 0xC0];
 const ROUTER: &[u8] = &[127, 0, 0, 3, 0xBA, 0xC0];
@@ -30,8 +31,10 @@ fn binding_database(recipients: &[(ObjectIdentifier, bool)]) -> ObjectDatabase {
             .unwrap();
     }
     db.add(Box::new(class)).unwrap();
-    db.add(Box::new(AnalogInputObject::new(1, "AI-1", 0).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AnalogInputObject::new(1, "AI-1", EngineeringUnits::SQUARE_METERS).unwrap(),
+    ))
+    .unwrap();
     db
 }
 

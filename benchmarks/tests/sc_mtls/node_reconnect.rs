@@ -7,6 +7,9 @@ use bacnet_objects::{
 };
 use bacnet_server::server::BACnetServer;
 use bacnet_transport::{
+    any::AnyTransport,
+    mstp::NoSerial,
+    port::TransportPort,
     sc::{ScReconnectConfig, ScTransport},
     sc_hub::ScHub,
     sc_tls::TlsWebSocket,
@@ -24,6 +27,7 @@ use tokio::{
 };
 
 type Client = BACnetClient<ScTransport<TlsWebSocket>>;
+type AnyClient = BACnetClient<AnyTransport<NoSerial>>;
 type Server = BACnetServer<ScTransport<TlsWebSocket>>;
 const SERVER: [u8; 6] = [2, 0, 0, 0, 0, 1];
 const SERVER_UUID: [u8; 16] = [
@@ -117,6 +121,7 @@ impl Drop for Proxy {
 struct Fixture {
     hubs: Vec<ScHub>,
     client: Option<Client>,
+    any_client: Option<AnyClient>,
     server: Option<Server>,
     proxy: Option<Proxy>,
     bad_server: Option<JoinHandle<std::io::Error>>,
@@ -143,13 +148,16 @@ impl Fixture {
         let mut db = ObjectDatabase::new();
         db.add(Box::new(
             DeviceObject::new(DeviceConfig {
-                instance: 123,
+                identity: bacnet_objects::DeviceIdentity::new(123, 0)
+                    .expect("valid Device identity")
+                    .with_name("BACnet Device"),
                 ..Default::default()
             })
             .unwrap(),
         ))
         .unwrap();
         let builder = BACnetServer::sc_builder()
+            .device(bacnet_objects::DeviceIdentity::new(123, 0).unwrap())
             .hub_url(url)
             .tls_config(try_make_node_tls_config(certs).unwrap())
             .vmac(SERVER)
@@ -160,6 +168,10 @@ impl Fixture {
     }
 
     async fn client(&mut self, url: &str, certs: &CertMaterial) {
+        self.client_with_erasure(url, certs, false).await;
+    }
+
+    async fn client_with_erasure(&mut self, url: &str, certs: &CertMaterial, erased: bool) {
         let builder = BACnetClient::sc_builder()
             .hub_url(url)
             .tls_config(try_make_node_tls_config(certs).unwrap())
@@ -168,12 +180,29 @@ impl Fixture {
             .apdu_timeout_ms(READ_BUDGET_MS)
             .apdu_retries(0)
             .reconnect(reconnect());
-        self.client = Some(bounded(boxed(|| builder.build())).await.unwrap());
+        if erased {
+            self.any_client = Some(
+                bounded(boxed(|| builder.build_any::<NoSerial>()))
+                    .await
+                    .unwrap(),
+            );
+        } else {
+            self.client = Some(bounded(boxed(|| builder.build())).await.unwrap());
+        }
     }
 
     async fn read(&self) -> Result<(), bacnet_types::error::Error> {
+        if let Some(client) = &self.any_client {
+            boxed(|| Self::read_with(client)).await
+        } else {
+            boxed(|| Self::read_with(self.client.as_ref().unwrap())).await
+        }
+    }
+
+    async fn read_with<T: TransportPort + 'static>(
+        client: &BACnetClient<T>,
+    ) -> Result<(), bacnet_types::error::Error> {
         let oid = ObjectIdentifier::new(ObjectType::DEVICE, 123).unwrap();
-        let client = self.client.as_ref().unwrap();
         let ack = boxed(|| {
             client.read_property(&SERVER, oid, PropertyIdentifier::OBJECT_IDENTIFIER, None)
         })
@@ -201,6 +230,10 @@ impl Fixture {
             bounded(boxed(|| client.stop())).await.unwrap();
         }
         self.client = None;
+        if let Some(client) = &mut self.any_client {
+            bounded(boxed(|| client.stop())).await.unwrap();
+        }
+        self.any_client = None;
         if let Some(server) = &mut self.server {
             bounded(boxed(|| server.stop())).await.unwrap();
         }
@@ -241,7 +274,7 @@ async fn run(test: impl AsyncFnOnce(&mut Fixture)) {
     }
 }
 
-async fn builder_redial(f: &mut Fixture, client_subject: bool) {
+async fn builder_redial(f: &mut Fixture, client_subject: bool, erased: bool) {
     let certs = generate_test_certs();
     let url = f.hub(&certs, 9).await;
     let good = f.hubs[0].local_addr().unwrap();
@@ -259,7 +292,14 @@ async fn builder_redial(f: &mut Fixture, client_subject: bool) {
     let proxy_url = f.proxy.as_ref().unwrap().url.clone();
     // Independently provisioned node UUIDs survive each builder's redial.
     boxed(|| f.server(if client_subject { &url } else { &proxy_url }, &certs)).await;
-    boxed(|| f.client(if client_subject { &proxy_url } else { &url }, &certs)).await;
+    boxed(|| {
+        f.client_with_erasure(
+            if client_subject { &proxy_url } else { &url },
+            &certs,
+            erased,
+        )
+    })
+    .await;
     assert_eq!(
         bounded(f.proxy.as_mut().unwrap().accepted.recv()).await,
         Some(0)
@@ -288,7 +328,12 @@ async fn builder_redial(f: &mut Fixture, client_subject: bool) {
 
 #[tokio::test]
 async fn node_tls_client_builder_redials_with_same_policy_and_rejects_wrong_hub() {
-    run(async |f| builder_redial(f, true).await).await;
+    run(async |f| builder_redial(f, true, false).await).await;
+}
+
+#[tokio::test]
+async fn node_tls_build_any_redials_with_same_policy_and_rejects_wrong_hub() {
+    run(async |f| builder_redial(f, true, true).await).await;
 }
 
 #[tokio::test]
@@ -322,7 +367,7 @@ async fn node_tls_client_builder_preflight_keeps_existing_error_precedence() {
 
 #[tokio::test]
 async fn node_tls_server_builder_redials_with_same_policy_and_rejects_wrong_hub() {
-    run(async |f| builder_redial(f, false).await).await;
+    run(async |f| builder_redial(f, false, false).await).await;
 }
 
 #[tokio::test]

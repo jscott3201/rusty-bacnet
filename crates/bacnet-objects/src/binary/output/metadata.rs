@@ -184,8 +184,8 @@ mod tests {
             assert!(
                 matches!(object.write_property(P::FEEDBACK_VALUE, None, PropertyValue::Enumerated(2), None),
                 Err(Error::Protocol { class, code })
-                    if class == ErrorClass::PROPERTY.to_raw() as u32
-                        && code == ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32)
+                    if class == ErrorClass::PROPERTY
+                        && code == ErrorCode::VALUE_OUT_OF_RANGE)
             );
             assert_eq!(
                 object.read_property(P::FEEDBACK_VALUE, None).unwrap(),

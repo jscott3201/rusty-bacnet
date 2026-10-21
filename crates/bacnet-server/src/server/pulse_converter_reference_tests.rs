@@ -11,7 +11,7 @@ use bacnet_objects::multistate::MultiStateValueObject;
 use bacnet_services::cov::{COVNotificationRequest, SubscribeCOVRequest};
 use bacnet_services::object_mgmt::{CreateObjectRequest, DeleteObjectRequest, ObjectSpecifier};
 use bacnet_types::constructed::BACnetObjectPropertyReference;
-use bacnet_types::enums::{ObjectType, Reliability};
+use bacnet_types::enums::{EngineeringUnits, ObjectType, Reliability};
 
 const FAULT: u8 = 0x40;
 
@@ -27,7 +27,7 @@ fn msv5() -> ObjectIdentifier {
 
 /// PC-1 counting from MSV-5's Present_Value, which doesn't exist yet.
 fn with_converter(db: &mut ObjectDatabase) {
-    let mut pc = PulseConverterObject::new(1, "PC-1", 95).unwrap();
+    let mut pc = PulseConverterObject::new(1, "PC-1", EngineeringUnits::NO_UNITS).unwrap();
     pc.set_input_reference(BACnetObjectPropertyReference::new(msv5(), PV.to_raw()));
     db.add(Box::new(pc)).unwrap();
 }

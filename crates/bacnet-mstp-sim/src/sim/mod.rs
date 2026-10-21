@@ -1,18 +1,26 @@
 //! The simulator: nodes, the line, the event loop and the public API.
 
 mod checks;
+mod contention;
 mod faults;
+#[cfg(test)]
+mod gap_tests;
+mod host;
 mod master;
 mod medium;
+mod post_drive;
+#[cfg(test)]
+mod post_drive_tests;
 
 use std::collections::BTreeMap;
 
 use bacnet_mstp_codec::{
     FrameHeader, StreamDecoder, MAX_EXTENDED_FRAME_LENGTH, MAX_EXTENDED_MPDU_DATA,
 };
+use bacnet_mstp_core::npdu::NetworkPriority;
 use bacnet_mstp_core::{
-    AllocQueues, Duration, ExtendedActionBuffers, Instant, MasterCore, MasterState,
-    NetworkPriority, QueueRefusal, RequestId, TransmitId,
+    AllocQueues, Duration, Instant, MasterCore, MasterState, QueueRefusal, RequestId, Storage,
+    TransmitId, DEFAULT_DELIVERY_SLOTS,
 };
 
 use crate::event::{Class, Key, Queue};
@@ -25,17 +33,27 @@ use crate::wire::WireTiming;
 
 use master::MasterNode;
 
-/// The core type every simulated master runs. Its queues and action buffers
-/// are sized for extended frames whether the master's configuration takes
-/// them or not, so masters with and without the flag share one type; the
-/// receive storage follows the flag (see [`MasterSpec::extended_frames`]).
+/// The storage every simulated master's core borrows: queues and buffers
+/// sized for extended frames whether the master's configuration takes them
+/// or not, so masters with and without the flag share one type. The core
+/// uses as much of the receive storage as the flag takes (see
+/// [`MasterSpec::extended_frames`]).
+pub(crate) type SimStorage = Storage<
+    AllocQueues<MAX_EXTENDED_MPDU_DATA>,
+    DEFAULT_DELIVERY_SLOTS,
+    MAX_EXTENDED_MPDU_DATA,
+    MAX_EXTENDED_FRAME_LENGTH,
+>;
+
+/// The core type every simulated master runs, over a `SimStorage`.
 ///
 /// So a master without the flag runs with 1497-octet delivery and queue
 /// slots, not the 501-octet default instantiation a firmware build uses.
 /// Its behaviour is the same: the flag, not the slot size, decides what it
 /// takes and sends, and the core refuses an NPDU over 501 octets at the
 /// queue whatever the slots hold.
-pub type SimCore = MasterCore<'static, AllocQueues<MAX_EXTENDED_MPDU_DATA>, MAX_EXTENDED_MPDU_DATA>;
+pub type SimCore =
+    MasterCore<'static, &'static mut AllocQueues<MAX_EXTENDED_MPDU_DATA>, MAX_EXTENDED_MPDU_DATA>;
 
 /// Run-wide settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,12 +103,17 @@ pub(crate) enum Event {
     TxEnd {
         tx: TxId,
     },
+    DriverRelease {
+        tx: TxId,
+    },
     AdapterStart {
         node: usize,
         id: TransmitId,
+        incarnation: u64,
     },
     Decide {
         node: usize,
+        incarnation: u64,
         request: RequestId,
         requester: u8,
         postpone: bool,
@@ -99,6 +122,14 @@ pub(crate) enum Event {
     ScriptSend {
         node: usize,
         send: ScriptSend,
+    },
+    /// An NPDU the node's application sends, fenced to the incarnation
+    /// that decided it: a node that lost power since never sends it.
+    AppSend {
+        node: usize,
+        incarnation: u64,
+        destination: u8,
+        npdu: Vec<u8>,
     },
     Enqueue {
         node: usize,
@@ -122,6 +153,7 @@ pub(crate) enum NodeKind {
 
 pub(crate) struct Node {
     station: u8,
+    receiver: contention::Receiver,
     kind: NodeKind,
     /// The transmission this node is driving.
     driving: Option<TxId>,
@@ -131,8 +163,12 @@ pub(crate) struct Node {
 }
 
 /// Facts about a transmission the line itself doesn't track.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct TxMeta {
+    /// Local return timing belongs to the physical operation, not its Write.
+    echo_profile: Option<host::EchoProfile>,
+    /// Core operation bound to this physical transmission, for abort fencing.
+    transmit_id: Option<TransmitId>,
     /// When a master's core handed this frame over.
     dispatched: Option<Instant>,
     generation: bool,
@@ -149,6 +185,8 @@ enum Next {
     Dynamic(Key),
     Timeline(Key),
     Deadline(Key, usize),
+    Host(Key, usize),
+    LocalEcho(Key, usize),
 }
 
 /// A deterministic, virtual-time MS/TP bus with real [`MasterCore`]s on it.
@@ -174,6 +212,8 @@ pub struct Sim {
     /// Draws adapter timer jitter, apart from [`Self::rng`] so a scenario's
     /// own draws don't shift it.
     jitter: SimRng,
+    /// Independent seeded stream for chunk boundaries.
+    chunks: SimRng,
     /// A fault or collision has happened; see [`Self::perturbed`].
     perturbed: bool,
     noise_bursts: u64,
@@ -204,6 +244,7 @@ impl Sim {
             report: Report::default(),
             rng: SimRng::new(config.seed),
             jitter: SimRng::new(config.seed ^ JITTER_STREAM),
+            chunks: SimRng::new(config.seed ^ 0xBB67_AE85_84CA_A73B),
             perturbed: false,
             noise_bursts: 0,
             armed: Vec::new(),
@@ -216,7 +257,8 @@ impl Sim {
     /// # Panics
     ///
     /// If the station is taken or the spec's baud rate differs from the
-    /// line's.
+    /// line's, or the inter-octet gap, post-drive hold or skew exceeds its
+    /// limit.
     pub fn add_master(&mut self, spec: MasterSpec) -> &mut Self {
         let station = spec.station();
         self.claim_station(station);
@@ -225,8 +267,13 @@ impl Sim {
             "station {station}: core baud rate differs from the line's"
         );
         let powered = spec.powered;
+        spec.skew.validate();
+        self.timing.validate_post_drive(spec.adapter.post_drive);
+        self.timing
+            .validate_inter_octet_gap(spec.adapter.inter_octet_gap);
         self.nodes.push(Node {
             station,
+            receiver: contention::Receiver::new(self.config.seed, station),
             kind: NodeKind::Master(Box::new(MasterNode::new(spec))),
             driving: None,
             listening_since: None,
@@ -248,6 +295,7 @@ impl Sim {
         self.claim_station(station);
         self.nodes.push(Node {
             station,
+            receiver: contention::Receiver::new(self.config.seed, station),
             kind: NodeKind::Scripted(Box::new(ScriptedNode {
                 script: Box::new(script),
                 decoder: StreamDecoder::new(leak_storage(2 * MAX_EXTENDED_FRAME_LENGTH)),
@@ -256,6 +304,20 @@ impl Sim {
             driving: None,
             listening_since: Some(self.now),
         });
+        self
+    }
+
+    /// Select this receiver's synthetic digital contention policy.
+    /// Uncontended characters and physical line timing are unchanged.
+    /// If enabled after unobserved core input, receipt qualification waits
+    /// for a known parser reset (silence, receive error, transmit or reboot).
+    ///
+    /// # Panics
+    ///
+    /// If the station has not been added.
+    pub fn set_contention(&mut self, station: u8, policy: crate::ContentionPolicy) -> &mut Self {
+        let node = self.index_of(station);
+        self.nodes[node].receiver.policy = policy;
         self
     }
 
@@ -288,7 +350,11 @@ impl Sim {
     pub fn run_until(&mut self, end: Instant) {
         while let Some(next) = self.next() {
             let key = match next {
-                Next::Dynamic(key) | Next::Timeline(key) | Next::Deadline(key, _) => key,
+                Next::Dynamic(key)
+                | Next::Timeline(key)
+                | Next::Deadline(key, _)
+                | Next::Host(key, _)
+                | Next::LocalEcho(key, _) => key,
             };
             if key.at > end {
                 break;
@@ -304,6 +370,8 @@ impl Sim {
                     self.dispatch(event);
                 }
                 Next::Deadline(_, node) => self.service_deadline(node),
+                Next::Host(_, node) => self.host_service(node),
+                Next::LocalEcho(_, node) => self.local_echo_service(node),
             }
             self.check_holders();
         }
@@ -499,7 +567,11 @@ impl Sim {
         let mut best = self.dynamic.peek_key().map(Next::Dynamic);
         let mut consider = |candidate: Next| {
             let key = |next: &Next| match next {
-                Next::Dynamic(key) | Next::Timeline(key) | Next::Deadline(key, _) => *key,
+                Next::Dynamic(key)
+                | Next::Timeline(key)
+                | Next::Deadline(key, _)
+                | Next::Host(key, _)
+                | Next::LocalEcho(key, _) => *key,
             };
             if best
                 .as_ref()
@@ -515,6 +587,37 @@ impl Sim {
             let NodeKind::Master(master) = &node.kind else {
                 continue;
             };
+            if let Some(at) = master
+                .host
+                .as_ref()
+                .and_then(host::HostState::next_local_echo)
+            {
+                consider(Next::LocalEcho(
+                    Key {
+                        at: at.max(self.now),
+                        class: Class::LocalEcho,
+                        tie: u16::from(node.station),
+                        seq: 0,
+                    },
+                    index,
+                ));
+            }
+            if let Some(at) = master.host.as_ref().and_then(host::HostState::next) {
+                consider(Next::Host(
+                    Key {
+                        at: at.max(self.now),
+                        class: Class::HostRead,
+                        tie: u16::from(node.station),
+                        seq: 0,
+                    },
+                    index,
+                ));
+            }
+            // The host transport awaits write/drain/echo without polling core
+            // deadlines. An octet adapter must still service its watchdog.
+            if master.transmitting.is_some() && master.host.is_some() {
+                continue;
+            }
             if let Some(fire_at) = master.fire_at {
                 let key = Key {
                     at: fire_at,
@@ -548,15 +651,51 @@ impl Sim {
             Event::WindowEnd => self.window_end(),
             Event::OctetStart { tx, index } => self.octet_start(tx, index),
             Event::TxEnd { tx } => self.tx_end(tx),
-            Event::AdapterStart { node, id } => self.adapter_start(node, id),
+            Event::DriverRelease { tx } => {
+                self.release_driver(tx, crate::DriverReleaseCause::Completed)
+            }
+            Event::AdapterStart {
+                node,
+                id,
+                incarnation,
+            } => {
+                if self
+                    .master_mut(node)
+                    .is_some_and(|master| master.incarnation == incarnation)
+                {
+                    self.adapter_start(node, id);
+                }
+            }
             Event::Decide {
                 node,
+                incarnation,
                 request,
                 requester,
                 postpone,
                 payload,
-            } => self.decide(node, request, requester, postpone, payload),
+            } => {
+                if self
+                    .master_mut(node)
+                    .is_some_and(|master| master.incarnation == incarnation)
+                {
+                    self.decide(node, request, requester, postpone, payload);
+                }
+            }
             Event::ScriptSend { node, send } => self.script_send(node, send),
+            Event::AppSend {
+                node,
+                incarnation,
+                destination,
+                npdu,
+            } => {
+                // Dropped, not refused, if the node lost power since: its
+                // application's state went with it.
+                if self.master_mut(node).is_some_and(|master| {
+                    master.incarnation == incarnation && master.core.is_some()
+                }) {
+                    self.enqueue_now(node, destination, &npdu, NetworkPriority::Normal);
+                }
+            }
             Event::Enqueue {
                 node,
                 destination,
@@ -582,10 +721,20 @@ impl Sim {
     }
 
     fn violation(&mut self, kind: ViolationKind, detail: String) {
+        self.violation_with_host(kind, detail, None);
+    }
+
+    fn violation_with_host(
+        &mut self,
+        kind: ViolationKind,
+        detail: String,
+        host_timing: Option<crate::HostTimingFailure>,
+    ) {
         let violation = Violation {
             at: self.now,
             kind,
             detail,
+            host_timing,
         };
         self.note(Who::Sim, TraceKind::Violation(violation.to_string()));
         self.report.violations.push(violation);
@@ -605,11 +754,10 @@ fn leak_storage(length: usize) -> &'static mut [u8] {
     Box::leak(vec![0u8; length].into_boxed_slice())
 }
 
-/// The action buffers a powered-on core borrows for its whole life, kept
-/// like [`leak_storage`]'s, with the default delivery slots, sized for
-/// extended frames.
-fn leak_action_buffers() -> &'static mut ExtendedActionBuffers {
-    Box::leak(Box::default())
+/// The storage a powered-on core borrows for its whole life, kept like
+/// [`leak_storage`]'s, around `queues`.
+fn leak_core_storage(queues: AllocQueues<MAX_EXTENDED_MPDU_DATA>) -> &'static mut SimStorage {
+    Box::leak(Box::new(SimStorage::with_queues(queues)))
 }
 
 /// Ties at one instant go to the lower station; the noise source and the line

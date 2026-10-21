@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use bacnet_bip_codec::address_from_slice;
 use bacnet_bip_core::node::Groups;
+use bacnet_bip_core::LocalSubnet;
 
 use super::BipTransport;
 
@@ -27,10 +28,13 @@ use super::BipTransport;
 pub(super) struct BipGroups(Groups);
 
 impl BipGroups {
-    /// The groups of a link bound to `interface` at `port` whose configured
-    /// broadcast IP is `broadcast`.
-    pub(super) fn new(broadcast: Ipv4Addr, port: u16, interface: Ipv4Addr) -> Self {
-        Self(Groups::new(SocketAddrV4::new(broadcast, port), interface))
+    /// The groups of a link bound to `interface` whose broadcasts go to
+    /// `subnet`: for a B/IP-M node its group, with the configured broadcast
+    /// IP as the directed broadcast beside it, as its node's link has them.
+    pub(super) fn new(subnet: LocalSubnet, interface: Ipv4Addr) -> Self {
+        let mut groups = Groups::new(subnet.broadcast, interface);
+        groups.directed = subnet.directed.unwrap_or(Ipv4Addr::UNSPECIFIED);
+        Self(groups)
     }
 
     pub(super) fn contains(self, mac: &[u8]) -> bool {
@@ -60,7 +64,9 @@ impl GroupDrops {
 
 impl BipTransport {
     pub(super) fn groups(&self) -> BipGroups {
-        BipGroups::new(self.broadcast_address, self.port, self.interface)
+        let subnet = SocketAddrV4::new(self.broadcast_address, self.port);
+        let subnet = super::multicast::subnet(self.multicast.config(), subnet);
+        BipGroups::new(subnet, self.interface)
     }
 
     /// Datagrams dropped since this transport was created because their UDP

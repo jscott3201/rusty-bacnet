@@ -10,7 +10,7 @@
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
-use bacnet_types::error::Error;
+use bacnet_types::error::{DecodeError, DecodingKind, Error, RangeError};
 use bytes::BytesMut;
 
 use super::members::{narrow, unsigned_member};
@@ -29,8 +29,11 @@ pub(super) struct PairNames {
     pub(super) floor: &'static str,
     /// An entry's enumerated member, e.g. "landing door door-status".
     pub(super) second: &'static str,
-    /// The range error for an oversized enumerated member, e.g.
-    /// "door-status \[1\] exceeds 32 bits".
+    /// The range error for an oversized floor number, e.g. "landing door
+    /// status floor-number \[0\] exceeds an Unsigned8".
+    pub(super) floor_oversized: &'static str,
+    /// The range error for an oversized enumerated member, e.g. "landing
+    /// door status door-status \[1\] exceeds 32 bits".
     pub(super) second_oversized: &'static str,
 }
 
@@ -53,7 +56,7 @@ pub(super) fn encode_floor_pairs(buf: &mut BytesMut, pairs: impl IntoIterator<It
 /// member, an empty or truncated member, or more than 10,000 entries) fails
 /// with [`Error::Decoding`] or [`Error::BufferTooShort`]. A value that is
 /// well formed throughout, but where a floor number exceeds an Unsigned8 or
-/// an enumerated member exceeds 32 bits, fails with [`Error::OutOfRange`]
+/// an enumerated member exceeds 32 bits, fails with [`Error::Range`]
 /// naming the first oversized member. A malformed member anywhere in the
 /// value takes precedence over an oversized one.
 pub(super) fn decode_floor_pairs(
@@ -67,20 +70,23 @@ pub(super) fn decode_floor_pairs(
     loop {
         if next_is_closing(data, offset, 0)? {
             if let Some(member) = oversized {
-                return Err(Error::OutOfRange(format!("{} {member}", names.value)));
+                return Err(RangeError::new(member).into());
             }
             return Ok((pairs, expect_closing(data, offset, 0, names.frame)?));
         }
         if pairs.len() >= MAX_FRAMED_ITEMS {
-            return Err(Error::overflow(
+            return Err(DecodeError::new(
+                DecodingKind::Overflow,
                 offset,
-                format!("{} exceeds the decoded item limit", names.value),
-            ));
+                "exceeds the decoded item limit",
+            )
+            .within(names.value)
+            .into());
         }
         let (floor, next) = decode_ctx_primitive(data, offset, 0, names.floor)?;
         let floor_number = narrow(
             unsigned_member(floor, next - floor.len())?,
-            "floor-number [0] exceeds an Unsigned8",
+            names.floor_oversized,
             &mut oversized,
         );
 

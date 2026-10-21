@@ -57,8 +57,8 @@ async fn enable(h: &mut Harness) {
 /// Whether `error` is the refusal of an I-Am announcement under DCC.
 fn communication_disabled(error: &Error) -> bool {
     matches!(error, Error::Protocol { class, code }
-        if *class == ErrorClass::SERVICES.to_raw() as u32
-            && *code == ErrorCode::COMMUNICATION_DISABLED.to_raw() as u32)
+        if *class == ErrorClass::SERVICES
+            && *code == ErrorCode::COMMUNICATION_DISABLED)
 }
 
 /// Deliver an unconfirmed request from the harness peer and let the server

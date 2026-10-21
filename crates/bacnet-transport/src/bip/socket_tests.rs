@@ -96,6 +96,7 @@ fn plan(interface: Ipv4Addr, port: u16, by_address: bool) -> BindPlan {
         by_address,
         broadcast: Ipv4Addr::new(127, 255, 255, 255),
         local: None,
+        multicast: None,
     }
 }
 

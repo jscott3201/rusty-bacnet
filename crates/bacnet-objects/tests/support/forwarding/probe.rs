@@ -46,8 +46,8 @@ use bacnet_types::constructed::{
     BACnetObjectPropertyReference, BACnetObjectSelector,
 };
 use bacnet_types::enums::{
-    AuditLevel, ErrorClass, ErrorCode, EventState, EventType, LifeSafetyOperation, ObjectType,
-    PropertyIdentifier as P, Reliability,
+    AuditLevel, EngineeringUnits, ErrorClass, ErrorCode, EventState, EventType,
+    LifeSafetyOperation, ObjectType, PropertyIdentifier as P, Reliability,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, Date, ObjectIdentifier, PropertyValue, Time};
@@ -97,7 +97,8 @@ impl Probe {
             device_identifier: None,
             object_identifier: oid(ObjectType::AUDIT_LOG, 9),
         }));
-        let mut value = AnalogValueObject::new(7, "Probe value", 62).unwrap();
+        let mut value =
+            AnalogValueObject::new(7, "Probe value", EngineeringUnits::DEGREES_CELSIUS).unwrap();
         value.set_audit_policy(ObjectAuditPolicy {
             level: Some(AuditLevel::NONE),
             ..ObjectAuditPolicy::default()
@@ -106,7 +107,8 @@ impl Probe {
             oid: oid(object_type, 1),
             log,
             device: DeviceObject::new(DeviceConfig {
-                instance: 77,
+                identity: bacnet_objects::DeviceIdentity::new(77, 0)
+                    .expect("valid Device identity"),
                 ..DeviceConfig::default()
             })
             .unwrap(),
@@ -233,6 +235,9 @@ impl BACnetObject for Probe {
     fn bind_deadline_waker_internal(&mut self, waker: Option<Arc<DeadlineWaker>>) {
         let waker = waker.as_deref().map(address);
         self.called("bind_deadline_waker_internal", (waker,));
+    }
+    fn start_output_internal(&mut self) {
+        self.called("start_output_internal", ());
     }
     fn advance_monotonic_time_internal(&mut self, now: Duration) -> bool {
         self.called("advance_monotonic_time_internal", (now,));
@@ -672,6 +677,10 @@ impl BACnetObject for Probe {
         self.called("refresh_log_window_internal", ());
         true
     }
+    fn log_collecting_internal(&self) -> bool {
+        self.called("log_collecting_internal", ());
+        false
+    }
     fn logs_received_event_notifications_internal(&self) -> bool {
         self.called("logs_received_event_notifications_internal", ());
         true
@@ -701,7 +710,7 @@ impl BACnetObject for Probe {
 /// object's own, unlike the default's OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
 fn own_record_error() -> Error {
     Error::Protocol {
-        class: ErrorClass::DEVICE.to_raw() as u32,
-        code: ErrorCode::OPERATIONAL_PROBLEM.to_raw() as u32,
+        class: ErrorClass::DEVICE,
+        code: ErrorCode::OPERATIONAL_PROBLEM,
     }
 }

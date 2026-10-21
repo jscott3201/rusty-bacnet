@@ -10,6 +10,7 @@ use bacnet_objects::command::CommandObject;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::wpm::WriteAccessSpecification;
 use bacnet_types::constructed::{BACnetActionCommand, BACnetActionList};
+use bacnet_types::enums::EngineeringUnits;
 
 fn cmd1() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::COMMAND, 1).unwrap()
@@ -35,8 +36,10 @@ fn write_ao1(value: f32, priority: u8) -> BACnetActionCommand {
 
 fn database() -> ObjectDatabase {
     let mut db = ObjectDatabase::new();
-    db.add(Box::new(AnalogOutputObject::new(1, "AO-1", 62).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+    ))
+    .unwrap();
     let mut command = CommandObject::new(1, "CMD-1").unwrap();
     command
         .set_action(vec![BACnetActionList {
@@ -152,8 +155,8 @@ fn bare_write_property_multiple_ends_the_runs_its_committed_prefix_started() {
     let error = handle_write_property_multiple(&mut db, &request).unwrap_err();
     assert!(
         matches!(error, Error::Structured { class, code, .. } | Error::Protocol { class, code }
-            if class == ErrorClass::OBJECT.to_raw() as u32
-                && code == ErrorCode::BUSY.to_raw() as u32),
+            if class == ErrorClass::OBJECT
+                && code == ErrorCode::BUSY),
         "{error:?}"
     );
     ended_unmade(&db);

@@ -90,7 +90,7 @@ fn unstarted_source(
     }
     if port_number.is_some() {
         session = session
-            .with_identity(identity)
+            .device(identity)
             .with_registered_network_port(oid(ObjectType::NETWORK_PORT, 2));
     }
     session

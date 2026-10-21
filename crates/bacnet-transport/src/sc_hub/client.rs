@@ -46,6 +46,10 @@ impl HubClient {
 pub(super) struct ClientRegistry {
     entries: Mutex<std::collections::HashMap<super::Vmac, HubClient>>,
     pub(super) outcomes: super::outcomes::OutcomeCounters,
+    /// The hub-wide throttle on warnings for relays that failed or timed
+    /// out (#1950): a client that stops reading would otherwise set one off
+    /// for every frame relayed to it.
+    pub(super) relay_warning: crate::warn_throttle::WarnThrottle,
 }
 
 impl ClientRegistry {

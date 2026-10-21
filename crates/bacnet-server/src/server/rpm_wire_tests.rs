@@ -16,7 +16,8 @@ async fn rpm_device_wildcard_bip_wire_returns_concrete_wrapper_and_value() {
     database
         .add(Box::new(
             DeviceObject::new(bacnet_objects::device::DeviceConfig {
-                instance: 321,
+                identity: bacnet_objects::DeviceIdentity::new(321, 0)
+                    .expect("valid Device identity"),
                 ..Default::default()
             })
             .unwrap(),
@@ -44,6 +45,7 @@ async fn rpm_device_wildcard_bip_wire_returns_concrete_wrapper_and_value() {
     .encode(&mut request)
     .unwrap();
     let mut server = BACnetServer::bip_builder()
+        .device(bacnet_objects::DeviceIdentity::new(321, 0).unwrap())
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
         .database(database)
@@ -100,8 +102,9 @@ async fn rpm_whole_abort_direct_routed_reply_and_segmentation_matrix() {
                     let (mut server, tx, mut started) = fixture_with_config(
                         "rpm",
                         ServerConfig {
+                            device: bacnet_objects::DeviceIdentity::default()
+                                .with_segmentation(Segmentation::BOTH),
                             read_property_multiple_budget: budget,
-                            segmentation_supported: Segmentation::BOTH,
                             ..Default::default()
                         },
                     )
@@ -237,6 +240,7 @@ async fn rpm_result_index_bip_wire_scalar_errors_and_array_count() {
     let mut expected = BytesMut::new();
     handlers::handle_read_property_multiple(&database, &request, &mut expected).unwrap();
     let mut server = BACnetServer::bip_builder()
+        .device(bacnet_objects::DeviceIdentity::new(oid.instance_number(), 0).unwrap())
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
         .database(database)

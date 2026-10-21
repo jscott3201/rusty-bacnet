@@ -118,8 +118,8 @@ pub(super) struct Settled {
 
 pub(super) fn operational_problem() -> Error {
     Error::Protocol {
-        class: ErrorClass::DEVICE.to_raw() as u32,
-        code: ErrorCode::OPERATIONAL_PROBLEM.to_raw() as u32,
+        class: ErrorClass::DEVICE,
+        code: ErrorCode::OPERATIONAL_PROBLEM,
     }
 }
 
@@ -284,8 +284,8 @@ impl AuditLogObject {
         }
         if !self.log_enable {
             return Err(Error::Protocol {
-                class: ErrorClass::SERVICES.to_raw() as u32,
-                code: ErrorCode::SERVICE_REQUEST_DENIED.to_raw() as u32,
+                class: ErrorClass::SERVICES,
+                code: ErrorCode::SERVICE_REQUEST_DENIED,
             });
         }
         if notifications.is_empty() {

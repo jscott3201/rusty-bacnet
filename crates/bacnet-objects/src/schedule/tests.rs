@@ -142,7 +142,7 @@ fn schedule_weekly_schedule_invalid_index_8_returns_error() {
     let sched = ScheduleObject::new(1, "SCHED-1", PropertyValue::Real(72.0)).unwrap();
     let result = weekly(&sched, Some(8));
     if let Err(Error::Protocol { code, .. }) = result {
-        assert_eq!(code, ErrorCode::INVALID_ARRAY_INDEX.to_raw() as u32);
+        assert_eq!(code, ErrorCode::INVALID_ARRAY_INDEX);
     } else {
         panic!("expected Protocol error, got {result:?}");
     }
@@ -153,7 +153,7 @@ fn schedule_weekly_schedule_refuses_a_day_index_past_sunday() {
     let mut sched = ScheduleObject::new(1, "SCHED-1", PropertyValue::Real(72.0)).unwrap();
     assert!(matches!(
         sched.set_weekly_schedule(7, vec![make_tv(8, 0, PropertyValue::Unsigned(1))]),
-        Err(Error::Protocol { code, .. }) if code == ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32
+        Err(Error::Protocol { code, .. }) if code == ErrorCode::VALUE_OUT_OF_RANGE
     ));
     assert_eq!(
         weekly(&sched, None).unwrap(),
@@ -293,7 +293,7 @@ fn schedule_exception_schedule_reads_each_special_event_with_its_period() {
         assert!(matches!(
             exceptions(&sched, Some(index)),
             Err(Error::Protocol { code, .. })
-                if code == ErrorCode::INVALID_ARRAY_INDEX.to_raw() as u32
+                if code == ErrorCode::INVALID_ARRAY_INDEX
         ));
     }
 }

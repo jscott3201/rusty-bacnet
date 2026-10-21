@@ -1,0 +1,13 @@
+---
+source: crates/bacnet-cli/src/tui/tests/footer.rs
+expression: chrome_at_sizes(&mut app)
+---
+80x24
+ bacnet | [1 Devices] 2 3 7 | BIP | failed | READ-ONLY | COV 0 | drop 0  ? help 
+ Connection failed: entity not found              c retry  L log  ? help  q quit
+120x40
+ bacnet | [1 Devices] 2 Browse 3 Watch 7 Capture | BIP | failed | READ-ONLY | COV 0 | drop 0                     ? help 
+ Connection failed: entity not found                                                      c retry  L log  ? help  q quit
+200x50
+ bacnet | [1 Devices] 2 Browse 3 Watch 7 Capture | BIP | failed | READ-ONLY | COV 0 | drop 0                                                                                                     ? help 
+ Connection failed: entity not found                                                                                                                                      c retry  L log  ? help  q quit

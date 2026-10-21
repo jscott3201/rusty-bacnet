@@ -1,6 +1,6 @@
 # Stack budget for the firmware link test's images under emulation (#1660,
-# #1664, #1667, #1679), in octets: one table per board, `[<board>]`, named
-# by its QEMU machine, with a key per image. scripts/emu/emulate-firmware.sh,
+# #1664, #1667, #1679, #1771, #1774), in octets: one table per board,
+# `[<board>]`, named by its QEMU machine, with a key per image. scripts/emu/emulate-firmware.sh,
 # the manual emulation check, runs each image on each board it fits (the
 # router doesn't fit the two 16 KiB boards; see below); the image reports
 # how deep its stack went, and scripts/ci/firmware_size.py --stack fails the
@@ -86,47 +86,76 @@
 #
 # The router rows are from when that image joined, on 2026-10-13, same
 # toolchain and QEMU (#1679): peaks of 5648 octets on lm3s6965evb and 5640
-# on netduinoplus2. Most of it is the scenario's own frame, 3.8 KB on
-# ARMv7-M, which holds the 704-octet summary, the MS/TP core (528), the
+# on netduinoplus2. Most of it was the scenario's own frame, 3.8 KB on
+# ARMv7-M, which held the 704-octet summary, the MS/TP core (528), the
 # BBMD port with its node (712), the router (88) and the BBMD's tables
-# (72); the router's receive and the B/IP port's send go about 1.8 KB
-# deeper. micro:bit and SiFive E have no router row: the image's statics,
-# 15,504 octets, leave 880 octets of their 16 KiB for a stack that needs
-# 5.6 KB, so emulate-firmware.sh builds it for them but doesn't run it.
+# (72); the router's receive and the B/IP port's send went about 1.8 KB
+# deeper. Its peak is now 4456 octets (#1774, below). micro:bit and
+# SiFive E have no router row: the image's statics, 15,504 octets, leave
+# 880 octets of their 16 KiB for a stack that needs about 4.5 KB, so
+# emulate-firmware.sh builds it for them but doesn't run it.
 # Run there, it faults as its stack reaches the statics. No smaller router
 # image is offered: Clause 9.3 asks a router's MS/TP port for extended
 # frames, and their buffers are most of the statics.
+#
+# The device rows are from when that image joined, on 2026-10-18, same
+# toolchain and QEMU (#1771): peaks of 2652 octets on microbit, 2284 on
+# lm3s6965evb, 2292 on netduinoplus2 and 2172 on sifive_e. Its statics,
+# 3,496 octets, leave the 16 KiB boards about 12.9 KB for the stack, so it
+# runs on every board.
+#
+# The node, bbmd and router rows were measured again on 2026-10-18, same
+# toolchain (Rust 1.99.0) and QEMU (10.0.13), after #1766 and #1767 changed
+# what those images keep on the stack (#1774), as node / bbmd / router
+# peaks:
+#
+#   microbit        5444 / 2380 / -
+#   lm3s6965evb     4972 / 2260 / 4456
+#   netduinoplus2   4972 / 2260 / 4456
+#   sifive_e        4808 / 2132 / -
+#
+# The node image now drives its Node through a NodePort, which its own
+# frame holds: 728 to 800 octets deeper than the node rows above. The bbmd
+# image's BbmdPort adds up to 80 octets. The router's BBMD port no longer
+# holds a Node, so the router is about 1.2 KB shallower. Each budget is
+# reset to its new peak plus 25%: up for node and for bbmd on the ARM
+# boards, down for the router, whose old budget was over 50% above its
+# new peak.
 
 [microbit]
 mstp = 2560
 mstp-extended = 3776
 bip = 2784
-node = 5904
-bbmd = 2880
+node = 6816
+bbmd = 2976
+device = 3328
 apdu = 3472
 
 [lm3s6965evb]
 mstp = 2288
 mstp-extended = 3600
 bip = 2640
-node = 5248
-bbmd = 2800
-router = 7072
+node = 6224
+bbmd = 2832
+router = 5584
+device = 2864
 apdu = 3184
 
 [netduinoplus2]
 mstp = 2304
 mstp-extended = 3600
 bip = 2640
-node = 5248
-bbmd = 2800
-router = 7056
+node = 6224
+bbmd = 2832
+router = 5584
+device = 2880
 apdu = 3184
 
 [sifive_e]
 mstp = 2144
 mstp-extended = 3424
 bip = 2528
-node = 5024
+node = 6016
 bbmd = 2672
+device = 2720
 apdu = 3088

@@ -7,7 +7,7 @@ use std::time::Duration;
 use super::registration_schedule_tests::Device;
 use super::*;
 
-const LONGEST: usize = 1497;
+const LONGEST: usize = bacnet_npdu::MAX_NPDU;
 
 #[tokio::test]
 async fn an_npdu_past_1497_octets_is_refused_and_counted() {

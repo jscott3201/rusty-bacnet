@@ -405,7 +405,7 @@ impl<T: TransportPort + 'static> DeviceLookup<'_, T> {
         )
         .expect("valid APDU encoding");
         let scope = scope.localize(self.network.local_network_number().get());
-        let priority = NetworkPriority::NORMAL;
+        let priority = NetworkPriority::Normal;
         if self.comm_state.initiation_restricted() {
             self.bindings.write().await.probes.withdraw(&device, probe);
             return false;

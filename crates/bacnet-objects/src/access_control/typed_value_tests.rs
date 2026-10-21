@@ -24,8 +24,8 @@ const OUTSIDE_DOOR_VALUE: [u32; 4] = [4, 200, 1024, u32::MAX];
 fn assert_property_error(result: Result<(), Error>, expected: ErrorCode) {
     match result {
         Err(Error::Protocol { class, code }) => {
-            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
-            assert_eq!(code, expected.to_raw() as u32, "expected {expected:?}");
+            assert_eq!(class, ErrorClass::PROPERTY);
+            assert_eq!(code, expected, "expected {expected:?}");
         }
         other => panic!("expected PROPERTY / {expected:?}, got {other:?}"),
     }

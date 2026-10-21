@@ -177,8 +177,8 @@ macro_rules! impl_builtin_intrinsic_reporting {
         ) -> Result<Option<$crate::event::EventStateChange>, bacnet_types::error::Error> {
             if !self.$event_detection_enable_field {
                 return Err(bacnet_types::error::Error::Protocol {
-                    class: bacnet_types::enums::ErrorClass::OBJECT.to_raw() as u32,
-                    code: bacnet_types::enums::ErrorCode::NO_ALARM_CONFIGURED.to_raw() as u32,
+                    class: bacnet_types::enums::ErrorClass::OBJECT,
+                    code: bacnet_types::enums::ErrorCode::NO_ALARM_CONFIGURED,
                 });
             }
             self.$history_field
@@ -345,8 +345,8 @@ impl EventHistory {
 
 fn service_error(code: ErrorCode) -> Error {
     Error::Protocol {
-        class: ErrorClass::SERVICES.to_raw() as u32,
-        code: code.to_raw() as u32,
+        class: ErrorClass::SERVICES,
+        code,
     }
 }
 

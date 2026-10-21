@@ -10,8 +10,9 @@ use crate::server::ServerConfig;
 
 fn device(instance: u32, services: &[ServiceSupported]) -> Box<DeviceObject> {
     let mut device = DeviceObject::new(DeviceConfig {
-        instance,
-        name: format!("Device {instance}"),
+        identity: bacnet_objects::DeviceIdentity::new(instance, 0)
+            .expect("valid Device identity")
+            .with_name(format!("Device {instance}")),
         ..DeviceConfig::default()
     })
     .unwrap();

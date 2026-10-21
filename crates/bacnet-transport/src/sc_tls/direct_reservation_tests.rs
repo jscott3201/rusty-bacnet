@@ -1,5 +1,5 @@
 //! Deterministic write failure/cancellation seam with a real TLS incumbent.
-use super::super::super::{serve_handshake, DirectFrame, DirectWs, DirectWsRead};
+use super::super::super::{serve_handshake, DirectFrame, DirectWarnings, DirectWs, DirectWsRead};
 use super::*;
 use tokio::sync::oneshot;
 
@@ -54,6 +54,7 @@ async fn failed_cancelled_timed_out_accept_preserves_real_tls_incumbent() {
             entered: Some(entered),
             fail: mode == 0,
         };
+        let warnings = DirectWarnings::default();
         {
             let future = serve_handshake(
                 &mut write,
@@ -61,6 +62,7 @@ async fn failed_cancelled_timed_out_accept_preserves_real_tls_incumbent() {
                 &config,
                 loopback_addr(),
                 &listener.membership,
+                &warnings,
             );
             tokio::pin!(future);
             if mode == 0 {
@@ -80,6 +82,50 @@ async fn failed_cancelled_timed_out_accept_preserves_real_tls_incumbent() {
         assert_routable(&old, &mut rx, DIAL_VMAC).await;
     }
     listener.stop().await;
+}
+
+/// #1950: peers that open connections and send an undecodable or oversized
+/// Connect-Request over and over warn once per interval through the
+/// listener's connection throttle, however many connections they use.
+#[tokio::test(start_paused = true)]
+async fn repeated_bad_handshakes_warn_once_per_interval() {
+    use crate::sc::direct_membership::DirectMembership;
+    use crate::warn_throttle::WARNING_INTERVAL;
+    use std::sync::Arc;
+    let ca = TestCa::generate();
+    let config = DirectAcceptConfig::new(
+        loopback_addr(),
+        LISTENER_VMAC,
+        LISTENER_UUID,
+        ca.node_config(vec!["localhost".into()]),
+    );
+    let membership = Arc::new(DirectMembership::default());
+    let warnings = DirectWarnings::default();
+    let oversized = vec![0; usize::from(crate::sc_limits::DEFAULT_MAX_BVLC_LENGTH) + 1];
+    for frame in [vec![0xff], oversized, vec![0xff, 0xff]] {
+        let mut write = Write {
+            entered: None,
+            fail: true,
+        };
+        let mut read = Read(Some(frame));
+        let handshake = serve_handshake(
+            &mut write,
+            &mut read,
+            &config,
+            loopback_addr(),
+            &membership,
+            &warnings,
+        );
+        assert!(handshake.await.is_none());
+    }
+    assert_eq!(warnings.connection.note(), None, "inside the interval");
+    tokio::time::advance(WARNING_INTERVAL).await;
+    assert_eq!(
+        warnings.connection.note(),
+        Some(4),
+        "the first warned; two held back, the check above, and this one"
+    );
+    assert_eq!(membership.counts(), (0, 0));
 }
 
 #[test]

@@ -48,7 +48,7 @@ fn expected_summary(count: u64, timestamp: BACnetTimeStamp) -> BACnetAuditNotifi
 pub(super) async fn complete_read(
     session: &EndpointSession<BipTransport>,
     peer: &NetworkLayer<BipTransport>,
-    requests: &mut mpsc::Receiver<ReceivedApdu>,
+    requests: &mut bacnet_network::layer::ApduReceiver,
 ) {
     let read = start_read(
         session,

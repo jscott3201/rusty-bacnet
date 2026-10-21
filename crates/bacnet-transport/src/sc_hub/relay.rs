@@ -310,8 +310,18 @@ pub(super) async fn relay_result(
     }
     match result {
         Ok(Ok(())) => {}
-        Ok(Err(error)) => warn!("Hub: Result relay failed to {destination:02x?}: {error}"),
-        Err(_) => warn!("Hub: Result relay timed out to {destination:02x?}"),
+        Ok(Err(error)) => {
+            crate::warn_throttled!(
+                clients.relay_warning,
+                "Hub: Result relay failed to {destination:02x?}: {error}"
+            );
+        }
+        Err(_) => {
+            crate::warn_throttled!(
+                clients.relay_warning,
+                "Hub: Result relay timed out to {destination:02x?}"
+            );
+        }
     }
     ResultRelayDisposition::Continue
 }

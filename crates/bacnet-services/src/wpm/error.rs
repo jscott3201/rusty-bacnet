@@ -88,8 +88,8 @@ impl TryFrom<&ErrorPdu> for WritePropertyMultipleError {
 impl From<WritePropertyMultipleError> for Error {
     fn from(error: WritePropertyMultipleError) -> Self {
         Error::protocol(
-            error.error_class.to_raw() as u32,
-            error.error_code.to_raw() as u32,
+            error.error_class,
+            error.error_code,
             Some(ErrorDetail::FirstFailedWriteAttempt(
                 error.first_failed_write_attempt,
             )),
@@ -149,7 +149,7 @@ mod tests {
         assert_eq!(WritePropertyMultipleError::try_from(&pdu).unwrap(), error);
         assert!(matches!(
             Error::from(error.clone()),
-            Error::Structured { class: 2, code: 40, detail }
+            Error::Structured { class: ErrorClass::PROPERTY, code: ErrorCode::WRITE_ACCESS_DENIED, detail }
                 if *detail == ErrorDetail::FirstFailedWriteAttempt(
                     error.first_failed_write_attempt.clone()
                 )

@@ -42,7 +42,7 @@ async fn positive_rule_count(fixture: &Fixture, rights: ObjectIdentifier) -> Pro
 }
 
 #[tokio::test]
-async fn access_rights_rule_writes_pass_the_mutation_authorizer() {
+async fn access_rights_rule_writes_pass_the_policy() {
     let rights = oid(ObjectType::ACCESS_RIGHTS, 7);
     let mut write_property = BytesMut::new();
     WritePropertyRequest {

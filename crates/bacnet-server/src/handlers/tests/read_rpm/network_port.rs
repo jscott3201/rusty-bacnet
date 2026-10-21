@@ -224,7 +224,7 @@ fn rpm_network_port_configured_profile_wire_bytes_and_dns_indices() {
                     assert!(result.property_value.is_none());
                     assert_eq!(result.error, Some((ErrorClass::PROPERTY, expected)));
                     assert!(matches!(rp, Err(Error::Protocol { class, code })
-                        if class == ErrorClass::PROPERTY.to_raw() as u32 && code == expected.to_raw() as u32));
+                        if class == ErrorClass::PROPERTY && code == expected));
                     assert!(response.is_empty());
                 }
             }

@@ -1,6 +1,7 @@
 use super::*;
 use bacnet_types::bitstring::LogStatus;
 use bacnet_types::constructed::{BACnetLogMultipleRecord, LogData, LogValue};
+use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::primitives::{Date, Time};
 
 fn record(log_data: LogData) -> BACnetLogMultipleRecord {
@@ -36,8 +37,8 @@ fn log_multiple_record_values_have_exact_bytes_and_round_trip() {
     let value = record(LogData::Values(vec![
         LogValue::RealValue(72.5),
         LogValue::Failure {
-            error_class: 2,
-            error_code: 32,
+            error_class: ErrorClass::PROPERTY,
+            error_code: ErrorCode::UNKNOWN_PROPERTY,
         },
         LogValue::NullValue,
         LogValue::UnsignedValue(7),
@@ -204,8 +205,8 @@ fn members_cut_short_are_a_short_buffer() {
         LogData::Values(vec![
             LogValue::RealValue(72.5),
             LogValue::Failure {
-                error_class: 2,
-                error_code: 32,
+                error_class: ErrorClass::PROPERTY,
+                error_code: ErrorCode::UNKNOWN_PROPERTY,
             },
             LogValue::UnsignedValue(7),
             LogValue::AnyValue(vec![
@@ -219,4 +220,40 @@ fn members_cut_short_are_a_short_buffer() {
         });
         assert!(framed > 0);
     }
+}
+
+#[test]
+fn a_member_failure_wider_than_sixteen_bits_is_refused() {
+    // As a Trend Log record's failure is (#1814): Clause 21 holds both to
+    // 16 bits.
+    let record = BACnetLogMultipleRecord {
+        date: Date {
+            year: 126,
+            month: 8,
+            day: 31,
+            day_of_week: 1,
+        },
+        time: Time {
+            hour: 14,
+            minute: 25,
+            second: 36,
+            hundredths: 47,
+        },
+        log_data: LogData::Values(vec![LogValue::Failure {
+            error_class: ErrorClass::PROPERTY,
+            error_code: ErrorCode::UNKNOWN_PROPERTY,
+        }]),
+    };
+    let mut buf = BytesMut::new();
+    encode_log_multiple_record(&record, &mut buf).unwrap();
+    let at = buf.windows(2).position(|w| w == [0x91, 0x20]).unwrap();
+    let wide = [&buf[..at], &[0x93, 0x01, 0x00, 0x00][..], &buf[at + 2..]].concat();
+    let text = decode_log_multiple_record(&wide, 0)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        text.contains("error code") && text.contains("exceeds u16"),
+        "{text}"
+    );
+    assert_eq!(decode_log_multiple_record(&buf, 0).unwrap().0, record);
 }

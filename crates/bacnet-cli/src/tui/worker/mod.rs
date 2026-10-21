@@ -7,7 +7,16 @@
 //! rather than queued without limit, and the table is resynchronised from the
 //! client's own discovery table afterwards.
 
+pub(crate) mod browse;
+pub(crate) mod coordinator;
+pub(crate) mod discovery;
+pub(crate) mod network;
+pub(crate) mod passive;
+#[cfg_attr(not(feature = "sc-tls"), allow(dead_code))]
+pub(crate) mod sc;
 pub(crate) mod session;
+pub(crate) mod watch;
+pub(crate) mod write;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -17,7 +26,8 @@ use bacnet_client::discovery::DiscoveredDevice;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc;
 
-use super::message::{hex, AddressStyle, DeviceRow, WorkerEvent};
+use super::message::{DeviceRow, WorkerEvent};
+use crate::core::target::AddressStyle;
 
 /// Capacity of the worker-to-UI channel.
 pub(crate) const EVENT_CHANNEL_CAPACITY: usize = 1_024;
@@ -41,6 +51,7 @@ pub(crate) enum Offer {
 pub(crate) struct EventSink {
     tx: mpsc::Sender<WorkerEvent>,
     dropped: Arc<AtomicU64>,
+    session: Option<(u64, tokio::sync::watch::Receiver<bool>)>,
 }
 
 impl EventSink {
@@ -50,8 +61,58 @@ impl EventSink {
         let sink = Self {
             tx,
             dropped: Arc::new(AtomicU64::new(0)),
+            session: None,
         };
         (sink, rx)
+    }
+
+    /// Scope every event to this session and make blocked sends cancellable.
+    pub(crate) fn for_session(
+        &self,
+        generation: u64,
+        cancelled: tokio::sync::watch::Receiver<bool>,
+    ) -> Self {
+        Self {
+            tx: self.tx.clone(),
+            dropped: Arc::clone(&self.dropped),
+            session: Some((generation, cancelled)),
+        }
+    }
+
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.session
+            .as_ref()
+            .is_some_and(|(_, cancelled)| *cancelled.borrow())
+    }
+
+    pub(crate) async fn cancelled(&self) {
+        let Some((_, receiver)) = &self.session else {
+            return std::future::pending().await;
+        };
+        let mut receiver = receiver.clone();
+        loop {
+            if *receiver.borrow_and_update() {
+                return;
+            }
+            if receiver.changed().await.is_err() {
+                return;
+            }
+        }
+    }
+
+    /// Wait until the UI has dropped its end of the channel.
+    pub(crate) async fn closed(&self) {
+        self.tx.closed().await;
+    }
+
+    fn scoped(&self, event: WorkerEvent) -> WorkerEvent {
+        match &self.session {
+            Some((generation, _)) => WorkerEvent::Session {
+                generation: *generation,
+                event: Box::new(event),
+            },
+            None => event,
+        }
     }
 
     /// The shared dropped-events counter the status bar shows.
@@ -66,20 +127,49 @@ impl EventSink {
 
     /// Queue a high-rate event without waiting; drop and count it when full.
     pub(crate) fn offer(&self, event: WorkerEvent) -> Offer {
-        match self.tx.try_send(event) {
+        let offered = self.offer_uncounted(event);
+        if offered == Offer::Dropped {
+            self.add_dropped(1);
+        }
+        offered
+    }
+
+    /// [`offer`](Self::offer) for a stream that counts its own losses (the
+    /// capture): a refusal leaves the status bar's counter alone.
+    pub(crate) fn offer_uncounted(&self, event: WorkerEvent) -> Offer {
+        if self.is_cancelled() {
+            return Offer::Closed;
+        }
+        match self.tx.try_send(self.scoped(event)) {
             Ok(()) => Offer::Sent,
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                self.add_dropped(1);
-                Offer::Dropped
-            }
+            Err(mpsc::error::TrySendError::Full(_)) => Offer::Dropped,
             Err(mpsc::error::TrySendError::Closed(_)) => Offer::Closed,
+        }
+    }
+
+    /// Queue an event that must not be lost, without waiting: hand it back
+    /// when the channel is full so the caller can offer it again later.
+    pub(crate) fn offer_or_keep(&self, event: WorkerEvent) -> Option<WorkerEvent> {
+        if self.is_cancelled() {
+            return None;
+        }
+        match self.tx.try_send(self.scoped(event)) {
+            Err(mpsc::error::TrySendError::Full(event)) => Some(match event {
+                WorkerEvent::Session { event, .. } if self.session.is_some() => *event,
+                event => event,
+            }),
+            Ok(()) | Err(mpsc::error::TrySendError::Closed(_)) => None,
         }
     }
 
     /// Queue a rare control event (connect, operation progress), waiting for
     /// room. Returns false if the UI has gone.
     pub(crate) async fn deliver(&self, event: WorkerEvent) -> bool {
-        self.tx.send(event).await.is_ok()
+        tokio::select! {
+            biased;
+            () = self.cancelled() => false,
+            result = self.tx.send(self.scoped(event)) => result.is_ok(),
+        }
     }
 }
 
@@ -107,17 +197,15 @@ impl DeviceFeed {
 
     /// Convert a client row for the UI.
     pub(crate) fn row(&self, device: &DiscoveredDevice) -> DeviceRow {
-        let address = match (&device.source_network, &device.source_address) {
-            (Some(_), Some(remote)) => format!(
-                "{} via {}",
-                hex(remote.as_slice()),
-                self.style.format(device.mac_address.as_slice())
-            ),
-            _ => self.style.format(device.mac_address.as_slice()),
-        };
+        let routed = device
+            .source_network
+            .zip(device.source_address.as_ref())
+            .map(|(network, station)| (network, station.as_slice()));
+        let (address, via) = self.style.locate(device.mac_address.as_slice(), routed);
         DeviceRow {
             instance: device.object_identifier.instance_number(),
             address,
+            via,
             network: device.source_network,
             vendor_id: device.vendor_id,
             max_apdu: device.max_apdu_length,
@@ -136,7 +224,7 @@ impl DeviceFeed {
                     DeviceEventKind::Updated => WorkerEvent::Updated(row),
                     DeviceEventKind::Lost => {
                         // The row leaves the table, so say so in the log pane.
-                        tracing::info!("device {} lost ({})", row.instance, row.address);
+                        tracing::info!("device {} lost ({})", row.instance, row.located());
                         WorkerEvent::Lost(row)
                     }
                 };

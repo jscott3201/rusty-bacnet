@@ -103,7 +103,14 @@ async fn sc_server_egress_1474_then_failover_keeps_device_and_iam_1476() {
         inner: transport,
         sends: Arc::clone(&sends),
     };
-    let start = BACnetServer::start(ServerConfig::default(), database(Some(1476)), transport);
+    let start = BACnetServer::start(
+        ServerConfig {
+            device: bacnet_objects::DeviceIdentity::new(893, 0).unwrap(),
+            ..Default::default()
+        },
+        database(Some(1476)),
+        transport,
+    );
     let (started, ()) = tokio::join!(start, accept(&primary, 1476, 5705));
     let mut server = started.unwrap();
     server.broadcast_i_am().await.unwrap();

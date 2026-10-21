@@ -1,24 +1,29 @@
-//! NPDU encoding and decoding per ASHRAE 135-2020 Clause 6.
+//! The owned NPDU (ASHRAE 135-2020 Clause 6) and its codec.
 //!
 //! The Network Protocol Data Unit carries either an application-layer APDU
 //! or a network-layer message, with optional source/destination routing
 //! information for multi-hop BACnet internetworks.
 //!
-//! Both directions hold DADR and SADR to [`NpduAddress::MAX_MAC_LEN`] octets
-//! (#1141), so the router, the non-router network layer and everything above
-//! them only ever see an address that some data link could carry.
+//! [`Npdu`] holds its addresses and payload in owned buffers. It decodes
+//! and encodes through `bacnet-npdu`'s borrowed view, the one NPDU codec of
+//! the stack, so the router core, the non-router network layer and every
+//! layer above them accept and refuse the same frames. Both directions hold
+//! DADR and SADR to [`MAX_MAC_LEN`] octets (#1141), so everything above the
+//! network layer only ever sees an address that some data link could carry.
 
-use bacnet_types::constructed::BACnetAddress;
-use bacnet_types::enums::{NetworkPriority, RejectMessageReason};
-use bacnet_types::error::Error;
+use bacnet_npdu::{Address, EncodeError, NetworkMessageType, NetworkPriority, MAX_MAC_LEN};
+use bacnet_types::error::{Error, RangeError};
 use bacnet_types::MacAddr;
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{Bytes, BytesMut};
 
 mod decode_error;
-pub use decode_error::{NpduAddressField, NpduDecodeError};
+pub use decode_error::NpduDecodeError;
 
-/// BACnet protocol version (always 1).
-pub const BACNET_PROTOCOL_VERSION: u8 = 1;
+/// `bacnet-npdu`, whose types this module's API speaks (the priority, the
+/// message type, the decode faults and the address bound), re-exported so
+/// its version can't drift apart from this crate's: the view this codec
+/// runs on is [`view::Npdu`].
+pub use bacnet_npdu as view;
 
 // ---------------------------------------------------------------------------
 // Address used in NPDU routing fields
@@ -26,7 +31,9 @@ pub const BACNET_PROTOCOL_VERSION: u8 = 1;
 
 /// Network-layer address: network number + MAC address.
 ///
-/// Used for source/destination fields in routed NPDUs.
+/// Used for source/destination fields in routed NPDUs. The MAC holds at most
+/// [`MAX_MAC_LEN`] octets on the wire: the decoder refuses a longer one and
+/// the encoder refuses to write it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct NpduAddress {
     /// Network number (1-65534, or 0xFFFF for global broadcast destination).
@@ -36,16 +43,23 @@ pub struct NpduAddress {
 }
 
 impl NpduAddress {
-    /// The longest DADR or SADR, in octets, the codec encodes or decodes
-    /// (#1141). It is the same limit as [`BACnetAddress::MAX_MAC_LEN`].
-    ///
-    /// A length octet could announce up to 255 octets, yet no standard data
-    /// link in Table 6-2 (Clause 6.2.2.2) needs more than 7, and the longest
-    /// MAC this stack serves is 6 octets (a B/IPv6 node's is its 3-octet
-    /// VMAC). The bound is the defensive 18 of [`BACnetAddress::MAX_MAC_LEN`].
-    /// A longer DLEN or SLEN names no node on a standard data link or on any
-    /// data link this stack serves.
-    pub const MAX_MAC_LEN: usize = BACnetAddress::MAX_MAC_LEN;
+    /// The borrowed form `bacnet-npdu`'s view uses.
+    fn view(&self) -> Address<'_> {
+        Address {
+            network: self.network,
+            mac: &self.mac_address,
+        }
+    }
+}
+
+/// An owned copy of a borrowed address.
+impl From<Address<'_>> for NpduAddress {
+    fn from(address: Address<'_>) -> Self {
+        Self {
+            network: address.network,
+            mac_address: MacAddr::from_slice(address.mac),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -53,10 +67,11 @@ impl NpduAddress {
 // ---------------------------------------------------------------------------
 
 /// Decoded Network Protocol Data Unit (Clause 6.2).
+///
+/// A network-layer message is one whose [`message_type`](Self::message_type)
+/// is set; without it the payload is an APDU.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Npdu {
-    /// Whether this is a network-layer message (vs application-layer APDU).
-    pub is_network_message: bool,
     /// Whether the sender expects a reply.
     pub expecting_reply: bool,
     /// Message priority.
@@ -65,34 +80,63 @@ pub struct Npdu {
     pub destination: Option<NpduAddress>,
     /// Originating source address (populated by routers).
     pub source: Option<NpduAddress>,
-    /// Remaining hop count for routed messages (0-255).
+    /// Remaining hop count for routed messages (0-255). Only an NPDU with a
+    /// destination carries one: without it this is 255, and the encoder
+    /// leaves it out.
     pub hop_count: u8,
-    /// Network message type (when `is_network_message` is true).
-    pub message_type: Option<u8>,
-    /// Vendor ID for proprietary network messages (message_type >= 0x80).
+    /// The network-layer message type, or `None` for an APDU.
+    pub message_type: Option<NetworkMessageType>,
+    /// Vendor ID for a proprietary network message type
+    /// ([`NetworkMessageType::is_proprietary`]).
     pub vendor_id: Option<u16>,
     /// Payload: either APDU bytes or network message data.
     pub payload: Bytes,
 }
 
-/// Decoded payload of a Reject-Message-To-Network control message.
-///
-/// The enclosing NPDU identifies the network-message type; this type models
-/// only the fixed reason/DNET payload used by that message.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RejectMessageToNetwork {
-    /// Why the router rejected the message.
-    pub reason: RejectMessageReason,
-    /// Destination network named by the rejection.
-    pub dnet: u16,
+impl Npdu {
+    /// Whether it carries a network-layer message rather than an APDU.
+    pub fn is_network_message(&self) -> bool {
+        self.message_type.is_some()
+    }
+
+    /// An owned copy of `view`'s control information, with an empty
+    /// payload. The payload is the caller's to attach: the frame the view
+    /// was read from, advanced by [`payload_offset`](view::Npdu::payload_offset),
+    /// shares the frame's buffer instead of copying it.
+    pub fn header_from(view: &view::Npdu<'_>) -> Self {
+        Self {
+            expecting_reply: view.expecting_reply,
+            priority: view.priority,
+            destination: view.destination.map(NpduAddress::from),
+            source: view.source.map(NpduAddress::from),
+            hop_count: view.hop_count,
+            message_type: view.message_type,
+            vendor_id: view.vendor_id,
+            payload: Bytes::new(),
+        }
+    }
+
+    /// The borrowed form `bacnet-npdu`'s encoder writes.
+    fn view(&self) -> bacnet_npdu::Npdu<'_> {
+        bacnet_npdu::Npdu {
+            expecting_reply: self.expecting_reply,
+            priority: self.priority,
+            destination: self.destination.as_ref().map(NpduAddress::view),
+            source: self.source.as_ref().map(NpduAddress::view),
+            hop_count: self.hop_count,
+            message_type: self.message_type,
+            vendor_id: self.vendor_id,
+            payload: &self.payload,
+            payload_offset: 0,
+        }
+    }
 }
 
 impl Default for Npdu {
     fn default() -> Self {
         Self {
-            is_network_message: false,
             expecting_reply: false,
-            priority: NetworkPriority::NORMAL,
+            priority: NetworkPriority::Normal,
             destination: None,
             source: None,
             hop_count: 255,
@@ -107,79 +151,53 @@ impl Default for Npdu {
 // Encoding
 // ---------------------------------------------------------------------------
 
-/// Encode an NPDU to wire format.
+/// Encode an NPDU to wire format, appending it to `buf`.
+///
+/// Nothing is appended when the NPDU is one the decoder would refuse: a
+/// DNET of 0, an SNET of 0 or 0xFFFF, an empty SADR, or a DADR or SADR past
+/// [`MAX_MAC_LEN`].
 pub fn encode_npdu(buf: &mut BytesMut, npdu: &Npdu) -> Result<(), Error> {
-    buf.put_u8(BACNET_PROTOCOL_VERSION);
-
-    let mut control: u8 = npdu.priority.to_raw() & 0x03;
-    if npdu.is_network_message {
-        control |= 0x80;
-    }
-    if npdu.destination.is_some() {
-        control |= 0x20;
-    }
-    if npdu.source.is_some() {
-        control |= 0x08;
-    }
-    if npdu.expecting_reply {
-        control |= 0x04;
-    }
-    buf.put_u8(control);
-
-    if let Some(dest) = &npdu.destination {
-        if dest.network == 0 {
-            return Err(Error::Encoding("NPDU DNET must not be 0".into()));
-        }
-        buf.put_u16(dest.network);
-        check_encoded_len(NpduAddressField::Destination, &dest.mac_address)?;
-        buf.put_u8(dest.mac_address.len() as u8);
-        buf.put_slice(&dest.mac_address);
-    }
-
-    if let Some(src) = &npdu.source {
-        if src.network == 0 || src.network == 0xFFFF {
-            return Err(Error::Encoding(format!(
-                "NPDU SNET must be 1..65534, got {}",
-                src.network
-            )));
-        }
-        if src.mac_address.is_empty() {
-            return Err(Error::Encoding("NPDU SLEN must not be 0".into()));
-        }
-        buf.put_u16(src.network);
-        check_encoded_len(NpduAddressField::Source, &src.mac_address)?;
-        buf.put_u8(src.mac_address.len() as u8);
-        buf.put_slice(&src.mac_address);
-    }
-
-    if npdu.destination.is_some() {
-        buf.put_u8(npdu.hop_count);
-    }
-
-    if npdu.is_network_message {
-        if let Some(msg_type) = npdu.message_type {
-            buf.put_u8(msg_type);
-            if msg_type >= 0x80 {
-                buf.put_u16(npdu.vendor_id.unwrap_or(0));
-            }
+    let view = npdu.view();
+    let start = buf.len();
+    buf.resize(start + view.encoded_len(), 0);
+    match view.encode_into(&mut buf[start..]) {
+        Ok(_) => Ok(()),
+        Err(refused) => {
+            buf.truncate(start);
+            Err(encode_error(npdu, refused))
         }
     }
-
-    buf.put_slice(&npdu.payload);
-
-    Ok(())
 }
 
-/// Refuse to encode a DADR or SADR that the decoder would refuse (#1141).
-fn check_encoded_len(field: NpduAddressField, mac: &[u8]) -> Result<(), Error> {
-    if mac.len() > NpduAddress::MAX_MAC_LEN {
-        return Err(Error::Encoding(format!(
-            "NPDU {field} address of {} octets exceeds the {}-octet limit",
-            mac.len(),
-            NpduAddress::MAX_MAC_LEN
-        )));
+/// An encoder refusal as a static [`Error::Range`] naming the field it
+/// concerns, formatted only when displayed (#1777).
+fn encode_error(npdu: &Npdu, refused: EncodeError) -> Error {
+    let destination = npdu.destination.as_ref();
+    let source = npdu.source.as_ref();
+    match refused {
+        EncodeError::ReservedNetwork if destination.is_some_and(|d| d.network == 0) => {
+            RangeError::new("NPDU DNET must not be 0")
+        }
+        EncodeError::ReservedNetwork => RangeError::new("NPDU SNET must be 1..65534, got {}")
+            .with_value(source.map_or(0, |s| s.network).into()),
+        EncodeError::EmptySource => RangeError::new("NPDU SLEN must not be 0"),
+        EncodeError::AddressTooLong => {
+            let (label, address) = match destination {
+                Some(d) if d.mac_address.len() > MAX_MAC_LEN => (
+                    "NPDU destination address of {} octets exceeds the {}-octet limit",
+                    d,
+                ),
+                _ => (
+                    "NPDU source address of {} octets exceeds the {}-octet limit",
+                    source.expect("an over-long address is one of the two"),
+                ),
+            };
+            RangeError::new(label).with_values(address.mac_address.len() as u64, MAX_MAC_LEN as u64)
+        }
+        // The buffer is sized to the NPDU, so nothing else is refused.
+        _ => RangeError::new("NPDU encoding refused"),
     }
-    Ok(())
+    .into()
 }
 
 // ---------------------------------------------------------------------------
@@ -189,221 +207,52 @@ fn check_encoded_len(field: NpduAddressField, mac: &[u8]) -> Result<(), Error> {
 /// Decode an NPDU from raw bytes.
 ///
 /// Returns the decoded [`Npdu`]. The `payload` field contains either the
-/// APDU bytes or network message data.
+/// APDU bytes or network message data, sharing `data`'s buffer.
 ///
-/// A DLEN or SLEN past [`NpduAddress::MAX_MAC_LEN`] fails with
+/// A DLEN or SLEN past [`MAX_MAC_LEN`] fails with
 /// [`NpduDecodeError::AddressTooLong`], raised without reading the address
 /// octets, so a caller can tell it apart from every other malformation
 /// ([`NpduDecodeError::Malformed`]). For an over-long DADR the error still
 /// carries the SNET/SADR behind it, when the frame holds a valid one, so a
 /// router can address its reject (#1158).
 pub fn decode_npdu(data: Bytes) -> Result<Npdu, NpduDecodeError> {
-    if data.len() < 2 {
-        return Err(Error::buffer_too_short(2, data.len()).into());
-    }
-
-    let version = data[0];
-    if version != BACNET_PROTOCOL_VERSION {
-        return Err(
-            Error::decoding(0, format!("unsupported BACnet protocol version: {version}")).into(),
-        );
-    }
-
-    let control = data[1];
-    let is_network_message = control & 0x80 != 0;
-    let has_destination = control & 0x20 != 0;
-    let has_source = control & 0x08 != 0;
-    let expecting_reply = control & 0x04 != 0;
-    let priority = NetworkPriority::from_raw(control & 0x03);
-
     // Only hosted builds log; tracing is a std-only dependency.
     #[cfg(feature = "std")]
-    if control & 0x50 != 0 {
-        tracing::warn!(
-            control_byte = control,
-            "NPDU control byte has reserved bits set (bits 4 or 6)"
-        );
-    }
-
-    let mut offset = 2;
-    let mut destination = None;
-    let mut source = None;
-    let mut hop_count: u8 = 255;
-
-    if has_destination {
-        if offset + 3 > data.len() {
-            return Err(Error::decoding(offset, "NPDU too short for destination fields").into());
-        }
-        let dnet = u16::from_be_bytes([data[offset], data[offset + 1]]);
-        if dnet == 0 {
-            return Err(Error::decoding(offset, "NPDU destination network 0 is invalid").into());
-        }
-        offset += 2;
-        let dlen = data[offset];
-        offset += 1;
-        let dadr = match decode_address(&data, offset, NpduAddressField::Destination, dlen, dnet) {
-            Ok(dadr) => dadr,
-            Err(mut refused) => {
-                if let NpduDecodeError::AddressTooLong { source, .. } = &mut refused {
-                    *source = has_source
-                        .then(|| source_behind(&data, offset + usize::from(dlen)))
-                        .flatten();
-                }
-                return Err(refused);
-            }
-        };
-        offset += dadr.len();
-
-        destination = Some(NpduAddress {
-            network: dnet,
-            mac_address: dadr,
-        });
-    }
-
-    if has_source {
-        if offset + 3 > data.len() {
-            return Err(Error::decoding(offset, "NPDU too short for source fields").into());
-        }
-        let snet = u16::from_be_bytes([data[offset], data[offset + 1]]);
-        if snet == 0 {
-            return Err(Error::decoding(offset, "NPDU source network 0 is invalid").into());
-        }
-        if snet == 0xFFFF {
-            return Err(Error::decoding(offset, "NPDU source network 0xFFFF is invalid").into());
-        }
-        offset += 2;
-        let slen = data[offset];
-        offset += 1;
-
-        if slen == 0 {
-            return Err(Error::decoding(offset - 1, "NPDU source SLEN=0 is invalid").into());
-        }
-        let dnet = destination.as_ref().map(|d| d.network);
-        let sadr = decode_address(&data, offset, NpduAddressField::Source, slen, dnet)?;
-        offset += sadr.len();
-
-        source = Some(NpduAddress {
-            network: snet,
-            mac_address: sadr,
-        });
-    }
-
-    if has_destination {
-        if offset >= data.len() {
-            return Err(Error::decoding(offset, "NPDU too short for hop count").into());
-        }
-        hop_count = data[offset];
-        offset += 1;
-    }
-
-    let mut message_type = None;
-    let mut vendor_id = None;
-
-    if is_network_message {
-        if offset >= data.len() {
-            return Err(Error::decoding(offset, "NPDU too short for network message type").into());
-        }
-        let msg_type = data[offset];
-        offset += 1;
-        message_type = Some(msg_type);
-
-        if msg_type >= 0x80 {
-            if offset + 2 > data.len() {
-                return Err(
-                    Error::decoding(offset, "NPDU too short for proprietary vendor ID").into(),
-                );
-            }
-            vendor_id = Some(u16::from_be_bytes([data[offset], data[offset + 1]]));
-            offset += 2;
+    if let Some(&control) = data.get(1) {
+        if control & 0x50 != 0 {
+            tracing::warn!(
+                control_byte = control,
+                "NPDU control byte has reserved bits set (bits 4 or 6)"
+            );
         }
     }
-
-    let payload = data.slice(offset..);
-
-    Ok(Npdu {
-        is_network_message,
-        expecting_reply,
-        priority,
-        destination,
-        source,
-        hop_count,
-        message_type,
-        vendor_id,
-        payload,
-    })
-}
-
-/// Read the `length`-octet DADR or SADR at `offset`. A length past
-/// [`NpduAddress::MAX_MAC_LEN`] is refused before any address octet is read,
-/// whether or not the frame holds that many (#1141).
-fn decode_address(
-    data: &[u8],
-    offset: usize,
-    field: NpduAddressField,
-    length: u8,
-    dnet: impl Into<Option<u16>>,
-) -> Result<MacAddr, NpduDecodeError> {
-    if usize::from(length) > NpduAddress::MAX_MAC_LEN {
-        return Err(NpduDecodeError::AddressTooLong {
+    let view = match bacnet_npdu::Npdu::decode(&data) {
+        Ok(view) => view,
+        Err(bacnet_npdu::DecodeError::AddressTooLong {
             field,
             length,
-            dnet: dnet.into(),
-            source: None,
-        });
-    }
-    let end = offset + usize::from(length);
-    if end > data.len() {
-        return Err(Error::decoding(
-            offset,
-            format!(
-                "NPDU {field} address truncated: {}={length}",
-                field.length_octet()
-            ),
-        )
-        .into());
-    }
-    Ok(MacAddr::from_slice(&data[offset..end]))
-}
-
-/// The SNET/SADR that starts at `offset`, behind a DADR too long to decode.
-///
-/// A router answers such an NPDU with a reject addressed to its original
-/// source (#1158), so the source is read past the DLEN octets the frame
-/// announces. Only a source the decoder would accept counts: a usable SNET, an
-/// SLEN within the bound and every SADR octet present.
-fn source_behind(data: &[u8], offset: usize) -> Option<NpduAddress> {
-    let header = data.get(offset..offset + 3)?;
-    let network = u16::from_be_bytes([header[0], header[1]]);
-    let length = usize::from(header[2]);
-    if network == 0 || network == 0xFFFF || length == 0 || length > NpduAddress::MAX_MAC_LEN {
-        return None;
-    }
-    let sadr = data.get(offset + 3..offset + 3 + length)?;
-    Some(NpduAddress {
-        network,
-        mac_address: MacAddr::from_slice(sadr),
-    })
-}
-
-/// Decode the fixed three-octet Reject-Message-To-Network payload.
-///
-/// The payload is rejected unless it contains exactly one reason octet and
-/// one two-octet destination network. Callers remain responsible for checking
-/// that the enclosing NPDU is the standard Reject-Message-To-Network type.
-pub fn decode_reject_message_to_network(payload: &[u8]) -> Result<RejectMessageToNetwork, Error> {
-    if payload.len() != 3 {
-        return Err(Error::decoding(
-            0,
-            format!(
-                "Reject-Message-To-Network payload must be exactly 3 octets, got {}",
-                payload.len()
-            ),
-        ));
-    }
-    Ok(RejectMessageToNetwork {
-        reason: RejectMessageReason::from_raw(payload[0]),
-        dnet: u16::from_be_bytes([payload[1], payload[2]]),
-    })
+            dnet,
+            source,
+        }) => {
+            return Err(NpduDecodeError::AddressTooLong {
+                field,
+                length,
+                dnet,
+                source: source.map(NpduAddress::from),
+            })
+        }
+        Err(bacnet_npdu::DecodeError::Malformed(fault)) => {
+            return Err(NpduDecodeError::Malformed(fault))
+        }
+    };
+    let mut npdu = Npdu::header_from(&view);
+    // Advanced, not sliced: a slice is a clone, and the first clone of a
+    // frame received into a plain buffer allocates its shared header (#1713).
+    let offset = view.payload_offset;
+    let mut payload = data;
+    bytes::Buf::advance(&mut payload, offset);
+    npdu.payload = payload;
+    Ok(npdu)
 }
 
 // ---------------------------------------------------------------------------
@@ -416,6 +265,7 @@ mod address_bound_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bacnet_npdu::Malformed;
 
     fn encode_to_vec(npdu: &Npdu) -> Vec<u8> {
         let mut buf = BytesMut::with_capacity(64);
@@ -454,10 +304,10 @@ mod tests {
     #[test]
     fn priority_encoding() {
         for (prio, expected_bits) in [
-            (NetworkPriority::NORMAL, 0x00),
-            (NetworkPriority::URGENT, 0x01),
-            (NetworkPriority::CRITICAL_EQUIPMENT, 0x02),
-            (NetworkPriority::LIFE_SAFETY, 0x03),
+            (NetworkPriority::Normal, 0x00),
+            (NetworkPriority::Urgent, 0x01),
+            (NetworkPriority::CriticalEquipment, 0x02),
+            (NetworkPriority::LifeSafety, 0x03),
         ] {
             let npdu = Npdu {
                 priority: prio,
@@ -557,8 +407,7 @@ mod tests {
     #[test]
     fn network_message_round_trip() {
         let npdu = Npdu {
-            is_network_message: true,
-            message_type: Some(0x01), // I-Am-Router-To-Network
+            message_type: Some(NetworkMessageType::I_AM_ROUTER_TO_NETWORK),
             payload: Bytes::from_static(&[0x03, 0xE8]), // network 1000
             ..Default::default()
         };
@@ -570,29 +419,9 @@ mod tests {
     }
 
     #[test]
-    fn reject_message_to_network_payload_decodes_typed_reason_and_dnet() {
-        let decoded = decode_reject_message_to_network(&[
-            RejectMessageReason::MESSAGE_TOO_LONG.to_raw(),
-            0x12,
-            0x34,
-        ])
-        .unwrap();
-        assert_eq!(decoded.reason, RejectMessageReason::MESSAGE_TOO_LONG);
-        assert_eq!(decoded.dnet, 0x1234);
-    }
-
-    #[test]
-    fn reject_message_to_network_payload_requires_exact_length() {
-        for payload in [&[][..], &[4, 0][..], &[4, 0, 1, 2][..]] {
-            assert!(decode_reject_message_to_network(payload).is_err());
-        }
-    }
-
-    #[test]
     fn proprietary_network_message_round_trip() {
         let npdu = Npdu {
-            is_network_message: true,
-            message_type: Some(0x80), // Proprietary range
+            message_type: Some(NetworkMessageType::from_raw(0x80)), // Proprietary range
             vendor_id: Some(999),
             payload: Bytes::from_static(&[0xDE, 0xAD]),
             ..Default::default()
@@ -609,9 +438,9 @@ mod tests {
         // HopCount=255, APDU=[0x10, 0x08]
         let wire = [0x01, 0x20, 0xFF, 0xFF, 0x00, 0xFF, 0x10, 0x08];
         let decoded = decode_npdu(Bytes::copy_from_slice(&wire)).unwrap();
-        assert!(!decoded.is_network_message);
+        assert!(!decoded.is_network_message());
         assert!(!decoded.expecting_reply);
-        assert_eq!(decoded.priority, NetworkPriority::NORMAL);
+        assert_eq!(decoded.priority, NetworkPriority::Normal);
         assert_eq!(
             decoded.destination,
             Some(NpduAddress {
@@ -630,25 +459,40 @@ mod tests {
 
     #[test]
     fn decode_too_short() {
-        assert!(decode_npdu(Bytes::new()).is_err());
-        assert!(decode_npdu(Bytes::from_static(&[0x01])).is_err());
+        assert_eq!(
+            decode_npdu(Bytes::new()),
+            Err(NpduDecodeError::Malformed(Malformed::Truncated))
+        );
+        assert_eq!(
+            decode_npdu(Bytes::from_static(&[0x01])),
+            Err(NpduDecodeError::Malformed(Malformed::Truncated))
+        );
     }
 
     #[test]
     fn decode_wrong_version() {
-        assert!(decode_npdu(Bytes::from_static(&[0x02, 0x00])).is_err());
+        assert_eq!(
+            decode_npdu(Bytes::from_static(&[0x02, 0x00])),
+            Err(NpduDecodeError::Malformed(Malformed::Version))
+        );
     }
 
     #[test]
     fn decode_truncated_destination() {
         // Has destination flag but not enough bytes
-        assert!(decode_npdu(Bytes::from_static(&[0x01, 0x20, 0xFF])).is_err());
+        assert_eq!(
+            decode_npdu(Bytes::from_static(&[0x01, 0x20, 0xFF])),
+            Err(NpduDecodeError::Malformed(Malformed::Truncated))
+        );
     }
 
     #[test]
     fn decode_truncated_source() {
         // Has source flag but not enough bytes after destination
-        assert!(decode_npdu(Bytes::from_static(&[0x01, 0x08, 0x00])).is_err());
+        assert_eq!(
+            decode_npdu(Bytes::from_static(&[0x01, 0x08, 0x00])),
+            Err(NpduDecodeError::Malformed(Malformed::Truncated))
+        );
     }
 
     // --- NPDU edge case tests ---
@@ -749,14 +593,20 @@ mod tests {
         // DNET + DLEN present but MAC bytes are short
         // Version=1, Control=0x20 (dest present), DNET=1000, DLEN=6, only 2 MAC bytes
         let data = [0x01, 0x20, 0x03, 0xE8, 0x06, 0x01, 0x02];
-        assert!(decode_npdu(Bytes::copy_from_slice(&data)).is_err());
+        assert_eq!(
+            decode_npdu(Bytes::copy_from_slice(&data)),
+            Err(NpduDecodeError::Malformed(Malformed::Truncated))
+        );
     }
 
     #[test]
     fn npdu_source_truncated_mac() {
         // Source present but MAC bytes truncated
         let data = [0x01, 0x08, 0x01, 0xF4, 0x04, 0x01]; // SNET=500, SLEN=4, only 1 byte
-        assert!(decode_npdu(Bytes::copy_from_slice(&data)).is_err());
+        assert_eq!(
+            decode_npdu(Bytes::copy_from_slice(&data)),
+            Err(NpduDecodeError::Malformed(Malformed::Truncated))
+        );
     }
 
     #[test]
@@ -764,30 +614,38 @@ mod tests {
         // Destination present but data ends before hop count
         // Version=1, Control=0x20, DNET=0xFFFF, DLEN=0
         let data = [0x01, 0x20, 0xFF, 0xFF, 0x00];
-        assert!(decode_npdu(Bytes::copy_from_slice(&data)).is_err());
+        assert_eq!(
+            decode_npdu(Bytes::copy_from_slice(&data)),
+            Err(NpduDecodeError::Malformed(Malformed::Truncated))
+        );
     }
 
     #[test]
     fn npdu_network_message_truncated_type() {
         // Network message flag set but no message type byte
         let data = [0x01, 0x80]; // is_network_message = true, but no type byte
-        assert!(decode_npdu(Bytes::copy_from_slice(&data)).is_err());
+        assert_eq!(
+            decode_npdu(Bytes::copy_from_slice(&data)),
+            Err(NpduDecodeError::Malformed(Malformed::Truncated))
+        );
     }
 
     #[test]
     fn npdu_proprietary_message_truncated_vendor() {
         // Proprietary message type (>=0x80) but vendor ID missing
         let data = [0x01, 0x80, 0x80]; // msg_type=0x80, need 2 more bytes for vendor
-        assert!(decode_npdu(Bytes::copy_from_slice(&data)).is_err());
+        assert_eq!(
+            decode_npdu(Bytes::copy_from_slice(&data)),
+            Err(NpduDecodeError::Malformed(Malformed::Truncated))
+        );
     }
 
     #[test]
     fn npdu_all_flags_round_trip() {
         // Maximum complexity: all flags set
         let npdu = Npdu {
-            is_network_message: false,
             expecting_reply: true,
-            priority: NetworkPriority::LIFE_SAFETY,
+            priority: NetworkPriority::LifeSafety,
             destination: Some(NpduAddress {
                 network: 2000,
                 mac_address: MacAddr::from_slice(&[0x0A, 0x00, 0x02, 0x01, 0xBA, 0xC0]),

@@ -735,3 +735,6 @@ async fn dcc_suppresses_event_enrollment_io_without_suppressing_commit() {
     drop(db);
     server.stop().await.unwrap();
 }
+
+#[path = "event_enrollment_reporting_options_tests.rs"]
+mod reporting_options;

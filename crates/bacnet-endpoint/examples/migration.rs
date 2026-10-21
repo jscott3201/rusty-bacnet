@@ -46,7 +46,7 @@ fn migrate_bip_server(
     BipEndpointBuilder::new(interface, port, broadcast)
         .role(SessionRole::ServerOnly)
         .database(db)
-        .identity(identity)
+        .device(identity)
         .build_session()
 }
 

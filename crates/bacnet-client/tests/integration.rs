@@ -9,12 +9,12 @@ use bacnet_encoding::apdu::{
     self, encode_apdu, Apdu, ComplexAck, UnconfirmedRequest as UnconfirmedRequestPdu,
 };
 use bacnet_network::layer::NetworkLayer;
+use bacnet_npdu::NetworkPriority;
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_services::who_is::{DeviceInstanceRange, IAmRequest};
 use bacnet_transport::bip::BipTransport;
 use bacnet_types::enums::{
-    ConfirmedServiceChoice, NetworkPriority, ObjectType, PropertyIdentifier, Segmentation,
-    UnconfirmedServiceChoice,
+    ConfirmedServiceChoice, ObjectType, PropertyIdentifier, Segmentation, UnconfirmedServiceChoice,
 };
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::{Bytes, BytesMut};
@@ -60,12 +60,12 @@ async fn full_read_property_round_trip() {
                 PropertyIdentifier::PRESENT_VALUE
             );
 
-            // Build a ReadPropertyACK with a Real value (72.5)
+            // Build a ReadPropertyACK with a Real value (72.0)
             let ack = ReadPropertyACK {
                 object_identifier: rp_req.object_identifier,
                 property_identifier: rp_req.property_identifier,
                 property_array_index: rp_req.property_array_index,
-                property_value: vec![0x44, 0x42, 0x90, 0x00, 0x00], // app-tagged Real 72.5
+                property_value: vec![0x44, 0x42, 0x90, 0x00, 0x00], // app-tagged Real 72.0
             };
             let mut ack_buf = BytesMut::new();
             ack.encode(&mut ack_buf);
@@ -83,7 +83,7 @@ async fn full_read_property_round_trip() {
             encode_apdu(&mut buf, &complex_ack).expect("valid APDU encoding");
 
             net_b
-                .send_apdu(&buf, &received.source_mac, false, NetworkPriority::NORMAL)
+                .send_apdu(&buf, &received.source_mac, false, NetworkPriority::Normal)
                 .await
                 .unwrap();
         } else {
@@ -174,7 +174,7 @@ async fn device_discovery_via_iam() {
     encode_apdu(&mut buf, &pdu).expect("valid APDU encoding");
 
     net_b
-        .send_apdu(&buf, client.local_mac(), false, NetworkPriority::NORMAL)
+        .send_apdu(&buf, client.local_mac(), false, NetworkPriority::Normal)
         .await
         .unwrap();
 

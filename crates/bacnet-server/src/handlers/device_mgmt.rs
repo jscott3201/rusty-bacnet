@@ -11,8 +11,8 @@ fn validate_password(
         match request_pw {
             Some(ref pw) if constant_time_eq(pw.as_bytes(), expected.as_bytes()) => Ok(()),
             _ => Err(Error::Protocol {
-                class: ErrorClass::SECURITY.to_raw() as u32,
-                code: ErrorCode::PASSWORD_FAILURE.to_raw() as u32,
+                class: ErrorClass::SECURITY,
+                code: ErrorCode::PASSWORD_FAILURE,
             }),
         }
     } else {
@@ -72,8 +72,8 @@ pub(crate) fn validate_dcc(
         // No DccPolicy admits it, so DccState has no DISABLE.
         return Err(failure(
             Error::Protocol {
-                class: ErrorClass::SERVICES.to_raw() as u32,
-                code: ErrorCode::SERVICE_REQUEST_DENIED.to_raw() as u32,
+                class: ErrorClass::SERVICES,
+                code: ErrorCode::SERVICE_REQUEST_DENIED,
             },
             DccOutcome::DeprecatedDenied,
         ));
@@ -88,8 +88,8 @@ pub(crate) fn validate_dcc(
     if policy == crate::server::DccPolicy::DenyAll {
         return Err(failure(
             Error::Protocol {
-                class: ErrorClass::SERVICES.to_raw() as u32,
-                code: ErrorCode::SERVICE_REQUEST_DENIED.to_raw() as u32,
+                class: ErrorClass::SERVICES,
+                code: ErrorCode::SERVICE_REQUEST_DENIED,
             },
             DccOutcome::PolicyDenied,
         ));
@@ -112,8 +112,8 @@ pub fn handle_reinitialize_device(
     // ACTIVATE_CHANGES (7) is the highest state Clause 16.4 defines.
     if request.reinitialized_state.to_raw() > ReinitializedState::ACTIVATE_CHANGES.to_raw() {
         return Err(Error::Protocol {
-            class: ErrorClass::SERVICES.to_raw() as u32,
-            code: ErrorCode::SERVICE_REQUEST_DENIED.to_raw() as u32,
+            class: ErrorClass::SERVICES,
+            code: ErrorCode::SERVICE_REQUEST_DENIED,
         });
     }
     Ok(request.reinitialized_state)

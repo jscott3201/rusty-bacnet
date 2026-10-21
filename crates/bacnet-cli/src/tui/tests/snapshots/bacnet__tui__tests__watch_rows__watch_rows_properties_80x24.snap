@@ -1,0 +1,28 @@
+---
+source: crates/bacnet-cli/src/tui/tests/watch_rows.rs
+expression: text
+---
+" 1 2 [3 Watch] 4 7 | BIP 10.0.0.1:47808 | up | READ-ONLY | drop 0        ? help "
+"┌ Watch (2) | COV 0 | requests 0.0/s ──────────────────────────────────────────┐"
+"│Device Object         Property      Value      Flags Source Age Trend         │"
+"│1001   analog-input 1 present-value 72.5 °F          COV    0s  ▄             │"
+"│1001   analog-input 1 status-flags  {in-alarm}       COV    0s                │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│ COV, lifetime 300 s, renewed before it runs out · analog-input 1 status-flags│"
+"└──────────────────────────────────────────────────────────────────────────────┘"
+" Watching analog-input 1 on device 1001. Press 3 for …  Esc back  ? help  q quit"

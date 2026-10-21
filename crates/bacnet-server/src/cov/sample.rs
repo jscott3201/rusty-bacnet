@@ -1,4 +1,5 @@
 //! Bounded immutable values retained by COV subscription snapshots.
+use bacnet_objects::cov_change::{reports_change, same_value};
 use bacnet_types::{
     enums::{ErrorClass, ErrorCode},
     error::Error,
@@ -22,66 +23,30 @@ impl CovSample {
         &self.0
     }
 
+    /// Whether this sample is a change from `previous` worth reporting,
+    /// by the shared Clause 13.1 test ([`reports_change`]); with no
+    /// previous sample it always is.
     pub(crate) fn reports(
         &self,
         previous: Option<&Self>,
         increment: Option<f64>,
         numeric: bool,
     ) -> bool {
-        let Some(previous) = previous else {
-            return true;
-        };
-        if !numeric {
-            return self != previous;
-        }
-        use PropertyValue::*;
-        match (self.value(), previous.value()) {
-            (Unsigned(a), Unsigned(b)) => integer_delta(a.abs_diff(*b), increment),
-            (Signed(a), Signed(b)) => integer_delta(u64::from(a.abs_diff(*b)), increment),
-            (Real(a), Real(b)) => {
-                if !a.is_finite() || !b.is_finite() {
-                    a.to_bits() != b.to_bits()
-                } else {
-                    float_delta((f64::from(*a) - f64::from(*b)).abs(), increment)
-                }
-            }
-            (Double(a), Double(b)) => {
-                if !a.is_finite() || !b.is_finite() {
-                    a.to_bits() != b.to_bits()
-                } else {
-                    float_delta((a - b).abs(), increment)
-                }
-            }
-            _ => self != previous,
-        }
+        previous.is_none_or(|previous| {
+            reports_change(self.value(), previous.value(), increment, numeric)
+        })
     }
 }
 impl PartialEq for CovSample {
     fn eq(&self, other: &Self) -> bool {
-        equal(self.value(), other.value())
+        same_value(self.value(), other.value())
     }
 }
 impl Eq for CovSample {}
-fn integer_delta(delta: u64, increment: Option<f64>) -> bool {
-    match increment {
-        None => delta != 0,
-        Some(i) if i <= 0.0 => delta != 0,
-        Some(i) if i.is_nan() || i >= 18_446_744_073_709_551_616.0 => false,
-        Some(i) => delta >= i.ceil() as u64,
-    }
-}
-fn float_delta(delta: f64, increment: Option<f64>) -> bool {
-    match increment {
-        None => delta != 0.0,
-        Some(i) if i <= 0.0 => delta != 0.0,
-        Some(i) if !i.is_finite() => false,
-        Some(i) => delta >= i,
-    }
-}
 fn capacity_error() -> Error {
     Error::Protocol {
-        class: ErrorClass::RESOURCES.to_raw() as u32,
-        code: ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT.to_raw() as u32,
+        class: ErrorClass::RESOURCES,
+        code: ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT,
     }
 }
 fn validate(
@@ -140,15 +105,6 @@ fn normalize(v: &PropertyValue) -> PropertyValue {
             data: bytes(data),
         },
         _ => v.clone(),
-    }
-}
-fn equal(a: &PropertyValue, b: &PropertyValue) -> bool {
-    use PropertyValue::*;
-    match (a, b) {
-        (Real(a), Real(b)) => a.to_bits() == b.to_bits(),
-        (Double(a), Double(b)) => a.to_bits() == b.to_bits(),
-        (List(a), List(b)) => a.len() == b.len() && a.iter().zip(b).all(|(a, b)| equal(a, b)),
-        _ => a == b,
     }
 }
 

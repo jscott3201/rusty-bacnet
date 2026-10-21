@@ -3,7 +3,7 @@ title: "Build and integrate"
 description: "Choose an integration path, find its API and evidence boundaries, and build from source when you need to."
 ---
 
-**Integration guides for v0.13.0.** These pages cover the parts of the release that go beyond a first read: shared endpoints, Network Port and Number controls, transports and BACnet/SC. Install the release from [v0.13 installation](/rusty-bacnet/start/installation/), or try the [local lab](/rusty-bacnet/start/local-lab/) first.
+**Integration guides for v0.14.0.** These pages cover the parts of the release that go beyond a first read: shared endpoints, Network Port and Number controls, transports and BACnet/SC. Install the release from [v0.14 installation](/rusty-bacnet/start/installation/), or try the [local lab](/rusty-bacnet/start/local-lab/) first.
 
 ## Choose the owner for your application
 
@@ -29,7 +29,7 @@ git rev-parse HEAD
 cargo build --locked
 ```
 
-To build the release itself, clone with `--branch v0.13.0` instead. A `dev` checkout may already hold changes past the release while its version still reads 0.13.0, so record the commit.
+To build the release itself, clone with `--branch v0.14.0` instead. A `dev` checkout may already hold changes past the release while its version still reads 0.14.0, so record the commit.
 
 The checked-in development toolchain is Rust 1.99.0; the declared minimum is 1.93. `cargo build` uses workspace default members, so select the CLI or Python binding explicitly when needed. Native prerequisites depend on the selected features and platform.
 
@@ -43,7 +43,7 @@ bacnet --version
 bacnet --help
 ```
 
-The executable is `bacnet`. IPv6 is enabled through CLI dependencies; `pcap` is a separate optional feature requiring native capture dependencies. A CLI version string alone cannot distinguish a source build from the release.
+The executable is `bacnet`. IPv6 is enabled through CLI dependencies; `pcap` is a separate optional feature requiring native capture dependencies. On `dev`, the terminal UI (`tui`) is a default feature (`--no-default-features` leaves it out), and MS/TP needs `--features serial`. A CLI version string alone cannot distinguish a source build from the release.
 
 For Python, use a fresh virtual environment and build the native extension:
 
@@ -60,7 +60,7 @@ This is a source-build workflow; the published wheels are described on the [inst
 
 ## Use the reference for exact signatures
 
-The [engineering documentation map](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/docs/README.md) links the canonical [Rust API](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/docs/rust-api.md), [Python API](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/docs/python-api.md) and [CLI reference](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/docs/CLI.md). These task guides summarize those contracts rather than duplicate every method.
+The [engineering documentation map](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/README.md) links the canonical [Rust API](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/rust-api.md), [Python API](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/python-api.md) and [CLI reference](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/CLI.md). These task guides summarize those contracts rather than duplicate every method.
 
 Before 1.0, APIs may be removed or changed directly. Keep the source revision, feature selection and installed native artifact together in your integration record. Review [upgrade guidance](/rusty-bacnet/project/upgrading/) when moving an existing application.
 

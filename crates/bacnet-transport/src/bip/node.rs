@@ -1,7 +1,9 @@
 //! The hosted B/IP node: [`bacnet_bip_core::node`] on Tokio (#1622).
 //!
-//! The engine's [`Link`] decides every receive and send without a lock: the
-//! receive loop and the send paths read one copy. Its [`Node`] holds this
+//! The engine's [`Link`] decides every receive and send: the receive loop
+//! and the send paths copy it out from behind a read lock that only a
+//! foreign device's move to another BBMD writes (#1825), so it is never
+//! contended in practice, and decide on the copy. Its [`Node`] holds this
 //! node's own management exchanges and a foreign device's registration,
 //! behind a std mutex that only a response, a foreign device's broadcast, an
 //! exchange and the driver's timer take, and never across an await. After
@@ -12,22 +14,24 @@
 //! be awaited, as when a request is dropped, so never has to send.
 //!
 //! Two clocks, which never meet: the node runs on Tokio time from the start
-//! ([`HostClock`]), which paused-time tests rely on, and the BBMD on std
-//! time (`bbmd/clock.rs`), as before. No time on one is compared with a
+//! ([`tokio_clock`]), which paused-time tests rely on, and the BBMD on std
+//! time, as before. No time on one is compared with a
 //! time on the other, and the management rate limit keeps its own std
 //! clock, as before.
 
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddrV4;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
 use std::time::Duration;
 
 use bacnet_bip_codec::{BvlcFunction, Bvll, BvllError};
 use bacnet_bip_core::node::{
-    Action, Admission, ConfigError, ExchangeId, Inbound, Link, LocalFailure, Mode, Node,
+    Action, Admission, ConfigError, ExchangeId, Foreign, Inbound, Link, LocalFailure, Mode, Node,
     NodeCounters, Policy, RegistrationEvent, Response, SendRefusal,
 };
-use bacnet_bip_core::{Duration as CoreDuration, Instant as CoreInstant};
+use bacnet_bip_core::Instant as CoreInstant;
+use bacnet_bip_core::LocalSubnet;
+use bacnet_time::HostClock;
 use bacnet_types::error::Error;
 use bytes::{Bytes, BytesMut};
 use tokio::sync::{oneshot, Notify};
@@ -40,6 +44,7 @@ use super::send_counters::SendRefusals;
 use super::BipSocket;
 use crate::bbmd;
 use crate::bvll::{bvll_error, encode_bvll, BvllMessage};
+use crate::runtime_clock::tokio_clock;
 
 /// Exchange slots, which the management helpers and a foreign device's
 /// registration share. Each holds one exchange per peer and operation, so
@@ -50,38 +55,6 @@ const SLOTS: usize = 8;
 
 /// The engine as the hosted transport runs it.
 pub(super) type HostNode = Node<SLOTS>;
-
-/// Tokio time mapped onto the engine's nanosecond timeline, from the
-/// moment the node started. Every call into the node reads it, so the
-/// engine's deadlines are Tokio deadlines and paused time drives them.
-#[derive(Debug, Clone, Copy)]
-pub(super) struct HostClock {
-    origin: tokio::time::Instant,
-}
-
-impl HostClock {
-    fn new() -> Self {
-        Self {
-            origin: tokio::time::Instant::now(),
-        }
-    }
-
-    /// The engine's time now.
-    pub(super) fn now(&self) -> CoreInstant {
-        let elapsed = tokio::time::Instant::now().saturating_duration_since(self.origin);
-        // Saturates some 584 years after the node started.
-        CoreInstant::ZERO + CoreDuration::saturating_from_core(elapsed)
-    }
-
-    /// The Tokio instant of an engine time. Both ways are exact, so a timer
-    /// set here never wakes before the engine's deadline is due.
-    fn instant(&self, at: CoreInstant) -> tokio::time::Instant {
-        let offset = Duration::from_nanos(at.as_nanos());
-        self.origin
-            .checked_add(offset)
-            .unwrap_or_else(|| self.origin + Duration::from_secs(86_400 * 365))
-    }
-}
 
 /// The host's rules [`Link::receive`] consults: the management rate limit,
 /// and the size limit on a table ACK.
@@ -256,17 +229,23 @@ impl NodeState {
 /// The node of one started transport, shared by its receive loop, its send
 /// paths, its driver task and the requests in flight.
 pub(super) struct NodeHandle {
-    link: Link,
+    /// A copy of the node's link, for the receive and send decisions. Only
+    /// [`retarget`](Self::retarget) and [`set_subnet`](Self::set_subnet)
+    /// write it, under the node lock, after
+    /// the node's own copy changed: lock order is the node lock, then this.
+    link: RwLock<Link>,
     clock: HostClock,
     socket: Arc<BipSocket>,
     record: Arc<ClientRecord>,
     /// Where the sends the link refuses are counted.
     refusals: Arc<SendRefusals>,
-    /// A foreign device's renewal interval.
-    renewal: Option<CoreDuration>,
     state: Mutex<NodeState>,
     /// Tells the driver that the node changed.
     wake: Notify,
+    /// Runs once in a broadcast send, between the link's decision and the
+    /// node's admission: where a test moves the node.
+    #[cfg(test)]
+    pub(super) before_admit: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 impl NodeHandle {
@@ -282,19 +261,14 @@ impl NodeHandle {
         record: Arc<ClientRecord>,
         refusals: Arc<SendRefusals>,
     ) -> Result<Self, Error> {
-        let clock = HostClock::new();
+        let clock = tokio_clock();
         let node = HostNode::new(link, clock.now()).map_err(config_error)?;
-        let renewal = match link.mode {
-            Mode::Foreign(foreign) => Some(foreign.effective_renewal()),
-            Mode::Normal | Mode::Bbmd => None,
-        };
         let handle = Self {
-            link,
+            link: RwLock::new(link),
             clock,
             socket,
             record,
             refusals,
-            renewal,
             state: Mutex::new(NodeState {
                 node,
                 waiters: HashMap::new(),
@@ -308,13 +282,68 @@ impl NodeHandle {
                 stopped: false,
             }),
             wake: Notify::new(),
+            #[cfg(test)]
+            before_admit: Mutex::new(None),
         };
         Ok(handle)
     }
 
-    /// The node's link: its address, subnet and mode.
-    pub(super) fn link(&self) -> &Link {
-        &self.link
+    /// The node's link as it stands: its address, subnet and mode. A copy,
+    /// so no lock is held while the caller decides on it.
+    pub(super) fn link(&self) -> Link {
+        *self.link.read().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Whether [`stop`](Self::stop) has run.
+    pub(super) fn is_stopped(&self) -> bool {
+        self.lock().stopped
+    }
+
+    /// Whether this node, a foreign device, would take `foreign` as its
+    /// registration ([`retarget`](Self::retarget)), changing nothing.
+    pub(super) fn check_retarget(&self, foreign: Foreign) -> Result<(), Error> {
+        let mut link = self.link();
+        if !matches!(link.mode, Mode::Foreign(_)) {
+            return Err(config_error(ConfigError::NotForeign));
+        }
+        link.mode = Mode::Foreign(foreign);
+        link.validate().map_err(config_error)
+    }
+
+    /// Register with `foreign`'s BBMD and time-to-live from now on
+    /// ([`Node::retarget`]): the attempt the driver hasn't sent yet is
+    /// dropped, and one to the new BBMD goes at once. Refused, changing
+    /// nothing, as the node refuses it. A stopped node has nothing to move:
+    /// the next start builds a new one.
+    pub(super) fn retarget(&self, foreign: Foreign) -> Result<(), Error> {
+        self.with(|state, now| {
+            if state.stopped {
+                return Ok(());
+            }
+            state.node.retarget(foreign, now).map_err(config_error)?;
+            // The node cancelled the attempt this would have sent; its
+            // replacement comes with the drain after this call.
+            state.register = None;
+            state.attempt_started = None;
+            state.refusal_warned = false;
+            *self.link.write().unwrap_or_else(PoisonError::into_inner) = *state.node.link();
+            info!(bbmd = %foreign.bbmd, ttl = foreign.ttl, "B/IP foreign device moved to a new BBMD registration");
+            Ok(())
+        })
+    }
+
+    /// Send broadcasts to `subnet` and take them from it from now on
+    /// ([`Node::set_subnet`]): a B/IP-M node joining, changing or leaving its
+    /// group (#941). A stopped node changes nothing.
+    pub(super) fn set_subnet(&self, subnet: LocalSubnet) -> Result<(), Error> {
+        self.with(|state, _| {
+            if state.stopped {
+                return Ok(());
+            }
+            state.node.set_subnet(subnet).map_err(config_error)?;
+            *self.link.write().unwrap_or_else(PoisonError::into_inner) = *state.node.link();
+            Ok(())
+        })
     }
 
     /// The node's clock.
@@ -383,11 +412,14 @@ impl NodeHandle {
     }
 
     /// Whether a foreign device's broadcast of `npdu` goes now, from the
-    /// caller. Otherwise the node keeps it: held until it releases or drops
-    /// it, or queued behind released broadcasts the driver hasn't sent yet,
-    /// so that broadcasts go in the order they were made. That queue takes
-    /// as many as the hold; one more is refused and counted as a full hold.
-    pub(super) fn admit_broadcast(&self, npdu: &[u8]) -> Result<bool, Error> {
+    /// caller, and on which link: the one the node decided under, which a
+    /// move to another BBMD may have changed since the caller read it
+    /// (#1825). Otherwise (`None`) the node keeps it: held until it
+    /// releases or drops it, or queued behind released broadcasts the
+    /// driver hasn't sent yet, so that broadcasts go in the order they were
+    /// made. That queue takes as many as the hold; one more is refused and
+    /// counted as a full hold.
+    pub(super) fn admit_broadcast(&self, npdu: &[u8]) -> Result<Option<Link>, Error> {
         self.with(|state, now| {
             let admission = state
                 .node
@@ -408,9 +440,9 @@ impl NodeHandle {
                     }
                     state.queued.push(copy());
                 }
-                Admission::Send => return Ok(true),
+                Admission::Send => return Ok(Some(*state.node.link())),
             }
-            Ok(false)
+            Ok(None)
         })
     }
 
@@ -429,9 +461,13 @@ impl NodeHandle {
         let Some(snapshot) = state.node.registration(now) else {
             return;
         };
+        let renewal = match state.node.link().mode {
+            Mode::Foreign(foreign) => Some(foreign.effective_renewal()),
+            Mode::Normal | Mode::Bbmd => None,
+        };
         let next = snapshot
             .next_attempt
-            .or_else(|| Some(state.attempt_started? + self.renewal?));
+            .or_else(|| Some(state.attempt_started? + renewal?));
         let until =
             |at: CoreInstant| Duration::from_nanos(at.saturating_duration_since(now).as_nanos());
         foreign.next_attempt_in = next.map(until);
@@ -491,10 +527,12 @@ impl NodeHandle {
                 self.send_attempt(attempt).await;
             }
             self.send_releases().await;
+            // A deadline past the host clock's range never comes.
             let deadline = self.lock().node.next_deadline();
+            let wake = deadline.and_then(|at| self.clock.to_std(at));
             let timer = async {
-                match deadline {
-                    Some(at) => tokio::time::sleep_until(self.clock.instant(at)).await,
+                match wake {
+                    Some(at) => tokio::time::sleep_until(at.into()).await,
                     None => std::future::pending().await,
                 }
             };
@@ -557,7 +595,7 @@ impl NodeHandle {
 
     /// Send a broadcast the node kept.
     async fn send_released(&self, npdu: &[u8]) {
-        let Ok((outgoing, _)) = self.link.broadcast(npdu) else {
+        let Ok((outgoing, _)) = self.link().broadcast(npdu) else {
             return;
         };
         let mut buf = BytesMut::with_capacity(4 + npdu.len());

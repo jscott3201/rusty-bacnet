@@ -10,7 +10,7 @@ use bacnet_objects::accumulator::{AccumulatorObject, PulseConverterObject};
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleRequest};
-use bacnet_types::enums::Reliability;
+use bacnet_types::enums::{EngineeringUnits, Reliability};
 
 const INPUT: PropertyIdentifier = PropertyIdentifier::INPUT_REFERENCE;
 /// [0] accumulator 1, [1] present-value: an Unsigned.
@@ -30,12 +30,18 @@ fn pc1() -> ObjectIdentifier {
 /// PC-1 without a reference, Accumulator 1 and Analog Input 1.
 fn database() -> ObjectDatabase {
     let mut db = ObjectDatabase::new();
-    db.add(Box::new(PulseConverterObject::new(1, "PC-1", 95).unwrap()))
-        .unwrap();
-    db.add(Box::new(AccumulatorObject::new(1, "ACC-1", 95).unwrap()))
-        .unwrap();
-    db.add(Box::new(AnalogInputObject::new(1, "AI-1", 95).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        PulseConverterObject::new(1, "PC-1", EngineeringUnits::NO_UNITS).unwrap(),
+    ))
+    .unwrap();
+    db.add(Box::new(
+        AccumulatorObject::new(1, "ACC-1", EngineeringUnits::NO_UNITS).unwrap(),
+    ))
+    .unwrap();
+    db.add(Box::new(
+        AnalogInputObject::new(1, "AI-1", EngineeringUnits::NO_UNITS).unwrap(),
+    ))
+    .unwrap();
     db
 }
 
@@ -131,8 +137,10 @@ fn deleting_and_recreating_the_named_object_moves_the_fault() {
     db.remove(&accumulator).unwrap();
     assert_eq!(state(&db), (Reliability::CONFIGURATION_ERROR, FAULT));
     assert_eq!(db.take_membership_work_internal().changed, [pc1()]);
-    db.add(Box::new(AccumulatorObject::new(1, "ACC-1", 95).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AccumulatorObject::new(1, "ACC-1", EngineeringUnits::NO_UNITS).unwrap(),
+    ))
+    .unwrap();
     assert_eq!(state(&db), (Reliability::NO_FAULT_DETECTED, 0));
     assert_eq!(db.take_membership_work_internal().changed, [pc1()]);
 }
@@ -159,8 +167,8 @@ fn write_to(
 fn refused_with(result: Result<ObjectIdentifier, Error>, expected: ErrorCode) {
     assert!(
         matches!(result, Err(Error::Protocol { class, code })
-            if class == ErrorClass::PROPERTY.to_raw() as u32
-                && code == expected.to_raw() as u32),
+            if class == ErrorClass::PROPERTY
+                && code == expected),
         "expected PROPERTY / {expected:?}, got {result:?}"
     );
 }
@@ -222,7 +230,7 @@ fn an_accumulator_serves_prescale_only_once_set() {
         ErrorCode::UNKNOWN_PROPERTY,
     );
     // Set by the application: served and read-only, so a NULL is denied.
-    let mut configured = AccumulatorObject::new(1, "ACC-1", 95).unwrap();
+    let mut configured = AccumulatorObject::new(1, "ACC-1", EngineeringUnits::NO_UNITS).unwrap();
     configured.set_prescale(bacnet_types::constructed::BACnetPrescale {
         multiplier: 5,
         modulo_divide: 100,

@@ -29,6 +29,9 @@ fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
             (P::DEFAULT_STEP_INCREMENT, false, true),
             (P::CURRENT_COMMAND_PRIORITY, false, false),
             (P::COV_INCREMENT, true, true),
+            (P::VALUE_SOURCE, false, true),
+            (P::VALUE_SOURCE_ARRAY, false, false),
+            (P::LAST_COMMAND_TIME, false, false),
             (P::PROPERTY_LIST, false, false),
         ],
         _ => vec![
@@ -46,6 +49,9 @@ fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
             (P::PRIORITY_ARRAY, false, false),
             (P::RELINQUISH_DEFAULT, false, true),
             (P::CURRENT_COMMAND_PRIORITY, false, false),
+            (P::VALUE_SOURCE, false, true),
+            (P::VALUE_SOURCE_ARRAY, false, false),
+            (P::LAST_COMMAND_TIME, false, false),
             (P::PROPERTY_LIST, false, false),
         ],
     }

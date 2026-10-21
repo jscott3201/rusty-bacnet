@@ -77,7 +77,11 @@ fn encode_value(value: &LogValue, buf: &mut BytesMut) -> Result<(), Error> {
         LogValue::UnsignedValue(value) => primitives::encode_ctx_unsigned(buf, UNSIGNED, *value),
         LogValue::SignedValue(value) => encode_ctx_integer(buf, INTEGER, *value),
         LogValue::BitstringValue { unused_bits, data } => {
-            check_bit_string(*unused_bits, data, "bitstring-value")?;
+            check_bit_string(
+                *unused_bits,
+                data,
+                "bitstring-value has {} unused bits over {} octets",
+            )?;
             primitives::encode_ctx_bit_string(buf, BIT_STRING, *unused_bits, data);
         }
         LogValue::NullValue => tags::encode_tag(buf, NULL, tags::TagClass::Context, 0),

@@ -50,12 +50,16 @@ for crate in $crates; do
   cargo_for doc -p "$crate" --no-deps --locked --document-private-items
 done
 
-# The no_std builds (std off, alloc on) of the crates that have one. Without
-# either feature they refuse to build (#1604).
+# The no_std builds of the crates that have one: std off with alloc on
+# (#1604), and both off, the allocation-free profile (#1614), whose docs
+# can't link to an item only alloc has.
 for crate in bacnet-types bacnet-encoding bacnet-services; do
   echo "==> $crate (no_std with alloc$label)"
   cargo_for clippy -p "$crate" --no-default-features --features alloc --locked -- -D warnings
   cargo_for doc -p "$crate" --no-default-features --features alloc --no-deps --locked --document-private-items
+  echo "==> $crate (no_std without alloc$label)"
+  cargo_for clippy -p "$crate" --no-default-features --locked -- -D warnings
+  cargo_for doc -p "$crate" --no-default-features --no-deps --locked --document-private-items
 done
 
 # The rustdoc of the MS/TP and B/IP crates with each storage feature alone,

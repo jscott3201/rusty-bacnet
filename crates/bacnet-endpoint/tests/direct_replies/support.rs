@@ -350,6 +350,7 @@ pub fn received_apdu(envelope: ReceivedNpdu) -> bacnet_network::layer::ReceivedA
         global_broadcast: false,
         data_attributes: envelope.data_attributes,
         provenance: envelope.provenance,
+        router_response: None,
         direct_response: envelope.direct_response,
         reply_tx: envelope.reply_tx,
     }

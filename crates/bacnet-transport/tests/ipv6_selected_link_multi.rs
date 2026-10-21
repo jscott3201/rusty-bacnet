@@ -1,5 +1,16 @@
 //! Explicit two-link external qualification; never runs against an inferred LAN.
-#![cfg(all(feature = "ipv6", unix))]
+// The packet-info oracle (wire.rs) needs nix's decoded IPV6_PKTINFO, which
+// it gives only on these targets.
+#![cfg(all(
+    feature = "ipv6",
+    any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "freebsd",
+        target_vendor = "apple"
+    )
+))]
+#![forbid(unsafe_code)]
 
 #[path = "ipv6_selected_link/support.rs"]
 mod support;

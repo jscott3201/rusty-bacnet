@@ -90,7 +90,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     &destination.mac_address,
                     &sub.subscriber_mac,
                     expecting_reply,
-                    NetworkPriority::NORMAL,
+                    NetworkPriority::Normal,
                 )
                 .await
         } else {
@@ -99,7 +99,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     apdu,
                     &sub.subscriber_mac,
                     expecting_reply,
-                    NetworkPriority::NORMAL,
+                    NetworkPriority::Normal,
                 )
                 .await
         }
@@ -502,8 +502,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             notification.encode(&mut service_buf);
 
             if sub.issue_confirmed_notifications {
-                let max_apdu_length = apdu::max_apdu_header_at_or_below(config.max_apdu_length)
-                    .expect("validated local APDU capacity");
+                let max_apdu_length =
+                    apdu::max_apdu_header_at_or_below(u32::from(config.device.max_apdu_length()))
+                        .expect("validated local APDU capacity");
                 let service_request = service_buf.freeze();
                 Self::send_confirmed_cov(
                     handles,

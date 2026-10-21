@@ -249,7 +249,7 @@ async fn group_present_value_past_the_work_limit_aborts_as_any_rpm_does() {
     );
     assert!(matches!(
         wire.server.read_local(&group(7), PV, None).await,
-        Err(Error::Abort { reason }) if reason == AbortReason::OUT_OF_RESOURCES.to_raw()
+        Err(Error::Abort { reason }) if reason == AbortReason::OUT_OF_RESOURCES
     ));
 
     for (instance, member_count) in [(8, 3), (9, 4)] {

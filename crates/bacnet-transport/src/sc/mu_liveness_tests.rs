@@ -2,7 +2,7 @@
 //! Real-time timing unless a test says otherwise; these tests require
 //! progressing WebSocket writes.
 
-use crate::sc::heartbeat_validation_tests::start_timed;
+use crate::sc::heartbeat_validation_tests::{start_timed, start_timed_with_timeout};
 use crate::sc::*;
 use tokio::time::timeout;
 
@@ -51,7 +51,10 @@ async fn barrier(ws: &LoopbackWebSocket) {
 
 #[tokio::test]
 async fn mu_liveness_rejected_burst_preserves_pending_probe_and_matching_ack() {
-    let (mut transport, mut rx, ws) = start_timed().await;
+    // The burst below runs on real time while the probe stays unanswered.
+    // A 5 s liveness timeout keeps a loaded runner from dropping the link
+    // first; probes still go out after 100 ms of idle.
+    let (mut transport, mut rx, ws) = start_timed_with_timeout(5000).await;
     let probe = recv(&ws).await;
     assert_eq!(probe[0], 0x0A);
     for &(options, marker) in OPTIONS {

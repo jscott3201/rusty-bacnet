@@ -515,10 +515,10 @@ impl<W: WebSocketPort> DirectShared<W> {
     /// on any transport failure or timeout; the caller must fall back to hub
     /// delivery and must not cache the miss. Successful results are cached
     /// before returning, including empty lists.
-    pub(super) async fn discover_via_hub(
+    pub(super) async fn discover_via_hub<H: WebSocketPort>(
         &self,
         dest: Vmac,
-        ws: &Arc<W>,
+        ws: &Arc<H>,
         conn: &Arc<Mutex<ScConnection>>,
         connect_timeout_ms: u64,
     ) -> Option<Vec<String>> {

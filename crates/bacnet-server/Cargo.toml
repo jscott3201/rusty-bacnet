@@ -1,5 +1,6 @@
 [package]
 name = "bacnet-server"
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,7 +10,15 @@ description = "BACnet server: APDU dispatch and service handlers"
 keywords = ["bacnet", "building-automation", "server", "async"]
 categories = ["network-programming"]
 
+[package.metadata.docs.rs]
+no-default-features = true
+features = ["sc-tls"]
+default-target = "x86_64-unknown-linux-gnu"
+targets = []
+rustdoc-args = ["--cfg", "docsrs"]
+
 [dependencies]
+bacnet-npdu = { workspace = true }
 bacnet-types = { workspace = true, features = ["std"] }
 bacnet-encoding = { workspace = true, features = ["std"] }
 bacnet-endpoint-core.workspace = true

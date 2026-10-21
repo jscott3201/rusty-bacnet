@@ -257,6 +257,7 @@ async fn receive_from(
         destination: destination.into(),
         arrival_index: None,
         os_group_delivery: None,
+        arrival_stamp: None,
     };
     let local = IngressAddresses {
         unicast_ips: vec![LOCAL],

@@ -32,11 +32,11 @@
 //! accepts all four.
 
 #[cfg(not(feature = "std"))]
-use alloc::{string::ToString, vec::Vec};
+use alloc::vec::Vec;
 
 use bacnet_types::constructed::FaultParameters;
 use bacnet_types::enums::LifeSafetyState;
-use bacnet_types::error::Error;
+use bacnet_types::error::{DecodeError, DecodingKind, Error};
 use bytes::BytesMut;
 
 use crate::primitives;
@@ -56,7 +56,7 @@ pub fn encode_fault_parameters(buf: &mut BytesMut, value: &FaultParameters) -> R
     let mut encoded = BytesMut::new();
     encode_fault_parameters_into(&mut encoded, value)?;
     super::validate_tlv_sequence(&encoded, "FaultParameters")
-        .map_err(|error| Error::Encoding(error.to_string()))?;
+        .map_err(Error::into_encode_refusal)?;
     buf.extend_from_slice(&encoded);
     Ok(())
 }
@@ -83,7 +83,7 @@ fn encode_fault_parameters_into(buf: &mut BytesMut, value: &FaultParameters) -> 
             parameters,
         } => {
             validate_extended_parameters(parameters, "fault-extended")
-                .map_err(|error| Error::Encoding(error.to_string()))?;
+                .map_err(Error::into_encode_refusal)?;
             tags::encode_opening_tag(buf, 2);
             primitives::encode_ctx_unsigned(buf, 0, *vendor_id as u64);
             primitives::encode_ctx_unsigned(buf, 1, *extended_fault_type as u64);
@@ -165,10 +165,13 @@ fn decode_fault_normal_value(data: &[u8], offset: usize) -> Result<(f64, usize),
     }
     let what = "fault-out-of-range min/max-normal-value";
     if t.number == tags::app_tag::BOOLEAN {
-        return Err(Error::decoding(
+        return Err(DecodeError::new(
+            DecodingKind::InvalidEncoding,
             offset,
-            format!("{what}: BOOLEAN is not a valid alternative"),
-        ));
+            "BOOLEAN is not a valid alternative",
+        )
+        .within(what)
+        .into());
     }
     let (content, end) = contents(data, pos, t.length)?;
     let value = match t.number {
@@ -177,10 +180,14 @@ fn decode_fault_normal_value(data: &[u8], offset: usize) -> Result<(f64, usize),
         tags::app_tag::DOUBLE => primitives::decode_double(content)?,
         tags::app_tag::SIGNED => primitives::decode_signed(content)? as f64,
         other => {
-            return Err(Error::decoding(
+            return Err(DecodeError::new(
+                DecodingKind::InvalidEncoding,
                 offset,
-                format!("{what}: unexpected application tag {other}"),
-            ))
+                "unexpected application tag {}",
+            )
+            .within(what)
+            .with_value(other.into())
+            .into())
         }
     };
     Ok((value, end))
@@ -330,10 +337,13 @@ pub fn decode_fault_parameters(
             (F::FaultListed { reference }, pos)
         }
         n => {
-            return Err(Error::decoding(
+            return Err(DecodeError::new(
+                DecodingKind::InvalidEncoding,
                 offset,
-                format!("BACnetFaultParameter: unknown CHOICE tag [{n}]"),
-            ));
+                "BACnetFaultParameter: unknown CHOICE tag [{}]",
+            )
+            .with_value(n.into())
+            .into());
         }
     };
     let (value, end) = value;

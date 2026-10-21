@@ -20,7 +20,7 @@ pub(super) fn who_is(frame: &mut Frame, area: Rect, app: &App, form: &WhoIsForm,
     let target_hint = match (form.scope.needs_target(), form.scope) {
         (false, _) => "not used for this scope",
         (true, ScopeChoice::Network) => "network number, 1-65534",
-        (true, _) => app.style.directed_forms(),
+        (true, _) => crate::tui::app::whois::directed_forms(app.style),
     };
     let mut lines = vec![
         field(

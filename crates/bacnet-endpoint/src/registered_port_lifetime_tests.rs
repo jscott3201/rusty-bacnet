@@ -157,7 +157,7 @@ async fn assert_protected(db: &Arc<RwLock<ObjectDatabase>>) {
 }
 async fn server(control: Arc<Control>) -> bacnet_server::server::BACnetServer<Controlled> {
     let id = identity();
-    let mut config = id.server_config();
+    let mut config = crate::identity::server_config(&id);
     config.registered_network_port = Some(port());
     bacnet_server::server::BACnetServer::start(
         config,
@@ -210,7 +210,7 @@ async fn registered_port_failed_postbind_start_cleanup_survives_caller_cancel() 
     let control = Control::new();
     control.mismatch.store(true, Ordering::SeqCst);
     let id = identity();
-    let mut config = id.server_config();
+    let mut config = crate::identity::server_config(&id);
     config.registered_network_port = Some(port());
     let task = tokio::spawn(bacnet_server::server::BACnetServer::start(
         config,
@@ -239,7 +239,7 @@ async fn registered_port_endpoint_cancelled_start_and_stop_join_same_cleanup() {
     )
     .unwrap()
     .with_database(id.build_database().unwrap())
-    .with_identity(id)
+    .device(id)
     .with_registered_network_port(port());
     let db = session.database.as_ref().unwrap().clone();
     {
@@ -273,7 +273,7 @@ async fn registered_port_admitted_read_survives_independent_ingress_end() {
             EndpointSession::new(transport, SessionRole::ServerOnly, SessionConfig::default())
                 .unwrap()
                 .with_database(id.build_database().unwrap())
-                .with_identity(id)
+                .device(id)
                 .with_registered_network_port(port());
         session.start().await.unwrap();
         let idle_handle = session.cloned_server_handle().unwrap();
@@ -289,6 +289,7 @@ async fn registered_port_admitted_read_survives_independent_ingress_end() {
             Some(tokio::spawn(async move {
                 handle
                     .handle_inbound(ReceivedApdu {
+                        router_response: None,
                         direct_response: None,
                         apdu: npdu.slice(2..),
                         source_mac: mac,
@@ -358,7 +359,7 @@ async fn registered_port_endpoint_cleanup_error_is_reported() {
     )
     .unwrap()
     .with_database(id.build_database().unwrap())
-    .with_identity(id)
+    .device(id)
     .with_registered_network_port(port());
     session.start().await.unwrap();
     control.stop_outcome.store(1, Ordering::SeqCst);
@@ -418,7 +419,7 @@ async fn registered_port_active_endpoint_cancelled_stop_retains_and_then_release
     )
     .unwrap()
     .with_database(id.build_database().unwrap())
-    .with_identity(id)
+    .device(id)
     .with_registered_network_port(port());
     session.start().await.unwrap();
     let db = session.database.as_ref().unwrap().clone();
@@ -463,7 +464,7 @@ async fn both_registered_bip_snapshots_use_local_capacity_not_smaller_egress() {
     )
     .unwrap()
     .with_database(id.build_database().unwrap())
-    .with_identity(id)
+    .device(id)
     .with_registered_network_port(port());
     session.start().await.unwrap();
     assert_eq!(

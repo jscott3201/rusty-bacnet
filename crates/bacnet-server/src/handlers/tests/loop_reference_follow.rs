@@ -10,6 +10,7 @@ use bacnet_encoding::constructed::{decode_object_property_reference, decode_setp
 use bacnet_objects::analog::AnalogOutputObject;
 use bacnet_objects::loop_obj::LoopObject;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
+use bacnet_types::enums::EngineeringUnits;
 
 const CVR: PropertyIdentifier = PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE;
 const MVR: PropertyIdentifier = PropertyIdentifier::MANIPULATED_VARIABLE_REFERENCE;
@@ -129,16 +130,28 @@ fn run_pass(db: &mut ObjectDatabase, lo: ObjectIdentifier) -> f32 {
 fn loop_follows_the_references_a_client_writes() {
     let mut db = ObjectDatabase::new();
     let lo = oid(ObjectType::LOOP, 1);
-    db.add(Box::new(LoopObject::new(1, "LOOP-1", 62).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        LoopObject::new(1, "LOOP-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+    ))
+    .unwrap();
     for (instance, value) in [(7, 20.0), (8, 30.0), (10, 22.5)] {
-        let mut ai = AnalogInputObject::new(instance, format!("AI-{instance}"), 62).unwrap();
+        let mut ai = AnalogInputObject::new(
+            instance,
+            format!("AI-{instance}"),
+            EngineeringUnits::DEGREES_CELSIUS,
+        )
+        .unwrap();
         ai.set_present_value(value);
         db.add(Box::new(ai)).unwrap();
     }
     for instance in [3, 4] {
         db.add(Box::new(
-            AnalogOutputObject::new(instance, format!("AO-{instance}"), 62).unwrap(),
+            AnalogOutputObject::new(
+                instance,
+                format!("AO-{instance}"),
+                EngineeringUnits::DEGREES_CELSIUS,
+            )
+            .unwrap(),
         ))
         .unwrap();
     }

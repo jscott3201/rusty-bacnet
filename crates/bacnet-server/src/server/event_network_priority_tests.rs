@@ -13,21 +13,21 @@ use super::event_recipient_routing_tests::{
     address_recipient, destination_for, distribute_with_priority,
 };
 use bacnet_encoding::npdu::decode_npdu;
-use bacnet_types::enums::NetworkPriority;
+use bacnet_npdu::NetworkPriority;
 use bytes::Bytes;
 
 /// Every band edge of Table 13-6, both ends.
 #[test]
 fn table_13_6_band_boundaries() {
     for (event_priority, expected) in [
-        (0u8, NetworkPriority::LIFE_SAFETY),
-        (63, NetworkPriority::LIFE_SAFETY),
-        (64, NetworkPriority::CRITICAL_EQUIPMENT),
-        (127, NetworkPriority::CRITICAL_EQUIPMENT),
-        (128, NetworkPriority::URGENT),
-        (191, NetworkPriority::URGENT),
-        (192, NetworkPriority::NORMAL),
-        (255, NetworkPriority::NORMAL),
+        (0u8, NetworkPriority::LifeSafety),
+        (63, NetworkPriority::LifeSafety),
+        (64, NetworkPriority::CriticalEquipment),
+        (127, NetworkPriority::CriticalEquipment),
+        (128, NetworkPriority::Urgent),
+        (191, NetworkPriority::Urgent),
+        (192, NetworkPriority::Normal),
+        (255, NetworkPriority::Normal),
     ] {
         assert_eq!(
             network_priority_for_event(event_priority),
@@ -46,14 +46,14 @@ fn npdu_priority(frame: &Bytes) -> NetworkPriority {
 #[tokio::test]
 async fn unconfirmed_notification_npdu_carries_projected_priority() {
     for (event_priority, expected) in [
-        (0u8, NetworkPriority::LIFE_SAFETY),
-        (63, NetworkPriority::LIFE_SAFETY),
-        (64, NetworkPriority::CRITICAL_EQUIPMENT),
-        (127, NetworkPriority::CRITICAL_EQUIPMENT),
-        (128, NetworkPriority::URGENT),
-        (191, NetworkPriority::URGENT),
-        (192, NetworkPriority::NORMAL),
-        (255, NetworkPriority::NORMAL),
+        (0u8, NetworkPriority::LifeSafety),
+        (63, NetworkPriority::LifeSafety),
+        (64, NetworkPriority::CriticalEquipment),
+        (127, NetworkPriority::CriticalEquipment),
+        (128, NetworkPriority::Urgent),
+        (191, NetworkPriority::Urgent),
+        (192, NetworkPriority::Normal),
+        (255, NetworkPriority::Normal),
     ] {
         let (broadcasts, unicasts) = distribute_with_priority(
             [event_priority; 3],
@@ -85,7 +85,7 @@ async fn confirmed_notification_npdu_carries_projected_priority() {
     assert!(broadcasts.is_empty());
     assert_eq!(unicasts.len(), 1, "confirmed unicast goes out");
     assert_eq!(unicasts[0].0, mac);
-    assert_eq!(npdu_priority(&unicasts[0].1), NetworkPriority::LIFE_SAFETY);
+    assert_eq!(npdu_priority(&unicasts[0].1), NetworkPriority::LifeSafety);
 }
 
 /// Every unconfirmed route shape carries the projected priority — each send
@@ -107,7 +107,7 @@ async fn every_unconfirmed_route_carries_projected_priority() {
         assert!(unicasts.is_empty());
         assert_eq!(
             npdu_priority(&broadcasts[0]),
-            NetworkPriority::LIFE_SAFETY,
+            NetworkPriority::LifeSafety,
             "route {recipient:?}"
         );
     }
@@ -121,5 +121,5 @@ async fn every_unconfirmed_route_carries_projected_priority() {
     .await;
     assert!(broadcasts.is_empty());
     assert_eq!(unicasts.len(), 1);
-    assert_eq!(npdu_priority(&unicasts[0].1), NetworkPriority::LIFE_SAFETY);
+    assert_eq!(npdu_priority(&unicasts[0].1), NetworkPriority::LifeSafety);
 }

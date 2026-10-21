@@ -36,11 +36,12 @@ fn lighting_output_read_object_type() {
 fn lighting_output_write_pv_commandable() {
     let mut obj = LightingOutputObject::new(1, "LO-1").unwrap();
     // Write at priority 8
-    obj.write_property(
+    obj.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Real(75.0),
         Some(8),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     let pv = obj
@@ -49,11 +50,12 @@ fn lighting_output_write_pv_commandable() {
     assert_eq!(pv, PropertyValue::Real(75.0));
 
     // Write at priority 1 (higher) overrides
-    obj.write_property(
+    obj.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Real(50.0),
         Some(1),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     let pv = obj
@@ -62,11 +64,12 @@ fn lighting_output_write_pv_commandable() {
     assert_eq!(pv, PropertyValue::Real(50.0));
 
     // Relinquish priority 1 — falls back to priority 8 value
-    obj.write_property(
+    obj.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Null,
         Some(1),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     let pv = obj
@@ -78,20 +81,22 @@ fn lighting_output_write_pv_commandable() {
 #[test]
 fn lighting_output_pv_out_of_range() {
     let mut obj = LightingOutputObject::new(1, "LO-1").unwrap();
-    let result = obj.write_property(
+    let result = obj.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Real(101.0),
         Some(16),
+        &crate::command_source::test_origin(),
     );
     assert!(result.is_err());
 
     // -1.0 is the WARN special value; -0.5 is just out of range.
-    let result = obj.write_property(
+    let result = obj.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Real(-0.5),
         Some(16),
+        &crate::command_source::test_origin(),
     );
     assert!(result.is_err());
 }
@@ -99,11 +104,12 @@ fn lighting_output_pv_out_of_range() {
 #[test]
 fn lighting_output_priority_array_read() {
     let mut obj = LightingOutputObject::new(1, "LO-1").unwrap();
-    obj.write_property(
+    obj.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Real(50.0),
         Some(8),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
 
@@ -129,11 +135,12 @@ fn lighting_output_priority_array_read() {
 #[test]
 fn lighting_output_priority_array_tracks_present_value_command() {
     let mut obj = LightingOutputObject::new(1, "LO-1").unwrap();
-    obj.write_property(
+    obj.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Real(33.0),
         Some(5),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     let pv = obj
@@ -168,11 +175,12 @@ fn lighting_output_lighting_properties() {
     assert_eq!(lc, PropertyValue::ApplicationData(vec![0x09, 0x00]));
 
     // Write LIGHTING_COMMAND: STEP_UP (3).
-    obj.write_property(
+    obj.write_property_from(
         PropertyIdentifier::LIGHTING_COMMAND,
         None,
         PropertyValue::ApplicationData(vec![0x09, 0x03]),
         None,
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     let lc = obj
@@ -258,11 +266,12 @@ fn binary_lighting_output_read_object_type() {
 fn binary_lighting_output_write_pv_commandable() {
     let mut obj = BinaryLightingOutputObject::new(1, "BLO-1").unwrap();
     // Write on (1) at priority 8
-    obj.write_property(
+    obj.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Enumerated(1),
         Some(8),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     let pv = obj
@@ -272,11 +281,12 @@ fn binary_lighting_output_write_pv_commandable() {
 
     // WARN is an operation, not a stored command. Priority 1 has no existing
     // ON slot, so this is an accepted no-op.
-    obj.write_property(
+    obj.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Enumerated(2),
         Some(1),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     let pv = obj
@@ -290,11 +300,12 @@ fn binary_lighting_output_write_pv_commandable() {
     );
 
     // Relinquish priority 1 — falls back to priority 8 (on)
-    obj.write_property(
+    obj.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Null,
         Some(1),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     let pv = obj
@@ -306,11 +317,12 @@ fn binary_lighting_output_write_pv_commandable() {
 #[test]
 fn binary_lighting_output_pv_out_of_range() {
     let mut obj = BinaryLightingOutputObject::new(1, "BLO-1").unwrap();
-    let result = obj.write_property(
+    let result = obj.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Enumerated(6),
         Some(16),
+        &crate::command_source::test_origin(),
     );
     assert!(result.is_err());
 }
@@ -319,11 +331,12 @@ fn binary_lighting_output_pv_out_of_range() {
 fn binary_lighting_output_all_named_pv_commands_are_accepted_without_storing_operations() {
     for val in 0..=5 {
         let mut obj = BinaryLightingOutputObject::new(1, "BLO-1").unwrap();
-        obj.write_property(
+        obj.write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Enumerated(val),
             Some(16),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
         let pv = obj
@@ -344,11 +357,12 @@ fn binary_lighting_output_all_named_pv_commands_are_accepted_without_storing_ope
 #[test]
 fn binary_lighting_output_priority_array() {
     let mut obj = BinaryLightingOutputObject::new(1, "BLO-1").unwrap();
-    obj.write_property(
+    obj.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Enumerated(1),
         Some(5),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
 
@@ -374,11 +388,12 @@ fn binary_lighting_output_priority_array() {
 #[test]
 fn binary_lighting_output_priority_array_tracks_present_value_command() {
     let mut obj = BinaryLightingOutputObject::new(1, "BLO-1").unwrap();
-    obj.write_property(
+    obj.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Enumerated(1),
         Some(3),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     let pv = obj
@@ -471,11 +486,8 @@ fn lighting_output_relinquish_default_write_recaptures_present_value() {
 fn assert_property_error(error: Error, expected_code: bacnet_types::enums::ErrorCode) {
     match error {
         Error::Protocol { class, code } => {
-            assert_eq!(
-                class,
-                bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
-            );
-            assert_eq!(code, expected_code.to_raw() as u32);
+            assert_eq!(class, bacnet_types::enums::ErrorClass::PROPERTY);
+            assert_eq!(code, expected_code);
         }
         other => panic!("expected PROPERTY / {expected_code:?}, got {other:?}"),
     }
@@ -521,11 +533,12 @@ fn binary_lighting_output_relinquish_default_accepts_off_on_and_recaptures_prese
 fn binary_lighting_output_relinquish_default_rejects_non_binary_values_atomically() {
     let mut blo = BinaryLightingOutputObject::new(1, "BLO-1").unwrap();
     blo.set_relinquish_default(1).unwrap();
-    blo.write_property(
+    blo.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Enumerated(0),
         Some(8),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
 
@@ -555,11 +568,12 @@ fn binary_lighting_output_relinquish_default_rejects_non_binary_values_atomicall
 fn binary_lighting_output_relinquish_default_wrong_type_is_atomic() {
     let mut blo = BinaryLightingOutputObject::new(1, "BLO-1").unwrap();
     blo.set_relinquish_default(1).unwrap();
-    blo.write_property(
+    blo.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Enumerated(0),
         Some(8),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
 
@@ -579,22 +593,24 @@ fn binary_lighting_output_relinquish_default_wrong_type_is_atomic() {
 #[test]
 fn binary_lighting_output_active_command_outranks_relinquish_default() {
     let mut blo = BinaryLightingOutputObject::new(1, "BLO-1").unwrap();
-    blo.write_property(
+    blo.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Enumerated(0),
         Some(8),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
 
     blo.set_relinquish_default(1).unwrap();
     assert_binary_lighting_output_command_state(&blo, 1, 0, PropertyValue::Enumerated(0));
 
-    blo.write_property(
+    blo.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Null,
         Some(8),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     assert_binary_lighting_output_command_state(&blo, 1, 1, PropertyValue::Null);

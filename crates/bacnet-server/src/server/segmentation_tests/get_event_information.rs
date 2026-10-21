@@ -78,8 +78,8 @@ impl BACnetObject for LargeSummaryObject {
             p if p == PropertyIdentifier::NOTIFY_TYPE => Ok(PropertyValue::Enumerated(0)),
             p if p == PropertyIdentifier::NOTIFICATION_CLASS => Ok(PropertyValue::Unsigned(42)),
             _ => Err(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+                class: ErrorClass::PROPERTY,
+                code: ErrorCode::UNKNOWN_PROPERTY,
             }),
         }
     }
@@ -92,8 +92,8 @@ impl BACnetObject for LargeSummaryObject {
         _priority: Option<u8>,
     ) -> Result<(), Error> {
         Err(Error::Protocol {
-            class: ErrorClass::PROPERTY.to_raw() as u32,
-            code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
+            class: ErrorClass::PROPERTY,
+            code: ErrorCode::WRITE_ACCESS_DENIED,
         })
     }
 
@@ -190,9 +190,11 @@ async fn dispatch_with_budget(
     let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let confirmed_request_tracker = Arc::new(ConfirmedRequestTracker::default());
     let config = ServerConfig {
+        device: bacnet_objects::DeviceIdentity::default()
+            .with_max_apdu(u16::try_from(local_max_apdu).expect("Device APDU fits u16"))
+            .expect("valid Device APDU")
+            .with_segmentation(segmentation),
         get_event_information_budget: budget,
-        max_apdu_length: local_max_apdu,
-        segmentation_supported: segmentation,
         ..ServerConfig::default()
     };
     let source_mac = test_mac(41);

@@ -8,6 +8,7 @@ use super::*;
 use bacnet_encoding::constructed::encode_object_property_reference;
 use bacnet_objects::binary::BinaryValueObject;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
+use bacnet_types::enums::EngineeringUnits;
 use PropertyIdentifier as P;
 
 fn ai() -> ObjectIdentifier {
@@ -69,15 +70,17 @@ fn read(
 fn refused(result: Result<(), Error>, expected: ErrorCode) {
     assert!(
         matches!(result, Err(Error::Protocol { class, code })
-            if class == ErrorClass::PROPERTY.to_raw() as u32 && code == expected.to_raw() as u32),
+            if class == ErrorClass::PROPERTY && code == expected),
         "expected {expected:?}, got {result:?}"
     );
 }
 
 fn db() -> ObjectDatabase {
     let mut db = ObjectDatabase::new();
-    db.add(Box::new(AnalogInputObject::new(1, "AI-1", 62).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+    ))
+    .unwrap();
     let mut active = BinaryValueObject::new(1, "BV-1").unwrap();
     active
         .write_property_from(

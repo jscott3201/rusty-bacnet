@@ -21,8 +21,8 @@ pub(crate) fn resolve_local(
     source: LocalCommandSource,
 ) -> Result<CommandOrigin, Error> {
     let denied = || Error::Protocol {
-        class: ErrorClass::PROPERTY.to_raw() as u32,
-        code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
+        class: ErrorClass::PROPERTY,
+        code: ErrorCode::WRITE_ACCESS_DENIED,
     };
     let owner_device = db.local_device().identifier().ok_or_else(denied)?;
     let initiating_object = match source {

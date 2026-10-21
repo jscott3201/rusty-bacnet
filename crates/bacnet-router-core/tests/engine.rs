@@ -3,14 +3,17 @@
 
 mod fixture;
 
-use bacnet_router_core::message::MessageType;
+use bacnet_router_core::npdu::Mac;
+use bacnet_router_core::npdu::NpduLimits;
+use bacnet_router_core::npdu::{NetworkMessageType, RejectMessageReason};
 use bacnet_router_core::router::{
-    Action, ConfigError, Discard, Event, Frame, Limits, Options, Permissive, Received, SendRefusal,
+    Action, ConfigError, ControlClass, Counters, Discard, Event, Frame, Kind, LimitError, Options,
+    Permissive, Received, SendRefusal,
 };
-use bacnet_router_core::{Duration, Instant, Mac, PortId, Router, Storage};
+use bacnet_router_core::{Duration, Instant, PortId, Router, RouterIn, Storage};
 use fixture::{
-    apdu_to, at, deliver, drain, learn_9_via_r7, options, port_on, router, two_ports, Outcome,
-    Recorder, Store, CONFIRMED, NODE_A, OWN_0, OWN_1, R7,
+    apdu_to, at, deliver, drain, i_am, learn_9_via_r7, message, options, port_on, router,
+    sent_reject, two_ports, Outcome, Recorder, Store, CONFIRMED, NODE_A, OWN_0, OWN_1, R7,
 };
 use proptest::prelude::*;
 
@@ -38,10 +41,22 @@ fn new_refuses_what_it_cannot_route() {
         new(&[port_on(1, OWN_0), port_on(1, OWN_1)], hosted),
         Err(ConfigError::DuplicateNetwork(1))
     );
+    // Clause 6.2.2.1: 0 is no network, and 0xFFFF no SNET (#1698).
+    for network in [0, 0xFFFF] {
+        assert_eq!(
+            new(&[port_on(1, OWN_0), port_on(network, OWN_1)], hosted),
+            Err(ConfigError::ReservedNetwork {
+                port: PortId(1),
+                network
+            })
+        );
+    }
+    let ends = [port_on(1, OWN_0), port_on(0xFFFE, OWN_1)];
+    assert_eq!(new(&ends, hosted), Ok(()));
     for limits in [
-        Limits::both(63),
-        Limits::both(1498),
-        Limits {
+        NpduLimits::both(63),
+        NpduLimits::both(1498),
+        NpduLimits {
             unicast: 1497,
             broadcast: 10,
         },
@@ -51,9 +66,9 @@ fn new_refuses_what_it_cannot_route() {
         assert_eq!(new(&ports, hosted), Err(ConfigError::Limit(PortId(1))));
     }
     let mut ports = two_ports();
-    ports[0].max_npdu = Limits::both(64);
+    ports[0].max_npdu = NpduLimits::both(64);
     assert_eq!(new(&ports, hosted), Ok(()));
-    let over = options(|o| o.route_cap = 257);
+    let over = options(|o| o.route_cap = Some(257));
     assert_eq!(
         new(&two_ports(), over),
         Err(ConfigError::RouteCap {
@@ -65,7 +80,7 @@ fn new_refuses_what_it_cannot_route() {
     assert_eq!(new(&two_ports(), still), Err(ConfigError::ZeroSweep));
 
     let mut storage = Storage::<2, 1, 1>::new();
-    let options = options(|o| o.route_cap = 1);
+    let options = options(|o| o.route_cap = Some(1));
     let refused = Router::new(&mut storage, &two_ports(), options, Instant::ZERO).map(|_| ());
     assert_eq!(refused, Err(ConfigError::TableTooSmall));
 }
@@ -74,7 +89,7 @@ fn new_refuses_what_it_cannot_route() {
 #[test]
 fn new_clears_the_storage_it_is_given() {
     let mut storage = Box::new(Small::new());
-    let options = options(|o| o.route_cap = 8);
+    let options = options(|o| o.route_cap = Some(8));
     let mut router = Router::new(&mut *storage, &two_ports(), options, at(0)).unwrap();
     router
         .table_mut()
@@ -153,6 +168,114 @@ fn refusals_are_counted() {
     }
     let counters = router.counters();
     assert_eq!((counters.refused, counters.egress_too_long), (3, 1));
+}
+
+/// A refusal reported after later polls (a link that queued the send) is
+/// counted as one at once is, but ends no table answer: the second Ack of
+/// a 132-route answer still goes.
+#[test]
+fn a_later_refusal_is_counted_and_ends_no_answer() {
+    let mut router = router();
+    let peer = Mac::from_slice(R7).unwrap();
+    for network in 100..230 {
+        router
+            .table_mut()
+            .add_learned(network, PortId(1), peer, at(0));
+    }
+    let query = message(NetworkMessageType::INITIALIZE_ROUTING_TABLE, &[0]);
+    let received = router.receive(
+        Frame {
+            port: PortId(0),
+            source: NODE_A,
+            link_group: false,
+            npdu: &query,
+        },
+        at(1),
+        &mut Permissive,
+    );
+    assert_eq!(received, Received::Handled);
+    assert!(matches!(router.poll_action(), Action::Send(_)));
+    router.refused_later(SendRefusal::TooLong, None);
+    assert_eq!(drain(&mut router).len(), 1, "the second Ack");
+    let counters = router.counters();
+    assert_eq!((counters.refused, counters.egress_too_long), (1, 1));
+}
+
+/// A port's limits replaced while the router runs (#1696) route every
+/// later frame: lowered, an NPDU that went before draws reason 4; raised
+/// again, it goes. An output still waiting when they drop is left out when
+/// polled and counted, with no reject. A port the router doesn't have, or
+/// a limit `new` refuses, changes nothing.
+#[test]
+fn a_ports_limits_can_change_while_it_runs() {
+    let mut router = router();
+    let mut host = Recorder::default();
+    // 598 octets in grow by 4 to 602 onto network 2: A's SADR comes, the
+    // DNET, DADR and hop count go.
+    let mut frame = apdu_to(2, &[5], CONFIRMED);
+    frame.resize(598, 0);
+    let (_, sent) = deliver(&mut router, &mut host, 0, NODE_A, &frame, at(1));
+    assert_eq!(
+        (sent[0].port, sent[0].kind, sent[0].npdu.len()),
+        (1, Kind::Forward, 602)
+    );
+
+    assert_eq!(
+        router.set_port_max_npdu(PortId(1), NpduLimits::both(601)),
+        Ok(())
+    );
+    assert_eq!(router.ports()[1].max_npdu, NpduLimits::both(601));
+    let (_, sent) = deliver(&mut router, &mut host, 0, NODE_A, &frame, at(2));
+    assert_eq!((sent.len(), sent[0].port), (1, 0));
+    assert_eq!(
+        sent_reject(&sent[0]),
+        (RejectMessageReason::MESSAGE_TOO_LONG, 2, None)
+    );
+    assert_eq!(router.counters().egress_too_long, 1);
+
+    assert_eq!(
+        router.set_port_max_npdu(PortId(1), NpduLimits::both(602)),
+        Ok(())
+    );
+    let (_, sent) = deliver(&mut router, &mut host, 0, NODE_A, &frame, at(3));
+    assert_eq!((sent[0].port, sent[0].npdu.len()), (1, 602));
+
+    // Written at 602, polled at 601.
+    let received = router.receive(
+        Frame {
+            port: PortId(0),
+            source: NODE_A,
+            link_group: false,
+            npdu: &frame,
+        },
+        at(4),
+        &mut host,
+    );
+    assert_eq!(received, Received::Handled);
+    assert_eq!(
+        router.set_port_max_npdu(PortId(1), NpduLimits::both(601)),
+        Ok(())
+    );
+    assert!(drain(&mut router).is_empty());
+    let counters = router.counters();
+    assert_eq!((counters.egress_too_long, counters.rejects), (2, 1));
+
+    for (port, limits, refusal) in [
+        (PortId(2), NpduLimits::both(1497), LimitError::UnknownPort),
+        (PortId(1), NpduLimits::both(63), LimitError::OutOfRange),
+        (PortId(1), NpduLimits::both(1498), LimitError::OutOfRange),
+        (
+            PortId(1),
+            NpduLimits {
+                unicast: 1497,
+                broadcast: 10,
+            },
+            LimitError::OutOfRange,
+        ),
+    ] {
+        assert_eq!(router.set_port_max_npdu(port, limits), Err(refusal));
+    }
+    assert_eq!(router.ports()[1].max_npdu, NpduLimits::both(601));
 }
 
 /// The sweep runs when due and not before; a late call runs it once and
@@ -257,7 +380,7 @@ fn discovery_is_bounded() {
     let mut router = Router::new(
         &mut *storage,
         &two_ports(),
-        options(|o| o.route_cap = 8),
+        options(|o| o.route_cap = Some(8)),
         at(0),
     )
     .unwrap();
@@ -275,7 +398,7 @@ fn discovery_is_bounded() {
             &mut Permissive,
         );
         while let Action::Send(send) = router.poll_action() {
-            if send.npdu[2] == MessageType::WHO_IS_ROUTER_TO_NETWORK.to_raw() {
+            if send.npdu[2] == NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK.to_raw() {
                 solicited += 1;
             }
         }
@@ -356,7 +479,7 @@ proptest! {
                         _ => "other",
                     },
                 };
-                *dropped.entry(key).or_insert(0u64) += 1;
+                *dropped.entry(key).or_insert(0u32) += 1;
             }
             drain(&mut router);
         }
@@ -373,4 +496,68 @@ proptest! {
         prop_assert_eq!(counters.unroutable_rejects, count("unroutable"));
         prop_assert_eq!(counters.undrained, 0);
     }
+}
+
+/// The router's counts drain as the link cores' do (decision D3):
+/// `take_counters` returns the counts since the last take and starts them
+/// again from zero, and `counters` looks without taking.
+#[test]
+fn counters_drain_on_take_and_a_look_takes_nothing() {
+    let mut router = router();
+    let mut host = Recorder::default();
+    let short = [0x01];
+    let malformed = Frame {
+        port: PortId(0),
+        source: NODE_A,
+        link_group: false,
+        npdu: &short,
+    };
+    let _ = router.receive(malformed, at(1), &mut host);
+    assert_eq!(router.counters().malformed, 1);
+    assert_eq!(router.counters().malformed, 1, "a look takes nothing");
+    assert_eq!(router.take_counters().malformed, 1);
+    assert_eq!(router.counters(), Counters::default(), "drained");
+    let _ = router.receive(malformed, at(2), &mut host);
+    let _ = router.receive(malformed, at(3), &mut host);
+    assert_eq!(
+        router.take_counters().malformed,
+        2,
+        "counted from zero again"
+    );
+}
+
+/// `Options::STANDARD` has no route cap of its own, so it fits storage of
+/// any size, where `HOSTED`'s 256-route cap is refused over a smaller
+/// table: learning fills the eight routes [`Small`] holds, and stops
+/// there. `RouterIn` names the router over the storage it borrows.
+#[test]
+fn standard_options_fill_the_table_the_storage_holds() {
+    let mut storage = Small::new();
+    let hosted =
+        RouterIn::<2, 8, 8, 4>::new(&mut storage, &two_ports(), Options::HOSTED, Instant::ZERO);
+    assert_eq!(
+        hosted.map(|_| ()),
+        Err(ConfigError::RouteCap {
+            cap: 256,
+            capacity: 8
+        })
+    );
+    let mut router: RouterIn<'_, 2, 8, 8, 4> =
+        Router::new(&mut storage, &two_ports(), Options::STANDARD, Instant::ZERO).unwrap();
+    let mut host = Recorder::default();
+    let offer = i_am(&[9, 10, 11, 12, 13, 14, 15]);
+    let frame = Frame {
+        port: PortId(1),
+        source: R7,
+        link_group: true,
+        npdu: &offer,
+    };
+    let _ = router.receive(frame, at(1), &mut host);
+    while router.poll_action() != Action::Idle {}
+    let networks: Vec<u16> = router.table().networks().collect();
+    assert_eq!(networks, [1, 2, 9, 10, 11, 12, 13, 14]);
+    assert!(host.events.contains(&Event::RouteCap {
+        class: ControlClass::IAm
+    }));
+    assert_eq!(Options::default(), Options::STANDARD);
 }

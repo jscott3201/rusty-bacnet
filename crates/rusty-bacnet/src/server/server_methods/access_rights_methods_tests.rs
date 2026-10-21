@@ -70,8 +70,8 @@ fn python_access_rules_reach_both_arrays() {
             .unwrap();
         assert!(
             matches!(refused, Error::Protocol { class, code }
-                if class == ErrorClass::PROPERTY.to_raw() as u32
-                    && code == ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32),
+                if class == ErrorClass::PROPERTY
+                    && code == ErrorCode::VALUE_OUT_OF_RANGE),
             "{refused:?}"
         );
     }
@@ -204,8 +204,8 @@ fn python_accompaniment_reaches_the_optional_row() {
     .unwrap();
     assert!(
         matches!(refused, Error::Protocol { class, code }
-            if class == ErrorClass::PROPERTY.to_raw() as u32
-                && code == ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32),
+            if class == ErrorClass::PROPERTY
+                && code == ErrorCode::VALUE_OUT_OF_RANGE),
         "{refused:?}"
     );
 }

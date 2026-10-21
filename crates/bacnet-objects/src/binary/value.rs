@@ -228,8 +228,8 @@ impl BACnetObject for BinaryValueObject {
     ) -> Result<(), Error> {
         if !self.event_detection_enable {
             return Err(Error::Protocol {
-                class: ErrorClass::OBJECT.to_raw() as u32,
-                code: ErrorCode::NO_ALARM_CONFIGURED.to_raw() as u32,
+                class: ErrorClass::OBJECT,
+                code: ErrorCode::NO_ALARM_CONFIGURED,
             });
         }
         self.event_history.acknowledge_correlated(

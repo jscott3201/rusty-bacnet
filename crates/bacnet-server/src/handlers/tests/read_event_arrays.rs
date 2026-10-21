@@ -36,8 +36,8 @@ impl bacnet_objects::traits::BACnetObject for EventArrayFixture {
                 read_fixed_array(&self.messages, array_index)
             }
             _ => Err(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+                class: ErrorClass::PROPERTY,
+                code: ErrorCode::UNKNOWN_PROPERTY,
             }),
         }
     }
@@ -50,8 +50,8 @@ impl bacnet_objects::traits::BACnetObject for EventArrayFixture {
         _priority: Option<u8>,
     ) -> Result<(), Error> {
         Err(Error::Protocol {
-            class: ErrorClass::PROPERTY.to_raw() as u32,
-            code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
+            class: ErrorClass::PROPERTY,
+            code: ErrorCode::WRITE_ACCESS_DENIED,
         })
     }
 
@@ -69,8 +69,8 @@ fn read_fixed_array(
         Some(0) => Ok(PropertyValue::Unsigned(3)),
         Some(index @ 1..=3) => Ok(values[index as usize - 1].clone()),
         Some(_) => Err(Error::Protocol {
-            class: ErrorClass::PROPERTY.to_raw() as u32,
-            code: ErrorCode::INVALID_ARRAY_INDEX.to_raw() as u32,
+            class: ErrorClass::PROPERTY,
+            code: ErrorCode::INVALID_ARRAY_INDEX,
         }),
     }
 }

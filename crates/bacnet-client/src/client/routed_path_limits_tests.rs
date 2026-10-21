@@ -40,12 +40,12 @@ fn routed_unicast_needs_one_remote_network_and_one_station() {
         Err(Error::Encoding(m)) if m == "routed destination MAC address must contain 1..=18 octets"));
 }
 
-/// Every MAC a routed path carries holds to [`NpduAddress::MAX_MAC_LEN`]
+/// Every MAC a routed path carries holds to [`MAX_MAC_LEN`](bacnet_npdu::MAX_MAC_LEN)
 /// (#1267). An 18-octet router MAC, forwarded source and DADR build a path; one
 /// octet more is refused, and a refused router MAC reserves no path entry.
 #[tokio::test]
 async fn routed_path_macs_hold_to_the_npdu_address_bound() {
-    let longest = NpduAddress::MAX_MAC_LEN;
+    let longest = bacnet_npdu::MAX_MAC_LEN;
     assert_eq!(forwarded_npci_len(longest, longest).unwrap(), 45);
     assert!(matches!(forwarded_npci_len(6, longest + 1),
         Err(Error::Encoding(m)) if m == "local source MAC address for routed forwarding must contain 1..=18 octets"));
@@ -209,8 +209,7 @@ async fn capacity_cleanup_never_splits_a_held_or_waiting_same_path_gate() {
 fn reason_4_control(router: &[u8], dnet: u16, ingress_sequence: u64) -> ReceivedNetworkControl {
     ReceivedNetworkControl {
         npdu: Npdu {
-            is_network_message: true,
-            message_type: Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK.to_raw()),
+            message_type: Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK),
             payload: Bytes::from(vec![
                 RejectMessageReason::MESSAGE_TOO_LONG.to_raw(),
                 (dnet >> 8) as u8,

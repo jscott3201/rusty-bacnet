@@ -11,8 +11,8 @@ use std::time::Duration;
 fn assert_error<T: std::fmt::Debug>(result: Result<T, Error>, expected: ErrorCode) {
     match result {
         Err(Error::Protocol { class, code }) => {
-            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
-            assert_eq!(code, expected.to_raw() as u32, "expected {expected:?}");
+            assert_eq!(class, ErrorClass::PROPERTY);
+            assert_eq!(code, expected, "expected {expected:?}");
         }
         other => panic!("expected PROPERTY/{expected:?}, got {other:?}"),
     }
@@ -24,11 +24,12 @@ fn read(object: &dyn BACnetObject, property: PropertyIdentifier) -> PropertyValu
 
 fn command(object: &mut dyn BACnetObject, value: PropertyValue, priority: u8) {
     object
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             value,
             Some(priority),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
 }

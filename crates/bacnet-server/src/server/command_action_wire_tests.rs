@@ -28,7 +28,7 @@ use bacnet_objects::command::CommandObject;
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::constructed::{BACnetActionCommand, BACnetActionList};
-use bacnet_types::enums::ObjectType;
+use bacnet_types::enums::{EngineeringUnits, ObjectType};
 
 pub(super) fn cmd(instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::COMMAND, instance).unwrap()
@@ -108,7 +108,12 @@ fn lists() -> Vec<BACnetActionList> {
 pub(super) fn outputs(db: &mut ObjectDatabase) {
     for instance in [1, 2] {
         db.add(Box::new(
-            AnalogOutputObject::new(instance, format!("AO-{instance}"), 62).unwrap(),
+            AnalogOutputObject::new(
+                instance,
+                format!("AO-{instance}"),
+                EngineeringUnits::DEGREES_CELSIUS,
+            )
+            .unwrap(),
         ))
         .unwrap();
     }

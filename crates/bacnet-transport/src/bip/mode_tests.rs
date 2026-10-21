@@ -1,6 +1,6 @@
 //! `set_mode` and the status handle (#938).
 
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,6 +8,7 @@ use std::time::Duration;
 use tokio::net::UdpSocket;
 
 use super::*;
+use crate::bbmd::NatTraversal;
 
 fn foreign_to(bbmd_port: u16) -> ForeignDeviceConfig {
     ForeignDeviceConfig {
@@ -46,13 +47,23 @@ fn bbmd_mode_maps_every_option_onto_its_setter() {
         management_acl: vec![[10, 0, 0, 9]],
         bdt_persist_path: Some(PathBuf::from("bdt.bin")),
         fanout_policy: fanout.clone(),
+        alone_on_subnet: true,
+        nat: Some(NatTraversal::new(SocketAddrV4::new(
+            Ipv4Addr::new(203, 0, 113, 1),
+            47809,
+        ))),
     }));
     let config = transport.bbmd_config.as_ref().unwrap();
+    assert!(config.alone_on_subnet);
+    assert_eq!(
+        config.nat.as_ref().map(|nat| nat.global_address),
+        Some(SocketAddrV4::new(Ipv4Addr::new(203, 0, 113, 1), 47809))
+    );
     assert_eq!(config.initial_bdt, [row]);
     assert_eq!(config.foreign_device_policy, Some(policy));
     assert_eq!(config.management_acl, [[10, 0, 0, 9]]);
     assert_eq!(
-        transport.bdt_persist_path.as_deref(),
+        transport.bdt_persist_path(),
         Some(std::path::Path::new("bdt.bin"))
     );
     // Sanitized, as `set_fanout_policy` leaves it.
@@ -66,7 +77,7 @@ fn bbmd_mode_maps_every_option_onto_its_setter() {
 fn foreign_mode_keeps_its_renewal_interval() {
     let mut transport = transport();
     transport.set_mode(BipMode::Foreign(foreign_to(47808)));
-    let foreign = transport.foreign_device.as_ref().unwrap();
+    let foreign = transport.foreign_device_config().unwrap();
     assert_eq!(foreign.renewal_interval, Some(Duration::from_secs(5)));
     assert_eq!(foreign.ttl, 60);
     assert!(transport.bbmd_config.is_none());
@@ -87,7 +98,7 @@ async fn a_mode_replaces_the_one_before_it() {
     transport.set_mode(BipMode::Normal);
     assert!(transport.bbmd_config.is_none());
     assert!(transport.foreign_device.is_none());
-    assert!(transport.bdt_persist_path.is_none());
+    assert!(transport.bdt_persist_path().is_none());
     assert_eq!(transport.fanout_policy, FanoutPolicy::default());
     let _rx = transport.start().await.unwrap();
     assert!(transport.bbmd_state().is_none());

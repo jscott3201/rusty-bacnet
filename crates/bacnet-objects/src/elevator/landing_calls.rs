@@ -55,11 +55,11 @@ pub(super) fn decode_write(value: PropertyValue) -> Result<BACnetLandingCallStat
         }
         _ => return Err(common::invalid_data_type_error()),
     };
-    // The codec reports a well-formed but oversized member as a local
-    // OutOfRange error; every other failure is a malformed encoding.
+    // The codec reports a well-formed but oversized member as a static
+    // range error; every other failure is a malformed encoding.
     let (status, consumed) =
         decode_landing_call_status(&bytes, 0).map_err(|error| match error {
-            Error::OutOfRange(_) => common::value_out_of_range_error(),
+            Error::Range(_) => common::value_out_of_range_error(),
             _ => common::invalid_data_encoding_error(),
         })?;
     if consumed != bytes.len() {

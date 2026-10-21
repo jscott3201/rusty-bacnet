@@ -20,7 +20,7 @@ use super::command_action_wire_tests::{ao, cmd, idle, read_db, slot8};
 use super::command_run_stop_tests::{channel_status, db_flags, db_state, objects, with_channel};
 use super::cov_wire_test_support::*;
 use super::*;
-use bacnet_types::enums::WriteStatus;
+use bacnet_types::enums::{EngineeringUnits, WriteStatus};
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll, Waker};
@@ -401,7 +401,12 @@ impl bacnet_objects::traits::BACnetObject for Rearmable {
 #[tokio::test(start_paused = true)]
 async fn a_rearm_of_an_object_that_isnt_life_safety_owes_no_cov() {
     let mut h = Harness::start_with(ServerConfig::default(), |db| {
-        let inner = bacnet_objects::analog::AnalogValueObject::new(2, "AV-2", 62).unwrap();
+        let inner = bacnet_objects::analog::AnalogValueObject::new(
+            2,
+            "AV-2",
+            EngineeringUnits::DEGREES_CELSIUS,
+        )
+        .unwrap();
         db.add(Box::new(Rearmable(inner))).unwrap();
     })
     .await;

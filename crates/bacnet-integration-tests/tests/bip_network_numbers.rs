@@ -2,12 +2,16 @@
 //! Actual loopback UDP only. BBMD broadcast observation requires Linux sharing.
 #[path = "bip_network_numbers/support.rs"]
 mod support;
+// The closing rebinds can lose the freed port to another process (#1419).
+#[path = "../../bacnet-endpoint/tests/support/port_retry.rs"]
+mod port_retry;
 use bacnet_encoding::{
     apdu::{decode_apdu, Apdu},
     npdu::decode_npdu,
 };
 use bacnet_transport::bip::{BipTransport, ForeignDeviceConfig};
 use bytes::Bytes;
+use port_retry::{bind_eventually, rerun_on_lost_port};
 use std::net::{Ipv4Addr, SocketAddrV4};
 use support::*;
 use tokio::net::UdpSocket;
@@ -82,138 +86,147 @@ async fn invalid_controls(
 
 #[tokio::test]
 async fn bip_number_foreign_full_server_wire_and_alternate_sender() {
-    let (server, local, bbmd) = foreign(None).await;
-    let alternate = udp().await;
-    send(&bbmd, local, &frame(0, &[0, 0])).await;
-    // No configured authority from unrelated Network Port999. An unknown query
-    // and unicast announcement must not cause a response before the valid fence.
-    send(&alternate, local, &frame(0x0a, QUERY)).await;
-    send(&alternate, local, &frame(0x0a, &number(999, 1))).await;
-    send(&alternate, local, &frame(0x0a, QUERY)).await;
-    forward(&alternate, local, QUERY).await;
-    fence(&alternate, local).await;
-    forward(&bbmd, local, &number(77, 0)).await;
-    forward(&bbmd, local, QUERY).await;
-    expect_number(&bbmd, local, 9, 77).await;
-    send(&alternate, local, &frame(0x0a, QUERY)).await;
-    expect_number(&bbmd, local, 9, 77).await;
-    // A foreign device takes a Forwarded-NPDU only from its BBMD by unicast
-    // (#1622): the alternate sender's announcement teaches nothing, and its
-    // query draws no reply, so the BBMD's query is answered with 77.
-    forward(&alternate, local, &number(78, 1)).await;
-    forward(&alternate, local, QUERY).await;
-    forward(&bbmd, local, QUERY).await;
-    expect_number(&bbmd, local, 9, 77).await;
-    for (value, flag, expected) in [(78, 0, 78), (79, 1, 79), (80, 0, 79), (81, 1, 81)] {
-        // The BBMD's forwards teach. Their logical group bit is not trust.
-        forward(&bbmd, local, &number(value, flag)).await;
+    rerun_on_lost_port(async || {
+        let (server, local, bbmd) = foreign(None).await;
+        let alternate = udp().await;
+        send(&bbmd, local, &frame(0, &[0, 0])).await;
+        // No configured authority from unrelated Network Port999. An unknown query
+        // and unicast announcement must not cause a response before the valid fence.
+        send(&alternate, local, &frame(0x0a, QUERY)).await;
+        send(&alternate, local, &frame(0x0a, &number(999, 1))).await;
+        send(&alternate, local, &frame(0x0a, QUERY)).await;
+        forward(&alternate, local, QUERY).await;
+        fence(&alternate, local).await;
+        forward(&bbmd, local, &number(77, 0)).await;
         forward(&bbmd, local, QUERY).await;
-        expect_number(&bbmd, local, 9, expected).await;
-    }
-    // Too-short forwarded BVLC and a length larger than the datagram are invalid.
-    send(&bbmd, local, &[0x81, 4, 0, 9, 127, 0, 0, 1, 0]).await;
-    send(&bbmd, local, &[0x81, 4, 0, 30, 127, 0, 0, 1, 0, 1]).await;
-    forward(&bbmd, local, QUERY).await;
-    expect_number(&bbmd, local, 9, 81).await;
-    invalid_controls(&bbmd, &bbmd, local, 9, 4).await;
-    stopped(server, local).await;
+        expect_number(&bbmd, local, 9, 77).await;
+        send(&alternate, local, &frame(0x0a, QUERY)).await;
+        expect_number(&bbmd, local, 9, 77).await;
+        // A foreign device takes a Forwarded-NPDU only from its BBMD by unicast
+        // (#1622): the alternate sender's announcement teaches nothing, and its
+        // query draws no reply, so the BBMD's query is answered with 77.
+        forward(&alternate, local, &number(78, 1)).await;
+        forward(&alternate, local, QUERY).await;
+        forward(&bbmd, local, QUERY).await;
+        expect_number(&bbmd, local, 9, 77).await;
+        for (value, flag, expected) in [(78, 0, 78), (79, 1, 79), (80, 0, 79), (81, 1, 81)] {
+            // The BBMD's forwards teach. Their logical group bit is not trust.
+            forward(&bbmd, local, &number(value, flag)).await;
+            forward(&bbmd, local, QUERY).await;
+            expect_number(&bbmd, local, 9, expected).await;
+        }
+        // Too-short forwarded BVLC and a length larger than the datagram are invalid.
+        send(&bbmd, local, &[0x81, 4, 0, 9, 127, 0, 0, 1, 0]).await;
+        send(&bbmd, local, &[0x81, 4, 0, 30, 127, 0, 0, 1, 0, 1]).await;
+        forward(&bbmd, local, QUERY).await;
+        expect_number(&bbmd, local, 9, 81).await;
+        invalid_controls(&bbmd, &bbmd, local, 9, 4).await;
+        stopped(server, local).await
+    })
+    .await;
 }
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn bip_number_bbmd_full_server_wire_admission() {
-    use bacnet_transport::bbmd::{BdtEntry, ForeignDevicePolicy};
-    let bdt = udp().await;
-    let foreign = udp().await;
-    let peer = udp().await;
-    let impostor = udp().await;
-    let (observer, port) = observer();
-    let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, port, BROADCAST);
-    transport.enable_bbmd(vec![BdtEntry {
-        ip: Ipv4Addr::LOCALHOST.octets(),
-        port: address(&bdt).port(),
-        broadcast_mask: [255; 4],
-    }]);
-    transport.enable_foreign_device_registration(ForeignDevicePolicy::default());
-    let (server, local) = start(transport, None).await;
-    let group = SocketAddrV4::new(BROADCAST, local.port());
-    // Before relying on shared capture, prove the real production wildcard
-    // receives this broadcast (BDT fanout) and the independent observer sees it.
-    send(&peer, group, &frame(0x0b, QUERY)).await;
-    let (seen, source) = receive(&observer).await;
-    assert_eq!(source, address(&peer));
-    assert_eq!(seen, frame(0x0b, QUERY));
-    let (fanout, source) = receive(&bdt).await;
-    assert_eq!(source, local);
-    assert_eq!(fanout, forwarded(address(&peer), QUERY));
-    send(&peer, local, &frame(0x0a, &number(999, 1))).await;
-    send(&peer, local, &frame(0x0a, QUERY)).await;
-    fence(&peer, local).await;
-    send(&peer, group, &frame(0x0b, &number(77, 0))).await;
-    send(&peer, group, &frame(0x0b, QUERY)).await;
-    expect_number(&observer, local, 0x0b, 77).await;
-    send(&peer, local, &frame(0x0a, QUERY)).await;
-    expect_number(&observer, local, 0x0b, 77).await;
-    forward(&impostor, local, &number(200, 1)).await;
-    fence(&impostor, local).await;
-    send(&peer, local, &frame(0x0a, QUERY)).await;
-    expect_number(&observer, local, 0x0b, 77).await;
-    forward(&bdt, local, &number(78, 0)).await;
-    forward(&bdt, local, QUERY).await;
-    expect_number(&observer, local, 0x0b, 78).await;
-    // Unregistered DBTN is NAKed and cannot teach.
-    send(&foreign, local, &frame(9, &number(200, 1))).await;
-    let (nak, source) = receive(&foreign).await;
-    assert_eq!(source, local);
-    assert_eq!(nak, frame(0, &[0, 0x60]));
-    send(&peer, local, &frame(0x0a, QUERY)).await;
-    expect_number(&observer, local, 0x0b, 78).await;
-    send(&foreign, local, &frame(5, &60u16.to_be_bytes())).await;
-    let (registered, source) = receive(&foreign).await;
-    assert_eq!(source, local);
-    assert_eq!(registered, frame(0, &[0, 0]));
-    for (value, flag, expected) in [(79, 1, 79), (80, 0, 79), (81, 1, 81)] {
-        send(&foreign, local, &frame(9, &number(value, flag))).await;
-        send(&foreign, local, &frame(9, QUERY)).await;
-        expect_number(&observer, local, 0x0b, expected).await;
-    }
-    invalid_controls(&peer, &observer, local, 0x0b, 0x0b).await;
-    drop(observer); // release the independently shared bind before reuse proof
-    stopped(server, local).await;
+    rerun_on_lost_port(async || {
+        use bacnet_transport::bbmd::{BdtEntry, ForeignDevicePolicy};
+        let bdt = udp().await;
+        let foreign = udp().await;
+        let peer = udp().await;
+        let impostor = udp().await;
+        let (observer, port) = observer();
+        let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, port, BROADCAST);
+        transport.enable_bbmd(vec![BdtEntry {
+            ip: Ipv4Addr::LOCALHOST.octets(),
+            port: address(&bdt).port(),
+            broadcast_mask: [255; 4],
+        }]);
+        transport.enable_foreign_device_registration(ForeignDevicePolicy::default());
+        let (server, local) = start(transport, None).await;
+        let group = SocketAddrV4::new(BROADCAST, local.port());
+        // Before relying on shared capture, prove the real production wildcard
+        // receives this broadcast (BDT fanout) and the independent observer sees it.
+        send(&peer, group, &frame(0x0b, QUERY)).await;
+        let (seen, source) = receive(&observer).await;
+        assert_eq!(source, address(&peer));
+        assert_eq!(seen, frame(0x0b, QUERY));
+        let (fanout, source) = receive(&bdt).await;
+        assert_eq!(source, local);
+        assert_eq!(fanout, forwarded(address(&peer), QUERY));
+        send(&peer, local, &frame(0x0a, &number(999, 1))).await;
+        send(&peer, local, &frame(0x0a, QUERY)).await;
+        fence(&peer, local).await;
+        send(&peer, group, &frame(0x0b, &number(77, 0))).await;
+        send(&peer, group, &frame(0x0b, QUERY)).await;
+        expect_number(&observer, local, 0x0b, 77).await;
+        send(&peer, local, &frame(0x0a, QUERY)).await;
+        expect_number(&observer, local, 0x0b, 77).await;
+        forward(&impostor, local, &number(200, 1)).await;
+        fence(&impostor, local).await;
+        send(&peer, local, &frame(0x0a, QUERY)).await;
+        expect_number(&observer, local, 0x0b, 77).await;
+        forward(&bdt, local, &number(78, 0)).await;
+        forward(&bdt, local, QUERY).await;
+        expect_number(&observer, local, 0x0b, 78).await;
+        // Unregistered DBTN is NAKed and cannot teach.
+        send(&foreign, local, &frame(9, &number(200, 1))).await;
+        let (nak, source) = receive(&foreign).await;
+        assert_eq!(source, local);
+        assert_eq!(nak, frame(0, &[0, 0x60]));
+        send(&peer, local, &frame(0x0a, QUERY)).await;
+        expect_number(&observer, local, 0x0b, 78).await;
+        send(&foreign, local, &frame(5, &60u16.to_be_bytes())).await;
+        let (registered, source) = receive(&foreign).await;
+        assert_eq!(source, local);
+        assert_eq!(registered, frame(0, &[0, 0]));
+        for (value, flag, expected) in [(79, 1, 79), (80, 0, 79), (81, 1, 81)] {
+            send(&foreign, local, &frame(9, &number(value, flag))).await;
+            send(&foreign, local, &frame(9, QUERY)).await;
+            expect_number(&observer, local, 0x0b, expected).await;
+        }
+        invalid_controls(&peer, &observer, local, 0x0b, 0x0b).await;
+        drop(observer); // release the independently shared bind before reuse proof
+        stopped(server, local).await
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn bip_number_foreign_registration_loss_and_retry_wire() {
-    let (server, local, bbmd) = foreign(None).await;
-    // Model peer registration responses, without inventing a transport status bit.
-    send(&bbmd, local, &frame(0, &[0, 0])).await;
-    forward(&bbmd, local, &number(77, 1)).await;
-    forward(&bbmd, local, QUERY).await;
-    expect_number(&bbmd, local, 9, 77).await;
-    send(&bbmd, local, &frame(0, &[0, 0x30])).await; // registration now refused
-    send(&bbmd, local, &frame(0, &[0, 0x60])).await; // distribution refused after loss
+    rerun_on_lost_port(async || {
+        let (server, local, bbmd) = foreign(None).await;
+        // Model peer registration responses, without inventing a transport status bit.
+        send(&bbmd, local, &frame(0, &[0, 0])).await;
+        forward(&bbmd, local, &number(77, 1)).await;
+        forward(&bbmd, local, QUERY).await;
+        expect_number(&bbmd, local, 9, 77).await;
+        send(&bbmd, local, &frame(0, &[0, 0x30])).await; // registration now refused
+        send(&bbmd, local, &frame(0, &[0, 0x60])).await; // distribution refused after loss
 
-    // The distribution NAK brings the next registration forward (#1622). Let
-    // it fall due and read it here, so it can't arrive among the replies
-    // below, however slow the runner. Advance only the local test runtime;
-    // resume before awaiting real UDP.
-    tokio::time::pause();
-    tokio::time::advance(std::time::Duration::from_secs(31)).await;
-    tokio::time::resume();
-    let (retry, source) = receive(&bbmd).await;
-    assert_eq!(source, local);
-    assert_eq!(retry, frame(5, &60u16.to_be_bytes()));
-    forward(&bbmd, local, QUERY).await;
-    // DBTN is still attempted after both NAKs, with the retry unanswered.
-    expect_number(&bbmd, local, 9, 77).await;
-    send(&bbmd, local, &frame(0, &[0, 0])).await;
-    forward(&bbmd, local, &number(78, 1)).await;
-    forward(&bbmd, local, QUERY).await;
-    expect_number(&bbmd, local, 9, 78).await;
-    stopped(server, local).await;
+        // The distribution NAK brings the next registration forward (#1622). Let
+        // it fall due and read it here, so it can't arrive among the replies
+        // below, however slow the runner. Advance only the local test runtime;
+        // resume before awaiting real UDP.
+        tokio::time::pause();
+        tokio::time::advance(std::time::Duration::from_secs(31)).await;
+        tokio::time::resume();
+        let (retry, source) = receive(&bbmd).await;
+        assert_eq!(source, local);
+        assert_eq!(retry, frame(5, &60u16.to_be_bytes()));
+        forward(&bbmd, local, QUERY).await;
+        // DBTN is still attempted after both NAKs, with the retry unanswered.
+        expect_number(&bbmd, local, 9, 77).await;
+        send(&bbmd, local, &frame(0, &[0, 0])).await;
+        forward(&bbmd, local, &number(78, 1)).await;
+        forward(&bbmd, local, QUERY).await;
+        expect_number(&bbmd, local, 9, 78).await;
+        stopped(server, local).await
+    })
+    .await;
 }
 
-async fn gated_progress_and_stop(bbmd_mode: bool, bare_drop: bool) {
+async fn gated_progress_and_stop(bbmd_mode: bool, bare_drop: bool) -> std::io::Result<()> {
     let gates = Gates::new();
     let peer = udp().await;
     #[cfg(target_os = "linux")]
@@ -293,15 +306,10 @@ async fn gated_progress_and_stop(bbmd_mode: bool, bare_drop: bool) {
     }
     // Drop cleanup may finish asynchronously; successful exclusive bind is the
     // positive release event, with a watchdog rather than a fixed sleep.
-    let rebound = bounded(async {
-        loop {
-            if let Ok(s) = std::net::UdpSocket::bind(local) {
-                break s;
-            }
-            tokio::task::yield_now().await;
-        }
+    let rebound = bind_eventually(std::time::Duration::from_secs(5), || {
+        std::net::UdpSocket::bind(local)
     })
-    .await;
+    .await?;
     drop(rebound);
     if let Some(bbmd) = bbmd {
         let mut bytes = [0; 2048];
@@ -310,17 +318,18 @@ async fn gated_progress_and_stop(bbmd_mode: bool, bare_drop: bool) {
             "held Number send never reached BBMD"
         );
     }
+    Ok(())
 }
 #[tokio::test]
 async fn bip_number_foreign_held_producer_progress_stop_and_drop() {
     for drop in [false, true] {
-        gated_progress_and_stop(false, drop).await;
+        rerun_on_lost_port(async || gated_progress_and_stop(false, drop).await).await;
     }
 }
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn bip_number_bbmd_held_producer_progress_stop_and_drop() {
     for drop in [false, true] {
-        gated_progress_and_stop(true, drop).await;
+        rerun_on_lost_port(async || gated_progress_and_stop(true, drop).await).await;
     }
 }

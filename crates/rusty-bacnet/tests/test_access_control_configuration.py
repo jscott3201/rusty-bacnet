@@ -581,10 +581,10 @@ class AccessControlConfigurationTests(unittest.TestCase):
             await server.write_property_local(
                 reader, PropertyIdentifier.PRESENT_VALUE, card, source_object=None
             )
-            self.assertEqual(
-                await server.read_property(reader, PropertyIdentifier.PRESENT_VALUE),
-                card,
-            )
+            # The read is typed (#1499) and holds the octets written.
+            read = await server.read_property(reader, PropertyIdentifier.PRESENT_VALUE)
+            self.assertEqual(read.value, (2, 3, b"\xab"))
+            self.assertEqual(read.octets, card.value)
             for undeclared in (factor(9, 0, b"\x01"), factor(8, 3, b"\x01")):
                 with self.assertRaises(BacnetProtocolError) as raised:
                     await server.write_property_local(

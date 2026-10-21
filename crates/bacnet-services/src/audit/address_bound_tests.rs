@@ -83,12 +83,12 @@ fn audit_log_query_address_filter_holds_to_the_bacnet_address_bound() {
         longest.try_encode(&mut encoded).unwrap();
         assert_eq!(AuditLogQueryRequest::decode(&encoded).unwrap(), longest);
         let error = AuditLogQueryRequest::decode(&lengthen_macs(&encoded)).unwrap_err();
-        assert!(matches!(error, Error::Decoding { .. }), "{error:?}");
+        assert!(matches!(error, Error::Decoding(_)), "{error:?}");
 
         let mut output = BytesMut::from(&b"prefix"[..]);
         assert!(matches!(
             too_long.try_encode(&mut output),
-            Err(Error::Encoding(_))
+            Err(Error::Encode(_))
         ));
         assert_eq!(output.as_ref(), b"prefix");
     }
@@ -134,12 +134,12 @@ fn audit_notification_recipients_hold_to_the_bacnet_address_bound() {
         longest.try_encode(&mut encoded).unwrap();
         assert_eq!(AuditNotificationRequest::decode(&encoded).unwrap(), longest);
         let error = AuditNotificationRequest::decode(&lengthen_macs(&encoded)).unwrap_err();
-        assert!(matches!(error, Error::Decoding { .. }), "{error:?}");
+        assert!(matches!(error, Error::Decoding(_)), "{error:?}");
 
         let mut output = BytesMut::from(&b"prefix"[..]);
         assert!(matches!(
             too_long.try_encode(&mut output),
-            Err(Error::Encoding(_))
+            Err(Error::Encode(_))
         ));
         assert_eq!(output.as_ref(), b"prefix");
     }

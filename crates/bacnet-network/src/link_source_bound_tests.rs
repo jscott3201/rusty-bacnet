@@ -1,5 +1,5 @@
 //! Network-layer admission of a frame from a link-layer source MAC longer
-//! than [`NpduAddress::MAX_MAC_LEN`] (#1198).
+//! than [`MAX_MAC_LEN`](bacnet_npdu::MAX_MAC_LEN) (#1198).
 //!
 //! No built-in transport reports such a MAC, so [`Injector`] ports stand in
 //! for a custom transport: the test hands them received frames from source
@@ -9,10 +9,10 @@
 //! is from them, which shows the refused frames went nowhere: no APDU or
 //! control was delivered, nothing was forwarded and no route was learned.
 //!
-//! [`NpduAddress::MAX_MAC_LEN`]: bacnet_encoding::npdu::NpduAddress::MAX_MAC_LEN
+//! [`MAX_MAC_LEN`]: bacnet_npdu::MAX_MAC_LEN
 
+use bacnet_npdu::{NetworkMessageType, RejectMessageReason};
 use bacnet_transport::port::{ReceivedNpdu, TransportPort};
-use bacnet_types::enums::{NetworkMessageType, RejectMessageReason};
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 use bytes::Bytes;
@@ -20,7 +20,7 @@ use tokio::sync::mpsc;
 
 use crate::layer::NetworkLayer;
 use crate::loopback_fixture::{
-    next_from_router, recv, reject_of, wire, FromRouter, LONGEST, REMOTE, TOO_LONG,
+    next_from_router, pump, recv, reject_of, wire, FromRouter, LONGEST, REMOTE, TOO_LONG,
 };
 use crate::router::{BACnetRouter, RouterOptions, RouterPort, StartedRouter};
 
@@ -121,7 +121,7 @@ fn mac(length: u8) -> MacAddr {
     (0..length).map(|i| 0xA0u8.wrapping_add(i)).collect()
 }
 
-const I_AM: Option<u8> = Some(NetworkMessageType::I_AM_ROUTER_TO_NETWORK.to_raw());
+const I_AM: Option<NetworkMessageType> = Some(NetworkMessageType::I_AM_ROUTER_TO_NETWORK);
 
 #[tokio::test]
 async fn non_router_drops_and_counts_a_frame_from_an_over_long_source_mac() {
@@ -137,6 +137,9 @@ async fn non_router_drops_and_counts_a_frame_from_an_over_long_source_mac() {
 
     let apdu = recv(&mut apdus).await;
     assert_eq!(apdu.source_mac, mac(LONGEST));
+    // The controls behind the last APDU reach their receiver once the
+    // APDU receiver is polled again (#1713).
+    pump(&mut apdus);
     let control = recv(&mut controls).await;
     assert_eq!(control.source_mac, mac(LONGEST));
     assert_eq!(network.address_length_drops(), 4);
@@ -194,7 +197,7 @@ async fn router_drops_and_counts_a_frame_from_an_over_long_source_mac() {
     assert!(to.is_none(), "the solicitation is a broadcast");
     assert_eq!(
         solicit.message_type,
-        Some(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK.to_raw())
+        Some(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK)
     );
     assert!(local.try_recv().is_err());
     assert_eq!(router.address_length_drops(), 3);

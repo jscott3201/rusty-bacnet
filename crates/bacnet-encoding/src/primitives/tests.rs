@@ -1,5 +1,6 @@
 use super::*;
 use bacnet_types::enums::ObjectType;
+use bacnet_types::primitives::ObjectIdentifier;
 
 fn encode_to_vec<F: FnOnce(&mut BytesMut)>(f: F) -> Vec<u8> {
     let mut buf = BytesMut::new();
@@ -99,7 +100,7 @@ fn typed_unsigned_rejects_numeric_overflow() {
                     4 => decode_unsigned_u32(data).unwrap_err(),
                     _ => unreachable!(),
                 };
-                assert!(matches!(error, Error::Decoding { .. }), "{error:?}");
+                assert!(matches!(error, Error::Decoding(_)), "{error:?}");
             }
         }
     }
@@ -114,7 +115,7 @@ fn typed_unsigned_preserves_raw_length_errors() {
             decode_unsigned_u16(data).unwrap_err(),
             decode_unsigned_u32(data).unwrap_err(),
         ] {
-            assert!(matches!(error, Error::Decoding { .. }));
+            assert!(matches!(error, Error::Decoding(_)));
             assert_eq!(error.to_string(), expected.to_string());
         }
     }

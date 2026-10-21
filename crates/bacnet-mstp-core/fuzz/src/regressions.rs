@@ -111,7 +111,7 @@ fn an_abandoned_request_asked_twice_owes_nothing() {
     run(&input);
 }
 
-/// Station 0 of 0 and 1 at 9600 baud, with the heapless queues.
+/// Station 0 of 0 and 1 at 9600 baud, with the fixed queues.
 fn small_station(lazy: bool) -> Setup {
     Setup {
         station: 0,

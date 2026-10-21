@@ -11,7 +11,7 @@ use bacnet_mstp_codec::BROADCAST_MAC;
 use bacnet_time::{Duration, Instant};
 use proptest::prelude::*;
 
-use super::{HeaplessQueues, NetworkPriority, QueueItemInfo, QueueKind, QueueRefusal};
+use super::{FixedQueues, NetworkPriority, QueueItemInfo, QueueKind, QueueRefusal};
 use super::{QueueCounters, QueueStorage};
 
 /// The slot length under test: short, so NPDUs at, under and over it come
@@ -83,7 +83,7 @@ fn serves_first(candidate: &Item, current: &Item, limit: u8) -> bool {
     }
 }
 
-/// The queues as they were. `HeaplessQueues` took an item's sequence number
+/// The queues as they were. `FixedQueues` took an item's sequence number
 /// before it found the queue full, so a full refusal used one up;
 /// `AllocQueues` didn't.
 struct Model {
@@ -250,7 +250,7 @@ trait Backend: QueueStorage {
     fn items(&self) -> Vec<(QueueItemInfo, Vec<u8>)>;
 }
 
-impl Backend for HeaplessQueues<UNICAST, BROADCAST, N> {
+impl Backend for FixedQueues<UNICAST, BROADCAST, N> {
     fn items(&self) -> Vec<(QueueItemInfo, Vec<u8>)> {
         let mut items = self.snapshot();
         items.sort_by_key(|(info, _)| info.sequence);
@@ -428,11 +428,11 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(512))]
 
     #[test]
-    fn heapless_queues_match_the_model(
+    fn fixed_queues_match_the_model(
         limit in 1u8..=4,
         ops in proptest::collection::vec(op(), 1..80),
     ) {
-        run(HeaplessQueues::<UNICAST, BROADCAST, N>::new(), true, limit, &ops)?;
+        run(FixedQueues::<UNICAST, BROADCAST, N>::new(), true, limit, &ops)?;
     }
 
     #[cfg(feature = "alloc")]

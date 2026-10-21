@@ -16,22 +16,25 @@ async fn complete_replacement(lso: bool, same_leaf: bool) {
     let allowed_lso = allowed.clone();
     let observed_lso = observed.clone();
     let config = ServerConfig {
-        mutation_authorizer: Some(Arc::new(move |context| {
-            let identity = context.direct_sc_identity().unwrap();
-            observed_mutation
-                .lock()
-                .unwrap()
-                .push((identity, format!("{context:?}")));
-            Some(identity) == *allowed_mutation.lock().unwrap()
-        })),
-        life_safety_operation_authorizer: Some(Arc::new(move |context| {
-            let identity = context.direct_sc_identity().unwrap();
-            observed_lso
-                .lock()
-                .unwrap()
-                .push((identity, format!("{context:?}")));
-            Some(identity) == *allowed_lso.lock().unwrap()
-        })),
+        policy: Some(Arc::new(
+            crate::FnPolicy::new()
+                .mutation(move |context| {
+                    let identity = context.direct_sc_identity().unwrap();
+                    observed_mutation
+                        .lock()
+                        .unwrap()
+                        .push((identity, format!("{context:?}")));
+                    Some(identity) == *allowed_mutation.lock().unwrap()
+                })
+                .life_safety_operation(move |context| {
+                    let identity = context.direct_sc_identity().unwrap();
+                    observed_lso
+                        .lock()
+                        .unwrap()
+                        .push((identity, format!("{context:?}")));
+                    Some(identity) == *allowed_lso.lock().unwrap()
+                }),
+        )),
         ..Default::default()
     };
     let executions = Arc::new(AtomicUsize::new(0));
@@ -164,11 +167,11 @@ async fn direct_principal_wpm_elements_keep_admitted_snapshot_and_order() {
     let observed = Arc::new(StdMutex::new(Vec::<MutationAuthorizationContext>::new()));
     let policy = observed.clone();
     let config = ServerConfig {
-        mutation_authorizer: Some(Arc::new(move |context| {
+        policy: Some(Arc::new(crate::FnPolicy::new().mutation(move |context| {
             let mut seen = policy.lock().unwrap();
             seen.push(context.clone());
             seen.len() == 1 // commit the first element, deny the second, never see the third
-        })),
+        }))),
         ..Default::default()
     };
     let mut f = Fixture::new(&ca, config, database(Arc::new(AtomicUsize::new(0)))).await;
@@ -342,6 +345,7 @@ async fn direct_principal_endpoint_reinitialize_context_keeps_the_provenance() {
     // loopback egress, so the send may fail; the handler has run by then.
     let _ = responder
         .handle(ReceivedApdu {
+            router_response: None,
             direct_response: None,
             apdu: npdu.payload,
             source_mac: admitted.source_mac.clone(),

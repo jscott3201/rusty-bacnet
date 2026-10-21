@@ -1,10 +1,9 @@
 //! TLS configuration helpers for Python bindings.
 
 use bacnet_transport::sc_hub::ScHubTlsConfig;
-use bacnet_transport::sc_tls::ScNodeTlsConfig;
+use bacnet_transport::sc_tls::{pem, ScNodeTlsConfig};
 use bacnet_types::error::Error;
-use tokio_rustls::rustls::pki_types::pem::PemObject;
-use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use tokio_rustls::rustls::pki_types::CertificateDer;
 
 /// Load Python hub credentials, then build the constrained native TLS policy.
 pub fn build_server_tls_config(
@@ -17,19 +16,17 @@ pub fn build_server_tls_config(
     let key_data = std::fs::read(key_path)
         .map_err(|e| Error::Encoding(format!("failed to read server key: {e}")))?;
 
-    let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(&cert_data)
-        .collect::<Result<Vec<_>, _>>()
+    let certs: Vec<CertificateDer<'static>> = pem::certificates(&cert_data)
         .map_err(|e| Error::Encoding(format!("failed to parse server cert: {e}")))?;
     if certs.is_empty() {
         return Err(Error::Encoding("no server certificates found".into()));
     }
-    let key = PrivateKeyDer::from_pem_slice(&key_data)
+    let key = pem::private_key(&key_data)
         .map_err(|e| Error::Encoding(format!("failed to parse server key: {e}")))?;
 
     let ca_data = std::fs::read(ca_cert_path)
         .map_err(|e| Error::Encoding(format!("failed to read CA cert: {e}")))?;
-    let ca_certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(&ca_data)
-        .collect::<Result<Vec<_>, _>>()
+    let ca_certs: Vec<CertificateDer<'static>> = pem::certificates(&ca_data)
         .map_err(|e| Error::Encoding(format!("failed to parse CA cert: {e}")))?;
     ScHubTlsConfig::from_der(ca_certs, certs, key)
 }
@@ -65,8 +62,7 @@ pub fn build_client_tls_config(
     let mut root_store = rustls::RootCertStore::empty();
     let ca_data = std::fs::read(ca_path)
         .map_err(|e| Error::Encoding(format!("failed to read CA cert: {e}")))?;
-    let ca_certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(&ca_data)
-        .collect::<Result<Vec<_>, _>>()
+    let ca_certs: Vec<CertificateDer<'static>> = pem::certificates(&ca_data)
         .map_err(|e| Error::Encoding(format!("failed to parse CA cert: {e}")))?;
     if ca_certs.is_empty() {
         return Err(Error::Encoding("no CA certificates found".into()));
@@ -83,14 +79,57 @@ pub fn build_client_tls_config(
         .map_err(|e| Error::Encoding(format!("failed to read client cert: {e}")))?;
     let key_data = std::fs::read(key_path)
         .map_err(|e| Error::Encoding(format!("failed to read client key: {e}")))?;
-    let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(&cert_data)
-        .collect::<Result<Vec<_>, _>>()
+    let certs: Vec<CertificateDer<'static>> = pem::certificates(&cert_data)
         .map_err(|e| Error::Encoding(format!("failed to parse client cert: {e}")))?;
     if certs.is_empty() {
         return Err(Error::Encoding("no client certificates found".into()));
     }
-    let key = PrivateKeyDer::from_pem_slice(&key_data)
+    let key = pem::private_key(&key_data)
         .map_err(|e| Error::Encoding(format!("failed to parse client key: {e}")))?;
 
     ScNodeTlsConfig::from_der(ca_certs, certs, key)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn node_ca_batch_decode_precedes_der_validation_and_identity_file_reads() {
+        struct Temp(std::path::PathBuf);
+        impl Drop for Temp {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(&self.0);
+            }
+        }
+        let path = Temp(
+            std::env::temp_dir().join(format!("sc-python-ca-order-{}.pem", std::process::id())),
+        );
+        let bad_der = "-----BEGIN CERTIFICATE-----\nYWJj\n-----END CERTIFICATE-----\n";
+        let bad_pem = "-----BEGIN CERTIFICATE-----\n!\n-----END CERTIFICATE-----\n";
+        for contents in [format!("{bad_der}{bad_pem}"), format!("{bad_pem}{bad_der}")] {
+            std::fs::write(&path.0, contents).unwrap();
+            let error = build_client_tls_config(
+                path.0.to_str(),
+                Some("missing-identity.pem"),
+                Some("missing-key.pem"),
+            );
+            assert!(error
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("failed to parse CA cert"));
+        }
+        std::fs::write(&path.0, bad_der).unwrap();
+        let error = build_client_tls_config(
+            path.0.to_str(),
+            Some("missing-identity.pem"),
+            Some("missing-key.pem"),
+        );
+        assert!(error
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("failed to add CA cert"));
+    }
 }

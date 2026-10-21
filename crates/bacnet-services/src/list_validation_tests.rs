@@ -16,7 +16,7 @@ fn list_outbound_invalid_tail_preserves_existing_buffer() {
     let mut buffer = BytesMut::from(&b"prefix"[..]);
     assert!(matches!(
         request.encode(&mut buffer),
-        Err(Error::Encoding(_))
+        Err(Error::Encode(_))
     ));
     assert_eq!(&buffer[..], b"prefix");
 }
@@ -41,10 +41,26 @@ fn list_outbound_empty_zero_index_and_bad_framing_are_transactional() {
         let mut output = BytesMut::from(&b"unchanged"[..]);
         assert!(matches!(
             request.encode(&mut output),
-            Err(Error::Encoding(_))
+            Err(Error::Encode(_))
         ));
         assert_eq!(&output[..], b"unchanged");
     }
+    // The framing refusal keeps the decoder's offset and label (#1802).
+    let refused = request(vec![0x1e], None).validate().unwrap_err();
+    assert!(
+        matches!(&refused, Error::Encode(error) if error.decode_offset.is_some()),
+        "{refused:?}"
+    );
+    assert!(
+        refused
+            .to_string()
+            .starts_with("encoding error: decoding error at offset "),
+        "{refused}"
+    );
+    assert!(
+        refused.to_string().contains(": ListElement framing: "),
+        "{refused}"
+    );
     let mut output = BytesMut::from(&b"index"[..]);
     assert!(request(vec![0], Some(0)).encode(&mut output).is_err());
     assert_eq!(&output[..], b"index");

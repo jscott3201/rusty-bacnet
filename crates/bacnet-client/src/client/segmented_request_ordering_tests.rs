@@ -161,7 +161,7 @@ async fn ready_terminal_before_final_send_aborts_without_polling_final_send() {
     assert!(matches!(
         result,
         Err(Error::Abort { reason })
-            if reason == AbortReason::INVALID_APDU_IN_THIS_STATE.to_raw()
+            if reason == AbortReason::INVALID_APDU_IN_THIS_STATE
     ));
     assert!(
         !final_segment_polled.load(Ordering::Acquire),

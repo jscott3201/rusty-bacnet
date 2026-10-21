@@ -17,6 +17,7 @@ use bacnet_objects::loop_obj::LoopObject;
 use bacnet_objects::multistate::MultiStateOutputObject;
 use bacnet_objects::schedule::ScheduleObject;
 use bacnet_objects::trend::TrendLogObject;
+use bacnet_types::enums::EngineeringUnits;
 
 fn encode_value(value: PropertyValue) -> Vec<u8> {
     let mut buf = BytesMut::new();
@@ -77,16 +78,8 @@ fn assert_refused(
         .expect_err(&format!("{context}: write must be refused"))
     {
         Error::Protocol { class, code } => {
-            assert_eq!(
-                class,
-                ErrorClass::PROPERTY.to_raw() as u32,
-                "{context}: wrong error class"
-            );
-            assert_eq!(
-                code,
-                expected_code.to_raw() as u32,
-                "{context}: wrong error code"
-            );
+            assert_eq!(class, ErrorClass::PROPERTY, "{context}: wrong error class");
+            assert_eq!(code, expected_code, "{context}: wrong error code");
         }
         other => panic!("{context}: expected PROPERTY/{expected_code:?}, got {other:?}"),
     }
@@ -169,7 +162,7 @@ fn assert_wire_reliability_gate(
 #[test]
 fn loop_reliability_gate_holds_over_write_property() {
     let mut db = ObjectDatabase::new();
-    let lo = LoopObject::new(1, "LOOP-1", 62).unwrap();
+    let lo = LoopObject::new(1, "LOOP-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let lo_oid = lo.object_identifier();
     db.add(Box::new(lo)).unwrap();
 
@@ -212,8 +205,8 @@ fn trend_log_reliability_write_is_denied_over_write_property() {
             PropertyValue::Boolean(true),
         ),
         Err(Error::Protocol { class, code })
-            if class == ErrorClass::PROPERTY.to_raw() as u32
-                && code == ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32
+            if class == ErrorClass::PROPERTY
+                && code == ErrorCode::UNKNOWN_PROPERTY
     ));
 }
 
@@ -257,7 +250,7 @@ fn assert_notify_type_validated(
 #[test]
 fn enumerated_overflow_is_invalid_data_encoding_without_mutation() {
     let mut db = ObjectDatabase::new();
-    let ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let ai_oid = ai.object_identifier();
     db.add(Box::new(ai)).unwrap();
     let baseline = read_wire(&db, ai_oid, PropertyIdentifier::NOTIFY_TYPE);
@@ -282,8 +275,8 @@ fn enumerated_overflow_is_invalid_data_encoding_without_mutation() {
 
     match sourced_wp(&mut db, &request_bytes).unwrap_err() {
         Error::Protocol { class, code } => {
-            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
-            assert_eq!(code, ErrorCode::INVALID_DATA_ENCODING.to_raw() as u32);
+            assert_eq!(class, ErrorClass::PROPERTY);
+            assert_eq!(code, ErrorCode::INVALID_DATA_ENCODING);
         }
         other => panic!("expected PROPERTY/INVALID_DATA_ENCODING, got {other:?}"),
     }
@@ -343,7 +336,7 @@ fn assert_event_enable_validated(
 #[test]
 fn analog_event_property_writes_are_validated_over_write_property() {
     let mut db = ObjectDatabase::new();
-    let ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let ai_oid = ai.object_identifier();
     db.add(Box::new(ai)).unwrap();
 
@@ -422,7 +415,7 @@ fn event_enrollment_writes_are_validated_over_write_property() {
 #[test]
 fn relinquish_default_write_recaptures_present_value_over_write_property() {
     let mut db = ObjectDatabase::new();
-    let ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
+    let ao = AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let ao_oid = ao.object_identifier();
     db.add(Box::new(ao)).unwrap();
 
@@ -498,7 +491,7 @@ fn relinquish_default_write_recaptures_present_value_over_write_property() {
 #[test]
 fn time_delay_normal_round_trips_over_write_property_and_read_property() {
     let mut db = ObjectDatabase::new();
-    let ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let ai_oid = ai.object_identifier();
     db.add(Box::new(ai)).unwrap();
 
@@ -591,8 +584,8 @@ fn write_property_rejects_overwide_color_temperature_without_mutation() {
         .expect_err("over-wide Color Temperature Present_Value must be rejected")
     {
         Error::Protocol { class, code } => {
-            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
-            assert_eq!(code, ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32);
+            assert_eq!(class, ErrorClass::PROPERTY);
+            assert_eq!(code, ErrorCode::VALUE_OUT_OF_RANGE);
         }
         other => panic!("expected PROPERTY/VALUE_OUT_OF_RANGE, got {other:?}"),
     }

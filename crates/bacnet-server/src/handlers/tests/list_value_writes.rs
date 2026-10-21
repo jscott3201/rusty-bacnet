@@ -16,6 +16,7 @@ use bacnet_objects::loop_obj::LoopObject;
 use bacnet_objects::multistate::{MultiStateInputObject, MultiStateValueObject};
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::wpm::WriteAccessSpecification;
+use bacnet_types::enums::EngineeringUnits;
 
 const ALARM_VALUES: PropertyIdentifier = PropertyIdentifier::ALARM_VALUES;
 
@@ -210,7 +211,7 @@ fn one_element_of_another_datatype_is_refused_as_element_one() {
 fn empty_value_on_a_scalar_property_is_still_invalid_data_encoding() {
     let mut db = ObjectDatabase::new();
     let msv = MultiStateValueObject::new(1, "MSV-1", 3).unwrap();
-    let lo = LoopObject::new(1, "LOOP-1", 62).unwrap();
+    let lo = LoopObject::new(1, "LOOP-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let scalars = [
         (msv.object_identifier(), PropertyIdentifier::PRESENT_VALUE),
         (msv.object_identifier(), PropertyIdentifier::DESCRIPTION),
@@ -254,7 +255,7 @@ fn empty_value_on_a_list_the_object_lacks_is_unknown_property() {
     // Alarm_Values on all but the CharacterString and BitString Values, so
     // the empty value reaches an Analog Value, which serves none of them.
     let mut db = ObjectDatabase::new();
-    let av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let oid = av.object_identifier();
     db.add(Box::new(av)).unwrap();
     for (service, write) in SERVICES {

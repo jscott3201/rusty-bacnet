@@ -85,6 +85,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         source_network: &Option<NpduAddress>,
         reply: InboundReply,
         req: ConfirmedRequestPdu,
+        decode_warning: &WarnThrottle,
     ) {
         let received = match ReceivedEventNotification::decode(
             &req.service_request,
@@ -94,7 +95,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         ) {
             Ok(received) => received,
             Err(error) => {
-                warn!(%error, "Failed to decode ConfirmedEventNotification");
+                warn_throttled!(
+                    decode_warning,
+                    %error,
+                    "Failed to decode ConfirmedEventNotification"
+                );
                 // The reason names the syntax fault, as the server's does
                 // for any confirmed request (#1446).
                 let reject_reason = error
@@ -135,6 +140,7 @@ pub(super) fn receive_unconfirmed_event_notification(
     source_mac: &[u8],
     source_network: &Option<NpduAddress>,
     data: &[u8],
+    decode_warning: &WarnThrottle,
 ) {
     match ReceivedEventNotification::decode(
         data,
@@ -145,6 +151,12 @@ pub(super) fn receive_unconfirmed_event_notification(
         Ok(received) => {
             let _ = event_tx.send(received);
         }
-        Err(error) => warn!(%error, "Failed to decode UnconfirmedEventNotification"),
+        Err(error) => {
+            warn_throttled!(
+                decode_warning,
+                %error,
+                "Failed to decode UnconfirmedEventNotification"
+            );
+        }
     }
 }

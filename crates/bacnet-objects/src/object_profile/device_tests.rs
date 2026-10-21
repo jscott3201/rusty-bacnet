@@ -64,14 +64,14 @@ impl AuditRecipientChangeSink for Sink {
 }
 fn configured(clock: bool, segmented: bool, cov: bool, audit: u8) -> (DeviceObject, Arc<Sink>) {
     let mut object = DeviceObject::new(DeviceConfig {
-        instance: 123,
-        name: "Profile Device".into(),
-        vendor_id: 555,
-        segmentation_supported: if segmented {
-            Segmentation::BOTH
-        } else {
-            Segmentation::NONE
-        },
+        identity: crate::DeviceIdentity::new(123, 555)
+            .expect("valid Device identity")
+            .with_name("Profile Device")
+            .with_segmentation(if segmented {
+                Segmentation::BOTH
+            } else {
+                Segmentation::NONE
+            }),
         ..Default::default()
     })
     .unwrap();
@@ -383,17 +383,12 @@ fn device_persistence_constructor_keeps_validation_before_loading() {
             panic!("constructor must not save");
         }
     }
-    for config in [
-        DeviceConfig {
-            instance: ObjectIdentifier::MAX_INSTANCE + 1,
-            ..Default::default()
-        },
-        DeviceConfig {
-            segmentation_supported: Segmentation::BOTH,
-            apdu_segment_timeout: 0,
-            ..Default::default()
-        },
-    ] {
-        assert!(DeviceObject::with_tags_persistence(config, Arc::new(NoLoad)).is_err());
-    }
+    assert!(crate::DeviceIdentity::new(ObjectIdentifier::MAX_INSTANCE + 1, 0).is_err());
+    let config = DeviceConfig {
+        identity: crate::DeviceIdentity::default()
+            .with_segmentation(Segmentation::BOTH)
+            .with_apdu_segment_timeout_ms(0),
+        ..Default::default()
+    };
+    assert!(DeviceObject::with_tags_persistence(config, Arc::new(NoLoad)).is_err());
 }

@@ -6,6 +6,7 @@ use bacnet_objects::staging::{StagingConfig, StagingObject};
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::wpm::WriteAccessSpecification;
 use bacnet_types::constructed::{BACnetDeviceObjectReference, BACnetStageLimitValue};
+use bacnet_types::enums::EngineeringUnits;
 
 const VENDOR: PropertyIdentifier = PropertyIdentifier::from_raw(5555);
 
@@ -19,7 +20,7 @@ fn staging(names: bool) -> StagingObject {
         StagingConfig {
             present_value: 0.0,
             min_present_value: -1.0,
-            units: 62,
+            units: EngineeringUnits::DEGREES_CELSIUS,
             priority_for_writing: 8,
             stages: vec![
                 BACnetStageLimitValue {
@@ -90,7 +91,7 @@ fn write(
 fn assert_error(result: Result<(), Error>, expected: ErrorCode) {
     assert!(
         matches!(result, Err(Error::Protocol { class, code })
-        if class == ErrorClass::PROPERTY.to_raw() as u32 && code == expected.to_raw() as u32),
+        if class == ErrorClass::PROPERTY && code == expected),
         "expected PROPERTY/{expected:?}, got {result:?}"
     );
 }
@@ -144,8 +145,8 @@ fn assert_absent(object: Box<dyn BACnetObject>, property: PropertyIdentifier) {
     }
     assert!(
         results.iter().all(|(_, _, result)| matches!(result,
-        Err(Error::Protocol { class, code }) if *class == ErrorClass::PROPERTY.to_raw() as u32
-            && *code == ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32)),
+        Err(Error::Protocol { class, code }) if *class == ErrorClass::PROPERTY
+            && *code == ErrorCode::UNKNOWN_PROPERTY)),
         "WP/WPM must report UNKNOWN_PROPERTY before value decode: {results:?}"
     );
 }
@@ -153,7 +154,7 @@ fn assert_absent(object: Box<dyn BACnetObject>, property: PropertyIdentifier) {
 #[test]
 fn indexed_write_absent_analog_input_property_is_unknown() {
     assert_absent(
-        Box::new(AnalogInputObject::new(1, "input", 62).unwrap()),
+        Box::new(AnalogInputObject::new(1, "input", EngineeringUnits::DEGREES_CELSIUS).unwrap()),
         VENDOR,
     );
 }
@@ -239,7 +240,9 @@ fn indexed_write_present_array_preserves_element_count_and_range_rules() {
 fn indexed_write_served_scalar_and_list_keep_predecode_not_array_error() {
     let objects: Vec<(Box<dyn BACnetObject>, PropertyIdentifier)> = vec![
         (
-            Box::new(AnalogInputObject::new(1, "input", 62).unwrap()),
+            Box::new(
+                AnalogInputObject::new(1, "input", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+            ),
             PropertyIdentifier::OBJECT_IDENTIFIER,
         ),
         (

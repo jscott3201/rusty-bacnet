@@ -33,6 +33,10 @@ pub(super) struct Engine<V> {
     deadline_waker: Option<Arc<DeadlineWaker>>,
     /// The time an object with no clock bound has been advanced to.
     logical_now: Duration,
+    /// Whether anything has driven the output since the object was built:
+    /// a write or command that set Present_Value, or the device's start
+    /// (#1526). Until then In_Progress reads NOT_CONTROLLED.
+    controlled: bool,
 }
 
 impl<V: TransitionLevel> Engine<V> {
@@ -45,6 +49,7 @@ impl<V: TransitionLevel> Engine<V> {
             monotonic_clock: None,
             deadline_waker: None,
             logical_now: Duration::ZERO,
+            controlled: false,
         }
     }
 
@@ -63,9 +68,13 @@ impl<V: TransitionLevel> Engine<V> {
             .map_or(present, |run| run.transition().value_at(now))
     }
 
-    /// In_Progress at `now`: FADE_ACTIVE or RAMP_ACTIVE while a transition is
-    /// still moving, otherwise IDLE.
+    /// In_Progress at `now`: NOT_CONTROLLED until the output is first
+    /// driven, then FADE_ACTIVE or RAMP_ACTIVE while a transition is still
+    /// moving, otherwise IDLE.
     pub(super) fn in_progress(&self, now: Duration) -> ColorOperationInProgress {
+        if !self.controlled {
+            return ColorOperationInProgress::NOT_CONTROLLED;
+        }
         match self.run {
             Some(run) if !run.transition().is_finished(now) => match run.transition().kind() {
                 TransitionKind::Fade => ColorOperationInProgress::FADE_ACTIVE,
@@ -77,8 +86,10 @@ impl<V: TransitionLevel> Engine<V> {
 
     /// Run `transition`, replacing any in progress, and wake the server's
     /// task for its first sample. `None`, nothing to move, leaves the engine
-    /// idle, so the value is at its target at once.
+    /// idle, so the value is at its target at once. Either way the output is
+    /// driven from here on.
     pub(super) fn start(&mut self, transition: Option<Transition<V>>) {
+        self.controlled = true;
         self.run = transition.map(|transition| Run::start(transition, self.step()));
         if self.run.is_some() {
             if let Some(waker) = &self.deadline_waker {
@@ -152,6 +163,7 @@ impl<V: TransitionLevel> Engine<V> {
             monotonic_clock: None,
             deadline_waker: None,
             logical_now: self.now(),
+            controlled: self.controlled,
         }
     }
 }

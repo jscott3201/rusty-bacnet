@@ -24,6 +24,7 @@ from rusty_bacnet import (
     BACnetClient,
     BACnetServer,
     BACnetTimeStamp,
+    Multicast,
     ObjectIdentifier,
     ObjectType,
     PropertyIdentifier,
@@ -90,6 +91,10 @@ def samples() -> dict[type, list[Any]]:
             # Equal as Python values, unequal as BACnet ones: the copy keeps
             # each item's tag.
             PropertyValue.list([*one, PropertyValue.list(one)]),
+        ],
+        Multicast: [
+            Multicast("239.255.66.1"),
+            Multicast("224.0.1.0", ttl=255, port=47809),
         ],
         BACnetTimeStamp: [
             BACnetTimeStamp.sequence_number(0),
@@ -228,6 +233,7 @@ class TypedReadCopyPickleTests(unittest.IsolatedAsyncioTestCase):
         reads = [
             (AI_1, P.EVENT_TIME_STAMPS, None, False),
             (AI_1, P.EVENT_TIME_STAMPS, 2, False),
+            (AI_1, P.EVENT_ALGORITHM_INHIBIT_REF, None, True),
             (SCHED_1, P.WEEKLY_SCHEDULE, None, True),
             (SCHED_1, P.EXCEPTION_SCHEDULE, None, True),
             (SCHED_1, P.EXCEPTION_SCHEDULE, 1, False),
@@ -255,7 +261,8 @@ class TypedReadCopyPickleTests(unittest.IsolatedAsyncioTestCase):
                         oid, prop, pickle.loads(pickle.dumps(value)), source_object=None)
                     self.assertEqual(await server.read_property(oid, prop, index), value)
         self.assertLessEqual({"list", "timestamp", "special_event", "date_range", "scale",
-                              "prescale", "device_object_reference"}, tags)
+                              "prescale", "device_object_reference",
+                              "object_property_reference"}, tags)
 
     async def test_a_peer_timestamp_outside_the_constructor_ranges_copies(self) -> None:
         # Month 0 and hour 99: BACnetTimeStamp.date_time refuses both, but a

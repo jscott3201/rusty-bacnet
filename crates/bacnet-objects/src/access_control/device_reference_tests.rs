@@ -34,8 +34,8 @@ fn not_devices() -> [ObjectIdentifier; 3] {
 fn assert_value_out_of_range<T: std::fmt::Debug>(result: Result<T, Error>) {
     assert!(
         matches!(result, Err(Error::Protocol { class, code })
-            if class == ErrorClass::PROPERTY.to_raw() as u32
-                && code == ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32),
+            if class == ErrorClass::PROPERTY
+                && code == ErrorCode::VALUE_OUT_OF_RANGE),
         "expected PROPERTY / VALUE_OUT_OF_RANGE, got {result:?}"
     );
 }

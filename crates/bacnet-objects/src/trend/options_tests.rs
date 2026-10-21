@@ -1,6 +1,6 @@
-//! Trend Log's acquisition rows (#1354): Logging_Type limited to POLLED and
-//! TRIGGERED until COV acquisition exists (#1480), Log_Interval's mode rules
-//! (Clause 12.25.9), Trigger and the clock-alignment rows. The window is in
+//! Trend Log's acquisition rows (#1354): Logging_Type's POLLED, TRIGGERED
+//! and COV (#1480), Log_Interval's mode rules and switches (Clause 12.25.9),
+//! the two COV rows, Trigger and the clock-alignment rows. The window is in
 //! `crate::log_window_tests`, shared with the Event Log.
 
 use super::*;
@@ -23,7 +23,7 @@ fn write(
 fn assert_refused(result: Result<(), Error>, class: ErrorClass, code: ErrorCode) {
     assert!(
         matches!(result, Err(Error::Protocol { class: c, code: e })
-            if c == class.to_raw() as u32 && e == code.to_raw() as u32),
+            if c == class && e == code),
         "expected {class:?} / {code:?}, got {result:?}"
     );
 }
@@ -52,15 +52,13 @@ fn record() -> BACnetLogRecord {
 }
 
 #[test]
-fn logging_type_takes_polled_or_triggered_and_refuses_cov_for_now() {
+fn logging_type_takes_polled_triggered_and_cov() {
     let mut log = TrendLogObject::new(1, "TL-1", 8).unwrap();
     log.set_log_interval(500).unwrap();
-    // Clause 12.25.26 allows COV, but this device has no COV acquisition
-    // (#1480), so COV is refused rather than served unacted on, with the
-    // error that clause gives for a value the object doesn't support; so is
-    // a value outside BACnetLoggingType. Through the wire and the setter
+    // A value outside BACnetLoggingType is one the object doesn't support,
+    // so it gets the Clause 12.25.26 error, through the wire and the setter
     // alike.
-    for raw in [LoggingType::COV.to_raw(), 3, 255] {
+    for raw in [3, 255] {
         assert_refused(
             write(
                 &mut log,
@@ -85,11 +83,31 @@ fn logging_type_takes_polled_or_triggered_and_refuses_cov_for_now() {
         ErrorClass::PROPERTY,
         ErrorCode::INVALID_DATA_TYPE,
     );
-    assert_eq!(
-        read(&log, PropertyIdentifier::LOGGING_TYPE),
-        PropertyValue::Enumerated(0)
-    );
+    assert_eq!(logging_type(&log), LoggingType::POLLED);
     assert_eq!(interval(&log), PropertyValue::Unsigned(500));
+
+    // COV, by the wire and by the setter, zeroes Log_Interval (Clause
+    // 12.25.26), which stays writable (Table 12-29 footnote 3).
+    write(
+        &mut log,
+        PropertyIdentifier::LOGGING_TYPE,
+        PropertyValue::Enumerated(LoggingType::COV.to_raw()),
+    )
+    .unwrap();
+    assert_eq!(logging_type(&log), LoggingType::COV);
+    assert_eq!(interval(&log), PropertyValue::Unsigned(0));
+    assert!(log.is_writable_property(PropertyIdentifier::LOG_INTERVAL));
+    log.set_logging_type(LoggingType::POLLED).unwrap();
+    log.set_log_interval(500).unwrap();
+    log.set_logging_type(LoggingType::COV).unwrap();
+    assert_eq!(logging_type(&log), LoggingType::COV);
+    assert_eq!(interval(&log), PropertyValue::Unsigned(0));
+    // A Trigger is for a TRIGGERED log only.
+    assert_refused(
+        log.trigger(),
+        ErrorClass::PROPERTY,
+        ErrorCode::NOT_CONFIGURED_FOR_TRIGGERED_LOGGING,
+    );
 
     // TRIGGERED zeroes Log_Interval, which is then read-only.
     write(
@@ -125,8 +143,15 @@ fn logging_type_takes_polled_or_triggered_and_refuses_cov_for_now() {
     assert_eq!(interval(&log), PropertyValue::Unsigned(250));
 }
 
+fn logging_type(log: &TrendLogObject) -> LoggingType {
+    let PropertyValue::Enumerated(raw) = read(log, PropertyIdentifier::LOGGING_TYPE) else {
+        panic!("Logging_Type is an enumeration");
+    };
+    LoggingType::from_raw(raw)
+}
+
 #[test]
-fn a_polled_interval_written_to_zero_is_a_refused_switch_to_cov() {
+fn log_interval_switches_between_polled_and_cov() {
     let mut log = TrendLogObject::new(1, "TL-1", 8).unwrap();
     // A new log is POLLED at zero: writing zero again changes nothing and
     // asks for no switch.
@@ -137,33 +162,40 @@ fn a_polled_interval_written_to_zero_is_a_refused_switch_to_cov() {
     )
     .unwrap();
     log.set_log_interval(0).unwrap();
+    assert_eq!(logging_type(&log), LoggingType::POLLED);
     write(
         &mut log,
         PropertyIdentifier::LOG_INTERVAL,
         PropertyValue::Unsigned(300),
     )
     .unwrap();
-    // From nonzero to zero is how Clause 12.25.9 switches a POLLED log to
-    // COV, which is refused like a COV Logging_Type; the log stays as it was.
-    assert_refused(
-        write(
-            &mut log,
-            PropertyIdentifier::LOG_INTERVAL,
-            PropertyValue::Unsigned(0),
-        ),
-        ErrorClass::PROPERTY,
-        ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-    );
-    assert_refused(
-        log.set_log_interval(0),
-        ErrorClass::PROPERTY,
-        ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-    );
-    assert_eq!(interval(&log), PropertyValue::Unsigned(300));
-    assert_eq!(
-        read(&log, PropertyIdentifier::LOGGING_TYPE),
-        PropertyValue::Enumerated(0)
-    );
+    // From nonzero to zero switches a POLLED log to COV (Clause 12.25.9),
+    // by the wire and by the setter.
+    write(
+        &mut log,
+        PropertyIdentifier::LOG_INTERVAL,
+        PropertyValue::Unsigned(0),
+    )
+    .unwrap();
+    assert_eq!(logging_type(&log), LoggingType::COV);
+    assert_eq!(interval(&log), PropertyValue::Unsigned(0));
+    // Zero again leaves it COV.
+    log.set_log_interval(0).unwrap();
+    assert_eq!(logging_type(&log), LoggingType::COV);
+    // A nonzero interval switches a COV log back to POLLED at it.
+    write(
+        &mut log,
+        PropertyIdentifier::LOG_INTERVAL,
+        PropertyValue::Unsigned(700),
+    )
+    .unwrap();
+    assert_eq!(logging_type(&log), LoggingType::POLLED);
+    assert_eq!(interval(&log), PropertyValue::Unsigned(700));
+    log.set_log_interval(0).unwrap();
+    assert_eq!(logging_type(&log), LoggingType::COV);
+    log.set_log_interval(40).unwrap();
+    assert_eq!(logging_type(&log), LoggingType::POLLED);
+    assert_eq!(interval(&log), PropertyValue::Unsigned(40));
     // Any other interval is taken, and so are the usual refusals.
     log.set_log_interval(1).unwrap();
     assert_eq!(interval(&log), PropertyValue::Unsigned(1));
@@ -182,7 +214,8 @@ fn a_polled_interval_written_to_zero_is_a_refused_switch_to_cov() {
     }
     assert_eq!(interval(&log), PropertyValue::Unsigned(1));
 
-    // A Trend Log Multiple has no such switch: zero leaves it idle.
+    // A Trend Log Multiple has no such switch: zero leaves it idle and
+    // POLLED, and COV is out of its range (Clause 12.30.12).
     let mut multiple = TrendLogMultipleObject::new(1, "TLM-1", 8).unwrap();
     multiple.set_log_interval(300).unwrap();
     multiple.set_log_interval(0).unwrap();
@@ -192,6 +225,87 @@ fn a_polled_interval_written_to_zero_is_a_refused_switch_to_cov() {
             .unwrap(),
         PropertyValue::Unsigned(0)
     );
+    assert_eq!(
+        multiple
+            .read_property(PropertyIdentifier::LOGGING_TYPE, None)
+            .unwrap(),
+        PropertyValue::Enumerated(0)
+    );
+    assert_refused(
+        multiple.set_logging_type(LoggingType::COV),
+        ErrorClass::PROPERTY,
+        ErrorCode::VALUE_OUT_OF_RANGE,
+    );
+}
+
+#[test]
+fn the_cov_rows_take_their_datatypes_and_ranges() {
+    let mut log = TrendLogObject::new(1, "TL-1", 8).unwrap();
+    let increment = PropertyIdentifier::CLIENT_COV_INCREMENT;
+    let resubscription = PropertyIdentifier::COV_RESUBSCRIPTION_INTERVAL;
+    // NULL, the referenced property's own criteria, by default.
+    assert_eq!(read(&log, increment), PropertyValue::Null);
+    assert_eq!(
+        read(&log, resubscription),
+        PropertyValue::Unsigned(DEFAULT_COV_RESUBSCRIPTION_INTERVAL.into())
+    );
+    write(&mut log, increment, PropertyValue::Real(0.5)).unwrap();
+    assert_eq!(read(&log, increment), PropertyValue::Real(0.5));
+    write(&mut log, increment, PropertyValue::Null).unwrap();
+    assert_eq!(read(&log, increment), PropertyValue::Null);
+    log.set_client_cov_increment(Some(2.0)).unwrap();
+    assert_eq!(read(&log, increment), PropertyValue::Real(2.0));
+    for value in [-1.0, f32::NAN, f32::INFINITY] {
+        assert_refused(
+            write(&mut log, increment, PropertyValue::Real(value)),
+            ErrorClass::PROPERTY,
+            ErrorCode::VALUE_OUT_OF_RANGE,
+        );
+        assert_refused(
+            log.set_client_cov_increment(Some(value)),
+            ErrorClass::PROPERTY,
+            ErrorCode::VALUE_OUT_OF_RANGE,
+        );
+    }
+    for value in [PropertyValue::Unsigned(1), PropertyValue::Double(1.0)] {
+        assert_refused(
+            write(&mut log, increment, value),
+            ErrorClass::PROPERTY,
+            ErrorCode::INVALID_DATA_TYPE,
+        );
+    }
+    assert_eq!(read(&log, increment), PropertyValue::Real(2.0));
+
+    write(&mut log, resubscription, PropertyValue::Unsigned(60)).unwrap();
+    assert_eq!(read(&log, resubscription), PropertyValue::Unsigned(60));
+    log.set_cov_resubscription_interval(90).unwrap();
+    assert_eq!(read(&log, resubscription), PropertyValue::Unsigned(90));
+    // Clause 12.25.10 keeps it nonzero.
+    for (value, code) in [
+        (PropertyValue::Unsigned(0), ErrorCode::VALUE_OUT_OF_RANGE),
+        (
+            PropertyValue::Unsigned(u64::from(u32::MAX) + 1),
+            ErrorCode::VALUE_OUT_OF_RANGE,
+        ),
+        (PropertyValue::Null, ErrorCode::INVALID_DATA_TYPE),
+    ] {
+        assert_refused(
+            write(&mut log, resubscription, value),
+            ErrorClass::PROPERTY,
+            code,
+        );
+    }
+    assert_refused(
+        log.set_cov_resubscription_interval(0),
+        ErrorClass::PROPERTY,
+        ErrorCode::VALUE_OUT_OF_RANGE,
+    );
+    assert_eq!(read(&log, resubscription), PropertyValue::Unsigned(90));
+    // Neither row is on a Trend Log Multiple (Table 12-35).
+    let multiple = TrendLogMultipleObject::new(1, "TLM-1", 8).unwrap();
+    for property in [increment, resubscription] {
+        assert!(multiple.read_property(property, None).is_err());
+    }
 }
 
 #[test]

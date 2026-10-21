@@ -1,5 +1,15 @@
 use super::*;
-use crate::mutation::{MutationAuthorizationContext, MutationAuthorizer, MutationTarget};
+use crate::mutation::{MutationAuthorizationContext, MutationTarget};
+
+/// A mutation decision as a closure, the shape these suites build.
+pub(crate) type MutationAuthorizer =
+    Arc<dyn Fn(&MutationAuthorizationContext) -> bool + Send + Sync>;
+
+/// A policy that decides mutations with `authorizer` and keeps every other
+/// default.
+pub(crate) fn mutation_policy(authorizer: MutationAuthorizer) -> Arc<dyn crate::ServerPolicy> {
+    Arc::new(crate::FnPolicy::new().mutation(move |context| authorizer(context)))
+}
 use crate::server::test_transport::TestTransport;
 use bacnet_encoding::{apdu::decode_apdu, npdu::decode_npdu};
 use bacnet_objects::{
@@ -74,7 +84,7 @@ impl Fixture {
             db: Arc::new(RwLock::new(db)),
             table: Arc::new(RwLock::new(CovSubscriptionTable::new())),
             config: ServerConfig {
-                mutation_authorizer: authorizer,
+                policy: authorizer.map(mutation_policy),
                 ..Default::default()
             },
             state: Arc::default(),
@@ -416,7 +426,7 @@ denial_test!(deny_subscribe_cov_property_multiple, 9);
 
 #[tokio::test]
 async fn default_allow_and_allow_all_have_identical_wire_and_state_for_all_ten() {
-    assert!(ServerConfig::default().mutation_authorizer.is_none());
+    assert!(ServerConfig::default().policy.is_none());
     for (service, bytes, _) in cases() {
         let absent = Fixture::new(None);
         let calls = Arc::new(AtomicUsize::new(0));
@@ -523,19 +533,19 @@ async fn malformed_final_field_is_decoded_before_policy_for_non_wpm_services() {
 #[test]
 fn builders_install_mutation_policy_and_debug_redacts_callbacks() {
     assert!(BACnetServer::<BipTransport>::generic_builder()
-        .mutation_authorizer(|_| false)
+        .policy(crate::FnPolicy::new().mutation(|_| false))
         .config
-        .mutation_authorizer
+        .policy
         .is_some());
     let config = BACnetServer::bip_builder()
-        .mutation_authorizer(|_| true)
+        .policy(crate::FnPolicy::new().mutation(|_| true))
         .config;
-    assert!(config.mutation_authorizer.is_some());
-    assert!(format!("{config:?}").contains("mutation_authorizer: Some(\"<callback>\")"));
+    assert!(config.policy.is_some());
+    assert!(format!("{config:?}").contains("policy: Some(\"<policy>\")"));
     #[cfg(feature = "sc-tls")]
     assert!(BACnetServer::sc_builder()
-        .mutation_authorizer(|_| false)
+        .policy(crate::FnPolicy::new().mutation(|_| false))
         .config
-        .mutation_authorizer
+        .policy
         .is_some());
 }

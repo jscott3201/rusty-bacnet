@@ -141,7 +141,7 @@ async fn max_retry_budget_sends_exactly_255_retransmissions() {
     .expect("the maximum retry budget must terminate");
     assert!(matches!(
         result,
-        Err(Error::Abort { reason }) if reason == AbortReason::TSM_TIMEOUT.to_raw()
+        Err(Error::Abort { reason }) if reason == AbortReason::TSM_TIMEOUT
     ));
     assert_eq!(drain.await.unwrap(), 1 + usize::from(u8::MAX));
 

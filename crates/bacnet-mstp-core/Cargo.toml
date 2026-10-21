@@ -10,14 +10,19 @@ readme = "README.md"
 keywords = ["bacnet", "mstp", "embedded", "no-std"]
 categories = ["embedded", "network-programming", "no-std", "no-std::no-alloc"]
 
-# No feature needs std. `alloc` adds AllocQueues; HeaplessQueues, which
-# keeps its slots in arrays, needs no feature.
+# No feature needs std. `alloc` adds AllocQueues; FixedQueues, which
+# keeps its slots in arrays, needs no feature. `inspect` adds a view of
+# the frame handed over and not yet started, for test oracles such as the
+# fuzz crate's; adapters never need it. It is a test and fuzz hook, not
+# covered by semver.
 [features]
 default = []
 alloc = []
+inspect = []
 
 [dependencies]
 bacnet-mstp-codec = { workspace = true, default-features = false }
+bacnet-npdu = { workspace = true }
 bacnet-time = { workspace = true }
 
 [dev-dependencies]

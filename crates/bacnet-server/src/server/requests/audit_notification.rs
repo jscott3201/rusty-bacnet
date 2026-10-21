@@ -45,11 +45,9 @@ pub(super) async fn receive_confirmed_audit_notification(
         audit_log_sink: sink,
         request: request.clone(),
     };
-    if !config
-        .audit_notification_authorizer
-        .as_ref()
-        .is_some_and(|authorizer| fail_closed_authorize(|| authorizer(&context)))
-    {
+    if !config.policy.as_ref().is_some_and(|policy| {
+        fail_closed_authorize(|| policy.authorize_audit_notification(&context))
+    }) {
         return Err(request_denied());
     }
 
@@ -138,10 +136,9 @@ pub(super) async fn receive_unconfirmed_audit_notification(
                 audit_log_sink: sink,
                 request: request.clone(),
             };
-            config
-                .unconfirmed_audit_notification_authorizer
-                .as_ref()
-                .is_some_and(|authorizer| fail_closed_authorize(|| authorizer(&context)))
+            config.policy.as_ref().is_some_and(|policy| {
+                fail_closed_authorize(|| policy.authorize_unconfirmed_audit_notification(&context))
+            })
         },
     )
     .await
@@ -204,7 +201,7 @@ pub(in crate::server) fn fail_closed_authorize(authorize: impl FnOnce() -> bool)
 
 pub(super) fn request_denied() -> Error {
     Error::Protocol {
-        class: ErrorClass::SERVICES.to_raw() as u32,
-        code: ErrorCode::SERVICE_REQUEST_DENIED.to_raw() as u32,
+        class: ErrorClass::SERVICES,
+        code: ErrorCode::SERVICE_REQUEST_DENIED,
     }
 }

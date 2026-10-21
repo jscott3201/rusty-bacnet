@@ -7,10 +7,12 @@ use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetEventParameter, BACnetPropertyStates,
     FaultParameters,
 };
-use bacnet_types::enums::{ErrorClass, ErrorCode, LifeSafetyState, Reliability};
+use bacnet_types::enums::{EngineeringUnits, ErrorClass, ErrorCode, LifeSafetyState, Reliability};
 use bacnet_types::primitives::BACnetTimeStamp;
 use std::borrow::Cow;
 use std::sync::atomic::Ordering;
+
+const CELSIUS: EngineeringUnits = EngineeringUnits::DEGREES_CELSIUS;
 
 struct OptionalReliabilityTarget {
     oid: ObjectIdentifier,
@@ -46,8 +48,8 @@ impl BACnetObject for OptionalReliabilityTarget {
             Ok(PropertyValue::Real(0.0))
         } else {
             Err(bacnet_types::error::Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+                class: ErrorClass::PROPERTY,
+                code: ErrorCode::UNKNOWN_PROPERTY,
             })
         }
     }
@@ -83,7 +85,7 @@ fn setup(
     fault_parameters: FaultParameters,
 ) -> (ObjectDatabase, ObjectIdentifier, ObjectIdentifier) {
     let mut db = ObjectDatabase::new();
-    let mut target = AnalogInputObject::new(301, "AI-fault-target", 62).unwrap();
+    let mut target = AnalogInputObject::new(301, "AI-fault-target", CELSIUS).unwrap();
     target.set_present_value(present_value);
     target
         .write_property(
@@ -335,7 +337,7 @@ fn fault_none_falls_through_to_the_normal_event_algorithm() {
 #[test]
 fn absent_optional_fault_parameters_preserves_custom_normal_event_evaluation() {
     let mut db = ObjectDatabase::new();
-    let mut target = AnalogValueObject::new(321, "AV-no-fault-parameters", 62).unwrap();
+    let mut target = AnalogValueObject::new(321, "AV-no-fault-parameters", CELSIUS).unwrap();
     target
         .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
@@ -413,7 +415,7 @@ fn absent_optional_target_reliability_falls_through_but_malformed_type_is_config
 
 #[test]
 fn local_status_flags_fault_enters_member_fault_and_recovers() {
-    let mut status_source = AnalogInputObject::new(302, "AI-status-source", 62).unwrap();
+    let mut status_source = AnalogInputObject::new(302, "AI-status-source", CELSIUS).unwrap();
     status_source
         .write_property(
             PropertyIdentifier::OUT_OF_SERVICE,
@@ -568,7 +570,7 @@ fn missing_target_is_observation_unavailable_without_public_transition() {
 #[test]
 fn fault_recovery_resets_cached_event_state_once_and_restarts_full_delay_next_pass() {
     let mut db = ObjectDatabase::new();
-    let mut target = AnalogValueObject::new(304, "AV-recovery", 62).unwrap();
+    let mut target = AnalogValueObject::new(304, "AV-recovery", CELSIUS).unwrap();
     target
         .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
@@ -643,7 +645,7 @@ fn fault_recovery_resets_cached_event_state_once_and_restarts_full_delay_next_pa
 fn rejected_and_mutating_custom_hooks_do_not_escape_tokens_or_consume_sequences() {
     for mutate_then_error in [false, true] {
         let mut db = ObjectDatabase::new();
-        let mut target = AnalogValueObject::new(305, "AV-hook", 62).unwrap();
+        let mut target = AnalogValueObject::new(305, "AV-hook", CELSIUS).unwrap();
         target
             .write_property_from(
                 PropertyIdentifier::PRESENT_VALUE,
@@ -701,7 +703,7 @@ fn rejected_and_mutating_custom_hooks_do_not_escape_tokens_or_consume_sequences(
 #[test]
 fn held_configuration_error_clears_landed_after_error_invalidation_once() {
     let mut db = ObjectDatabase::new();
-    let mut target = AnalogValueObject::new(306, "AV-held-config", 62).unwrap();
+    let mut target = AnalogValueObject::new(306, "AV-held-config", CELSIUS).unwrap();
     target
         .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,

@@ -271,6 +271,12 @@ pub(super) struct AdmissionRuntime {
     pub(super) bindings: Option<super::ScHubCertificateBindings>,
     pub(super) policy: Option<ScHubAdmissionPolicy>,
     pub(super) denied: AtomicU64,
+    /// The throttle on the warnings for connections a peer ends badly, with
+    /// a failed read or a frame that isn't binary (#1950). It is hub-wide,
+    /// not per connection, since each such warning ends its connection: a
+    /// peer that reconnects over and over warns once per
+    /// [`WARNING_INTERVAL`](crate::warn_throttle::WARNING_INTERVAL).
+    pub(super) connection_warning: crate::warn_throttle::WarnThrottle,
     /// WebSocket-upgrade deadlines armed, one per TLS success. Paused-clock
     /// tests wait for it before advancing, since the hub finishes TLS after
     /// the peer does (#1042).
@@ -285,6 +291,7 @@ impl AdmissionRuntime {
             bindings: None,
             policy,
             denied: AtomicU64::new(0),
+            connection_warning: Default::default(),
             #[cfg(test)]
             upgrade_deadlines_armed: std::sync::atomic::AtomicUsize::new(0),
         }

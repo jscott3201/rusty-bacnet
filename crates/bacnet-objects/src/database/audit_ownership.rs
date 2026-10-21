@@ -110,7 +110,7 @@ impl ObjectDatabase {
 
 fn protected() -> Error {
     Error::Protocol {
-        class: ErrorClass::OBJECT.to_raw() as u32,
-        code: ErrorCode::OBJECT_DELETION_NOT_PERMITTED.to_raw() as u32,
+        class: ErrorClass::OBJECT,
+        code: ErrorCode::OBJECT_DELETION_NOT_PERMITTED,
     }
 }

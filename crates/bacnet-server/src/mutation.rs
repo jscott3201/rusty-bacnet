@@ -1,13 +1,14 @@
 //! Opt-in authorization for the server's ten covered confirmed mutation
 //! services and the Channel writes an inbound WriteGroup makes (#1319).
 //!
-//! This is local application policy, not authentication. DCC/ReinitializeDevice,
-//! LifeSafety/Audit, the other unconfirmed services, reads, and queries retain
-//! their own behavior. Direct handler calls and trusted local writes are not
-//! gated here.
+//! This is local application policy, not authentication. The decision itself
+//! is [`ServerPolicy::authorize_mutation`](crate::ServerPolicy::authorize_mutation);
+//! this module holds its context, the [`MutationPolicy`] hardening switch and
+//! the decision counters. DCC/ReinitializeDevice, the other unconfirmed
+//! services, reads, and queries keep their own behavior. Direct handler calls
+//! and trusted local writes are not gated here.
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
 
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_services::cov::{SubscribeCOVPropertyRequest, SubscribeCOVRequest};
@@ -26,10 +27,10 @@ use bacnet_types::MacAddr;
 /// `ControlTrust`. Scope only, never leaf identity: a verified SC ingress
 /// asserts the channel/relay validation, not that a claimed SNET/SADR leaf
 /// is the authenticated peer. Provenance alone never authorizes; only the
-/// callback does (callback-only, no static allowlist).
+/// policy does (no static allowlist).
 ///
-/// Direct ingress exposes its verified leaf through the provenance snapshot;
-/// this enum remains scope-only. The SC VMAC is payload-claimed inside the TLS
+/// Direct ingress exposes its verified leaf as
+/// [`MutationAuthorizationContext::principal`]; this enum remains scope-only. The SC VMAC is payload-claimed inside the TLS
 /// channel and is not bound to the operational certificate. An unknown origin (including a
 /// hub-mediated unknown leaf, which arrives [`TransportProvenance::unverified`])
 /// never satisfies a baseline-only allow rule; receive-permission (e.g. an
@@ -62,22 +63,23 @@ impl MutationTrust {
 /// ten confirmed services and inbound WriteGroup.
 ///
 /// SC mTLS channel/peer authentication is **not service authorization**. Identities
-/// include claimed link/routed addresses separately from the sealed direct-SC
-/// leaf/incarnation snapshot available to an installed authorizer.
+/// include claimed link/routed addresses separately from the direct-SC
+/// [`principal`](MutationAuthorizationContext::principal) an installed
+/// [`ServerPolicy`](crate::ServerPolicy) sees.
 /// DCC, admission, decoding and WPM element validation retain their existing precedence.
 ///
 /// An inbound WriteGroup is decided once per Channel write it would make
-/// ([`MutationTarget::WriteGroup`]): `DenyAll` denies each one, and an
-/// authorizer may allow some Channels and not others (#1319). A denied write is
+/// ([`MutationTarget::WriteGroup`]): `DenyAll` denies each one, and a policy
+/// may allow some Channels and not others (#1319). A denied write is
 /// skipped silently, since nothing answers an unconfirmed request, and counted.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum MutationPolicy {
-    /// Preserve default-allow behavior: an absent authorizer allows; an installed
-    /// authorizer must allow each decision.
+    /// Preserve default-allow behavior: without a policy every decision is
+    /// allowed; an installed policy must allow each one.
     #[default]
     Permissive,
-    /// Deny every covered decision, even with an allow-all authorizer installed.
-    /// The authorizer is not called. Denials use SERVICES / SERVICE_REQUEST_DENIED.
+    /// Deny every covered decision, even with an allow-all policy installed.
+    /// The policy is not asked. Denials use SERVICES / SERVICE_REQUEST_DENIED.
     DenyAll,
 }
 
@@ -169,15 +171,16 @@ impl MutationTarget {
 /// `source_mac` identifies the immediate peer (often a router); `source_network`
 /// is the peer-claimed routed origin, not a verified identity.
 /// SC mTLS authenticates the channel/peer, not service authorization; neither
-/// address is a certificate principal.
+/// address is a certificate principal. [`principal`](Self::principal) is, and
+/// only for a verified direct SC connection.
 ///
 /// `provenance` is the reassembled ingress snapshot threaded from dispatch
 /// (segmentation mismatches already fail closed at reassembly, so every
 /// element of one request — including each WPM element — observes the same
 /// snapshot). `trust` is the channel/relay scope derived from it, never leaf
-/// identity. Debug is redacted by construction: address lengths and the
-/// target kind only, never MAC bytes, property values, file payloads, or
-/// other decoded inputs.
+/// identity. Debug is redacted by construction: address lengths, whether a
+/// principal is present and the target kind only, never MAC bytes, the
+/// fingerprint, property values, file payloads, or other decoded inputs.
 #[derive(Clone, PartialEq)]
 pub struct MutationAuthorizationContext {
     /// Immediate data-link peer address.
@@ -199,7 +202,25 @@ pub struct MutationAuthorizationContext {
 }
 
 impl MutationAuthorizationContext {
-    /// Original verified direct-SC leaf and incarnation; absent on other ingress.
+    /// The principal of the peer that originated the request: the verified
+    /// leaf certificate of a direct BACnet/SC connection, when the request
+    /// carries no routed source. `None` for other ingress, hub-relayed and
+    /// routed requests included (see [`crate::policy`]).
+    pub fn principal(&self) -> Option<bacnet_transport::port::ScPrincipal> {
+        crate::policy::originating_principal(self.provenance, self.source_network.as_ref())
+    }
+
+    /// The principal of the direct BACnet/SC peer that handed this request
+    /// over, a router included when the request was routed; `None` off a
+    /// verified direct SC connection. Trusting it trusts everything that
+    /// peer forwards.
+    pub fn forwarding_peer_principal(&self) -> Option<bacnet_transport::port::ScPrincipal> {
+        self.provenance.principal()
+    }
+
+    /// The immediate direct-SC hop's verified leaf and connection incarnation:
+    /// for a routed request, the router that forwarded it. Absent off a
+    /// verified direct SC connection. Separate from claimed addresses.
     pub fn direct_sc_identity(&self) -> Option<bacnet_transport::port::DirectScIdentity> {
         self.provenance.direct_sc_identity()
     }
@@ -217,6 +238,7 @@ impl std::fmt::Debug for MutationAuthorizationContext {
                     .map(|source| (source.network, source.mac_address.len())),
             )
             .field("provenance", &self.provenance)
+            .field("principal", &self.principal().is_some())
             .field("trust", &self.trust)
             .field("invoke_id", &self.invoke_id)
             .field("service_choice", &self.service_choice)
@@ -225,55 +247,22 @@ impl std::fmt::Debug for MutationAuthorizationContext {
     }
 }
 
-/// Fast, nonblocking, side-effect-free mutation authorization callback.
-///
-/// Timing: invoked after DCC prechecks, request admission, service decoding,
-/// and per-element validation, and before any database mutation, COV/event
-/// fan-out, or audit-log write. A denial performs no audit-log write (that
-/// would itself be a mutation); it is recorded in the saturating per-service
-/// counters and bounded tracing diagnostics only.
-///
-/// Under [`MutationPolicy::Permissive`], **default-allow:** `None` preserves existing
-/// behavior, deliberately unlike
-/// AuditNotification/LifeSafetyOperation's fail-closed absence. Returning `false`
-/// or panicking denies with SERVICES / SERVICE_REQUEST_DENIED before mutation.
-/// DCC prechecks and request admission precede this callback.
-///
-/// WPM invokes policy per decoded, validated element in wire order, immediately
-/// before its write. Denial or a malformed suffix leaves the authorized prefix
-/// committed. Other covered services decode their complete service request and
-/// invoke policy once, including multi-element list/subscription requests.
-/// Callbacks can run concurrently and WPM holds the database write lock: do not
-/// block, reenter the server, or perform side effects from a callback.
-///
-/// A WPM element that an object saves before serving (a Notification
-/// Forwarder's or Notification Class's list, an Access Rights object's rules,
-/// Enable or Accompaniment, an Audit Log's Log_Enable or Buffer_Size) is
-/// decided earlier, under a database read guard, before the server stages its
-/// save to run off the write lock (#1321). It is still decided once, after
-/// that element's own validation and in wire order among such elements, so
-/// ahead of earlier elements no object saves first, and the handler applies
-/// the decision when it reaches the element. So the callback can be asked
-/// about such an element that the request never reaches, because an earlier
-/// element fails for another reason. Decision counters and audit records
-/// cover only the elements the handler reaches.
-///
-/// An inbound WriteGroup reaches the callback once per Channel it would write,
-/// after the change list is decoded and matched to the Channels and before each
-/// write, with no database guard held. The context has no invoke ID and an
-/// unconfirmed service. Returning `false`, or panicking, skips that Channel
-/// silently, with no Audit record; the other Channels are decided on their own.
-pub type MutationAuthorizer = Arc<dyn Fn(&MutationAuthorizationContext) -> bool + Send + Sync>;
+/// The shared endpoint's gate for writes to its local Device, given the same
+/// redacted context [`ServerPolicy::authorize_mutation`](crate::ServerPolicy::authorize_mutation)
+/// sees, under the same calling rules. A full server uses its
+/// [`ServerPolicy`](crate::ServerPolicy) instead.
+pub type DeviceWriteAuthorizer =
+    std::sync::Arc<dyn Fn(&MutationAuthorizationContext) -> bool + Send + Sync>;
 
 /// Saturating lifetime decision totals for one covered service.
 /// These count authorization decisions, not successful mutations or response delivery.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MutationServiceCounters {
-    /// Allowed by absent or approving authorizer in permissive mode.
+    /// Allowed, with no policy or an approving one, in permissive mode.
     pub allow_total: u64,
-    /// All denials: authorizer refusal/panic or deny-all policy.
+    /// All denials: policy refusal/panic or deny-all mode.
     pub deny_total: u64,
-    /// Deny-all policy denials, a subset of `deny_total`; no callback was called.
+    /// Deny-all mode denials, a subset of `deny_total`; no policy was asked.
     pub policy_deny_total: u64,
 }
 
@@ -281,9 +270,9 @@ pub struct MutationServiceCounters {
 /// New servers start at zero. Each field is independently sampled and saturates at
 /// `u64::MAX`, so snapshots are not atomic aggregates. Counters never affect policy.
 /// WPM counts each element reaching its gate, not requests or an unvisited suffix,
-/// even one the authorizer was asked about ahead of the handler (#1321).
-/// Pre-gate failures and duplicates do not count. In permissive mode an
-/// absent authorizer allows without decoding, so a later handler failure still counts.
+/// even one the policy was asked about ahead of the handler (#1321).
+/// Pre-gate failures and duplicates do not count. In permissive mode without
+/// a policy, a decision allows without decoding, so a later handler failure still counts.
 /// An inbound WriteGroup counts once per Channel write it would make.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MutationDecisionCounters {

@@ -191,8 +191,8 @@ fn custom_reporter_configuration_replaces_every_setting_through_trait_object() {
     assert!(
         matches!(object.read_property(PropertyIdentifier::MONITORED_OBJECTS, None),
         Err(Error::Protocol { class, code })
-            if class == ErrorClass::PROPERTY.to_raw() as u32
-                && code == ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32)
+            if class == ErrorClass::PROPERTY
+                && code == ErrorCode::UNKNOWN_PROPERTY)
     );
     assert!(object
         .audit_reporter_internal()
@@ -256,8 +256,8 @@ fn non_reporter_rejects_complete_configuration_without_mutation() {
             AuditLevel::AUDIT_ALL, AuditOperationFlags::from_bits(2).unwrap(), true,
             selectors, priorities,
          None,), Err(Error::Protocol { class, code })
-            if class == ErrorClass::OBJECT.to_raw() as u32
-                && code == ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32));
+            if class == ErrorClass::OBJECT
+                && code == ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED));
         assert_eq!(snapshot(object), before);
     }
 }

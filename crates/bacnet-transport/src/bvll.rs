@@ -55,7 +55,7 @@
 
 use std::net::{Ipv4Addr, SocketAddrV4};
 
-use bacnet_types::error::Error;
+use bacnet_types::error::{DecodeError, DecodingKind, Error};
 use bytes::{Bytes, BytesMut};
 
 pub use bacnet_bip_codec::{
@@ -65,28 +65,104 @@ pub use bacnet_bip_codec::{
     DEFAULT_PORT, FDT_ENTRY_LENGTH, HEADER_LENGTH, MAX_BVLL_LENGTH,
 };
 
+/// The static label `NAME cannot carry a {}-octet payload` for each named
+/// function of `$Type` listed, or `None` for another value, so a payload
+/// refusal reads as the codec's does without formatting (#1776).
+macro_rules! payload_label {
+    ($function:expr, $Type:ident: $($name:ident),+ $(,)?) => {
+        match $function {
+            $( $Type::$name => Some(concat!(stringify!($name), " cannot carry a {}-octet payload")), )+
+            _ => None,
+        }
+    };
+}
+// The B/IPv6 mapper uses it too.
+#[cfg(feature = "ipv6")]
+pub(crate) use payload_label;
+
 /// Map a codec error to the transport's [`Error`].
 ///
-/// Decode failures become [`Error::Decoding`] at the offset of the field at
-/// fault: 0 for the datagram as a whole, its type octet or a B/IP address,
-/// 1 for the function, 2 for the Length field, 4 for the payload. Encode
+/// Decode failures become a static [`Error::Decoding`] at the offset of the
+/// field at fault: 0 for the datagram as a whole, its type octet or a B/IP
+/// address, 1 for the function, 2 for the Length field, 4 for the payload.
+/// The text is the codec's, octets in upper-case hexadecimal (#1803). Encode
 /// failures become [`Error::Encoding`], and so does an error the codec adds
 /// later, until it is placed here.
 pub fn bvll_error(error: BvllError) -> Error {
-    let offset = match error {
-        BvllError::TooShort { .. }
-        | BvllError::NotBip { .. }
-        | BvllError::TableLength { .. }
-        | BvllError::AddressLength { .. } => 0,
-        BvllError::UnknownFunction { .. } => 1,
-        BvllError::LengthMismatch { .. } => 2,
-        BvllError::PayloadLength { .. } => 4,
-        BvllError::TooLong { .. }
-        | BvllError::UndefinedResultCode { .. }
-        | BvllError::BufferExhausted { .. } => return Error::Encoding(error.to_string()),
+    let (offset, label, values) = match error {
+        BvllError::TooShort { length } => (
+            0,
+            "BVLL datagram too short: {} octets, header needs 4",
+            [length as u64, 0],
+        ),
+        BvllError::NotBip { bvlc_type } => (
+            0,
+            "BVLC type {:#04X} is not B/IP (0x81)",
+            [bvlc_type.into(), 0],
+        ),
+        BvllError::TableLength {
+            length,
+            entry_length,
+        } => (
+            0,
+            "table of {} octets is not a whole number of {}-octet entries",
+            [length as u64, entry_length as u64],
+        ),
+        BvllError::AddressLength { length } => (
+            0,
+            "B/IP address must be 6 octets, got {}",
+            [length as u64, 0],
+        ),
+        BvllError::UnknownFunction { function } => {
+            (1, "unknown BVLC function {:#04X}", [function.into(), 0])
+        }
+        BvllError::LengthMismatch { declared, received } => (
+            2,
+            "BVLC length {} does not match the {}-octet datagram",
+            [declared as u64, received as u64],
+        ),
+        BvllError::PayloadLength { function, length } => {
+            let label = payload_label!(
+                function,
+                BvlcFunction: BVLC_RESULT,
+                WRITE_BROADCAST_DISTRIBUTION_TABLE,
+                READ_BROADCAST_DISTRIBUTION_TABLE,
+                READ_BROADCAST_DISTRIBUTION_TABLE_ACK,
+                FORWARDED_NPDU,
+                REGISTER_FOREIGN_DEVICE,
+                READ_FOREIGN_DEVICE_TABLE,
+                READ_FOREIGN_DEVICE_TABLE_ACK,
+                DELETE_FOREIGN_DEVICE_TABLE_ENTRY,
+                DISTRIBUTE_BROADCAST_TO_NETWORK,
+                ORIGINAL_UNICAST_NPDU,
+                ORIGINAL_BROADCAST_NPDU,
+            );
+            return payload_refusal(label, function.to_raw(), length);
+        }
         _ => return Error::Encoding(error.to_string()),
     };
-    Error::decoding(offset, error.to_string())
+    let mut refused = DecodeError::new(DecodingKind::InvalidEncoding, offset, label);
+    refused.values = values;
+    refused.into()
+}
+
+/// The refusal of a `length`-octet payload its function can't carry, at the
+/// payload's offset, 4: `label` names a named function (see
+/// [`payload_label`]), and an unnamed one is given by its number `raw`.
+/// Shared with the B/IPv6 mapper.
+pub(crate) fn payload_refusal(label: Option<&'static str>, raw: u8, length: usize) -> Error {
+    match label {
+        Some(label) => {
+            DecodeError::new(DecodingKind::InvalidEncoding, 4, label).with_value(length as u64)
+        }
+        None => DecodeError::new(
+            DecodingKind::InvalidEncoding,
+            4,
+            "{} cannot carry a {}-octet payload",
+        )
+        .with_values(raw.into(), length as u64),
+    }
+    .into()
 }
 
 /// An owned copy of a received BVLL frame: the header checked, the payload

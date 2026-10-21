@@ -22,6 +22,7 @@ accepts configured baud rates of 9600, 19200, 38400, 57600, 76800, or 115200.
 | [`mstp_mini_device.py`](mstp_mini_device.py) | BACnet MS/TP mini-device over USB RS-485 (`transport="mstp"`) |
 | [`cov_subscriptions.py`](cov_subscriptions.py) | COV subscription and real-time notifications |
 | [`sc_secure_connect.py`](sc_secure_connect.py) | BACnet/SC with hub, TLS, and VMAC addressing |
+| [`sc_peer_certificates.py`](sc_peer_certificates.py) | Helpers for accepted-Hub snapshots and untrusted rejected-attempt certificates on configured clients |
 | [`ipv6_client_server.py`](ipv6_client_server.py) | BACnet/IPv6 client and server: VMAC addressing and `resolve_vmac` |
 | [`device_management.py`](device_management.py) | DeviceCommunicationControl, CreateObject, error handling |
 

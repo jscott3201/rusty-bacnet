@@ -6,8 +6,9 @@
 
 use std::time::Duration;
 
-use crate::resolve::{parse_target, Target};
-use crate::tui::message::{AddressStyle, DirectedTo, WhoIsScope, WhoIsSpec, MAX_INSTANCE};
+use crate::core::target::AddressStyle;
+use crate::core::target::{parse_target, Target, MSTP_TEXT_PREFIX};
+use crate::tui::message::{DirectedTo, WhoIsScope, WhoIsSpec, MAX_INSTANCE};
 use bacnet_services::who_is::DeviceInstanceRange;
 use bacnet_transport::bip6::VMAC_TEXT_PREFIX;
 
@@ -267,6 +268,12 @@ fn parse_directed(target: &str, style: AddressStyle) -> Result<DirectedTo, Strin
             "'{target}' is a B/IPv6 VMAC; bip6: addresses need the --ipv6 transport"
         ));
     }
+    if target.starts_with(MSTP_TEXT_PREFIX) != (style == AddressStyle::Mstp) {
+        return Err(format!(
+            "'{target}' is not an address on this transport; a directed Who-Is needs {}",
+            directed_forms(style)
+        ));
+    }
     match parse_target(target)? {
         Target::Mac(mac) => Ok(DirectedTo::Mac(mac)),
         // The worker finds the VMAC of the node at this address.
@@ -274,10 +281,20 @@ fn parse_directed(target: &str, style: AddressStyle) -> Result<DirectedTo, Strin
         Target::Bip6(_) => Err(format!(
             "'{target}' is a B/IPv6 address; start the TUI with --ipv6"
         )),
-        Target::Instance(_) | Target::Routed(..) => Err(format!(
+        Target::Instance(_) | Target::Routed { .. } | Target::RoutedMac { .. } => Err(format!(
             "'{target}' is not an address; a directed Who-Is needs {}",
-            style.directed_forms()
+            directed_forms(style)
         )),
+    }
+}
+
+/// The addresses a directed Who-Is takes on a transport with `style`.
+pub(crate) fn directed_forms(style: AddressStyle) -> &'static str {
+    match style {
+        AddressStyle::Bip => "IP or IP:port",
+        AddressStyle::Bip6 => "bip6:N, bip6:0xVMAC or [IPv6]:port",
+        AddressStyle::Hex => "VMAC as 12 hex digits",
+        AddressStyle::Mstp => "mstp:N, a station 0 to 254",
     }
 }
 

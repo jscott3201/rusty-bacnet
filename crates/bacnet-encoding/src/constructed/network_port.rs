@@ -34,12 +34,12 @@ use core::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddr
 use bacnet_types::constructed::{
     BACnetBDTEntry, BACnetFDTEntry, BACnetHostAddress, BACnetHostNPort,
 };
-use bacnet_types::error::Error;
+use bacnet_types::error::{DecodeError, DecodingKind, Error};
 use bytes::BytesMut;
 
 use super::tagged::{
     contents, decode_ctx_character_string, decode_ctx_fixed, decode_ctx_unsigned,
-    decode_optional_ctx, expect_closing, expect_opening, misplaced_tag,
+    decode_optional_ctx, expect_closing, expect_opening, misplaced, Fixed,
 };
 use super::MAX_FRAMED_ITEMS;
 use crate::primitives;
@@ -81,10 +81,14 @@ pub fn decode_host_address(
     let (tag, start) = tags::decode_tag(data, offset)?;
     if tag.is_context(0) {
         if tag.length != 0 {
-            return Err(Error::decoding(
+            return Err(DecodeError::new(
+                DecodingKind::InvalidEncoding,
                 offset,
-                format!("{what} none [0]: NULL has {} contents octets", tag.length),
-            ));
+                "none [0]: NULL has {} contents octets",
+            )
+            .within(what)
+            .with_value(tag.length.into())
+            .into());
         }
         return Ok((BACnetHostAddress::None, start));
     }
@@ -95,13 +99,14 @@ pub fn decode_host_address(
             _ => match <[u8; 16]>::try_from(octets) {
                 Ok(v6) => IpAddr::V6(Ipv6Addr::from(v6)),
                 Err(_) => {
-                    return Err(Error::decoding(
+                    return Err(DecodeError::new(
+                        DecodingKind::InvalidEncoding,
                         offset,
-                        format!(
-                            "{what} ip-address [1]: {} octets, expected 4 or 16",
-                            octets.len()
-                        ),
-                    ))
+                        "ip-address [1]: {} octets, expected 4 or 16",
+                    )
+                    .within(what)
+                    .with_value(octets.len() as u64)
+                    .into())
                 }
             },
         };
@@ -111,13 +116,15 @@ pub fn decode_host_address(
         let (name, end) = decode_ctx_character_string(data, offset, 2, what)?;
         return Ok((BACnetHostAddress::Name(name), end));
     }
-    Err(misplaced_tag(
+    Err(misplaced(
         data,
         &tag,
         None,
         offset,
-        format!("{what}: expected none [0], ip-address [1] or name [2]"),
-    ))
+        "expected none [0], ip-address [1] or name [2]",
+    )
+    .within(what)
+    .into())
 }
 
 /// Encode one bare `BACnetHostNPort` SEQUENCE.
@@ -168,8 +175,13 @@ pub fn decode_bdt_entry(data: &[u8], offset: usize) -> Result<(BACnetBDTEntry, u
     let pos = expect_opening(data, offset, 0, what)?;
     let (bbmd_address, pos) = decode_host_n_port(data, pos)?;
     let pos = expect_closing(data, pos, 0, what)?;
+    const MASK: Fixed = Fixed {
+        octets: 4,
+        misplaced: "expected context tag [{}] broadcast mask",
+        wrong_length: "[{}] broadcast mask has {} contents octets, expected 4",
+    };
     let (mask, pos) = decode_optional_ctx(data, pos, 1, what, |data, at, tag, what| {
-        decode_ctx_fixed(data, at, tag, 4, "broadcast mask", what)
+        decode_ctx_fixed(data, at, tag, MASK, what)
     })?;
     let broadcast_mask = mask.map(|octets| [octets[0], octets[1], octets[2], octets[3]]);
     Ok((
@@ -207,13 +219,11 @@ pub fn decode_fdt_entry(data: &[u8], offset: usize) -> Result<(BACnetFDTEntry, u
     let what = "BACnetFDTEntry";
     let (tag, start) = tags::decode_tag(data, offset)?;
     if !tag.is_context(0) {
-        return Err(misplaced_tag(
-            data,
-            &tag,
-            Some(0),
-            offset,
-            format!("{what}: expected bacnetip-address [0]"),
-        ));
+        return Err(
+            misplaced(data, &tag, Some(0), offset, "expected bacnetip-address [0]")
+                .within(what)
+                .into(),
+        );
     }
     let (octets, pos) = contents(data, start, tag.length)?;
     let address = match octets.len() {
@@ -232,10 +242,14 @@ pub fn decode_fdt_entry(data: &[u8], offset: usize) -> Result<(BACnetFDTEntry, u
             ))
         }
         other => {
-            return Err(Error::decoding(
+            return Err(DecodeError::new(
+                DecodingKind::InvalidEncoding,
                 offset,
-                format!("{what} bacnetip-address [0]: {other} octets, expected 6 or 18"),
-            ))
+                "bacnetip-address [0]: {} octets, expected 6 or 18",
+            )
+            .within(what)
+            .with_value(other as u64)
+            .into())
         }
     };
     let (time_to_live, pos) = decode_ctx_unsigned::<u16>(data, pos, 1, what)?;
@@ -283,17 +297,21 @@ pub fn decode_fdt_entry_list(data: &[u8]) -> Result<Vec<BACnetFDTEntry>, Error> 
 
 fn decode_list<T>(
     data: &[u8],
-    what: &str,
+    what: &'static str,
     decode: impl Fn(&[u8], usize) -> Result<(T, usize), Error>,
 ) -> Result<Vec<T>, Error> {
     let mut values = Vec::new();
     let mut offset = 0;
     while offset < data.len() {
         if values.len() == MAX_FRAMED_ITEMS {
-            return Err(Error::decoding(
+            return Err(DecodeError::new(
+                DecodingKind::InvalidEncoding,
                 offset,
-                format!("{what}: more than {MAX_FRAMED_ITEMS} entries"),
-            ));
+                "more than {} entries",
+            )
+            .within(what)
+            .with_value(MAX_FRAMED_ITEMS as u64)
+            .into());
         }
         let (value, end) = decode(data, offset)?;
         values.push(value);

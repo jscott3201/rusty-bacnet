@@ -96,6 +96,7 @@ fn datagram(
         destination: IpAddr::V6(destination),
         arrival_index: Some(1),
         os_group_delivery,
+        arrival_stamp: None,
     }
 }
 

@@ -1,4 +1,5 @@
-//! BACnet object model: traits, database, and standard object types.
+#![doc = include_str!("../README.md")]
+#![forbid(unsafe_code)]
 
 pub mod access_control;
 pub mod accumulator;
@@ -12,8 +13,11 @@ pub mod color;
 pub mod command;
 pub mod command_source;
 pub(crate) mod common;
+pub mod cov_change;
 pub mod database;
 pub mod device;
+pub mod device_identity;
+pub use device_identity::DeviceIdentity;
 pub(crate) mod device_reference;
 pub mod durable;
 pub mod elevator;
@@ -27,6 +31,7 @@ pub mod lighting;
 pub mod load_control;
 pub mod log_buffer;
 pub(crate) mod log_lifecycle;
+pub mod log_persistence;
 pub mod log_reporting;
 pub(crate) mod log_window;
 pub mod loop_obj;
@@ -72,6 +77,9 @@ mod reliability_inhibit_tests;
 
 #[cfg(test)]
 mod typed_enum_storage_tests;
+
+#[cfg(test)]
+mod typed_units_tests;
 
 #[cfg(test)]
 mod computed_status_flags_tests;

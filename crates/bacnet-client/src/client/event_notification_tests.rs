@@ -22,6 +22,9 @@ const SUFFIX: &[u8] = &[
 const PEER: &[u8] = &[0x12];
 const INVOKE: u8 = 37;
 
+#[path = "response_warning_tests.rs"]
+mod response_warnings;
+
 fn remote() -> Option<NpduAddress> {
     Some(NpduAddress {
         network: 200,
@@ -201,7 +204,7 @@ fn assert_reply(data: Bytes, source: Option<NpduAddress>, expected: &[u8]) {
     assert_eq!(npdu.destination, source);
     assert!(npdu.source.is_none());
     assert!(!npdu.expecting_reply);
-    assert_eq!(npdu.priority, NetworkPriority::NORMAL);
+    assert_eq!(npdu.priority, NetworkPriority::Normal);
     assert_eq!(npdu.payload.as_ref(), expected);
 }
 
@@ -389,6 +392,61 @@ async fn other_malformed_fields_are_rejected_or_silently_dropped_without_deliver
             assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
         }
     }
+    h.client.stop().await.unwrap();
+}
+
+/// #1950: a burst of malformed event notifications, through both services,
+/// of malformed COV notifications, I-Ams and I-Haves, and of APDUs that
+/// don't decode at all, goes through the client's one decode throttle: the
+/// first warns, and the rest log at debug and count toward the next warning.
+#[tokio::test(start_paused = true)]
+async fn a_burst_of_malformed_requests_warns_once_per_interval() {
+    use bacnet_transport::warn_throttle::WARNING_INTERVAL;
+    let mut h = Harness::new(64).await;
+    let _i_haves = h.client.i_have_events();
+    let cases = malformed_cases();
+    for (data, _) in &cases {
+        h.send(inbound(request(data.clone(), true, false), None))
+            .await;
+        h.reject(None).await;
+        h.send(inbound(request(data.clone(), false, false), None))
+            .await;
+    }
+    let Apdu::ConfirmedRequest(mut cov) = request(Bytes::new(), true, false) else {
+        unreachable!()
+    };
+    cov.service_choice = ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION;
+    h.send(inbound(Apdu::ConfirmedRequest(cov), None)).await;
+    h.reject(None).await;
+    for service_choice in [
+        UnconfirmedServiceChoice::UNCONFIRMED_COV_NOTIFICATION,
+        UnconfirmedServiceChoice::I_AM,
+        UnconfirmedServiceChoice::I_HAVE,
+    ] {
+        let malformed = Apdu::UnconfirmedRequest(UnconfirmedRequest {
+            service_choice,
+            service_request: Bytes::from_static(&[0xFF]),
+        });
+        h.send(inbound(malformed, None)).await;
+    }
+    // Version 1, no control flags, then PDU type 15, which doesn't exist.
+    let mut undecodable = inbound(request(Bytes::new(), false, false), None);
+    undecodable.npdu = Bytes::from_static(&[0x01, 0x00, 0xF0]);
+    h.send(undecodable).await;
+    h.fence().await;
+    let throttle = &h.client.decode_warning;
+    assert_eq!(
+        throttle.note(),
+        None,
+        "the first warned; the rest held back"
+    );
+    tokio::time::advance(WARNING_INTERVAL).await;
+    let burst = 2 * cases.len() as u64 + 5;
+    assert_eq!(
+        throttle.note(),
+        Some(burst + 1),
+        "all but the first of the burst, the check above, and this one"
+    );
     h.client.stop().await.unwrap();
 }
 

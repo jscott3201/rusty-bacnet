@@ -65,18 +65,21 @@ fn six_single_reference_mappings_keep_exact_octets_and_outer_index_boundaries() 
     }
     // Same property on an object outside the six pairings is not reclassified.
     assert_eq!(
-        element(
+        property_element(
             ObjectType::ANALOG_INPUT,
             PropertyIdentifier::OBJECT_PROPERTY_REFERENCE
         ),
         None
     );
     assert_eq!(
-        element(
+        property_element(
             ObjectType::TREND_LOG_MULTIPLE,
             PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY
         ),
-        Some((Element::DeviceObjectPropertyReference, Shape::Collection))
+        Some((
+            Element::DeviceObjectPropertyReference,
+            ElementShape::Collection
+        ))
     );
 }
 

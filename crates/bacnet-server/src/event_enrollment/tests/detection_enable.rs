@@ -18,13 +18,14 @@ use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::event_enrollment::EventEnrollmentObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetEventParameter};
+use bacnet_types::enums::EngineeringUnits;
 
 /// Build an enrollment that would transition NORMAL -> HIGH_LIMIT, with
 /// `Event_Detection_Enable` set from `detection_enabled`.
 fn setup(detection_enabled: bool) -> (ObjectDatabase, ObjectIdentifier) {
     let mut db = ObjectDatabase::new();
 
-    let mut ai = AnalogInputObject::new(20, "AI-20", 62).unwrap();
+    let mut ai = AnalogInputObject::new(20, "AI-20", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ai.set_present_value(85.0); // above high_limit
     let ai_oid = ai.object_identifier();
     db.add(Box::new(ai)).unwrap();

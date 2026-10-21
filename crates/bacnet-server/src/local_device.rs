@@ -1,26 +1,47 @@
-use bacnet_objects::database::ObjectDatabase;
-use bacnet_types::primitives::ObjectIdentifier;
+//! Startup identity resolution and the frozen announcement target.
+use bacnet_objects::{database::ObjectDatabase, DeviceIdentity};
+use bacnet_types::{error::Error, primitives::ObjectIdentifier};
 
-/// Validate the current [selected Device](ObjectDatabase::selected_device)
-/// under the caller's database guard.
-/// An empty database remains supported; applications own their Device objects.
-pub(crate) fn validate_apdu_declaration(
-    db: &ObjectDatabase,
-    capacity: u32,
-) -> Result<Option<ObjectIdentifier>, bacnet_types::error::Error> {
-    use bacnet_types::primitives::PropertyValue;
-    use bacnet_types::{enums::PropertyIdentifier, error::Error};
-    let Some(oid) = db.selected_device() else {
-        return Ok(None);
+/// Only an absent database requests generation. An explicitly empty database
+/// stays empty; a supplied Device is checked without rebuilding its state.
+pub(crate) fn prepare_database(
+    config: &mut crate::server::ServerConfig,
+    database: Option<ObjectDatabase>,
+    local_receive_capacity: u16,
+) -> Result<ObjectDatabase, Error> {
+    config.device = config.device.resolve(local_receive_capacity)?;
+    let database = match database {
+        Some(database) => database,
+        None => config
+            .device
+            .clone()
+            .with_services(bacnet_objects::device::EXECUTED_SERVICES)
+            .build_database()?,
     };
-    let declared = db
-        .get(&oid)
-        .expect("selected under same database guard")
-        .read_property(PropertyIdentifier::MAX_APDU_LENGTH_ACCEPTED, None)?;
-    if declared != PropertyValue::Unsigned(u64::from(capacity)) {
-        return Err(Error::Encoding(format!(
-            "selected Device Max_APDU_Length_Accepted must equal effective server capacity {capacity}"
-        )));
+    validate_startup(&database, &config.device)?;
+    Ok(database)
+}
+
+/// Check the global selected Device once before I/O; do not change selection.
+pub(crate) fn validate_startup(
+    db: &ObjectDatabase,
+    identity: &DeviceIdentity,
+) -> Result<(), Error> {
+    identity.validate()?;
+    if let Some(oid) = db.selected_device() {
+        identity.validate_device(db.get(&oid).expect("selected under the database guard"))?;
     }
-    Ok(Some(oid))
+    Ok(())
+}
+
+/// Membership may change, but announcement identity never rebinds. Served
+/// identity properties are projected from the same frozen declarations.
+pub(crate) fn announcement_device(
+    db: &ObjectDatabase,
+    identity: &DeviceIdentity,
+) -> Option<ObjectIdentifier> {
+    let oid = identity.device_oid();
+    db.get(&oid)
+        .filter(|object| object.object_identifier() == oid)
+        .map(|_| oid)
 }

@@ -18,14 +18,16 @@ async fn bbmd(instance: u32, accept: bool) -> BACnetServer<BipTransport> {
     let mut db = ObjectDatabase::new();
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
-            instance,
-            name: format!("bbmd-{instance}"),
+            identity: bacnet_objects::DeviceIdentity::new(instance, 0)
+                .expect("valid Device identity")
+                .with_name(format!("bbmd-{instance}")),
             ..DeviceConfig::default()
         })
         .unwrap(),
     ))
     .unwrap();
     BACnetServer::bip_builder()
+        .device(bacnet_objects::DeviceIdentity::new(instance, 0).unwrap())
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
         .broadcast_address(Ipv4Addr::LOCALHOST)
@@ -140,10 +142,10 @@ async fn a_silent_bbmd_fails_the_command() {
 
 #[tokio::test]
 async fn the_flags_need_b_ip_and_each_other() {
-    let output = run(["--renewal", "20", "devices"]).await;
+    let output = run(["--renewal", "20", "discover"]).await;
     failure(&output, "--foreign-bbmd");
-    let output = run(["--ipv6", "--foreign-bbmd", "127.0.0.1", "devices"]).await;
+    let output = run(["--ipv6", "--foreign-bbmd", "127.0.0.1", "discover"]).await;
     failure(&output, "--foreign-bbmd requires BACnet/IP");
-    let output = run(["--foreign-bbmd", "127.0.0.1:0", "devices"]).await;
+    let output = run(["--foreign-bbmd", "127.0.0.1:0", "discover"]).await;
     failure(&output, "is not a BBMD a device can register with");
 }

@@ -4,7 +4,7 @@ use bacnet_objects::clock::{ClockFrame, ClockReader};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_objects::trend::TrendLogObject;
 use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
-use bacnet_types::enums::PropertyIdentifier;
+use bacnet_types::enums::{EngineeringUnits, PropertyIdentifier};
 use bacnet_types::primitives::{Date, Time};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use std::sync::Mutex;
@@ -38,7 +38,7 @@ fn frame() -> ClockFrame {
 
 fn database(clock: Arc<dyn ClockReader>) -> (Arc<RwLock<ObjectDatabase>>, ObjectIdentifier) {
     let mut db = ObjectDatabase::new();
-    let mut target = AnalogValueObject::new(1, "AV", 95).unwrap();
+    let mut target = AnalogValueObject::new(1, "AV", EngineeringUnits::NO_UNITS).unwrap();
     target
         .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,

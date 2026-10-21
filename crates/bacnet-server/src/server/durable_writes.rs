@@ -18,7 +18,7 @@
 //! WritePropertyMultiple that provisions an Access Rights object saves its
 //! rule arrays and Enable together, off the guard.
 //!
-//! Under a mutation authorizer, a WritePropertyMultiple decides each attempt
+//! Under a policy that decides mutations, a WritePropertyMultiple decides each attempt
 //! it would stage before staging it, and stages only those allowed (#1321).
 //! The handler then answers each such attempt from the decision made ahead
 //! instead of asking again (`mutations::wpm_ahead`).
@@ -82,8 +82,8 @@ enum TargetValue {
 /// first. A forwarder saves its Recipient_List and Subscribed_Recipients, a
 /// Notification Class its Recipient_List, an Audit Log its Log_Enable and
 /// Buffer_Size, and an Access Rights object its two rule arrays, Enable
-/// (property 133, named `LOG_ENABLE`) and Accompaniment. Under an
-/// authorizer, only these attempts of a WritePropertyMultiple are decided
+/// (property 133, named `LOG_ENABLE`) and Accompaniment. Under a policy
+/// that decides mutations, only these attempts of a WritePropertyMultiple are decided
 /// ahead of the handler (#1321).
 ///
 /// An object type that takes up [`DurableWrites`] is listed here too, or

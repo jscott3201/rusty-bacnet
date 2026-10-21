@@ -263,7 +263,7 @@ fn hostile_terminal_mismatches_leave_the_transaction_active() {
             &peer,
             &wrong_direction,
             TsmResponse::Abort {
-                reason: AbortReason::OTHER.to_raw(),
+                reason: AbortReason::OTHER,
             },
         ),
         CoordinatedCompletion::Rejected
@@ -464,8 +464,8 @@ async fn error_service_is_checked_in_coordinated_and_pre_admitted_completion() {
             })
         };
         let response = || TsmResponse::Error {
-            class: 2,
-            code: 40,
+            class: ErrorClass::PROPERTY,
+            code: ErrorCode::WRITE_ACCESS_DENIED,
             detail: None,
         };
         let wrong = error(ConfirmedServiceChoice::READ_PROPERTY);
@@ -520,8 +520,8 @@ async fn error_service_is_checked_in_coordinated_and_pre_admitted_completion() {
         assert!(matches!(
             registration.response.await.unwrap(),
             TsmResponse::Error {
-                class: 2,
-                code: 40,
+                class: ErrorClass::PROPERTY,
+                code: ErrorCode::WRITE_ACCESS_DENIED,
                 detail: None
             }
         ));

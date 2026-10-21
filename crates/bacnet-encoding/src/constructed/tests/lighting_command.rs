@@ -163,7 +163,7 @@ fn lighting_command_wrong_tags_and_lengths_are_malformed() {
     ];
     for value in malformed {
         match decode_lighting_command(value, 0) {
-            Err(Error::Decoding { .. }) => {}
+            Err(Error::Decoding(_)) => {}
             other => panic!("{value:02X?}: {other:?}"),
         }
     }
@@ -188,7 +188,8 @@ fn lighting_command_fields_too_wide_for_their_type_are_out_of_range() {
     ];
     for (value, field) in too_wide {
         match decode_lighting_command(value, 0) {
-            Err(Error::OutOfRange(message)) => {
+            Err(Error::Range(refused)) => {
+                let message = refused.label;
                 assert_eq!(message, format!("lighting command {field}"));
             }
             other => panic!("{value:02X?}: {other:?}"),
@@ -200,7 +201,7 @@ fn lighting_command_fields_too_wide_for_their_type_are_out_of_range() {
     ];
     assert!(matches!(
         decode_lighting_command(&both, 0),
-        Err(Error::Decoding { .. })
+        Err(Error::Decoding(_))
     ));
 }
 
@@ -214,7 +215,7 @@ fn lighting_command_unsigned_past_four_octets_with_a_leading_zero_is_malformed()
         &[0x09, 0x07, 0x5D, 0x05, 0x00, 0x00, 0x00, 0x00, 0x08],
     ] {
         match decode_lighting_command(value, 0) {
-            Err(Error::Decoding { .. }) => {}
+            Err(Error::Decoding(_)) => {}
             other => panic!("{value:02X?}: {other:?}"),
         }
     }
@@ -234,14 +235,14 @@ fn lighting_command_value_must_fill_its_input_before_a_field_is_too_wide() {
     let wide = [0x09, 0x07, 0x5A, 0x01, 0x00];
     assert!(matches!(
         decode_lighting_command_value(&wide),
-        Err(Error::OutOfRange(_))
+        Err(Error::Range(_))
     ));
     for value in [
         [&wide[..], &[0xFF]].concat(),
         [&wide[..], &[0x1C, 0x42, 0x48, 0x00, 0x00]].concat(),
     ] {
         match decode_lighting_command_value(&value) {
-            Err(Error::Decoding { .. }) => {}
+            Err(Error::Decoding(_)) => {}
             other => panic!("{value:02X?}: {other:?}"),
         }
     }
@@ -249,7 +250,7 @@ fn lighting_command_value_must_fill_its_input_before_a_field_is_too_wide() {
     // the oversized field.
     assert!(matches!(
         decode_lighting_command(&[0x09, 0x07, 0x5A, 0x01, 0x00, 0xFF], 0),
-        Err(Error::OutOfRange(_))
+        Err(Error::Range(_))
     ));
 }
 

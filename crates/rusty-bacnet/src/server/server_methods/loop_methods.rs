@@ -98,7 +98,7 @@ fn loop_object(
     settings: LoopSettings,
 ) -> Result<LoopObject, Error> {
     type UnitsSetter = fn(&mut LoopObject, EngineeringUnits) -> Result<(), Error>;
-    let mut lp = LoopObject::new(instance, name, output_units)?;
+    let mut lp = LoopObject::new(instance, name, EngineeringUnits::from_raw(output_units))?;
     let units: [(Option<u32>, UnitsSetter); 4] = [
         (
             settings.controlled_variable_units,

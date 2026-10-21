@@ -106,6 +106,13 @@ async fn bip_ignores_unused_sc_ca_and_credentials() {
 
 #[tokio::test]
 async fn ipv6_does_not_require_sc_files() {
+    use bacnet_transport::port::TransportPort;
+    // A bare B/IPv6 node on loopback: it answers the address resolution of
+    // its VMAC but sends no I-Am, so the directed discover finds nothing.
+    let mut node =
+        bacnet_transport::bip6::Bip6Transport::new(std::net::Ipv6Addr::LOCALHOST, 0, Some(1234));
+    let _rx = node.start().await.unwrap();
+    let target = format!("[::1]:{}", node.local_address().unwrap().port());
     let output = run([
         "--ipv6",
         "--ipv6-interface",
@@ -117,9 +124,14 @@ async fn ipv6_does_not_require_sc_files() {
         "--json",
         "--sc-ca",
         "/nonexistent/site.pem",
-        "devices",
+        "discover",
+        "--wait",
+        "0",
+        "--target",
+        &target,
     ])
     .await;
+    node.stop().await.unwrap();
     assert!(
         output.status.success(),
         "{}",

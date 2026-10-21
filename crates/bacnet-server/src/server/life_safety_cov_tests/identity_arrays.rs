@@ -5,6 +5,7 @@ use bacnet_services::cov_multiple::{
     COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
 };
 use bacnet_types::constructed::PropertyReference;
+use bacnet_types::enums::EngineeringUnits;
 
 fn object() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 8).unwrap()
@@ -39,8 +40,10 @@ fn multiple(refs: &[(Option<u32>, f32)], cancel: bool) -> Bytes {
 #[tokio::test]
 async fn cov_identity_multiple_array_coordinates_duplicates_and_refused_first_change_nothing() {
     let mut db = clocked_test_database();
-    db.add(Box::new(AnalogValueObject::new(8, "array", 95).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AnalogValueObject::new(8, "array", EngineeringUnits::NO_UNITS).unwrap(),
+    ))
+    .unwrap();
     let fixture = DispatchFixture::new(db, []).await;
     fixture
         .dispatch(
@@ -156,8 +159,10 @@ async fn cov_identity_multiple_array_coordinates_duplicates_and_refused_first_ch
 #[tokio::test]
 async fn cov_identity_single_array_coordinates_cancel_exactly() {
     let mut db = clocked_test_database();
-    db.add(Box::new(AnalogValueObject::new(8, "array", 95).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AnalogValueObject::new(8, "array", EngineeringUnits::NO_UNITS).unwrap(),
+    ))
+    .unwrap();
     let fixture = DispatchFixture::new(db, []).await;
     for (invoke, index) in [None, Some(0), Some(1), Some(2)].into_iter().enumerate() {
         let request = SubscribeCOVPropertyRequest {

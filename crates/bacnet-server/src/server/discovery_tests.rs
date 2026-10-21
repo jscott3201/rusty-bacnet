@@ -18,6 +18,7 @@ use bacnet_encoding::apdu::{
     UnconfirmedRequest as UnconfirmedRequestPdu,
 };
 use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress};
+use bacnet_npdu::NetworkPriority;
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_services::read_property::ReadPropertyRequest;
@@ -25,7 +26,7 @@ use bacnet_services::who_has::{WhoHasObject, WhoHasRequest};
 use bacnet_services::who_is::WhoIsRequest;
 use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};
 use bacnet_types::enums::{
-    ConfirmedServiceChoice, NetworkPriority, ObjectType, PropertyIdentifier,
+    ConfirmedServiceChoice, EngineeringUnits, ObjectType, PropertyIdentifier,
     UnconfirmedServiceChoice,
 };
 use bacnet_types::primitives::ObjectIdentifier;
@@ -48,9 +49,8 @@ fn discovery_transport() -> (TestTransport, SendLog, mpsc::Sender<ReceivedNpdu>)
 
 fn wrap_apdu(apdu: Bytes, source_mac: &[u8], routed: Option<(u16, &[u8])>) -> ReceivedNpdu {
     let npdu = Npdu {
-        is_network_message: false,
         expecting_reply: false,
-        priority: NetworkPriority::NORMAL,
+        priority: NetworkPriority::Normal,
         destination: None,
         source: routed.map(|(net, mac)| NpduAddress {
             network: net,
@@ -126,18 +126,19 @@ async fn spawn_test_server(
 
     let mut db = ObjectDatabase::new();
     let dev = DeviceObject::new(DeviceConfig {
-        instance: 1234,
-        name: "TestDevice".into(),
-        vendor_id: 42,
+        identity: bacnet_objects::DeviceIdentity::new(1234, 42)
+            .expect("valid Device identity")
+            .with_name("TestDevice"),
         ..Default::default()
     })
     .unwrap();
     db.add(Box::new(dev)).unwrap();
 
-    let ai = AnalogInputObject::new(1, "Zone Temp", 62).unwrap();
+    let ai = AnalogInputObject::new(1, "Zone Temp", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     db.add(Box::new(ai)).unwrap();
 
     let server = BACnetServer::generic_builder()
+        .device(bacnet_objects::DeviceIdentity::new(1234, 42).unwrap())
         .database(db)
         .transport(transport)
         .discovery_policy(policy)
@@ -447,9 +448,8 @@ async fn test_confirmed_traffic_latency_bounded_during_discovery_flood() {
     let mut apdu_buf = BytesMut::new();
     encode_apdu(&mut apdu_buf, &pdu).unwrap();
     let npdu = Npdu {
-        is_network_message: false,
         expecting_reply: true,
-        priority: NetworkPriority::NORMAL,
+        priority: NetworkPriority::Normal,
         destination: None,
         source: None,
         hop_count: 255,
@@ -651,6 +651,7 @@ fn mock_received(
     routed: Option<(u16, &[u8])>,
 ) -> bacnet_network::layer::ReceivedApdu {
     bacnet_network::layer::ReceivedApdu {
+        router_response: None,
         direct_response: None,
         apdu: Bytes::new(),
         source_mac: MacAddr::from_slice(source_mac),

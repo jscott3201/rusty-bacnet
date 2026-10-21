@@ -628,7 +628,13 @@ async fn transport_send_unicast_rejects_peer_max_npdu() {
         .await
         .unwrap_err();
 
-    assert!(format!("{err}").contains("Max-NPDU-Length"));
+    assert!(matches!(
+        err,
+        Error::SendTooLong {
+            length: 3,
+            limit: 2
+        }
+    ));
     assert!(
         tokio::time::timeout(Duration::from_millis(50), ws_hub.recv())
             .await
@@ -654,7 +660,13 @@ async fn transport_send_unicast_rejects_peer_max_bvlc() {
         .await
         .unwrap_err();
 
-    assert!(format!("{err}").contains("Max-BVLC-Length"));
+    assert!(matches!(
+        err,
+        Error::SendTooLong {
+            length: 14,
+            limit: 13
+        }
+    ));
     assert!(
         tokio::time::timeout(Duration::from_millis(50), ws_hub.recv())
             .await

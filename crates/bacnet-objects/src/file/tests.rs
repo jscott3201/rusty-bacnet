@@ -472,8 +472,8 @@ fn file_has_no_status_flags_reliability_or_out_of_service() {
         for result in [read, write] {
             match result {
                 Err(Error::Protocol { class, code }) => {
-                    assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
-                    assert_eq!(code, ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32);
+                    assert_eq!(class, ErrorClass::PROPERTY);
+                    assert_eq!(code, ErrorCode::UNKNOWN_PROPERTY);
                 }
                 other => panic!("{property:?}: expected UNKNOWN_PROPERTY, got {other:?}"),
             }
@@ -609,7 +609,7 @@ fn file_unknown_property_error() {
     let result = file.read_property(PropertyIdentifier::PRESENT_VALUE, None);
     assert!(result.is_err());
     if let Err(Error::Protocol { code, .. }) = result {
-        assert_eq!(code, ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32);
+        assert_eq!(code, ErrorCode::UNKNOWN_PROPERTY);
     } else {
         panic!("expected Protocol error");
     }

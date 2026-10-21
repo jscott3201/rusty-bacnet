@@ -1,5 +1,4 @@
-//! The range a `read-range` asks for, from flags on the command line or in
-//! the shell (#1532).
+//! The range a `read-range` asks for, from its flags (#1532).
 
 use bacnet_client::log_reader::LogCursor;
 use bacnet_services::read_range::RangeSpec;
@@ -79,57 +78,6 @@ impl RangeOptions {
         let page_size = u16::try_from(self.count()?)
             .map_err(|_| "--all reads forward: --count must be positive".to_string())?;
         Ok((cursor, page_size))
-    }
-
-    /// Take the options out of a shell command's words, returning the rest.
-    pub fn from_words(words: &[String]) -> Result<(Self, Vec<String>), String> {
-        let mut options = Self::default();
-        let mut rest = Vec::new();
-        let mut words = words.iter();
-        while let Some(word) = words.next() {
-            let mut value = |flag: &str| {
-                words
-                    .next()
-                    .cloned()
-                    .ok_or_else(|| format!("{flag} needs a value"))
-            };
-            let reference = |flag: &str, text: String| {
-                text.parse::<u64>()
-                    .map_err(|_| format!("{flag} needs a number, got '{text}'"))
-            };
-            match word.as_str() {
-                "--position" => {
-                    options.position = Some(reference("--position", value("--position")?)?)
-                }
-                "--sequence" => {
-                    options.sequence = Some(reference("--sequence", value("--sequence")?)?)
-                }
-                "--time" => options.time = Some(parse_reference_time(&value("--time")?)?),
-                "--count" => {
-                    let text = value("--count")?;
-                    options.count = Some(
-                        text.parse()
-                            .map_err(|_| format!("--count needs -32768..=32767, got '{text}'"))?,
-                    );
-                }
-                "--all" => options.all = true,
-                "--strict" => options.strict = true,
-                flag if flag.starts_with("--") => return Err(format!("unknown option {flag}")),
-                _ => rest.push(word.clone()),
-            }
-        }
-        let starts = [
-            options.position.is_some(),
-            options.sequence.is_some(),
-            options.time.is_some(),
-        ];
-        if starts.iter().filter(|start| **start).count() > 1 {
-            return Err("give one of --position, --sequence and --time".into());
-        }
-        if options.strict && options.all {
-            return Err("--strict takes one range; --all reads leniently".into());
-        }
-        Ok((options, rest))
     }
 }
 

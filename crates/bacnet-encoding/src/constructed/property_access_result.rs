@@ -11,7 +11,7 @@
 
 use bacnet_types::constructed::{AccessResult, BACnetPropertyAccessResult};
 use bacnet_types::enums::{ErrorClass, ErrorCode};
-use bacnet_types::error::Error;
+use bacnet_types::error::{DecodeError, DecodingKind, Error};
 use bytes::BytesMut;
 
 use super::tagged::{decode_app_enumerated, decode_framed_value, expect_closing};
@@ -75,10 +75,13 @@ pub fn decode_property_access_result(
         let (class, next) = decode_app_enumerated::<u32>(data, content, WHAT)?;
         let (code, next) = decode_app_enumerated::<u32>(data, next, WHAT)?;
         let class = u16::try_from(class).map_err(|_| {
-            Error::out_of_range(content, format!("{WHAT}: error class exceeds u16"))
+            DecodeError::new(DecodingKind::OutOfRange, content, "error class exceeds u16")
+                .within(WHAT)
         })?;
-        let code = u16::try_from(code)
-            .map_err(|_| Error::out_of_range(content, format!("{WHAT}: error code exceeds u16")))?;
+        let code = u16::try_from(code).map_err(|_| {
+            DecodeError::new(DecodingKind::OutOfRange, content, "error code exceeds u16")
+                .within(WHAT)
+        })?;
         let end = expect_closing(data, next, 5, WHAT)?;
         let error = AccessResult::Error {
             class: ErrorClass::from_raw(class),
@@ -86,10 +89,13 @@ pub fn decode_property_access_result(
         };
         (error, end)
     } else {
-        return Err(Error::decoding(
+        return Err(DecodeError::new(
+            DecodingKind::InvalidEncoding,
             offset,
-            format!("{WHAT}: expected property-value [4] or property-access-error [5]"),
-        ));
+            "expected property-value [4] or property-access-error [5]",
+        )
+        .within(WHAT)
+        .into());
     };
     Ok((
         BACnetPropertyAccessResult {

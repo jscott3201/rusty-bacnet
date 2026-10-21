@@ -99,8 +99,8 @@ fn an_unreadable_assignment_list_is_passed_back() {
         db.add(Stub::new(credential(1), values)).unwrap();
         match evaluate_access_rights(&db, credential(1), point(1)) {
             Err(Error::Protocol { class, code }) => {
-                assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
-                assert_eq!(code, expected.to_raw() as u32, "{expected:?}");
+                assert_eq!(class, ErrorClass::PROPERTY);
+                assert_eq!(code, expected, "{expected:?}");
             }
             other => panic!("expected PROPERTY / {expected:?}, got {other:?}"),
         }

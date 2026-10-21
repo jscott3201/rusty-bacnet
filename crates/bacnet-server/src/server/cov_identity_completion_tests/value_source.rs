@@ -78,11 +78,12 @@ use bacnet_objects::{
     multistate::{MultiStateOutputObject, MultiStateValueObject},
     traits::BACnetObject,
 };
+use bacnet_types::enums::EngineeringUnits;
 
 fn families() -> Vec<Box<dyn BACnetObject>> {
     vec![
-        Box::new(AnalogOutputObject::new(3, "ao", 95).unwrap()),
-        Box::new(AnalogValueObject::new(3, "av", 95).unwrap()),
+        Box::new(AnalogOutputObject::new(3, "ao", EngineeringUnits::NO_UNITS).unwrap()),
+        Box::new(AnalogValueObject::new(3, "av", EngineeringUnits::NO_UNITS).unwrap()),
         Box::new(BinaryOutputObject::new(3, "bo").unwrap()),
         Box::new(BinaryValueObject::new(3, "bv").unwrap()),
         Box::new(MultiStateOutputObject::new(3, "mso", 3).unwrap()),

@@ -39,6 +39,8 @@ fn bip_builder_applies_the_mode_concretely() {
         management_acl: vec![[127, 0, 0, 1]],
         fanout_policy: FanoutPolicy::default(),
         bdt_persist_path: None,
+        alone_on_subnet: false,
+        nat: None,
     });
     // The transport builds unstarted, in the mode given: a BBMD's tables
     // appear only once `start()` creates them.
@@ -56,13 +58,10 @@ fn bip_builder_applies_the_mode_concretely() {
         .mode(foreign())
         .build_transport()
         .unwrap();
-    assert!(matches!(
-        transport.bip_port().unwrap().mode,
-        BipPortMode::Foreign {
-            subscription_lifetime: 60,
-            ..
-        }
-    ));
+    let BipPortMode::Foreign { registration } = transport.bip_port().unwrap().mode else {
+        panic!("foreign mode");
+    };
+    assert_eq!(registration.subscription_lifetime(), 60);
 }
 
 /// One mode at a time: a later `mode` replaces an earlier one, so a BBMD

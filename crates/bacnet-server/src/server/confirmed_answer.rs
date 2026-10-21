@@ -49,16 +49,9 @@ pub enum Refusal {
 impl From<Refusal> for Error {
     fn from(refusal: Refusal) -> Self {
         match refusal {
-            Refusal::Error { class, code } => Self::Protocol {
-                class: class.to_raw().into(),
-                code: code.to_raw().into(),
-            },
-            Refusal::Reject(reason) => Self::Reject {
-                reason: reason.to_raw(),
-            },
-            Refusal::Abort(reason) => Self::Abort {
-                reason: reason.to_raw(),
-            },
+            Refusal::Error { class, code } => Self::Protocol { class, code },
+            Refusal::Reject(reason) => Self::Reject { reason },
+            Refusal::Abort(reason) => Self::Abort { reason },
         }
     }
 }
@@ -75,11 +68,24 @@ mod tests {
         };
         assert!(matches!(
             Error::from(error),
-            Error::Protocol { class: 2, code: 9 }
+            Error::Protocol {
+                class: ErrorClass::PROPERTY,
+                code: ErrorCode::INVALID_DATA_TYPE
+            }
         ));
         let reject = Refusal::Reject(RejectReason::INVALID_PARAMETER_DATA_TYPE);
-        assert!(matches!(Error::from(reject), Error::Reject { reason: 3 }));
+        assert!(matches!(
+            Error::from(reject),
+            Error::Reject {
+                reason: RejectReason::INVALID_PARAMETER_DATA_TYPE
+            }
+        ));
         let abort = Refusal::Abort(AbortReason::SEGMENTATION_NOT_SUPPORTED);
-        assert!(matches!(Error::from(abort), Error::Abort { reason: 4 }));
+        assert!(matches!(
+            Error::from(abort),
+            Error::Abort {
+                reason: AbortReason::SEGMENTATION_NOT_SUPPORTED
+            }
+        ));
     }
 }

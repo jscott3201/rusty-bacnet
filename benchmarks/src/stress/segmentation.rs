@@ -3,13 +3,15 @@
 //! Sends RPM requests for increasing numbers of objects to force
 //! segmented responses and measure reassembly performance.
 
+use std::net::Ipv4Addr;
 use std::time::Instant;
 
+use bacnet_server::server::BACnetServer;
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{ObjectType, PropertyIdentifier, Segmentation};
 use bacnet_types::primitives::ObjectIdentifier;
 
-use crate::stress::harness::{make_bip_server_with_db, make_large_db, make_stress_client};
+use crate::stress::harness::{make_large_db_with, make_stress_client, stress_device_config};
 use crate::stress::output::{DegradationPoint, LatencyRecorder};
 
 pub async fn run(_transport: &str, steps: &[u64]) -> Vec<DegradationPoint> {
@@ -19,8 +21,19 @@ pub async fn run(_transport: &str, steps: &[u64]) -> Vec<DegradationPoint> {
     for &count in steps {
         eprintln!("--- RPM {} objects ---", count);
 
-        let db = make_large_db(1234, max_objects);
-        let mut server = make_bip_server_with_db(db).await.unwrap();
+        // The server and its Device both segment, so a reply longer than
+        // the client's 1,476-octet APDU goes out in segments.
+        let mut config = stress_device_config(1234);
+        config.identity = config.identity.with_segmentation(Segmentation::BOTH);
+        let mut server = BACnetServer::bip_builder()
+            .interface(Ipv4Addr::LOCALHOST)
+            .port(0)
+            .broadcast_address(Ipv4Addr::LOCALHOST)
+            .device(config.identity.clone())
+            .database(make_large_db_with(config, max_objects))
+            .build()
+            .await
+            .unwrap();
         let server_mac = server.local_mac().to_vec();
         let mut client = make_stress_client().await.unwrap();
 
@@ -37,6 +50,7 @@ pub async fn run(_transport: &str, steps: &[u64]) -> Vec<DegradationPoint> {
         let iterations = 50u32;
         let mut recorder = LatencyRecorder::new();
 
+        let started = Instant::now();
         for _ in 0..iterations {
             let start = Instant::now();
             match client
@@ -51,26 +65,11 @@ pub async fn run(_transport: &str, steps: &[u64]) -> Vec<DegradationPoint> {
             }
         }
 
-        let stats = recorder.stats();
-        let throughput = recorder.successful() as f64
-            / (stats.p50 as f64 * recorder.successful() as f64 / 1_000_000.0).max(0.001);
-
-        eprintln!(
-            "  ok={} err={} p50={}µs p99={}µs max={}µs",
-            recorder.successful(),
-            recorder.failed(),
-            stats.p50,
-            stats.p99,
-            stats.max,
-        );
-
-        curve.push(DegradationPoint {
-            parameter: count,
-            p50_us: stats.p50,
-            p99_us: stats.p99,
-            throughput,
-            errors: recorder.failed(),
-        });
+        // Requests per second over the requests' measured time.
+        let point = DegradationPoint::from_recorder(count, &recorder, started.elapsed());
+        point.log();
+        eprintln!("  max={} µs", recorder.stats().max);
+        curve.push(point);
 
         let _ = client.stop().await;
         let _ = server.stop().await;

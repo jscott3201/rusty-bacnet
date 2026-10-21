@@ -24,9 +24,9 @@
 //!    bytes). The Requesting Source is fingerprint bytes inside the request,
 //!    NEVER an authenticated identity.
 //! 3. Post-TTL expiry executes fresh (it does not mask a new operation).
-//! 4. Replay path has zero side effects: no mutation, no authorizer
+//! 4. Replay path has zero side effects: no mutation, no policy
 //!    re-invocation, no COV/event/reset re-fire — byte resend only.
-//! 5. Fail-closed authorization is preserved: the authorizer still runs
+//! 5. Fail-closed authorization is preserved: the policy still runs
 //!    outside the database lock on first execution.
 //! 6. No physical-idempotency claim: reset executors own application
 //!    idempotency; replay only shrinks the retransmission window.

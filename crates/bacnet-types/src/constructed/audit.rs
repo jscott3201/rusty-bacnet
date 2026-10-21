@@ -41,8 +41,8 @@ impl BACnetObjectSelector {
             PropertyValue::Null => Ok(Self::None),
             PropertyValue::ObjectIdentifier(object) => Ok(Self::Object(*object)),
             PropertyValue::Enumerated(kind) => Ok(Self::ObjectType(ObjectType::from_raw(*kind))),
-            _ => Err(crate::error::Error::Encoding(
-                "BACnetObjectSelector requires NULL, ObjectIdentifier, or Enumerated".into(),
+            _ => Err(crate::error::Error::encode(
+                "BACnetObjectSelector requires NULL, ObjectIdentifier, or Enumerated",
             )),
         }
     }
@@ -83,7 +83,7 @@ mod selector_tests {
         ] {
             assert!(matches!(
                 BACnetObjectSelector::decode_property_value(&invalid),
-                Err(crate::error::Error::Encoding(_))
+                Err(crate::error::Error::Encode(_))
             ));
         }
     }

@@ -4,7 +4,9 @@
 
 use bacnet_encoding::constructed::{encode_prescale, encode_scale};
 use bacnet_types::constructed::{BACnetPrescale, BACnetScale};
-use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier, Reliability};
+use bacnet_types::enums::{
+    EngineeringUnits, EventState, ObjectType, PropertyIdentifier, Reliability,
+};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use bytes::BytesMut;
@@ -34,7 +36,7 @@ pub struct AccumulatorObject {
     scale: BACnetScale,
     prescale: Option<BACnetPrescale>,
     pulse_rate: f32,
-    units: u32,
+    units: EngineeringUnits,
     limit_monitoring_interval: u32,
     status_flags: StatusFlags,
     event_state: EventState,
@@ -46,7 +48,11 @@ pub struct AccumulatorObject {
 
 impl AccumulatorObject {
     /// Create a new Accumulator object with default values.
-    pub fn new(instance: u32, name: impl Into<String>, units: u32) -> Result<Self, Error> {
+    pub fn new(
+        instance: u32,
+        name: impl Into<String>,
+        units: EngineeringUnits,
+    ) -> Result<Self, Error> {
         let oid = ObjectIdentifier::new(ObjectType::ACCUMULATOR, instance)?;
         Ok(Self {
             oid,
@@ -141,7 +147,9 @@ impl BACnetObject for AccumulatorObject {
                 None => Err(common::unknown_property_error()),
             },
             p if p == PropertyIdentifier::PULSE_RATE => Ok(PropertyValue::Real(self.pulse_rate)),
-            p if p == PropertyIdentifier::UNITS => Ok(PropertyValue::Enumerated(self.units)),
+            p if p == PropertyIdentifier::UNITS => {
+                Ok(PropertyValue::Enumerated(self.units.to_raw()))
+            }
             p if p == PropertyIdentifier::LIMIT_MONITORING_INTERVAL => Ok(PropertyValue::Unsigned(
                 self.limit_monitoring_interval as u64,
             )),
@@ -235,7 +243,7 @@ mod tests {
 
     #[test]
     fn accumulator_create_and_read_defaults() {
-        let acc = AccumulatorObject::new(1, "ACC-1", 95).unwrap();
+        let acc = AccumulatorObject::new(1, "ACC-1", EngineeringUnits::NO_UNITS).unwrap();
         assert_eq!(acc.object_name(), "ACC-1");
         assert_eq!(
             acc.read_property(PropertyIdentifier::PRESENT_VALUE, None)
@@ -250,7 +258,7 @@ mod tests {
 
     #[test]
     fn accumulator_read_present_value() {
-        let mut acc = AccumulatorObject::new(1, "ACC-1", 95).unwrap();
+        let mut acc = AccumulatorObject::new(1, "ACC-1", EngineeringUnits::NO_UNITS).unwrap();
         acc.set_present_value(42);
         assert_eq!(
             acc.read_property(PropertyIdentifier::PRESENT_VALUE, None)
@@ -261,7 +269,7 @@ mod tests {
 
     #[test]
     fn accumulator_present_value_read_only_from_network() {
-        let mut acc = AccumulatorObject::new(1, "ACC-1", 95).unwrap();
+        let mut acc = AccumulatorObject::new(1, "ACC-1", EngineeringUnits::NO_UNITS).unwrap();
         let result = acc.write_property(
             PropertyIdentifier::PRESENT_VALUE,
             None,
@@ -274,7 +282,7 @@ mod tests {
     #[test]
     fn accumulator_read_scale_float() {
         // float-scale [0], a four-octet REAL (#1487).
-        let acc = AccumulatorObject::new(1, "ACC-1", 95).unwrap();
+        let acc = AccumulatorObject::new(1, "ACC-1", EngineeringUnits::NO_UNITS).unwrap();
         let val = acc.read_property(PropertyIdentifier::SCALE, None).unwrap();
         assert_eq!(
             val,
@@ -285,7 +293,7 @@ mod tests {
     #[test]
     fn accumulator_read_scale_integer() {
         // integer-scale [1], a signed INTEGER (#1487).
-        let mut acc = AccumulatorObject::new(1, "ACC-1", 95).unwrap();
+        let mut acc = AccumulatorObject::new(1, "ACC-1", EngineeringUnits::NO_UNITS).unwrap();
         acc.set_scale(BACnetScale::IntegerScale(10));
         let val = acc.read_property(PropertyIdentifier::SCALE, None).unwrap();
         assert_eq!(val, PropertyValue::ApplicationData(vec![0x19, 0x0A]));
@@ -297,14 +305,14 @@ mod tests {
     #[test]
     fn accumulator_without_prescale_does_not_serve_it() {
         // Optional, and BACnetPrescale has no NULL: absent until set.
-        let acc = AccumulatorObject::new(1, "ACC-1", 95).unwrap();
+        let acc = AccumulatorObject::new(1, "ACC-1", EngineeringUnits::NO_UNITS).unwrap();
         let err = acc
             .read_property(PropertyIdentifier::PRESCALE, None)
             .unwrap_err();
         assert!(
             matches!(err, Error::Protocol { class, code }
-                if class == bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
-                    && code == bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32),
+                if class == bacnet_types::enums::ErrorClass::PROPERTY
+                    && code == bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY),
             "{err:?}"
         );
         assert!(!acc.property_list().contains(&PropertyIdentifier::PRESCALE));
@@ -312,7 +320,7 @@ mod tests {
 
     #[test]
     fn accumulator_read_prescale_set() {
-        let mut acc = AccumulatorObject::new(1, "ACC-1", 95).unwrap();
+        let mut acc = AccumulatorObject::new(1, "ACC-1", EngineeringUnits::NO_UNITS).unwrap();
         acc.set_prescale(BACnetPrescale {
             multiplier: 5,
             modulo_divide: 100,
@@ -329,7 +337,7 @@ mod tests {
 
     #[test]
     fn accumulator_object_type() {
-        let acc = AccumulatorObject::new(1, "ACC-1", 95).unwrap();
+        let acc = AccumulatorObject::new(1, "ACC-1", EngineeringUnits::NO_UNITS).unwrap();
         let val = acc
             .read_property(PropertyIdentifier::OBJECT_TYPE, None)
             .unwrap();
@@ -341,7 +349,7 @@ mod tests {
 
     #[test]
     fn accumulator_property_list() {
-        let mut acc = AccumulatorObject::new(1, "ACC-1", 95).unwrap();
+        let mut acc = AccumulatorObject::new(1, "ACC-1", EngineeringUnits::NO_UNITS).unwrap();
         acc.set_prescale(BACnetPrescale {
             multiplier: 1,
             modulo_divide: 1,

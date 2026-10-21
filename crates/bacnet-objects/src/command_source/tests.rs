@@ -9,6 +9,7 @@ use bacnet_encoding::{
     constructed::{decode_value_source, encode_value_source},
     primitives::decode_timestamp_choice,
 };
+use bacnet_types::enums::EngineeringUnits;
 use bacnet_types::{
     enums::{ErrorCode, PropertyIdentifier as P},
     primitives::{BACnetTimeStamp, PropertyValue},
@@ -66,11 +67,11 @@ fn time(o: &dyn BACnetObject) -> u16 {
 fn objects() -> Vec<(Box<dyn BACnetObject>, PropertyValue)> {
     vec![
         (
-            Box::new(AnalogOutputObject::new(1, "AO", 0).unwrap()),
+            Box::new(AnalogOutputObject::new(1, "AO", EngineeringUnits::SQUARE_METERS).unwrap()),
             PropertyValue::Real(1.0),
         ),
         (
-            Box::new(AnalogValueObject::new(1, "AV", 0).unwrap()),
+            Box::new(AnalogValueObject::new(1, "AV", EngineeringUnits::SQUARE_METERS).unwrap()),
             PropertyValue::Real(1.0),
         ),
         (
@@ -341,6 +342,7 @@ fn command_source_invalid_writes_are_atomic_and_metadata_is_paired() {
 
 #[test]
 fn command_source_owner_matrix_retains_original_token() {
+    use bacnet_types::enums::EngineeringUnits;
     use CommandDeviceBinding::*;
     let states = [Unknown, Unique(device(1)), Unique(device(2)), Ambiguous];
     for old in states {
@@ -364,7 +366,7 @@ fn command_source_owner_matrix_retains_original_token() {
     assert!(local(1, None).permits_correction_by(&local(1, Some(device(7)))));
     assert!(!local(1, None).permits_correction_by(&local(2, None)));
     assert!(!local(1, None).permits_correction_by(&remote(1, Unique(device(1)))));
-    let mut o = AnalogOutputObject::new(1, "AO", 0).unwrap();
+    let mut o = AnalogOutputObject::new(1, "AO", EngineeringUnits::SQUARE_METERS).unwrap();
     let original = remote(1, Unknown);
     o.write_property_from(
         P::PRESENT_VALUE,
@@ -417,7 +419,7 @@ fn command_source_owner_matrix_retains_original_token() {
 #[test]
 fn command_source_correction_refuses_a_stranger_before_its_value() {
     let code = |result: Result<(), Error>| match result {
-        Err(Error::Protocol { code, .. }) => ErrorCode::from_raw(code as u16),
+        Err(Error::Protocol { code, .. }) => code,
         other => panic!("expected a refusal, got {other:?}"),
     };
     for (mut o, value) in objects() {

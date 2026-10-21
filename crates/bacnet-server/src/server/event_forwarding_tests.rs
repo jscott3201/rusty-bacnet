@@ -120,8 +120,9 @@ pub(super) fn subscribe(
 
 pub(super) fn local_device() -> DeviceObject {
     DeviceObject::new(DeviceConfig {
-        instance: LOCAL_DEVICE,
-        name: "Forwarding device".into(),
+        identity: bacnet_objects::DeviceIdentity::new(LOCAL_DEVICE, 0)
+            .expect("valid Device identity")
+            .with_name("Forwarding device"),
         ..DeviceConfig::default()
     })
     .unwrap()
@@ -247,6 +248,7 @@ impl Forwarding {
                 service_request: encoded(request),
             },
             &bacnet_network::layer::ReceivedApdu {
+                router_response: None,
                 direct_response: None,
                 apdu: Bytes::new(),
                 source_mac: MacAddr::from_slice(&PEER_B),
@@ -285,6 +287,11 @@ impl Forwarding {
 
     pub(super) fn counters(&self) -> EventNotificationCounters {
         self.services.event_suppressions.snapshot()
+    }
+
+    /// The server's throttle on the forwarding-cap warning.
+    pub(super) fn cap_warning(&self) -> &WarnThrottle {
+        &self.services.event_suppressions.cap_warning
     }
 
     /// Give the network layer `number` as the local network's number, as
@@ -604,6 +611,7 @@ async fn malformed_unconfirmed_notification_is_ignored() {
             service_request: encoded(&notification(9)).slice(..10),
         },
         &bacnet_network::layer::ReceivedApdu {
+            router_response: None,
             direct_response: None,
             apdu: Bytes::new(),
             source_mac: MacAddr::from_slice(&PEER_B),

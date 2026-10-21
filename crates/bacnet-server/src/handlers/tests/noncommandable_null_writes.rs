@@ -17,6 +17,7 @@ use bacnet_objects::schedule::{CalendarObject, ScheduleObject};
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::wpm::WriteAccessSpecification;
 use bacnet_types::constructed::BACnetPortPermission;
+use bacnet_types::enums::EngineeringUnits;
 use PropertyIdentifier as P;
 
 /// One application NULL, the whole value.
@@ -74,11 +75,13 @@ fn db() -> ObjectDatabase {
     let mut credential = AccessCredentialObject::new(1, "CRED-1").unwrap();
     credential.set_global_identifier(7);
     db.add(Box::new(credential)).unwrap();
-    let mut input = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let mut input = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     input.set_description("kept");
     db.add(Box::new(input)).unwrap();
-    db.add(Box::new(AnalogOutputObject::new(1, "AO-1", 62).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+    ))
+    .unwrap();
     db.add(Box::new(CalendarObject::new(1, "CAL-1").unwrap()))
         .unwrap();
     db.add(Box::new(NotificationClass::new(1, "NC-1").unwrap()))
@@ -102,8 +105,10 @@ fn db() -> ObjectDatabase {
         ScheduleObject::new(1, "SCH-1", PropertyValue::Real(1.0)).unwrap(),
     ))
     .unwrap();
-    db.add(Box::new(AnalogValueObject::new(99, "AV-99", 62).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AnalogValueObject::new(99, "AV-99", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+    ))
+    .unwrap();
     // One positive rule, so the array has an element 1.
     wp(
         &mut db,
@@ -210,7 +215,7 @@ fn read(db: &ObjectDatabase, oid: ObjectIdentifier, property: P) -> Vec<u8> {
 fn assert_error(result: Result<impl std::fmt::Debug, Error>, class: ErrorClass, code: ErrorCode) {
     assert!(
         matches!(&result, Err(Error::Protocol { class: c, code: e })
-            if *c == class.to_raw() as u32 && *e == code.to_raw() as u32),
+            if *c == class && *e == code),
         "expected {class:?} / {code:?}, got {result:?}"
     );
 }

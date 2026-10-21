@@ -17,7 +17,9 @@ use super::metadata;
 /// Provides the Alert Enrollment property surface from ASHRAE 135-2020 Table
 /// 12-61. `Present_Value` names whichever object most recently handed this
 /// enrollment an alert to distribute; recording that source does not itself
-/// evaluate or generate an event.
+/// evaluate or generate an event. Event_Message_Texts,
+/// Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair come from
+/// the shared reporting options, as on Event Enrollment (#1865).
 pub struct AlertEnrollmentObject {
     oid: ObjectIdentifier,
     name: String,
@@ -137,16 +139,23 @@ impl BACnetObject for AlertEnrollmentObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
-        if property == PropertyIdentifier::EVENT_TIME_STAMPS {
-            if !self.event_detection_enable {
-                return EventHistory::default()
-                    .read(property, array_index)
-                    .expect("EventHistory handles Event_Time_Stamps");
-            }
-            return self
-                .event_history
+        // The history arrays read their initial condition while detection is
+        // off, even after a direct field assignment skipped the reset.
+        if !self.event_detection_enable
+            && matches!(
+                property,
+                PropertyIdentifier::EVENT_TIME_STAMPS | PropertyIdentifier::EVENT_MESSAGE_TEXTS
+            )
+        {
+            return EventHistory::default()
                 .read(property, array_index)
-                .expect("EventHistory handles Event_Time_Stamps");
+                .expect("EventHistory handles the history arrays");
+        }
+        // Event_Time_Stamps, Event_Message_Texts and the reporting options
+        // (Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair),
+        // which Table 12-61 lists as optional rows (#1865).
+        if let Some(result) = self.event_history.read(property, array_index) {
+            return result;
         }
         if let Some(result) = self.read_alert_common_property(property, array_index) {
             return result;
@@ -195,7 +204,7 @@ impl BACnetObject for AlertEnrollmentObject {
     fn write_property(
         &mut self,
         property: PropertyIdentifier,
-        _array_index: Option<u32>,
+        array_index: Option<u32>,
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
@@ -234,13 +243,19 @@ impl BACnetObject for AlertEnrollmentObject {
             }
             return Err(common::invalid_data_type_error());
         }
+        if let Some(result) =
+            self.event_history
+                .write(property, array_index, &value, self.event_detection_enable)
+        {
+            return result;
+        }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
         Err(crate::common::unhandled_write_error(
             self.property_metadata().as_ref(),
             property,
-            _array_index,
+            array_index,
         ))
     }
 
@@ -283,7 +298,20 @@ impl BACnetObject for AlertEnrollmentObject {
                 | PropertyIdentifier::EVENT_ENABLE
                 | PropertyIdentifier::NOTIFICATION_CLASS
                 | PropertyIdentifier::NOTIFY_TYPE
+                | PropertyIdentifier::EVENT_MESSAGE_TEXTS_CONFIG
+                | PropertyIdentifier::EVENT_ALGORITHM_INHIBIT_REF
+                | PropertyIdentifier::EVENT_ALGORITHM_INHIBIT
         )
+    }
+
+    fn event_algorithm_inhibit_reference_internal(
+        &self,
+    ) -> Option<bacnet_types::constructed::BACnetObjectPropertyReference> {
+        self.event_history.options.inhibit_reference().cloned()
+    }
+
+    fn follow_event_algorithm_inhibit_internal(&mut self, inhibit: bool) -> bool {
+        self.event_history.options.follow(inhibit)
     }
 
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {

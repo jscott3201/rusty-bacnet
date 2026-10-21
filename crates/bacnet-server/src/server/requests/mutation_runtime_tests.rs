@@ -9,8 +9,8 @@ async fn mutation_runtime_ingress_and_reassembly_share_retained_server_counters(
         let fixture = Fixture::new(Some(Arc::new(|_| true)));
         let (transport, tx) = TestTransport::inbound(2);
         let config = ServerConfig {
+            device: bacnet_objects::DeviceIdentity::default().with_segmentation(Segmentation::BOTH),
             mutation_policy: MutationPolicy::DenyAll,
-            segmentation_supported: Segmentation::BOTH,
             ..fixture.config
         };
         let db = std::mem::take(&mut *fixture.db.write().await);
@@ -97,7 +97,41 @@ async fn mutation_counters_record_decisions_not_handler_success() {
             expected(
                 service,
                 MutationServiceCounters {
-                    allow_total: u64::from(server.config.mutation_authorizer.is_none()),
+                    allow_total: u64::from(server.config.policy.is_none()),
+                    ..Default::default()
+                }
+            )
+        );
+        server.stop().await.unwrap();
+    }
+
+    // A policy that doesn't decide mutations keeps that fast path; one that
+    // does decodes first, so the malformed request is never counted.
+    for (policy, fast) in [
+        (crate::FnPolicy::new().life_safety_operation(|_| true), true),
+        (crate::FnPolicy::new().mutation(|_| true), false),
+    ] {
+        assert_eq!(crate::ServerPolicy::decides_mutations(&policy), !fast);
+        let fixture = Fixture::new(None);
+        let db = std::mem::take(&mut *fixture.db.write().await);
+        let config = ServerConfig {
+            policy: Some(Arc::new(policy)),
+            ..fixture.config
+        };
+        let mut server = BACnetServer::start(config, db, TestTransport::new())
+            .await
+            .unwrap();
+        let service = ConfirmedServiceChoice::WRITE_PROPERTY;
+        let response = dispatch(&server, service, Bytes::from_static(&[0x0c]), 1)
+            .await
+            .unwrap();
+        assert!(matches!(apdu(response), Apdu::Error(_) | Apdu::Reject(_)));
+        assert_eq!(
+            server.mutation_decision_counters(),
+            expected(
+                service,
+                MutationServiceCounters {
+                    allow_total: u64::from(fast),
                     ..Default::default()
                 }
             )

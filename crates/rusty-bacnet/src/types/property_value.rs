@@ -4,7 +4,7 @@ use std::hash::{Hash, Hasher};
 use bacnet_encoding::tags::MAX_CONTEXT_NESTING_DEPTH;
 use pyo3::types::PyTuple;
 
-use super::constructed_read::Element;
+use super::constructed_read::{Element, TypedElement};
 use super::date::{date_from_value, date_value};
 use super::timestamp::time_value;
 use super::*;
@@ -284,6 +284,19 @@ impl PyPropertyValue {
             }
             (inner, _) => property_value_to_py(py, inner),
         }
+    }
+
+    /// The value's octets as a WriteProperty of it carries them (#1499): a
+    /// typed constructed element's are the octets it was read from, a whole
+    /// typed collection's its elements' back to back, and a primitive's its
+    /// application-tagged encoding. A value that doesn't encode raises
+    /// ValueError.
+    #[getter]
+    fn octets<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+        let mut encoded = BytesMut::new();
+        encode_property_value(&mut encoded, &self.inner)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        Ok(PyBytes::new(py, &encoded))
     }
 
     fn __repr__(&self) -> String {

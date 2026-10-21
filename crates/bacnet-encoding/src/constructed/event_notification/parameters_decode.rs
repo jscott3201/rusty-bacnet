@@ -650,9 +650,12 @@ pub(super) fn decode_bounded(
         21 => decode_change_of_discrete_value(data, inner_start, variant_body_end),
         // [22] Change of timer
         22 => decode_change_of_timer(data, inner_start, variant_body_end),
-        other => Err(Error::invalid_tag(
+        other => Err(DecodeError::new(
+            DecodingKind::InvalidTag,
             offset,
-            format!("NotificationParameters variant [{other}] unknown"),
-        )),
+            "NotificationParameters variant [{}] unknown",
+        )
+        .with_value(other.into())
+        .into()),
     }
 }

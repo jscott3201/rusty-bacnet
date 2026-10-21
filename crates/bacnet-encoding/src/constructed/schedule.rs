@@ -30,7 +30,7 @@
 use alloc::vec::Vec;
 
 use bacnet_types::constructed::{BACnetSpecialEvent, BACnetTimeValue, SpecialEventPeriod};
-use bacnet_types::error::Error;
+use bacnet_types::error::{DecodeError, DecodingKind, Error};
 use bacnet_types::primitives::Time;
 use bytes::BytesMut;
 
@@ -50,9 +50,7 @@ use crate::tags::{self, TagClass};
 /// `ApplicationData`), which no time-value can carry.
 pub fn encode_time_value(buf: &mut BytesMut, time_value: &BACnetTimeValue) -> Result<(), Error> {
     if !time_value.value.is_primitive() {
-        return Err(Error::Encoding(
-            "time-value: the value must be of a primitive datatype".into(),
-        ));
+        return Err(Error::encode("time-value: the value must be of a primitive datatype"));
     }
     primitives::encode_app_time(buf, &time_value.time);
     primitives::encode_property_value(buf, &time_value.value)
@@ -75,13 +73,13 @@ pub fn decode_time_value(data: &[u8], offset: usize) -> Result<(BACnetTimeValue,
 
     let (tag, _) = tags::decode_tag(data, value_start)?;
     if tag.class != TagClass::Application {
-        return Err(Error::decoding(
+        return Err(DecodeError::new(
+            DecodingKind::InvalidEncoding,
             value_start,
-            format!(
-                "time-value: expected an application-tagged value, got context tag [{}]",
-                tag.number
-            ),
-        ));
+            "time-value: expected an application-tagged value, got context tag [{}]",
+        )
+        .with_value(tag.number.into())
+        .into());
     }
     let (value, value_end) = primitives::decode_application_value(data, value_start)?;
     Ok((BACnetTimeValue { time, value }, value_end))
@@ -107,7 +105,7 @@ fn decode_time_values(
     data: &[u8],
     offset: usize,
     tag: u8,
-    what: &str,
+    what: &'static str,
 ) -> Result<(Vec<BACnetTimeValue>, usize), Error> {
     let mut pos = expect_opening(data, offset, tag, what)?;
     let mut time_values = Vec::new();
@@ -116,10 +114,13 @@ fn decode_time_values(
             return Ok((time_values, expect_closing(data, pos, tag, what)?));
         }
         if time_values.len() >= MAX_FRAMED_ITEMS {
-            return Err(Error::overflow(
+            return Err(DecodeError::new(
+                DecodingKind::Overflow,
                 pos,
-                format!("{what}: time-values exceed item limit"),
-            ));
+                "time-values exceed item limit",
+            )
+            .within(what)
+            .into());
         }
         let (time_value, next) = decode_time_value(data, pos)?;
         time_values.push(time_value);
@@ -226,6 +227,17 @@ pub fn encode_weekly_schedule(
     Ok(())
 }
 
+/// The refusal of a schedule's entry `index` at `offset`, named by `what`:
+/// the inner reader's fault, restated there without formatting (#1776).
+#[cold]
+fn entry_refusal(error: &Error, offset: usize, what: &'static str, index: u16) -> Error {
+    error
+        .to_decode_error(offset)
+        .within(what)
+        .at_item(index)
+        .into()
+}
+
 /// Decode a whole Weekly_Schedule.
 ///
 /// The data must hold exactly seven daily schedules and nothing after them:
@@ -233,9 +245,9 @@ pub fn encode_weekly_schedule(
 pub fn decode_weekly_schedule(data: &[u8]) -> Result<[Vec<BACnetTimeValue>; 7], Error> {
     let mut days: [Vec<BACnetTimeValue>; 7] = Default::default();
     let mut pos = 0;
-    for (index, day) in days.iter_mut().enumerate() {
+    for (index, day) in (0u16..).zip(days.iter_mut()) {
         let (time_values, next) = decode_daily_schedule(data, pos)
-            .map_err(|e| Error::decoding(pos, format!("weekly schedule day {index}: {e}")))?;
+            .map_err(|error| entry_refusal(&error, pos, "weekly schedule day", index))?;
         *day = time_values;
         pos = next;
     }
@@ -267,12 +279,10 @@ pub fn decode_exception_schedule(data: &[u8]) -> Result<Vec<BACnetSpecialEvent>,
                 "exception schedule exceeds item limit",
             ));
         }
-        let (event, next) = decode_special_event(data, pos).map_err(|e| {
-            Error::decoding(
-                pos,
-                format!("exception schedule entry {}: {e}", events.len()),
-            )
-        })?;
+        // The item limit keeps the count within u16.
+        let index = u16::try_from(events.len()).unwrap_or(u16::MAX);
+        let (event, next) = decode_special_event(data, pos)
+            .map_err(|error| entry_refusal(&error, pos, "exception schedule entry", index))?;
         events.push(event);
         pos = next;
     }

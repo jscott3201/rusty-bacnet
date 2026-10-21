@@ -11,8 +11,15 @@ use crate::message::RoutingEntries;
 use crate::npdu::{Npdu, GLOBAL_NETWORK};
 use crate::PortId;
 
-impl<const P: usize, const R: usize, const H: usize, const D: usize, const N: usize>
-    Storage<P, R, H, D, N>
+impl<
+        const P: usize,
+        const R: usize,
+        const H: usize,
+        const D: usize,
+        const N: usize,
+        G: super::GroupClassifier,
+        const B: usize,
+    > Storage<P, R, H, D, N, G, B>
 {
     /// Initialize-Routing-Table. A count of 0 is a query, answered with the
     /// whole table in Acks of at most 124 entries, ascending, each network
@@ -63,9 +70,7 @@ impl<const P: usize, const R: usize, const H: usize, const D: usize, const N: us
                 });
                 continue;
             };
-            if self.table.len() >= usize::from(options.route_cap)
-                && self.table.lookup(network).is_none()
-            {
+            if self.table.len() >= options.cap(R) && self.table.lookup(network).is_none() {
                 self.table.record_learning_cap();
                 host.observe(Event::RouteCap {
                     class: ControlClass::InitMgmt,
@@ -85,9 +90,10 @@ impl<const P: usize, const R: usize, const H: usize, const D: usize, const N: us
 
     /// Initialize-Routing-Table-Ack: one with no data answers an update and
     /// says nothing. Otherwise its networks are learned through the arrival
-    /// port and the sender, as I-Am-Router's are; its Port IDs are the
-    /// sender's own numbering, so they are not used. Reserved networks are
-    /// skipped.
+    /// port and the sender, as I-Am-Router's are, at the route cap too,
+    /// where the networks the table holds are still refreshed (#1698); its
+    /// Port IDs are the sender's own numbering, so they are not used.
+    /// Reserved networks are skipped.
     pub(super) fn routing_table_ack<'f>(
         &mut self,
         at: &Arrival<'f>,

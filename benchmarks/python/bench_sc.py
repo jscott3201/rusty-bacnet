@@ -231,9 +231,11 @@ async def test_sc_cov_subscribe_latency(sc_client):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("concurrency", [1, 5, 10, 25])
+# A server admits at most 16 confirmed requests in flight from one peer by
+# default, so one client stops at 16.
+@pytest.mark.parametrize("concurrency", [1, 5, 10, 16])
 async def test_sc_concurrency_scaling(sc_client, concurrency):
-    """ReadProperty throughput over SC at different concurrency."""
+    """ReadProperty throughput over SC with `concurrency` requests in flight."""
     client, addr = sc_client
     total_ops = concurrency * 25
     tracker = LatencyTracker()

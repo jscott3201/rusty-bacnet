@@ -1,6 +1,7 @@
 //! Who-Is a BACnet device, ReadPropertyMultiple on a batch of points, print, exit.
 //!
 //! Default demo (device 5007): RPM read OA-T, STAT ZN-T, and DUCT-T in one request.
+#![forbid(unsafe_code)]
 
 use std::net::Ipv4Addr;
 use std::process;

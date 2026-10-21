@@ -132,8 +132,7 @@ impl Fixture {
         db.add(object).unwrap();
         db.add(Box::new(
             DeviceObject::new(DeviceConfig {
-                instance: 1,
-                name: "Dev".into(),
+                identity: bacnet_objects::DeviceIdentity::default().with_name("Dev"),
                 ..DeviceConfig::default()
             })
             .unwrap(),

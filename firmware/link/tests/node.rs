@@ -5,7 +5,7 @@
 
 use core::mem::size_of;
 
-use firmware_link::node::{expected, run, ForeignNode, Memory, Summary};
+use firmware_link::node::{expected, run, ForeignNode, ForeignPort, Memory, Summary};
 
 /// The whole summary against the one the emulation build checks too
 /// (`firmware_link::node::expected`, which explains each value).
@@ -22,6 +22,10 @@ fn scenario_summary() {
 fn ram_sizes() {
     let node = size_of::<ForeignNode>();
     println!("Node<2> (the image's, on the stack): {node} octets");
+    println!(
+        "NodePort over it (on the stack): {} octets",
+        size_of::<ForeignPort<'static>>()
+    );
     println!("Summary: {} octets", size_of::<Summary>());
     println!("Memory: {} octets", size_of::<Memory>());
     assert!(node < 1024, "the node is {node} octets");

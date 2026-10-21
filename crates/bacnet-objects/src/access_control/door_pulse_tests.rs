@@ -218,8 +218,8 @@ fn access_door_times_are_unsigned32_tenths() {
         ] {
             match door.write_property(property, None, value, None) {
                 Err(Error::Protocol { class, code: c }) => {
-                    assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
-                    assert_eq!(c, code.to_raw() as u32, "{property:?}");
+                    assert_eq!(class, ErrorClass::PROPERTY);
+                    assert_eq!(c, code, "{property:?}");
                 }
                 other => panic!("expected {code:?}, got {other:?}"),
             }

@@ -95,8 +95,8 @@ fn time_delay_normal_write_validation() {
             assert_eq!(
                 (class, code),
                 (
-                    bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32,
-                    bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE.to_raw() as u32
+                    bacnet_types::enums::ErrorClass::PROPERTY,
+                    bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE
                 ),
                 "Unsigned-typed property fed a Real: PROPERTY/INVALID_DATA_TYPE"
             );
@@ -116,8 +116,8 @@ fn time_delay_normal_write_validation() {
             assert_eq!(
                 (class, code),
                 (
-                    bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32,
-                    bacnet_types::enums::ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32
+                    bacnet_types::enums::ErrorClass::PROPERTY,
+                    bacnet_types::enums::ErrorCode::VALUE_OUT_OF_RANGE
                 ),
                 "unrepresentable Unsigned: PROPERTY/VALUE_OUT_OF_RANGE"
             );

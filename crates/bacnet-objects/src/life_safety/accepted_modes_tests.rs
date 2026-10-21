@@ -38,8 +38,8 @@ fn network_write_mode(object: &mut dyn BACnetObject, raw: u32) -> Result<(), Err
 fn assert_property_error(result: Result<(), Error>, code: ErrorCode) {
     assert!(
         matches!(result, Err(Error::Protocol { class, code: actual })
-            if class == ErrorClass::PROPERTY.to_raw() as u32
-                && actual == code.to_raw() as u32),
+            if class == ErrorClass::PROPERTY
+                && actual == code),
         "expected PROPERTY / {code:?}, got {result:?}"
     );
 }

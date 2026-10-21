@@ -1,5 +1,6 @@
 [package]
 name = "bacnet-services"
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,19 +10,27 @@ description = "BACnet service request/response encode/decode per ASHRAE 135-2020
 keywords = ["bacnet", "building-automation", "ashrae", "services", "protocol"]
 categories = ["network-programming", "no-std"]
 
-# One of `std` or `alloc` is required; with neither the crate refuses to build.
-# Leaving both off is reserved for a future allocation-free subset.
+# Without `std` or `alloc` the crate builds allocation-free (#1614): Who-Is,
+# I-Am and ReadProperty (request and ACK) encode to a sink and decode from
+# borrowed octets. Every other service, and the owned forms, need `alloc`.
 [features]
 default = ["std"]
 # Hosted builds: std in the dependencies.
 std = ["alloc", "bacnet-types/std", "bacnet-encoding/std", "bytes/std"]
-# no_std with a global allocator.
-alloc = ["bacnet-types/alloc", "bacnet-encoding/alloc"]
+# no_std with a global allocator: every service.
+alloc = ["bacnet-types/alloc", "bacnet-encoding/alloc", "dep:bytes"]
 
 [dependencies]
 bacnet-types = { workspace = true }
 bacnet-encoding = { workspace = true }
-bytes = { workspace = true }
+bytes = { workspace = true, optional = true }
+
+[package.metadata.docs.rs]
+no-default-features = true
+features = ["std"]
+default-target = "x86_64-unknown-linux-gnu"
+targets = []
+rustdoc-args = ["--cfg", "docsrs"]
 
 [lints]
 workspace = true

@@ -5,7 +5,7 @@ export const base = '/rusty-bacnet/';
  * names every other place that must match it (plain Markdown pages and the
  * loopback lab script).
  */
-export const release = '0.13.0';
+export const release = '0.14.0';
 export const repository = 'https://github.com/jscott3201/rusty-bacnet';
 /** The download URL of one of the release's assets on its GitHub release copy. */
 export function releaseAsset(file) {

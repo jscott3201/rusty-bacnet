@@ -1,0 +1,21 @@
+{
+  "outcome": "not_completed",
+  "summary": null,
+  "inspection": null,
+  "diagnostics": [],
+  "unassessed": [
+    "issuer_authorization",
+    "certificate_path",
+    "peer_name_matching",
+    "revocation",
+    "remote_acceptance"
+  ],
+  "error": {
+    "category": "io",
+    "role": "identity",
+    "index": null,
+    "kind": null,
+    "os_code": 2,
+    "message": "Could not read a selected input file. Check that it exists and is readable; the role and OS code identify the failure."
+  }
+}

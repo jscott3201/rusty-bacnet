@@ -15,7 +15,7 @@ pub(crate) const WRITE_CAPACITY: usize = 64;
 pub(crate) struct DirectWrite {
     pub(crate) bytes: Bytes,
     pub(crate) done: oneshot::Sender<Result<(), Error>>,
-    pub(crate) scope: Option<Weak<AtomicBool>>,
+    pub(crate) scopes: [Option<crate::port::ResponseScopeGuard>; 2],
     pub(crate) deadline: tokio::time::Instant,
     pub(crate) started: Arc<AtomicBool>,
 }
@@ -24,9 +24,10 @@ impl DirectWrite {
         tokio::time::Instant::now() < self.deadline
             && !self.done.is_closed()
             && self
-                .scope
-                .as_ref()
-                .is_none_or(|s| s.upgrade().is_some_and(|s| !s.load(Ordering::Acquire)))
+                .scopes
+                .iter()
+                .flatten()
+                .all(crate::port::ResponseScopeGuard::is_open)
     }
     pub(crate) fn mark_started(&self) {
         self.started.store(true, Ordering::Release);
@@ -86,9 +87,10 @@ impl DirectEgress {
         attributes: &[DataAttribute],
     ) -> Result<(), DirectSendError> {
         if npdu.len() > usize::from(self.limits.1) {
-            return Err(DirectSendError::Failed(Error::Encoding(
-                "direct NPDU exceeds peer Max-NPDU-Length".into(),
-            )));
+            return Err(DirectSendError::Failed(Error::SendTooLong {
+                length: npdu.len(),
+                limit: usize::from(self.limits.1),
+            }));
         }
         let frame = ScMessage {
             function: ScFunction::EncapsulatedNpdu,
@@ -106,9 +108,10 @@ impl DirectEgress {
     }
     pub(crate) async fn send_frame(&self, bytes: Bytes) -> Result<(), DirectSendError> {
         if bytes.len() > usize::from(self.limits.0) {
-            return Err(DirectSendError::Failed(Error::Encoding(
-                "direct BVLC exceeds peer Max-BVLC-Length".into(),
-            )));
+            return Err(DirectSendError::Failed(Error::SendTooLong {
+                length: bytes.len(),
+                limit: usize::from(self.limits.0),
+            }));
         }
         let started = Arc::new(AtomicBool::new(false));
         let (done, receive) = oneshot::channel();
@@ -122,7 +125,7 @@ impl DirectEgress {
                     self.send.try_send(DirectWrite {
                         bytes,
                         done,
-                        scope: None,
+                        scopes: [None, None],
                         deadline,
                         started: started.clone(),
                     })

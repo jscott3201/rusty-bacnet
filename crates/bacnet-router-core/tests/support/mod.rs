@@ -10,8 +10,9 @@
 
 #![allow(dead_code)]
 
+use bacnet_router_core::npdu::Mac;
 use bacnet_router_core::table::{ClaimCounters, Convergence, Table, Timing};
-use bacnet_router_core::{Duration, Instant, Mac, PortId};
+use bacnet_router_core::{Duration, Instant, PortId};
 
 /// The hosted router's sizes: 256 routes, 1,024 hold-down records.
 pub type Hosted = Table<256, 1024>;

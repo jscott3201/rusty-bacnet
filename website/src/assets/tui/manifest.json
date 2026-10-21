@@ -1,0 +1,546 @@
+{
+ "generator": "website/scripts/tui-screenshots/capture.py",
+ "font": "Menlo 12",
+ "shots": [
+  {
+   "name": "profiles-picker",
+   "file": "profiles-picker.webp",
+   "alt": "The profile picker listing four saved profiles, with keys to preview, create or reload them.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui",
+   "keys": "",
+   "commit": "93125c060"
+  },
+  {
+   "name": "profiles-new-bip",
+   "file": "profiles-new-bip.webp",
+   "alt": "The new B/IP profile form with its fields and their defaults.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui",
+   "keys": "n",
+   "commit": "93125c060"
+  },
+  {
+   "name": "profiles-new-mstp",
+   "file": "profiles-new-mstp.webp",
+   "alt": "The new MS/TP profile form: serial port, MAC, baud, Max_Master and Max_Info_Frames.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui",
+   "keys": "Escape m",
+   "commit": "93125c060"
+  },
+  {
+   "name": "profiles-preview-attest",
+   "file": "profiles-preview-attest.webp",
+   "alt": "A B/IP profile preview in Foreign Device mode, asking for first-use authorization.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui",
+   "keys": "Escape Enter",
+   "commit": "93125c060"
+  },
+  {
+   "name": "profiles-passive",
+   "file": "profiles-passive.webp",
+   "alt": "A passive session: the status bar reads PASSIVE and the device list says nothing is transmitted.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui --profile lab --passive",
+   "keys": "Enter",
+   "commit": "93125c060"
+  },
+  {
+   "name": "discovery-whois-form",
+   "file": "discovery-whois-form.webp",
+   "alt": "The Who-Is form with its Scope, Target, Range and Listen fields.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui",
+   "keys": "a d",
+   "commit": "93125c060"
+  },
+  {
+   "name": "discovery-whois-warning",
+   "file": "discovery-whois-warning.webp",
+   "alt": "The Who-Is form warning that a global Who-Is with no range reaches every device.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui",
+   "keys": "Right Enter",
+   "commit": "93125c060"
+  },
+  {
+   "name": "discovery-devices",
+   "file": "discovery-devices.webp",
+   "alt": "The device table after a global Who-Is: two local devices and one routed device on network 2.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui",
+   "keys": "Enter",
+   "commit": "93125c060"
+  },
+  {
+   "name": "discovery-filter",
+   "file": "discovery-filter.webp",
+   "alt": "The device table filtered to instances containing 100.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui",
+   "keys": "/ \"100\" Enter",
+   "commit": "93125c060"
+  },
+  {
+   "name": "discovery-who-has",
+   "file": "discovery-who-has.webp",
+   "alt": "A Who-Has panel below the device table, listing the device that has an object named Damper.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui",
+   "keys": "/ Escape : \"find Damper\" Enter",
+   "commit": "93125c060"
+  },
+  {
+   "name": "browser-device",
+   "file": "browser-device.webp",
+   "alt": "The device browser: the device card, the object list grouped by type, and an empty property pane.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui",
+   "keys": ": \"find\" Enter g Enter",
+   "commit": "93125c060"
+  },
+  {
+   "name": "browser-status-flags",
+   "file": "browser-status-flags.webp",
+   "alt": "An analog input in alarm, in fault and out of service, with its status badges.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui",
+   "keys": "g Enter",
+   "commit": "93125c060"
+  },
+  {
+   "name": "browser-priority-array",
+   "file": "browser-priority-array.webp",
+   "alt": "A commandable analog output with its 16-slot priority array; priority 10 is in control.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui",
+   "keys": "BTab g j j j j Enter",
+   "commit": "93125c060"
+  },
+  {
+   "name": "browser-trend-log",
+   "file": "browser-trend-log.webp",
+   "alt": "A Trend Log object's properties in the browser.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui",
+   "keys": "BTab g j j j j j j j j j j j j j j j j j j j Enter",
+   "commit": "93125c060"
+  },
+  {
+   "name": "browser-schedule",
+   "file": "browser-schedule.webp",
+   "alt": "A Schedule object's properties in the browser.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui",
+   "keys": "BTab g j j j j j j j j j j j j j j j j j Enter",
+   "commit": "93125c060"
+  },
+  {
+   "name": "browser-object-filter",
+   "file": "browser-object-filter.webp",
+   "alt": "The object list filtered to binary objects.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui",
+   "keys": "BTab g / \"binary\"",
+   "commit": "93125c060"
+  },
+  {
+   "name": "writes-not-armed",
+   "file": "writes-not-armed.webp",
+   "alt": "The footer refusing a write because no write session is armed.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui",
+   "keys": "Escape g j j j j Enter w",
+   "commit": "93125c060"
+  },
+  {
+   "name": "writes-arm-dialog",
+   "file": "writes-arm-dialog.webp",
+   "alt": "The dialog that arms a write session, with a reason and a length in minutes.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui",
+   "keys": "W \"Docs lab\"",
+   "commit": "93125c060"
+  },
+  {
+   "name": "writes-form",
+   "file": "writes-form.webp",
+   "alt": "The write form for an analog output: property, value and priority.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui",
+   "keys": "Enter w \"65\" Tab BSpace BSpace \"12\"",
+   "commit": "93125c060"
+  },
+  {
+   "name": "writes-preview-t1",
+   "file": "writes-preview-t1.webp",
+   "alt": "A T1 write preview at priority 12: the slot changes but Present_Value does not.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui",
+   "keys": "Enter",
+   "commit": "93125c060"
+  },
+  {
+   "name": "writes-result",
+   "file": "writes-result.webp",
+   "alt": "The result of a write the device acknowledged; the status bar counts one ledger entry.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui",
+   "keys": "Enter",
+   "commit": "93125c060"
+  },
+  {
+   "name": "writes-preview-t2",
+   "file": "writes-preview-t2.webp",
+   "alt": "A T2 write preview at priority 8, which needs y to send.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui",
+   "keys": "Enter w \"70\" Tab BSpace BSpace \"8\" Enter",
+   "commit": "93125c060"
+  },
+  {
+   "name": "writes-preview-t3",
+   "file": "writes-preview-t3.webp",
+   "alt": "A T3 write preview at priority 5, which needs the device instance typed to send.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui",
+   "keys": "Escape w \"70\" Tab BSpace BSpace \"5\" Enter",
+   "commit": "93125c060"
+  },
+  {
+   "name": "writes-blocked",
+   "file": "writes-blocked.webp",
+   "alt": "A write at priority 6, blocked because the profile does not allow dangerous writes.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui",
+   "keys": "Escape w \"70\" Tab BSpace BSpace \"6\" Enter",
+   "commit": "93125c060"
+  },
+  {
+   "name": "writes-relinquish",
+   "file": "writes-relinquish.webp",
+   "alt": "The relinquish form, which writes NULL to one priority slot.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui",
+   "keys": "Escape n",
+   "commit": "93125c060"
+  },
+  {
+   "name": "writes-writem-preview",
+   "file": "writes-writem-preview.webp",
+   "alt": "A WritePropertyMultiple batch preview of two writes, confirmed at T2.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui",
+   "keys": "Escape : \"writem 1001 av:1 present-value 72@12 av:2 present-value 68@12\" Enter",
+   "commit": "93125c060"
+  },
+  {
+   "name": "writes-ledger",
+   "file": "writes-ledger.webp",
+   "alt": "The session ledger with one write and its undo value.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui",
+   "keys": "Escape u",
+   "commit": "93125c060"
+  },
+  {
+   "name": "writes-exit-guard",
+   "file": "writes-exit-guard.webp",
+   "alt": "The exit guard listing a change still in effect, with revert, keep and cancel.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui",
+   "keys": "Escape q",
+   "commit": "93125c060"
+  },
+  {
+   "name": "watch-list",
+   "file": "watch-list.webp",
+   "alt": "The watch list: COV and polled rows with values, units, status flags, age and sparklines.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui",
+   "keys": "Escape a : \"watch 1001 ai:2\" Enter : \"watch 1001 ai:3\" Enter : \"watch 1001 ai:1\" Enter : \"watch 2:2001 ai:1\" Enter : \"watch 1002 av:7\" Enter : \"watch 1001 bo:1\" Enter 3",
+   "commit": "93125c060"
+  },
+  {
+   "name": "overview-log-pane",
+   "file": "overview-log-pane.webp",
+   "alt": "The device browser with the log pane open below it.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui",
+   "keys": "2 L",
+   "commit": "93125c060"
+  },
+  {
+   "name": "overview-help",
+   "file": "overview-help.webp",
+   "alt": "The help overlay: the global keys, then the current screen's keys, then the commands.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui",
+   "keys": "1 ?",
+   "commit": "93125c060"
+  },
+  {
+   "name": "network-fd-bdt",
+   "file": "network-fd-bdt.webp",
+   "alt": "The Network screen: the foreign-device panel and the BBMD's broadcast distribution table.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui",
+   "keys": "L 4",
+   "commit": "93125c060"
+  },
+  {
+   "name": "network-fdt",
+   "file": "network-fdt.webp",
+   "alt": "The Network screen's FDT tab with this client's own entry.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui",
+   "keys": "Tab",
+   "commit": "93125c060"
+  },
+  {
+   "name": "network-matrix",
+   "file": "network-matrix.webp",
+   "alt": "The BDT consistency matrix after a survey: both BBMDs agree.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui",
+   "keys": "Tab m",
+   "commit": "93125c060"
+  },
+  {
+   "name": "network-networks",
+   "file": "network-networks.webp",
+   "alt": "The Networks tab: one router reaches network 2.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui",
+   "keys": "Tab r",
+   "commit": "93125c060"
+  },
+  {
+   "name": "network-bbmd-unreachable",
+   "file": "network-bbmd-unreachable.webp",
+   "alt": "The foreign-device panel when the BBMD never answers: not registered, attempts counting.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet -i 127.0.0.1 -p 0 -b 127.255.255.255 --foreign-bbmd 127.0.0.1:9 tui --no-profile",
+   "keys": "4",
+   "commit": "93125c060"
+  },
+  {
+   "name": "sc-preview",
+   "file": "sc-preview.webp",
+   "alt": "A BACnet/SC profile preview: hub URL, PEM file paths and first-use authorization.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui --profile sc-lab",
+   "keys": "",
+   "commit": "93125c060"
+  },
+  {
+   "name": "sc-profile-editor",
+   "file": "sc-profile-editor.webp",
+   "alt": "The BACnet/SC profile editor.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui --profile sc-lab",
+   "keys": "e",
+   "commit": "bbdcdbd9f"
+  },
+  {
+   "name": "sc-lint-warning",
+   "file": "sc-lint-warning.webp",
+   "alt": "An SC profile preview warning that the operational certificate expires within 30 days.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui --profile sc-expiring",
+   "keys": "",
+   "commit": "93125c060"
+  },
+  {
+   "name": "sc-hub-certs",
+   "file": "sc-hub-certs.webp",
+   "alt": "The SC screen connected: hub connector, VMAC and UUID, and the hub's certificate chain.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui --profile sc-lab",
+   "keys": "Escape a 5",
+   "commit": "93125c060"
+  },
+  {
+   "name": "sc-doctor",
+   "file": "sc-doctor.webp",
+   "alt": "The connection doctor with every phase passed.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui --profile sc-lab",
+   "keys": "Tab",
+   "commit": "93125c060"
+  },
+  {
+   "name": "sc-credentials",
+   "file": "sc-credentials.webp",
+   "alt": "My credentials: this node's certificate, the CA bundle, the key match and the issuer check.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui --profile sc-lab",
+   "keys": "Tab",
+   "commit": "93125c060"
+  },
+  {
+   "name": "sc-devices",
+   "file": "sc-devices.webp",
+   "alt": "The device table over BACnet/SC, with a VMAC as the address.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui --profile sc-lab",
+   "keys": "1 d Enter Enter",
+   "commit": "93125c060"
+  },
+  {
+   "name": "sc-doctor-failure",
+   "file": "sc-doctor-failure.webp",
+   "alt": "The connection doctor after a failed dial: TLS failed because the hub's CA is not trusted.",
+   "size": "120x36",
+   "source": "live",
+   "command": "bacnet tui --profile sc-untrusted",
+   "keys": "y a 5",
+   "commit": "93125c060"
+  },
+  {
+   "name": "mstp-monitor-stations",
+   "file": "mstp-monitor-stations.webp",
+   "alt": "The MS/TP monitor's Stations view: an address map and a row per station heard.",
+   "size": "120x40",
+   "source": "snapshot",
+   "command": "(insta snapshot)",
+   "keys": "",
+   "commit": "93125c060"
+  },
+  {
+   "name": "mstp-monitor-ring",
+   "file": "mstp-monitor-ring.webp",
+   "alt": "The Token ring view: successors, rotation times and per-master token statistics.",
+   "size": "120x40",
+   "source": "snapshot",
+   "command": "(insta snapshot)",
+   "keys": "",
+   "commit": "93125c060"
+  },
+  {
+   "name": "mstp-monitor-findings",
+   "file": "mstp-monitor-findings.webp",
+   "alt": "The Findings view warning that one master's Max_Master leaves a station out.",
+   "size": "80x24",
+   "source": "snapshot",
+   "command": "(insta snapshot)",
+   "keys": "",
+   "commit": "93125c060"
+  },
+  {
+   "name": "mstp-monitor-errors",
+   "file": "mstp-monitor-errors.webp",
+   "alt": "The Errors view: CRC errors, noise, a lost token and the adapter's timing note.",
+   "size": "80x24",
+   "source": "snapshot",
+   "command": "(insta snapshot)",
+   "keys": "",
+   "commit": "93125c060"
+  },
+  {
+   "name": "mstp-join-proposal",
+   "file": "mstp-join-proposal.webp",
+   "alt": "The safe-join proposal: a free MAC, the Max_Master to use and the free addresses.",
+   "size": "80x24",
+   "source": "snapshot",
+   "command": "(insta snapshot)",
+   "keys": "",
+   "commit": "93125c060"
+  },
+  {
+   "name": "mstp-join-confirm",
+   "file": "mstp-join-confirm.webp",
+   "alt": "The join confirmation the safe join opens, naming the station and the port.",
+   "size": "80x24",
+   "source": "snapshot",
+   "command": "(insta snapshot)",
+   "keys": "",
+   "commit": "f9025d9b1"
+  },
+  {
+   "name": "mstp-participant-join",
+   "file": "mstp-participant-join.webp",
+   "alt": "The confirmation shown before joining a trunk with --mstp.",
+   "size": "80x24",
+   "source": "snapshot",
+   "command": "(insta snapshot)",
+   "keys": "",
+   "commit": "f9025d9b1"
+  },
+  {
+   "name": "mstp-participant",
+   "file": "mstp-participant.webp",
+   "alt": "The MS/TP screen as a participant: this station's token state and the transport counters.",
+   "size": "120x40",
+   "source": "snapshot",
+   "command": "(insta snapshot)",
+   "keys": "",
+   "commit": "f9025d9b1"
+  },
+  {
+   "name": "troubleshoot-narrow",
+   "file": "troubleshoot-narrow.webp",
+   "alt": "The device browser at 80x24, where only the focused pane is shown.",
+   "size": "80x24",
+   "source": "live",
+   "command": "bacnet tui --profile lab",
+   "keys": "Enter d Right Enter Enter g Enter g j j j j Enter",
+   "commit": "93125c060"
+  },
+  {
+   "name": "troubleshoot-too-small",
+   "file": "troubleshoot-too-small.webp",
+   "alt": "The notice shown when the terminal is smaller than 80x24.",
+   "size": "70x20",
+   "source": "live",
+   "command": "bacnet tui --profile lab --passive",
+   "keys": "",
+   "commit": "93125c060"
+  }
+ ]
+}

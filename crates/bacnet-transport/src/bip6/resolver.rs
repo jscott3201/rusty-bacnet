@@ -320,9 +320,12 @@ pub(super) struct Driver<S> {
     pub(super) resolver: Arc<Resolver>,
     /// This node's VMAC.
     pub(super) source: Bip6Vmac,
-    /// Where Address-Resolutions go: the scope's BACnet group at this
-    /// node's port, or for a foreign device its BBMD (U.4.4).
+    /// Where Address-Resolutions go for a node that isn't a foreign
+    /// device: the scope's BACnet group at this node's port.
     pub(super) resolution_to: SocketAddrV6,
+    /// A foreign device's registration: its Address-Resolutions go to the
+    /// BBMD it names at the time (U.4.4).
+    pub(super) foreign: Option<Arc<super::foreign_target::ForeignTarget>>,
 }
 
 impl<S: DatagramSender> Driver<S> {
@@ -338,7 +341,11 @@ impl<S: DatagramSender> Driver<S> {
                     source: self.source,
                     target,
                 };
-                self.send(&request, self.resolution_to).await;
+                let to = self
+                    .foreign
+                    .as_ref()
+                    .map_or(self.resolution_to, |target| target.bbmd_addr());
+                self.send(&request, to).await;
                 self.resolver.counts.address_resolution_sent();
             }
             let request = Bvll6::VirtualAddressResolution {

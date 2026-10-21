@@ -4,10 +4,15 @@ import socket
 import unittest
 
 import rusty_bacnet as rb
+from port_retry import rerun_on_lost_port
 
 
 class ServerShutdownTests(unittest.IsolatedAsyncioTestCase):
     async def test_cancelled_stop_can_rejoin_confirmed_audit_drain(self):
+        # The closing rebind can lose the freed port to another process (#1419).
+        await rerun_on_lost_port(self.stop_drain_and_release)
+
+    async def stop_drain_and_release(self):
         loop = asyncio.get_running_loop()
         server = rb.BACnetServer(8721, interface="127.0.0.1", port=0)
         server.add_binary_value(1, "shutdown-value")

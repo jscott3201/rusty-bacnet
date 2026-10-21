@@ -7,7 +7,7 @@ Rusty BACnet is a protocol stack with three user-facing entry points, not a desk
 
 ## Integrating more than a read?
 
-The [integration overview](/rusty-bacnet/development/overview/) covers shared endpoints, BACnet/SC setup, Network Port and Number controls, and building from source. The installation and start pages below target v0.13.0.
+The [integration overview](/rusty-bacnet/development/overview/) covers shared endpoints, BACnet/SC setup, Network Port and Number controls, and building from source. The installation and start pages below target v0.14.0.
 
 ## Start without hardware
 
@@ -19,6 +19,10 @@ Start here when your goal is to identify a device, read a point, or collect diag
 
 [Install the CLI](/rusty-bacnet/start/installation/#install-a-cli-executable) and follow [Your first read](/rusty-bacnet/start/first-read/). The first-read path does not change a property value.
 
+## Work in the terminal UI
+
+Plain `bacnet` on a terminal opens a full-screen terminal UI: discovery, a device browser, a watch list and guarded writes, with B/IP, BACnet/SC and MS/TP diagnostics. [Use the terminal UI](/rusty-bacnet/tui/overview/) shows how to install it and walks through every screen.
+
 ## Automate with Python
 
 Choose Python for scripts, data collection, integration prototypes, or a small test device. The distribution is `rusty-bacnet`; the Python import is `rusty_bacnet`. The binding uses asynchronous I/O.
@@ -27,9 +31,15 @@ Choose Python for scripts, data collection, integration prototypes, or a small t
 
 ## Embed with Rust
 
-Choose Rust when BACnet belongs inside your application. The workspace has separate crates for clients, servers, types, encoding, services, transports, networking, objects and shared endpoints, plus `no_std` codecs and cores (MS/TP, BACnet/IP and a router) for firmware. You do not need every crate for a property read.
+Choose Rust when BACnet belongs inside your application. The workspace has separate crates for clients, servers, types, encoding, services, transports, networking, objects and shared endpoints, plus `no_std` codecs and cores (MS/TP, BACnet/IP and a router) for firmware, which the next section covers. You do not need every crate for a property read.
 
 [Start with the Rust client](/rusty-bacnet/start/rust/). The reviewed release declares Rust 1.93 as its minimum; this documentation project does not raise the library's minimum Rust version.
+
+## Run on a microcontroller
+
+Choose the portable crates when BACnet runs on firmware with no operating system and no heap: an MS/TP or B/IP device, a BBMD, or a router between B/IP and MS/TP. They read no clock and own no hardware; your firmware feeds them the line and the time.
+
+[Run on a microcontroller](/rusty-bacnet/start/embedded/) lists the crates each product needs, the clock they share, measured flash and RAM, the rules your adapter follows, and what still needs an allocator.
 
 ## Pick the network path separately
 
@@ -45,6 +55,6 @@ Keep writes, alarm acknowledgments, device communication control, time synchroni
 
 ## Sources and release scope
 
-These instructions target **v0.13.0**. Source review is not a claim of hardware qualification.
+These instructions target **v0.14.0**. Source review is not a claim of hardware qualification.
 
-[Release](https://github.com/jscott3201/rusty-bacnet/releases/tag/v0.13.0) · [Workspace manifest](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/Cargo.toml) · [Python packaging](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/crates/rusty-bacnet/pyproject.toml).
+[Release](https://github.com/jscott3201/rusty-bacnet/releases/tag/v0.14.0) · [Workspace manifest](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/Cargo.toml) · [Python packaging](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/crates/rusty-bacnet/pyproject.toml).

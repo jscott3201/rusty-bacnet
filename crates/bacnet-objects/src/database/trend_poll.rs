@@ -22,8 +22,10 @@ use crate::device_reference::decode_reference;
 use crate::log_buffer::ANY_VALUE_MAX_OCTETS;
 use crate::traits::{BACnetObject, MonotonicClock};
 use alignment::{Alignment, DAY};
+use cov::CovBaseline;
 
 mod alignment;
+mod cov;
 
 /// Local maximum idle/configuration reconciliation delay and failure backoff.
 /// This is a scheduling policy, not a BACnet timing guarantee.
@@ -53,6 +55,11 @@ enum Mode {
     /// TRIGGERED with Trigger TRUE: one acquisition now (Clauses 12.25.29
     /// and 12.30.16).
     Triggered,
+    /// A Trend Log's COV: on every pass, one acquisition when the reference
+    /// has changed by COV's criteria, held to Client_COV_Increment when it
+    /// isn't NULL (Clauses 12.25.11 and 12.25.26, #1480). See the `cov`
+    /// module.
+    Cov { increment: Option<f32> },
 }
 
 /// One monitored reference of a log.
@@ -79,6 +86,9 @@ struct Schedule {
     retry_completed: Option<Duration>,
     /// An aligned log's plan, kept on the Device clock.
     alignment: Alignment,
+    /// A COV log's last logged value, which the next change is measured
+    /// from; `None` until the first is logged.
+    cov_baseline: Option<CovBaseline>,
 }
 
 impl Schedule {
@@ -88,6 +98,7 @@ impl Schedule {
             last_success: None,
             retry_completed: None,
             alignment: Alignment::default(),
+            cov_baseline: None,
         }
     }
 
@@ -100,6 +111,8 @@ impl Schedule {
                 hundredths(interval).saturating_sub(now.saturating_sub(success))
             }
             (Mode::Aligned { interval, offset }, _) => self.alignment.wait(now, interval, offset),
+            // A COV log looks again on the next pass.
+            (Mode::Cov { .. }, _) => RECONCILE,
             _ => Duration::ZERO,
         }
     }
@@ -153,6 +166,9 @@ impl ObjectDatabase {
     /// 12.25.27-28 and 12.30.14-15); the first acquisition waits for such a
     /// boundary. Such a log is judged against the Device clock on every pass,
     /// so a clock change moves its plan with it (see the `alignment` module).
+    /// A Trend Log whose Logging_Type is COV is looked at on every pass and
+    /// logs its reference, with the monitored object's Status_Flags, when it
+    /// changed by COV's criteria (#1480; see the `cov` module).
     ///
     /// Every pass also lets each Trend Log, Trend Log Multiple and Event Log
     /// look at its Start_Time / Stop_Time window, with or without a
@@ -199,13 +215,17 @@ impl ObjectDatabase {
                 continue;
             };
             eligible.insert(oid);
-            if self
-                .trend_poll
-                .0
-                .get(&oid)
-                .is_none_or(|entry| entry.configuration != configuration)
-            {
-                self.trend_poll.0.insert(oid, Schedule::new(configuration));
+            match self.trend_poll.0.get_mut(&oid) {
+                Some(entry) if entry.configuration == configuration => {}
+                // A COV log whose Client_COV_Increment alone changed keeps
+                // its baseline: the next look measures from the last logged
+                // value with the new increment, so nothing is logged twice.
+                Some(entry) if only_increment_changed(&entry.configuration, &configuration) => {
+                    entry.configuration = configuration;
+                }
+                _ => {
+                    self.trend_poll.0.insert(oid, Schedule::new(configuration));
+                }
             }
             self.poll_one(oid, local, &*monotonic);
         }
@@ -231,6 +251,10 @@ impl ObjectDatabase {
         let now = monotonic();
         let entry = &self.trend_poll.0[&oid];
         let mode = entry.configuration.mode;
+        if let Mode::Cov { increment } = mode {
+            self.poll_cov(oid, local, increment, monotonic);
+            return;
+        }
         // An aligned log looks at the Device clock on every pass, so its plan
         // follows a clock change; the others wait for their deadline. Both
         // wait out the retry delay after a failed attempt.
@@ -313,6 +337,19 @@ impl ObjectDatabase {
     /// One reference's value, or the failure that stopped its read
     /// (Clause 12.25 Log_Buffer; Clause 12.30.19 for each member).
     fn acquire(&self, local: LocalDevice, member: &Member) -> LogValue {
+        match self.read_member(local, member) {
+            Ok((value, _)) => property_value_to_log_value(&value),
+            Err(failure) => failure,
+        }
+    }
+
+    /// One reference's value with the object it was read from, or the
+    /// failure that stopped its read, as [`acquire`](Self::acquire) logs it.
+    fn read_member(
+        &self,
+        local: LocalDevice,
+        member: &Member,
+    ) -> Result<(PropertyValue, &dyn BACnetObject), LogValue> {
         let Member::Reference {
             target,
             property,
@@ -320,44 +357,54 @@ impl ObjectDatabase {
             device,
         } = *member
         else {
-            return failure(ErrorClass::PROPERTY, ErrorCode::NO_PROPERTY_SPECIFIED);
+            return Err(failure(
+                ErrorClass::PROPERTY,
+                ErrorCode::NO_PROPERTY_SPECIFIED,
+            ));
         };
         if !local.is_local(device) {
             // Reading another device's property is not supported here.
-            return failure(
+            return Err(failure(
                 ErrorClass::PROPERTY,
                 ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-            );
+            ));
         }
         let Some(target) = self.get(&target) else {
-            return failure(ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT);
+            return Err(failure(ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT));
         };
         // ReadProperty's gate, which the Averaging sampler shares: only an
         // array has elements, whatever an object's read arm does with the
         // index.
         if index.is_some() && !target.is_array_property(property) {
-            return failure(ErrorClass::PROPERTY, ErrorCode::PROPERTY_IS_NOT_AN_ARRAY);
+            return Err(failure(
+                ErrorClass::PROPERTY,
+                ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
+            ));
         }
         match target.read_property(property, index) {
-            Ok(value) => property_value_to_log_value(&value),
+            Ok(value) => Ok((value, target)),
             Err(Error::Protocol { class, code } | Error::Structured { class, code, .. }) => {
-                LogValue::Failure {
-                    error_class: class,
-                    error_code: code,
-                }
+                Err(failure(class, code))
             }
             // An error with no BACnet class and code reports as ReadProperty
             // would answer it.
-            Err(_) => failure(ErrorClass::SERVICES, ErrorCode::OTHER),
+            Err(_) => Err(failure(ErrorClass::SERVICES, ErrorCode::OTHER)),
         }
     }
 }
 
 fn failure(class: ErrorClass, code: ErrorCode) -> LogValue {
     LogValue::Failure {
-        error_class: u32::from(class.to_raw()),
-        error_code: u32::from(code.to_raw()),
+        error_class: class,
+        error_code: code,
     }
+}
+
+/// Whether `new` differs from `old` only in a COV log's increment.
+fn only_increment_changed(old: &Configuration, new: &Configuration) -> bool {
+    matches!((old.mode, new.mode), (Mode::Cov { .. }, Mode::Cov { .. }))
+        && old.reference == new.reference
+        && old.members == new.members
 }
 
 /// What a log's properties ask of the poller now; `None` when nothing.
@@ -391,6 +438,13 @@ fn configuration(object: &dyn BACnetObject) -> Option<Configuration> {
                 Mode::Polled { interval }
             }
         }
+        // Only a Trend Log takes COV; NULL is the target's own criteria.
+        LoggingType::COV => Mode::Cov {
+            increment: match read(P::CLIENT_COV_INCREMENT) {
+                Some(PropertyValue::Real(increment)) => Some(increment),
+                _ => None,
+            },
+        },
         _ => return None,
     };
     let reference = read(P::LOG_DEVICE_OBJECT_PROPERTY)?;

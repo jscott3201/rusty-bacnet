@@ -73,7 +73,7 @@ fn assert_cases(
                 assert!(result.property_value.is_none());
                 assert_eq!(result.error, Some((ErrorClass::PROPERTY, expected)));
                 assert!(matches!(rp, Err(Error::Protocol { class, code })
-                    if class == ErrorClass::PROPERTY.to_raw() as u32 && code == expected.to_raw() as u32));
+                    if class == ErrorClass::PROPERTY && code == expected));
                 assert!(response.is_empty());
             }
         }
@@ -140,14 +140,21 @@ fn rpm_lighting_output_indexed_reads_and_bytes_are_unchanged() {
         let mut object = LightingOutputObject::new(7, "LO-7").unwrap();
         if configured {
             object
-                .write_property(P::PRESENT_VALUE, None, PropertyValue::Real(50.0), Some(8))
+                .write_property_from(
+                    P::PRESENT_VALUE,
+                    None,
+                    PropertyValue::Real(50.0),
+                    Some(8),
+                    &crate::command_source::test_origin(),
+                )
                 .unwrap();
             object
-                .write_property(
+                .write_property_from(
                     P::LIGHTING_COMMAND,
                     None,
                     PropertyValue::ApplicationData(vec![0x09, 0x0A]),
                     None,
+                    &crate::command_source::test_origin(),
                 )
                 .unwrap();
             object
@@ -416,11 +423,12 @@ fn rpm_lighting_output_indexed_reads_and_bytes_are_unchanged() {
                     0x91, 28, 0x91, 85, 0x91, 164, 0x92, 0x01, 0x7C, 0x92, 0x01, 0x7D, 0x92, 0x01,
                     0x7A, 0x92, 0x01, 0x75, 0x92, 0x01, 0x79, 0x92, 0x01, 0x82, 0x91, 111, 0x91,
                     81, 0x91, 103, 0x91, 87, 0x91, 104, 0x92, 0x01, 0x76, 0x92, 0x01, 0x77, 0x92,
-                    0x01, 0x78, 0x92, 0x01, 0xAF, 0x91, 22,
+                    0x01, 0x78, 0x92, 0x01, 0xAF, 0x91, 22, 0x92, 0x01, 0xB1, 0x92, 0x01, 0xB2,
+                    0x92, 0x01, 0xB0,
                 ]),
             ),
             (P::COV_INCREMENT, None, Ok(&[0x44, 0x00, 0x00, 0x00, 0x00])),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 19])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 22])),
             (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 28])),
             (P::PROPERTY_LIST, Some(2), Ok(&[0x91, 85])),
             (P::PROPERTY_LIST, Some(3), Ok(&[0x91, 164])),
@@ -440,9 +448,13 @@ fn rpm_lighting_output_indexed_reads_and_bytes_are_unchanged() {
             (P::PROPERTY_LIST, Some(17), Ok(&[0x92, 0x01, 0x78])),
             (P::PROPERTY_LIST, Some(18), Ok(&[0x92, 0x01, 0xAF])),
             (P::PROPERTY_LIST, Some(19), Ok(&[0x91, 22])),
+            // Value_Source, Value_Source_Array, Last_Command_Time (#1866).
+            (P::PROPERTY_LIST, Some(20), Ok(&[0x92, 0x01, 0xB1])),
+            (P::PROPERTY_LIST, Some(21), Ok(&[0x92, 0x01, 0xB2])),
+            (P::PROPERTY_LIST, Some(22), Ok(&[0x92, 0x01, 0xB0])),
             (
                 P::PROPERTY_LIST,
-                Some(20),
+                Some(23),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (
@@ -474,11 +486,12 @@ fn rpm_binary_lighting_output_indexed_reads_and_bytes_are_unchanged() {
         let mut object = BinaryLightingOutputObject::new(7, "BLO-7").unwrap();
         if configured {
             object
-                .write_property(
+                .write_property_from(
                     P::PRESENT_VALUE,
                     None,
                     PropertyValue::Enumerated(1),
                     Some(8),
+                    &crate::command_source::test_origin(),
                 )
                 .unwrap();
             object
@@ -631,10 +644,11 @@ fn rpm_binary_lighting_output_indexed_reads_and_bytes_are_unchanged() {
                 None,
                 Ok(&[
                     0x91, 28, 0x91, 85, 0x92, 0x01, 0x75, 0x92, 0x01, 0x79, 0x92, 0x01, 0x82, 0x91,
-                    111, 0x91, 81, 0x91, 103, 0x91, 87, 0x91, 104, 0x92, 0x01, 0xAF,
+                    111, 0x91, 81, 0x91, 103, 0x91, 87, 0x91, 104, 0x92, 0x01, 0xAF, 0x92, 0x01,
+                    0xB1, 0x92, 0x01, 0xB2, 0x92, 0x01, 0xB0,
                 ]),
             ),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 11])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 14])),
             (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 28])),
             (P::PROPERTY_LIST, Some(2), Ok(&[0x91, 85])),
             (P::PROPERTY_LIST, Some(3), Ok(&[0x92, 0x01, 0x75])),
@@ -646,9 +660,13 @@ fn rpm_binary_lighting_output_indexed_reads_and_bytes_are_unchanged() {
             (P::PROPERTY_LIST, Some(9), Ok(&[0x91, 87])),
             (P::PROPERTY_LIST, Some(10), Ok(&[0x91, 104])),
             (P::PROPERTY_LIST, Some(11), Ok(&[0x92, 0x01, 0xAF])),
+            // Value_Source, Value_Source_Array, Last_Command_Time (#1866).
+            (P::PROPERTY_LIST, Some(12), Ok(&[0x92, 0x01, 0xB1])),
+            (P::PROPERTY_LIST, Some(13), Ok(&[0x92, 0x01, 0xB2])),
+            (P::PROPERTY_LIST, Some(14), Ok(&[0x92, 0x01, 0xB0])),
             (
                 P::PROPERTY_LIST,
-                Some(12),
+                Some(15),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (

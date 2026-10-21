@@ -10,7 +10,7 @@ fn server_config_cov_retry_timeout_default() {
 fn server_config_time_sync_callback_default_is_none() {
     let config = ServerConfig::default();
     assert!(config.on_time_sync.is_none());
-    assert!(config.life_safety_operation_authorizer.is_none());
+    assert!(config.policy.is_none());
 }
 
 #[tokio::test]
@@ -82,19 +82,20 @@ async fn default_and_clockless_start_bind_truthful_device_clock() {
 }
 
 #[test]
-fn all_builders_assign_life_safety_operation_authorizer() {
-    let generic =
-        BACnetServer::<BipTransport>::generic_builder().life_safety_operation_authorizer(|_| true);
-    assert!(generic.config.life_safety_operation_authorizer.is_some());
+fn all_builders_assign_the_policy() {
+    let generic = BACnetServer::<BipTransport>::generic_builder()
+        .policy(crate::FnPolicy::new().life_safety_operation(|_| true));
+    assert!(generic.config.policy.is_some());
 
-    let bip =
-        BACnetServer::<BipTransport>::bip_builder().life_safety_operation_authorizer(|_| true);
-    assert!(bip.config.life_safety_operation_authorizer.is_some());
+    let bip = BACnetServer::<BipTransport>::bip_builder()
+        .policy(crate::FnPolicy::new().life_safety_operation(|_| true));
+    assert!(bip.config.policy.is_some());
 
     #[cfg(feature = "sc-tls")]
     {
-        let sc = BACnetServer::sc_builder().life_safety_operation_authorizer(|_| true);
-        assert!(sc.config.life_safety_operation_authorizer.is_some());
+        let sc = BACnetServer::sc_builder()
+            .policy(crate::FnPolicy::new().life_safety_operation(|_| true));
+        assert!(sc.config.policy.is_some());
     }
 }
 
@@ -189,17 +190,19 @@ fn all_builders_assign_segmentation_supported() {
     // enforces it (Clause 5.4.5.1), so a mis-assignment silently turns
     // segmented reception off.
     let generic = BACnetServer::<BipTransport>::generic_builder()
-        .segmentation_supported(Segmentation::RECEIVE);
-    assert_eq!(generic.config.segmentation_supported, Segmentation::RECEIVE);
+        .device(bacnet_objects::DeviceIdentity::default().with_segmentation(Segmentation::RECEIVE));
+    assert_eq!(generic.config.device.segmentation(), Segmentation::RECEIVE);
 
-    let bip =
-        BACnetServer::<BipTransport>::bip_builder().segmentation_supported(Segmentation::BOTH);
-    assert_eq!(bip.config.segmentation_supported, Segmentation::BOTH);
+    let bip = BACnetServer::<BipTransport>::bip_builder()
+        .device(bacnet_objects::DeviceIdentity::default().with_segmentation(Segmentation::BOTH));
+    assert_eq!(bip.config.device.segmentation(), Segmentation::BOTH);
 
     #[cfg(feature = "sc-tls")]
     {
-        let sc = BACnetServer::sc_builder().segmentation_supported(Segmentation::RECEIVE);
-        assert_eq!(sc.config.segmentation_supported, Segmentation::RECEIVE);
+        let sc = BACnetServer::sc_builder().device(
+            bacnet_objects::DeviceIdentity::default().with_segmentation(Segmentation::RECEIVE),
+        );
+        assert_eq!(sc.config.device.segmentation(), Segmentation::RECEIVE);
     }
 }
 
@@ -241,6 +244,7 @@ async fn server_enrollment_task_evaluates_at_startup_on_its_configured_interval(
     use bacnet_objects::event_enrollment::EventEnrollmentObject;
     use bacnet_objects::traits::BACnetObject;
     use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetEventParameter};
+    use bacnet_types::enums::EngineeringUnits;
     use bacnet_types::enums::{EventState, EventType, PropertyIdentifier};
 
     // Exercises the spawned task, not `tokio::time::interval` in isolation. Two
@@ -249,7 +253,7 @@ async fn server_enrollment_task_evaluates_at_startup_on_its_configured_interval(
     // the period so the config field is silently ignored.
     let mut db = ObjectDatabase::new();
 
-    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ai.set_present_value(150.0); // above high_limit
     let ai_oid = ai.object_identifier();
     db.add(Box::new(ai)).unwrap();
@@ -363,16 +367,11 @@ async fn server_runs_fault_detection_without_enrollment() {
     server.stop().await.expect("server should stop");
 }
 
-#[tokio::test]
-async fn server_rejects_below_minimum_local_apdu_capacity() {
-    let config = ServerConfig {
-        max_apdu_length: 49,
-        ..ServerConfig::default()
-    };
-    let transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
-
-    let result = BACnetServer::start(config, ObjectDatabase::new(), transport).await;
-    assert!(result.is_err());
+#[test]
+fn identity_rejects_below_minimum_local_apdu_capacity() {
+    assert!(bacnet_objects::DeviceIdentity::default()
+        .with_max_apdu(49)
+        .is_err());
 }
 
 fn test_mac(byte: u8) -> MacAddr {
@@ -397,11 +396,8 @@ fn default_apdu_retries_constant() {
 
 #[test]
 fn seg_receiver_timeout_is_four_times_configured_tseg() {
-    let timeout = super::segmented_receive::validate_segment_timeout(
-        &ServerConfig::default(),
-        &ObjectDatabase::new(),
-    )
-    .unwrap();
+    let timeout =
+        super::segmented_receive::validate_segment_timeout(&ServerConfig::default()).unwrap();
     assert_eq!(timeout, Duration::from_secs(20));
 }
 
@@ -528,7 +524,7 @@ fn service_reject_error_preserves_reason_on_wire_response() {
         0x31,
         ConfirmedServiceChoice::GET_ENROLLMENT_SUMMARY,
         &Error::Reject {
-            reason: RejectReason::UNDEFINED_ENUMERATION.to_raw(),
+            reason: RejectReason::UNDEFINED_ENUMERATION,
         },
     );
     assert_eq!(

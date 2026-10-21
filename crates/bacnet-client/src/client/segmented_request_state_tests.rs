@@ -147,7 +147,7 @@ async fn assert_premature_response_aborts(kind: PrematureResponse) {
             .unwrap()
             .unwrap(),
         Err(Error::Abort { reason })
-            if reason == AbortReason::INVALID_APDU_IN_THIS_STATE.to_raw()
+            if reason == AbortReason::INVALID_APDU_IN_THIS_STATE
     ));
     assert_eq!(client.tsm.lock().await.pending_count(), 0);
     assert!(
@@ -223,7 +223,7 @@ async fn reject_during_segmented_send_stops_the_sender() {
             .await
             .unwrap()
             .unwrap(),
-        Err(Error::Reject { reason }) if reason == RejectReason::OTHER.to_raw()
+        Err(Error::Reject { reason }) if reason == RejectReason::OTHER
     ));
     expect_silence(&mut rx, "after Reject completed the send").await;
     assert_eq!(client.tsm.lock().await.pending_count(), 0);
@@ -284,7 +284,7 @@ async fn server_abort_during_segmented_send_stops_the_sender() {
             .await
             .unwrap()
             .unwrap(),
-        Err(Error::Abort { reason }) if reason == AbortReason::BUFFER_OVERFLOW.to_raw()
+        Err(Error::Abort { reason }) if reason == AbortReason::BUFFER_OVERFLOW
     ));
     expect_silence(&mut rx, "after server Abort completed the send").await;
     assert_eq!(client.tsm.lock().await.pending_count(), 0);

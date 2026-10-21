@@ -91,7 +91,9 @@
 //! | A BBMD answers Distribute-Broadcast-To-Network with its NAK when the sender isn't registered, and also when forwarding fails; that NAK from the device's own BBMD is taken as a hint to register again, at most once per response timeout, when retries back off | J.4.5 | `node_registration.rs` `distribute_nak_pulls_the_renewal_forward`, `at_renewal_takes_no_hint_from_a_distribute_nak` |
 //! | A recommendation, not an obligation: behind NAT, a foreign device registers often enough to keep the router's mapping open, whatever its time-to-live | J.7.5 (e) | `node_registration.rs` `renewal_is_independent_of_ttl` |
 //! | A function the annex doesn't define, 0x0C among them (its clause is deleted), is dropped unanswered | J.2.13 | `node_receive.rs` `unknown_functions_are_dropped_unanswered` |
-//! | B/IP multicast (a group address in place of the broadcast address) | J.8 | Not supported here (#941); the broadcast address is configuration |
+//! | A B/IP-M node sends its broadcasts to its multicast group, which stands in for the subnet's broadcast address, and directed messages by unicast as before | J.8.1, J.8.2 | `node_multicast.rs` `a_member_broadcasts_to_the_group_and_never_unicasts_there` |
+//! | A B/IP-M node takes Original-Broadcast-NPDU and Forwarded-NPDU from its group, and not from the subnet's broadcast address: members and plain devices don't share a subnet, so that broadcast belongs to another network | J.8.1 | `node_multicast.rs` `a_member_takes_broadcast_functions_from_the_group_and_unicast_ones_only_by_unicast` |
+//! | A foreign device broadcasts through its BBMD, so it joins no group; a BBMD may serve one (its rules are in [`bbmd`](crate::bbmd)) | J.8.1, J.8.3 | `node_multicast.rs` `a_foreign_device_takes_no_group` |
 //!
 //! Local rules, beyond the annex:
 //!
@@ -99,6 +101,7 @@
 //! | --- | --- |
 //! | A BBMD-only request sent to a broadcast address draws nothing: J.2.1 asks for the NAK when the request came by unicast, read here as leaving broadcast copies unanswered | `node_naks.rs` `a_broadcast_bbmd_request_draws_nothing` |
 //! | A datagram whose UDP source is a group address is dropped before its frame is read (#1504) | `node_receive.rs` `group_sources_and_origins_are_dropped` |
+//! | A B/IP-M node's subnet directed broadcast stays a group address, as a UDP source and as a Forwarded-NPDU origin | `node_multicast.rs` `a_members_directed_broadcast_stays_a_group` |
 //! | A Forwarded-NPDU whose origin is a group address is dropped (#1493) | `node_receive.rs` `group_sources_and_origins_are_dropped` |
 //! | The node's own frames, and Forwarded-NPDUs naming it as the origin, are dropped | `node_receive.rs` `own_echoes_are_dropped` |
 //! | A broadcast listener keeps only this link's broadcasts, from its own interface (#1538) | `node_receive.rs` `listeners_keep_only_this_links_broadcasts` |
@@ -128,7 +131,7 @@ pub use actions::Action;
 pub use addressing::{Addressed, Groups, LocalAddresses};
 pub use config::{
     ConfigError, Foreign, ForwardedTrust, Link, Mode, Retry, DEFAULT_RESPONSE_TIMEOUT,
-    MAX_DATAGRAM, MAX_NPDU, MIN_BUDGET, MIN_RENEWAL,
+    MAX_DATAGRAM, MIN_BUDGET, MIN_RENEWAL,
 };
 pub use counters::{ExchangeCounters, NodeCounters, RegisterAttempt};
 pub use engine::{Inbound, Node};

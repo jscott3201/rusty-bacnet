@@ -18,7 +18,7 @@ use super::{
 /// enqueue and dequeue do not grow a vector after initialization.
 ///
 /// `N` is the longest NPDU a slot holds, as for
-/// [`HeaplessQueues`](crate::HeaplessQueues): 501 octets by default, and
+/// [`FixedQueues`](crate::FixedQueues): 501 octets by default, and
 /// [`MAX_EXTENDED_MPDU_DATA`](bacnet_mstp_codec::MAX_EXTENDED_MPDU_DATA) for
 /// a core with extended frames on. `N` can be at most 65,535, or the
 /// constructors fail to compile:
@@ -41,7 +41,7 @@ use super::{
 /// fills.
 ///
 /// The starvation limit comes from the core's configuration, as for
-/// [`HeaplessQueues`](crate::HeaplessQueues).
+/// [`FixedQueues`](crate::FixedQueues).
 pub struct AllocQueues<const N: usize = MAX_STANDARD_MPDU_DATA> {
     unicast: Lane<Vec<Slot<N>>>,
     broadcast: Lane<Vec<Slot<N>>>,

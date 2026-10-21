@@ -370,7 +370,7 @@ async fn send<T: TransportPort + 'static>(
     invoke_id: u8,
     attempt: u8,
 ) -> Result<(), ()> {
-    let priority = NetworkPriority::NORMAL;
+    let priority = NetworkPriority::Normal;
     let sent = match (&route.local_target, &route.remote) {
         (Some(mac), None) => network.send_apdu(apdu, mac, true, priority).await,
         (None, Some((dnet, dadr, Some(router)))) => {

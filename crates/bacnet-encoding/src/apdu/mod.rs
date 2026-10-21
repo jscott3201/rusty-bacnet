@@ -1,80 +1,75 @@
 //! APDU encoding and decoding per ASHRAE 135-2020 Clause 20.1.
 //!
 //! Covers all eight PDU types:
-//! - [`ConfirmedRequest`] (Clause 20.1.2)
-//! - [`UnconfirmedRequest`] (Clause 20.1.3)
-//! - [`SimpleAck`] (Clause 20.1.4)
-//! - [`ComplexAck`] (Clause 20.1.5)
-//! - [`SegmentAck`] (Clause 20.1.6)
-//! - [`ErrorPdu`] (Clause 20.1.7)
-//! - [`RejectPdu`] (Clause 20.1.8)
-//! - [`AbortPdu`] (Clause 20.1.9)
+//! - `ConfirmedRequest` (Clause 20.1.2)
+//! - `UnconfirmedRequest` (Clause 20.1.3)
+//! - `SimpleAck` (Clause 20.1.4)
+//! - `ComplexAck` (Clause 20.1.5)
+//! - `SegmentAck` (Clause 20.1.6)
+//! - `ErrorPdu` (Clause 20.1.7)
+//! - `RejectPdu` (Clause 20.1.8)
+//! - `AbortPdu` (Clause 20.1.9)
+//!
+//! Those owned PDUs need `alloc`. Without it, [`header`] reads and writes the
+//! header of an Unconfirmed-Request, an unsegmented Confirmed-Request or an
+//! unsegmented ComplexACK, borrowing the service parameters in place.
 
+#[cfg(feature = "alloc")]
 use bacnet_types::enums::{
     AbortReason, ConfirmedServiceChoice, ErrorClass, ErrorCode, PduType, RejectReason,
     UnconfirmedServiceChoice,
 };
-use bacnet_types::error::Error;
+#[cfg(feature = "alloc")]
+use bacnet_types::error::{DecodeError, DecodingKind, Error, RangeError};
+#[cfg(feature = "alloc")]
 use bytes::{BufMut, Bytes, BytesMut};
 
+#[cfg(feature = "alloc")]
 use crate::primitives;
+#[cfg(feature = "alloc")]
 use crate::tags;
 
+#[cfg(feature = "alloc")]
 mod formal_error;
+pub mod header;
+
+use header::{MaxApdu, MaxSegments};
 
 // ---------------------------------------------------------------------------
 // Max-segments encoding
 // ---------------------------------------------------------------------------
 
-/// Decoded max-segments values indexed by the 3-bit field (0-7).
-/// `None` means unspecified (0).
-const MAX_SEGMENTS_DECODE: [Option<u8>; 8] = [
-    None,      // 0 = unspecified
-    Some(2),   // 1
-    Some(4),   // 2
-    Some(8),   // 3
-    Some(16),  // 4
-    Some(32),  // 5
-    Some(64),  // 6
-    Some(255), // 7 = >64 segments accepted
-];
-
 /// Validate a configured maximum segment count for a Confirmed-Request header.
 ///
 /// Clause 20.1.2.4 has no encoding for a finite capacity below two segments.
 /// To decline segmented responses, set `segmented-response-accepted = false`
-/// and use `None` rather than `Some(1)`.
+/// and use `None` rather than `Some(1)`. Only with `alloc`;
+/// [`MaxSegments::from_capacity`] is the allocation-free check.
+#[cfg(feature = "alloc")]
 pub fn validate_max_segments(value: Option<u8>) -> Result<(), Error> {
-    match value {
-        Some(value @ 0..=1) => Err(Error::Encoding(format!(
-            "invalid max-segments-accepted {value}; expected 2..=255 or unspecified"
-        ))),
-        _ => Ok(()),
-    }
+    encode_max_segments(value).map(drop)
 }
 
 /// Encode a max-segments value to a 3-bit field.
 ///
 /// Finite counts that fall between the Clause 20.1.2.4 rungs are rounded down
 /// so the wire header never promises more receive capacity than configured.
+#[cfg(feature = "alloc")]
 fn encode_max_segments(value: Option<u8>) -> Result<u8, Error> {
-    validate_max_segments(value)?;
-    Ok(match value {
-        None => 0,
-        Some(2..=3) => 1,
-        Some(4..=7) => 2,
-        Some(8..=15) => 3,
-        Some(16..=31) => 4,
-        Some(32..=63) => 5,
-        Some(64) => 6,
-        Some(65..=u8::MAX) => 7, // >64
-        Some(0..=1) => unreachable!("validated above"),
-    })
+    match MaxSegments::from_capacity(value) {
+        Some(field) => Ok(field.bits()),
+        None => Err(RangeError::new(
+            "invalid max-segments-accepted {}; expected 2..=255 or unspecified",
+        )
+        .with_value(value.unwrap_or(0).into())
+        .into()),
+    }
 }
 
 /// Decode a 3-bit max-segments field.
+#[cfg(feature = "alloc")]
 fn decode_max_segments(value: u8) -> Option<u8> {
-    MAX_SEGMENTS_DECODE[(value & 0x07) as usize]
+    MaxSegments::from_bits(value).count()
 }
 
 /// The segment count a configured `max-segments-accepted` actually promises a peer.
@@ -89,10 +84,9 @@ fn decode_max_segments(value: u8) -> Option<u8> {
 /// peer was told only that capacity exceeds 64, not that it is 100. Answering
 /// from the configured number would claim a promise that was never sent.
 /// Invalid finite capacities below two yield `None`; APDU encoding and client
-/// startup reject those values through [`validate_max_segments`].
+/// startup reject those values through `validate_max_segments`.
 pub fn advertised_max_segments(configured: Option<u8>) -> Option<u8> {
-    let encoded = encode_max_segments(configured).ok()?;
-    match decode_max_segments(encoded) {
+    match MaxSegments::from_capacity(configured)?.count() {
         // B'111' advertises capacity above 64, not a specific upper bound.
         Some(255) => None,
         decoded => decoded,
@@ -111,65 +105,62 @@ pub fn advertised_max_segments(configured: Option<u8>) -> Option<u8> {
 /// peer's receive capacity.
 pub const MINIMUM_MESSAGE_SIZE: u16 = 50;
 
-/// Decoded max-APDU-length values indexed by the 4-bit field.
-const MAX_APDU_DECODE: [u16; 6] = [MINIMUM_MESSAGE_SIZE, 128, 206, 480, 1024, 1476];
-
 /// Floor a raw local receive capacity to a Confirmed-Request header value.
 ///
 /// Device `Max_APDU_Length_Accepted` and I-Am retain the raw unsigned value.
 /// Only the Clause 20.1.2.5 header uses this six-code representation; flooring
 /// must not change byte budgets or the Device declaration. Values below
 /// MinimumMessageSize are invalid, while larger values saturate at 1476.
+/// Only with `alloc`; [`MaxApdu::at_or_below`] is the allocation-free form.
+#[cfg(feature = "alloc")]
 pub fn max_apdu_header_at_or_below(capacity: u32) -> Result<u16, Error> {
-    MAX_APDU_DECODE
-        .iter()
-        .rev()
-        .copied()
-        .find(|value| u32::from(*value) <= capacity)
-        .ok_or_else(|| Error::Encoding(format!("local APDU capacity {capacity} is below 50")))
+    MaxApdu::at_or_below(capacity)
+        .map(MaxApdu::octets)
+        .ok_or_else(|| {
+            RangeError::new("local APDU capacity {} is below 50")
+                .with_value(capacity.into())
+                .into()
+        })
 }
 
 /// Return true when `value` is one of the BACnet max-APDU-length encodings
 /// defined by ASHRAE 135-2020 Clause 20.1.2.5.
 pub fn is_valid_max_apdu_length(value: u16) -> bool {
-    matches!(value, 50 | 128 | 206 | 480 | 1024 | 1476)
+    MaxApdu::from_octets(value).is_some()
 }
 
-/// Validate an exact Confirmed-Request max-APDU-length header value.
+/// Validate an exact Confirmed-Request max-APDU-length header value. Only
+/// with `alloc`.
+#[cfg(feature = "alloc")]
 pub fn validate_max_apdu_length(value: u16) -> Result<(), Error> {
-    if is_valid_max_apdu_length(value) {
-        Ok(())
-    } else {
-        Err(Error::Encoding(format!(
-            "invalid max-APDU-length {value}; expected one of 50, 128, 206, 480, 1024, 1476"
-        )))
-    }
+    encode_max_apdu(value).map(drop)
 }
 
 /// Encode a max-APDU-length to a 4-bit field.
+#[cfg(feature = "alloc")]
 fn encode_max_apdu(value: u16) -> Result<u8, Error> {
-    validate_max_apdu_length(value)?;
-    match value {
-        50 => Ok(0),
-        128 => Ok(1),
-        206 => Ok(2),
-        480 => Ok(3),
-        1024 => Ok(4),
-        1476 => Ok(5),
-        _ => unreachable!("validated max-APDU-length"),
+    match MaxApdu::from_octets(value) {
+        Some(field) => Ok(field.bits()),
+        None => Err(RangeError::new(
+            "invalid max-APDU-length {}; expected one of 50, 128, 206, 480, 1024, 1476",
+        )
+        .with_value(value.into())
+        .into()),
     }
 }
 
 /// Decode a 4-bit max-APDU-length field.
+#[cfg(feature = "alloc")]
 fn decode_max_apdu(value: u8) -> Result<u16, Error> {
-    let idx = (value & 0x0F) as usize;
-    if idx < MAX_APDU_DECODE.len() {
-        Ok(MAX_APDU_DECODE[idx])
-    } else {
-        Err(Error::decoding(
+    match MaxApdu::from_bits(value) {
+        Some(field) => Ok(field.octets()),
+        None => Err(DecodeError::new(
+            DecodingKind::InvalidEncoding,
             1,
-            format!("reserved max-APDU-length field value {idx}"),
-        ))
+            "reserved max-APDU-length field value {}",
+        )
+        .with_value(u64::from(value & 0x0F))
+        .into()),
     }
 }
 
@@ -179,6 +170,7 @@ fn decode_max_apdu(value: u8) -> Result<u16, Error> {
 
 /// Confirmed-Request PDU (Clause 20.1.2).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(feature = "alloc")]
 pub struct ConfirmedRequest {
     /// Set when this PDU is one segment of a segmented request; adds the sequence and window
     /// fields.
@@ -209,6 +201,7 @@ pub struct ConfirmedRequest {
 
 /// Unconfirmed-Request PDU (Clause 20.1.3).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(feature = "alloc")]
 pub struct UnconfirmedRequest {
     /// Which unconfirmed service this PDU carries.
     pub service_choice: UnconfirmedServiceChoice,
@@ -218,6 +211,7 @@ pub struct UnconfirmedRequest {
 
 /// SimpleACK PDU (Clause 20.1.4).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(feature = "alloc")]
 pub struct SimpleAck {
     /// Invoke ID of the confirmed request being acknowledged.
     pub invoke_id: u8,
@@ -227,6 +221,7 @@ pub struct SimpleAck {
 
 /// ComplexACK PDU (Clause 20.1.5).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(feature = "alloc")]
 pub struct ComplexAck {
     /// Set when this PDU is one segment of a segmented reply; adds the sequence and window fields.
     pub segmented: bool,
@@ -248,6 +243,7 @@ pub struct ComplexAck {
 
 /// SegmentACK PDU (Clause 20.1.6).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(feature = "alloc")]
 pub struct SegmentAck {
     /// Set when a segment arrived out of order; the peer resends starting with the segment after
     /// `sequence_number`.
@@ -266,6 +262,7 @@ pub struct SegmentAck {
 
 /// Error PDU (Clause 20.1.7).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(feature = "alloc")]
 pub struct ErrorPdu {
     /// Invoke ID of the confirmed request that failed.
     pub invoke_id: u8,
@@ -286,6 +283,7 @@ pub struct ErrorPdu {
 
 /// Reject PDU (Clause 20.1.8).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(feature = "alloc")]
 pub struct RejectPdu {
     /// Invoke ID of the rejected request.
     pub invoke_id: u8,
@@ -295,6 +293,7 @@ pub struct RejectPdu {
 
 /// Abort PDU (Clause 20.1.9).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(feature = "alloc")]
 pub struct AbortPdu {
     /// Set when the abort comes from the server side of the transaction, clear when sent by the
     /// requester.
@@ -307,6 +306,7 @@ pub struct AbortPdu {
 
 /// Sum type for all APDU PDU types.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(feature = "alloc")]
 pub enum Apdu {
     /// Confirmed service request.
     ConfirmedRequest(ConfirmedRequest),
@@ -331,6 +331,7 @@ pub enum Apdu {
 // ---------------------------------------------------------------------------
 
 /// Encode an APDU to wire format.
+#[cfg(feature = "alloc")]
 pub fn encode_apdu(buf: &mut BytesMut, apdu: &Apdu) -> Result<(), Error> {
     match apdu {
         Apdu::ConfirmedRequest(pdu) => encode_confirmed_request(buf, pdu),
@@ -356,9 +357,21 @@ pub fn encode_apdu(buf: &mut BytesMut, apdu: &Apdu) -> Result<(), Error> {
     }
 }
 
+#[cfg(feature = "alloc")]
 fn encode_confirmed_request(buf: &mut BytesMut, pdu: &ConfirmedRequest) -> Result<(), Error> {
+    // Every refusal comes before the first octet, so a refused APDU leaves
+    // `buf` as it was.
     let max_segments = encode_max_segments(pdu.max_segments)?;
     let max_apdu = encode_max_apdu(pdu.max_apdu_length)?;
+    let window = pdu
+        .segmented
+        .then(|| {
+            valid_window_size(
+                "ConfirmedRequest proposed-window-size {} outside BACnet range 1..=127",
+                pdu.proposed_window_size.unwrap_or(1),
+            )
+        })
+        .transpose()?;
 
     let mut byte0 = PduType::CONFIRMED_REQUEST.to_raw() << 4;
     if pdu.segmented {
@@ -377,12 +390,9 @@ fn encode_confirmed_request(buf: &mut BytesMut, pdu: &ConfirmedRequest) -> Resul
 
     buf.put_u8(pdu.invoke_id);
 
-    if pdu.segmented {
+    if let Some(window) = window {
         buf.put_u8(pdu.sequence_number.unwrap_or(0));
-        buf.put_u8(valid_window_size(
-            "ConfirmedRequest proposed-window-size",
-            pdu.proposed_window_size.unwrap_or(1),
-        )?);
+        buf.put_u8(window);
     }
 
     buf.put_u8(pdu.service_choice.to_raw());
@@ -390,19 +400,33 @@ fn encode_confirmed_request(buf: &mut BytesMut, pdu: &ConfirmedRequest) -> Resul
     Ok(())
 }
 
+#[cfg(feature = "alloc")]
 fn encode_unconfirmed_request(buf: &mut BytesMut, pdu: &UnconfirmedRequest) {
     buf.put_u8(PduType::UNCONFIRMED_REQUEST.to_raw() << 4);
     buf.put_u8(pdu.service_choice.to_raw());
     buf.put_slice(&pdu.service_request);
 }
 
+#[cfg(feature = "alloc")]
 fn encode_simple_ack(buf: &mut BytesMut, pdu: &SimpleAck) {
     buf.put_u8(PduType::SIMPLE_ACK.to_raw() << 4);
     buf.put_u8(pdu.invoke_id);
     buf.put_u8(pdu.service_choice.to_raw());
 }
 
+#[cfg(feature = "alloc")]
 fn encode_complex_ack(buf: &mut BytesMut, pdu: &ComplexAck) -> Result<(), Error> {
+    // Refused before the first octet, so `buf` stays as it was.
+    let window = pdu
+        .segmented
+        .then(|| {
+            valid_window_size(
+                "ComplexAck proposed-window-size {} outside BACnet range 1..=127",
+                pdu.proposed_window_size.unwrap_or(1),
+            )
+        })
+        .transpose()?;
+
     let mut byte0 = PduType::COMPLEX_ACK.to_raw() << 4;
     if pdu.segmented {
         byte0 |= 0x08;
@@ -414,12 +438,9 @@ fn encode_complex_ack(buf: &mut BytesMut, pdu: &ComplexAck) -> Result<(), Error>
 
     buf.put_u8(pdu.invoke_id);
 
-    if pdu.segmented {
+    if let Some(window) = window {
         buf.put_u8(pdu.sequence_number.unwrap_or(0));
-        buf.put_u8(valid_window_size(
-            "ComplexAck proposed-window-size",
-            pdu.proposed_window_size.unwrap_or(1),
-        )?);
+        buf.put_u8(window);
     }
 
     buf.put_u8(pdu.service_choice.to_raw());
@@ -427,7 +448,13 @@ fn encode_complex_ack(buf: &mut BytesMut, pdu: &ComplexAck) -> Result<(), Error>
     Ok(())
 }
 
+#[cfg(feature = "alloc")]
 fn encode_segment_ack(buf: &mut BytesMut, pdu: &SegmentAck) -> Result<(), Error> {
+    // Refused before the first octet, so `buf` stays as it was.
+    let window = valid_window_size(
+        "SegmentACK actual-window-size {} outside BACnet range 1..=127",
+        pdu.actual_window_size,
+    )?;
     let mut byte0 = PduType::SEGMENT_ACK.to_raw() << 4;
     if pdu.negative_ack {
         byte0 |= 0x02;
@@ -438,23 +465,22 @@ fn encode_segment_ack(buf: &mut BytesMut, pdu: &SegmentAck) -> Result<(), Error>
     buf.put_u8(byte0);
     buf.put_u8(pdu.invoke_id);
     buf.put_u8(pdu.sequence_number);
-    buf.put_u8(valid_window_size(
-        "SegmentACK actual-window-size",
-        pdu.actual_window_size,
-    )?);
+    buf.put_u8(window);
     Ok(())
 }
 
-fn valid_window_size(field: &str, value: u8) -> Result<u8, Error> {
+/// `value` when it is a window size (1 to 127), or the [`Error::Range`]
+/// `label` names it in, with a placeholder for the value.
+#[cfg(feature = "alloc")]
+fn valid_window_size(label: &'static str, value: u8) -> Result<u8, Error> {
     if (1..=127).contains(&value) {
         Ok(value)
     } else {
-        Err(Error::Encoding(format!(
-            "{field} {value} outside BACnet range 1..=127"
-        )))
+        Err(RangeError::new(label).with_value(value.into()).into())
     }
 }
 
+#[cfg(feature = "alloc")]
 fn encode_error(buf: &mut BytesMut, pdu: &ErrorPdu) -> Result<(), Error> {
     // A legacy generic error may carry arbitrary service data beginning with
     // an opening tag. Only suppress the generic pair for a complete,
@@ -463,8 +489,8 @@ fn encode_error(buf: &mut BytesMut, pdu: &ErrorPdu) -> Result<(), Error> {
         formal_error::decode_formal_body(pdu.service_choice, &pdu.error_data).unwrap_or(None);
     if let Some((error_class, error_code)) = formal {
         if error_class != pdu.error_class || error_code != pdu.error_code {
-            return Err(Error::Encoding(
-                "formal Error body disagrees with ErrorPdu class/code".into(),
+            return Err(Error::encode(
+                "formal Error body disagrees with ErrorPdu class/code",
             ));
         }
     }
@@ -475,8 +501,8 @@ fn encode_error(buf: &mut BytesMut, pdu: &ErrorPdu) -> Result<(), Error> {
     if formal.is_some() {
         buf.put_slice(&pdu.error_data);
     } else {
-        primitives::encode_app_enumerated(buf, pdu.error_class.to_raw() as u32);
-        primitives::encode_app_enumerated(buf, pdu.error_code.to_raw() as u32);
+        primitives::encode_app_enumerated(buf, u32::from(pdu.error_class.to_raw()));
+        primitives::encode_app_enumerated(buf, u32::from(pdu.error_code.to_raw()));
         if !pdu.error_data.is_empty() {
             buf.put_slice(&pdu.error_data);
         }
@@ -484,12 +510,14 @@ fn encode_error(buf: &mut BytesMut, pdu: &ErrorPdu) -> Result<(), Error> {
     Ok(())
 }
 
+#[cfg(feature = "alloc")]
 fn encode_reject(buf: &mut BytesMut, pdu: &RejectPdu) {
     buf.put_u8(PduType::REJECT.to_raw() << 4);
     buf.put_u8(pdu.invoke_id);
     buf.put_u8(pdu.reject_reason.to_raw());
 }
 
+#[cfg(feature = "alloc")]
 fn encode_abort(buf: &mut BytesMut, pdu: &AbortPdu) {
     let mut byte0 = PduType::ABORT.to_raw() << 4;
     if pdu.sent_by_server {
@@ -505,6 +533,7 @@ fn encode_abort(buf: &mut BytesMut, pdu: &AbortPdu) {
 // ---------------------------------------------------------------------------
 
 /// Decode an APDU from raw bytes.
+#[cfg(feature = "alloc")]
 pub fn decode_apdu(data: Bytes) -> Result<Apdu, Error> {
     if data.is_empty() {
         return Err(Error::decoding(0, "APDU data is empty"));
@@ -530,13 +559,17 @@ pub fn decode_apdu(data: Bytes) -> Result<Apdu, Error> {
     } else if pdu_type == PduType::ABORT {
         decode_abort(data).map(Apdu::Abort)
     } else {
-        Err(Error::decoding(
+        Err(DecodeError::new(
+            DecodingKind::InvalidEncoding,
             0,
-            format!("unknown PDU type nibble: {:#x}", pdu_type_raw),
-        ))
+            "unknown PDU type nibble: {:#x}",
+        )
+        .with_value(pdu_type_raw.into())
+        .into())
     }
 }
 
+#[cfg(feature = "alloc")]
 fn decode_confirmed_request(data: Bytes) -> Result<ConfirmedRequest, Error> {
     if data.len() < 4 {
         return Err(Error::buffer_too_short(4, data.len()));
@@ -594,6 +627,7 @@ fn decode_confirmed_request(data: Bytes) -> Result<ConfirmedRequest, Error> {
     })
 }
 
+#[cfg(feature = "alloc")]
 fn decode_unconfirmed_request(data: Bytes) -> Result<UnconfirmedRequest, Error> {
     if data.len() < 2 {
         return Err(Error::buffer_too_short(2, data.len()));
@@ -608,6 +642,7 @@ fn decode_unconfirmed_request(data: Bytes) -> Result<UnconfirmedRequest, Error> 
     })
 }
 
+#[cfg(feature = "alloc")]
 fn decode_simple_ack(data: Bytes) -> Result<SimpleAck, Error> {
     if data.len() < 3 {
         return Err(Error::buffer_too_short(3, data.len()));
@@ -619,6 +654,7 @@ fn decode_simple_ack(data: Bytes) -> Result<SimpleAck, Error> {
     })
 }
 
+#[cfg(feature = "alloc")]
 fn decode_complex_ack(data: Bytes) -> Result<ComplexAck, Error> {
     if data.len() < 3 {
         return Err(Error::buffer_too_short(3, data.len()));
@@ -665,6 +701,7 @@ fn decode_complex_ack(data: Bytes) -> Result<ComplexAck, Error> {
     })
 }
 
+#[cfg(feature = "alloc")]
 fn decode_segment_ack(data: Bytes) -> Result<SegmentAck, Error> {
     if data.len() < 4 {
         return Err(Error::buffer_too_short(4, data.len()));
@@ -673,10 +710,13 @@ fn decode_segment_ack(data: Bytes) -> Result<SegmentAck, Error> {
     let byte0 = data[0];
     let raw_window = data[3];
     if raw_window == 0 || raw_window > 127 {
-        return Err(Error::decoding(
+        return Err(DecodeError::new(
+            DecodingKind::InvalidEncoding,
             3,
-            format!("SegmentACK actual-window-size {raw_window} outside range 1..=127"),
-        ));
+            "SegmentACK actual-window-size {} outside range 1..=127",
+        )
+        .with_value(raw_window.into())
+        .into());
     }
     Ok(SegmentAck {
         negative_ack: byte0 & 0x02 != 0,
@@ -687,6 +727,7 @@ fn decode_segment_ack(data: Bytes) -> Result<SegmentAck, Error> {
     })
 }
 
+#[cfg(feature = "alloc")]
 fn decode_error(data: Bytes) -> Result<ErrorPdu, Error> {
     if data.len() < 5 {
         return Err(Error::buffer_too_short(5, data.len()));
@@ -723,10 +764,12 @@ fn decode_error(data: Bytes) -> Result<ErrorPdu, Error> {
     }
     let error_class_raw = primitives::decode_unsigned(&data[tag_end..class_end])?;
     let error_class_raw = u16::try_from(error_class_raw).map_err(|_| {
-        Error::out_of_range(
+        DecodeError::new(
+            DecodingKind::OutOfRange,
             tag_end,
-            format!("ErrorPDU error class {error_class_raw} exceeds u16"),
+            "ErrorPDU error class {} exceeds u16",
         )
+        .with_value(error_class_raw)
     })?;
     offset = class_end;
 
@@ -745,10 +788,12 @@ fn decode_error(data: Bytes) -> Result<ErrorPdu, Error> {
     }
     let error_code_raw = primitives::decode_unsigned(&data[tag_end..code_end])?;
     let error_code_raw = u16::try_from(error_code_raw).map_err(|_| {
-        Error::out_of_range(
+        DecodeError::new(
+            DecodingKind::OutOfRange,
             tag_end,
-            format!("ErrorPDU error code {error_code_raw} exceeds u16"),
+            "ErrorPDU error code {} exceeds u16",
         )
+        .with_value(error_code_raw)
     })?;
     offset = code_end;
 
@@ -767,6 +812,7 @@ fn decode_error(data: Bytes) -> Result<ErrorPdu, Error> {
     })
 }
 
+#[cfg(feature = "alloc")]
 fn decode_reject(data: Bytes) -> Result<RejectPdu, Error> {
     if data.len() < 3 {
         return Err(Error::buffer_too_short(3, data.len()));
@@ -778,6 +824,7 @@ fn decode_reject(data: Bytes) -> Result<RejectPdu, Error> {
     })
 }
 
+#[cfg(feature = "alloc")]
 fn decode_abort(data: Bytes) -> Result<AbortPdu, Error> {
     if data.len() < 3 {
         return Err(Error::buffer_too_short(3, data.len()));
@@ -795,11 +842,13 @@ fn decode_abort(data: Bytes) -> Result<AbortPdu, Error> {
 // Tests
 // ---------------------------------------------------------------------------
 
-#[cfg(test)]
+#[cfg(all(test, feature = "alloc"))]
 mod change_list_error_tests;
-#[cfg(test)]
+#[cfg(all(test, feature = "alloc"))]
+mod encode_refusal_tests;
+#[cfg(all(test, feature = "alloc"))]
 mod structured_error_tests;
-#[cfg(test)]
+#[cfg(all(test, feature = "alloc"))]
 mod tests;
-#[cfg(test)]
+#[cfg(all(test, feature = "alloc"))]
 mod wpm_error_tests;

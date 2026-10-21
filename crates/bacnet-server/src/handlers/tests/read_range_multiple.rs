@@ -7,6 +7,7 @@ use std::time::Duration;
 use super::*;
 use bacnet_objects::analog::AnalogValueObject;
 use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
+use bacnet_types::enums::EngineeringUnits;
 
 /// Hands out the time last stored, on [`DATE`].
 struct SettableClock(Mutex<Time>);
@@ -47,7 +48,7 @@ fn polled_log() -> (ObjectDatabase, ObjectIdentifier) {
     db.set_monotonic_clock_internal(Some(Arc::new(move || *source.lock().unwrap())));
     let clock = Arc::new(SettableClock(Mutex::new(time(1))));
     db.set_clock_reader(Some(clock.clone()));
-    let mut av = AnalogValueObject::new(1, "AV-1", 95).unwrap();
+    let mut av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::NO_UNITS).unwrap();
     av.set_relinquish_default(42.5).unwrap();
     let av = {
         let oid = av.object_identifier();
@@ -167,8 +168,8 @@ fn read_range_multiple_records_decode_back_to_the_polled_values() {
     let (db, oid) = polled_log();
     let ack = call(&db, oid, PropertyIdentifier::LOG_BUFFER, None).unwrap();
     let failure = |class: ErrorClass, code: ErrorCode| LogValue::Failure {
-        error_class: class.to_raw().into(),
-        error_code: code.to_raw().into(),
+        error_class: class,
+        error_code: code,
     };
     let mut offset = 0;
     for hour in 2..=4 {

@@ -54,7 +54,7 @@ fn assert_refused(
         .unwrap_err();
     assert!(
         matches!(error, Error::Protocol { class, code }
-            if class == ErrorClass::PROPERTY.to_raw() as u32 && code == expected.to_raw() as u32),
+            if class == ErrorClass::PROPERTY && code == expected),
         "{property:?} <- {value:?}: expected PROPERTY/{expected:?}, got {error:?}"
     );
     assert_eq!(read(lo, property), before, "{property:?} changed");
@@ -62,7 +62,7 @@ fn assert_refused(
 
 /// A Loop with all three references set by its setters.
 fn configured_loop() -> LoopObject {
-    let mut lo = LoopObject::new(1, "LOOP-1", 62).unwrap();
+    let mut lo = LoopObject::new(1, "LOOP-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     lo.set_controlled_variable_reference(BACnetObjectPropertyReference::new(
         oid(ObjectType::ANALOG_INPUT, 7),
         PRESENT_VALUE,
@@ -81,7 +81,7 @@ fn configured_loop() -> LoopObject {
 
 #[test]
 fn loop_unset_references_read_the_reserved_instance_or_the_empty_setpoint_reference() {
-    let lo = LoopObject::new(1, "LOOP-1", 62).unwrap();
+    let lo = LoopObject::new(1, "LOOP-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     assert_eq!(read(&lo, CVR), data(&UNSET_CVR));
     assert_eq!(read(&lo, MVR), data(&UNSET_MVR));
     // A BACnetSetpointReference without its optional member encodes as
@@ -99,7 +99,7 @@ fn loop_set_references_read_as_their_clause_21_encodings() {
 
 #[test]
 fn loop_references_in_property_list() {
-    let lo = LoopObject::new(1, "LOOP-1", 62).unwrap();
+    let lo = LoopObject::new(1, "LOOP-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let list = lo.property_list();
     for property in [CVR, MVR, SR] {
         assert!(list.contains(&property), "{property:?} missing");
@@ -108,7 +108,7 @@ fn loop_references_in_property_list() {
 
 #[test]
 fn loop_reference_writes_take_the_encodings_they_read_as() {
-    let mut lo = LoopObject::new(1, "LOOP-1", 62).unwrap();
+    let mut lo = LoopObject::new(1, "LOOP-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     for (property, bytes) in [
         (CVR, &AO_3_PV_4[..]),
         (MVR, &AI_7_PV[..]),
@@ -137,7 +137,7 @@ fn loop_reference_writes_clear_with_the_unset_values_they_read_as() {
     // Any reference to the reserved instance clears one, whatever else it
     // names (here analog-value 4194303's priority-array); the read gives the
     // property's own unset form back (#1417).
-    let unset = LoopObject::new(2, "LOOP-2", 62).unwrap();
+    let unset = LoopObject::new(2, "LOOP-2", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     for property in [CVR, MVR] {
         let mut lo = configured_loop();
         write(

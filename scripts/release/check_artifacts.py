@@ -73,7 +73,10 @@ MACHO_LOAD_DYLIB = {"LC_LOAD_DYLIB", "LC_LOAD_WEAK_DYLIB", "LC_REEXPORT_DYLIB", 
 # Windows' own DLLs that the binaries import, and the API sets that map onto
 # them. A new one fails the check, so a new run-time dependency is noticed.
 WINDOWS_SYSTEM = {"kernel32.dll", "ntdll.dll", "user32.dll", "advapi32.dll", "ws2_32.dll", "iphlpapi.dll",
-                  "bcryptprimitives.dll"}
+                  "bcryptprimitives.dll",
+                  # The CLI's TUI finds its config folder through `directories`
+                  # (SHGetKnownFolderPath, then CoTaskMemFree), #974.
+                  "shell32.dll", "combase.dll"}
 # Also allowed in an extension module, not in the CLI: serialport's port
 # listing, which list_serial_ports() uses (#951), as the macOS extension
 # modules alone may load IOKit and CoreFoundation.

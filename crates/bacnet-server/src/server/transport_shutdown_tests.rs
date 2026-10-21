@@ -1,4 +1,5 @@
 use super::*;
+use crate::server::port_retry::{bind_eventually, rerun_on_lost_port};
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 
 async fn bip_server() -> BACnetServer<BipTransport> {
@@ -33,36 +34,39 @@ async fn retained_bip_broadcaster_refuses_after_stop() {
 
 #[tokio::test]
 async fn stopped_bip_server_releases_udp_port_with_retained_broadcaster() {
-    let mut server = bip_server().await;
-    let mac = server.local_mac();
-    let port = u16::from_be_bytes([mac[4], mac[5]]);
-    let retained = server.i_am_broadcaster();
-    server.stop().await.unwrap();
-    let rebound = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, port))
-        .expect("successful server stop must release its UDP socket");
-    assert!(retained.broadcast_i_am().await.is_err());
-    drop(rebound);
+    rerun_on_lost_port(async || {
+        let mut server = bip_server().await;
+        let mac = server.local_mac();
+        let port = u16::from_be_bytes([mac[4], mac[5]]);
+        let retained = server.i_am_broadcaster();
+        server.stop().await.unwrap();
+        // A successful stop releases the server's UDP socket.
+        let rebound = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, port))?;
+        assert!(retained.broadcast_i_am().await.is_err());
+        drop(rebound);
+        Ok(())
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn dropped_bip_server_retires_retained_broadcaster() {
-    let server = bip_server().await;
-    let mac = server.local_mac();
-    let port = u16::from_be_bytes([mac[4], mac[5]]);
-    let retained = server.i_am_broadcaster();
-    drop(server);
-    assert!(
-        retained.broadcast_i_am().await.is_err(),
-        "dropped server still sends"
-    );
-    tokio::time::timeout(Duration::from_secs(2), async {
-        loop {
-            if let Ok(socket) = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, port)) {
-                break socket;
-            }
-            tokio::task::yield_now().await;
-        }
+    rerun_on_lost_port(async || {
+        let server = bip_server().await;
+        let mac = server.local_mac();
+        let port = u16::from_be_bytes([mac[4], mac[5]]);
+        let retained = server.i_am_broadcaster();
+        drop(server);
+        assert!(
+            retained.broadcast_i_am().await.is_err(),
+            "dropped server still sends"
+        );
+        // The aborted owned frames finally release the UDP port.
+        bind_eventually(Duration::from_secs(2), || {
+            std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, port))
+        })
+        .await
+        .map(drop)
     })
-    .await
-    .expect("aborted owned frames must finally release the UDP port");
+    .await;
 }

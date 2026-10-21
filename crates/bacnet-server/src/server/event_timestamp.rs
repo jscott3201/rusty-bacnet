@@ -98,6 +98,7 @@ mod tests {
     use super::super::{BACnetServer, LearnedRouterCache, NotificationTransactions};
     use super::*;
     use crate::server::test_transport::TestTransport;
+    use bacnet_types::enums::EngineeringUnits;
 
     struct FixedClock(ClockFrame);
 
@@ -199,15 +200,17 @@ mod tests {
         }
         db.add(Box::new(
             DeviceObject::new(DeviceConfig {
-                instance: 1,
-                name: "Timestamp-Policy-Device".into(),
+                identity: bacnet_objects::DeviceIdentity::default()
+                    .with_name("Timestamp-Policy-Device"),
                 ..DeviceConfig::default()
             })
             .unwrap(),
         ))
         .unwrap();
-        db.add(Box::new(AnalogInputObject::new(1, "AI-1", 0).unwrap()))
-            .unwrap();
+        db.add(Box::new(
+            AnalogInputObject::new(1, "AI-1", EngineeringUnits::SQUARE_METERS).unwrap(),
+        ))
+        .unwrap();
         let mut notification_class = NotificationClass::new(0, "NC-0").unwrap();
         for _ in 0..recipients {
             notification_class

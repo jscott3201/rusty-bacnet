@@ -1,8 +1,6 @@
-#[cfg(not(feature = "std"))]
-use alloc::string::ToString;
-
 use super::*;
 use crate::constructed::log_fields::check_bit_string;
+use bacnet_types::error::EncodeError;
 
 /// Encode a context-tagged `BACnetStatusFlags`: four defined bits, so four unused bits, with
 /// `IN_ALARM` in the content octet's top bit.
@@ -22,22 +20,18 @@ pub fn encode_notification_parameters(
     encode_into(params, &mut encoded)?;
     if matches!(params, NotificationParameters::ComplexEventType { .. }) {
         let (opening, content_start) =
-            tags::decode_tag(&encoded, 0).map_err(|error| Error::Encoding(error.to_string()))?;
+            tags::decode_tag(&encoded, 0).map_err(Error::into_encode_refusal)?;
         if !opening.is_opening_tag(6) {
-            return Err(Error::Encoding(
-                "ComplexEventType missing opening tag [6]".into(),
-            ));
+            return Err(Error::encode("ComplexEventType missing opening tag [6]"));
         }
         let (_, next) = tags::extract_context_value(&encoded, content_start, 6)
-            .map_err(|error| Error::Encoding(error.to_string()))?;
+            .map_err(Error::into_encode_refusal)?;
         if next != encoded.len() {
-            return Err(Error::Encoding(
-                "ComplexEventType has trailing encoded fields".into(),
-            ));
+            return Err(Error::encode("ComplexEventType has trailing encoded fields"));
         }
     } else {
         validate_tlv_sequence(&encoded, "NotificationParameters")
-            .map_err(|error| Error::Encoding(error.to_string()))?;
+            .map_err(Error::into_encode_refusal)?;
     }
     buf.extend_from_slice(&encoded);
     Ok(())
@@ -50,7 +44,11 @@ fn encode_into(params: &NotificationParameters, buf: &mut BytesMut) -> Result<()
             status_flags,
         } => {
             let (unused_bits, data) = referenced_bitstring;
-            check_bit_string(*unused_bits, data, "ChangeOfBitstring referenced-bitstring")?;
+            check_bit_string(
+                *unused_bits,
+                data,
+                "ChangeOfBitstring referenced-bitstring has {} unused bits over {} octets",
+            )?;
             tags::encode_opening_tag(buf, 0);
             primitives::encode_ctx_bit_string(buf, 0, *unused_bits, data);
             encode_status_flags(buf, 1, *status_flags);
@@ -78,7 +76,11 @@ fn encode_into(params: &NotificationParameters, buf: &mut BytesMut) -> Result<()
             tags::encode_opening_tag(buf, 0);
             match new_value {
                 ChangeOfValueChoice::ChangedBits { unused_bits, data } => {
-                    check_bit_string(*unused_bits, data, "ChangeOfValue changed-bits")?;
+                    check_bit_string(
+                        *unused_bits,
+                        data,
+                        "ChangeOfValue changed-bits has {} unused bits over {} octets",
+                    )?;
                     primitives::encode_ctx_bit_string(buf, 0, *unused_bits, data);
                 }
                 ChangeOfValueChoice::ChangedValue(v) => {
@@ -136,9 +138,9 @@ fn encode_into(params: &NotificationParameters, buf: &mut BytesMut) -> Result<()
         }
         NotificationParameters::ComplexEventType { property_values } => {
             if property_values.len() > MAX_FRAMED_ITEMS {
-                return Err(Error::Encoding(format!(
-                    "ComplexEventType exceeds {MAX_FRAMED_ITEMS} property values"
-                )));
+                return Err(EncodeError::new("ComplexEventType exceeds {} property values")
+                    .with_value(MAX_FRAMED_ITEMS as u32)
+                    .into());
             }
             tags::encode_opening_tag(buf, 6);
             for property_value in property_values {
@@ -146,12 +148,10 @@ fn encode_into(params: &NotificationParameters, buf: &mut BytesMut) -> Result<()
                     .priority
                     .is_some_and(|priority| !(1..=16).contains(&priority))
                 {
-                    return Err(Error::Encoding(
-                        "ComplexEventType property priority must be in 1..=16".into(),
-                    ));
+                    return Err(Error::encode("ComplexEventType property priority must be in 1..=16"));
                 }
                 validate_tlv_sequence(&property_value.value, "ComplexEventType property value")
-                    .map_err(|error| Error::Encoding(error.to_string()))?;
+                    .map_err(Error::into_encode_refusal)?;
                 encode_bacnet_property_value(property_value, buf);
             }
             tags::encode_closing_tag(buf, 6);
@@ -227,7 +227,7 @@ fn encode_into(params: &NotificationParameters, buf: &mut BytesMut) -> Result<()
         } => {
             if let Some(authentication_factor) = authentication_factor {
                 structured::validate_authentication_factor(authentication_factor)
-                    .map_err(|error| Error::Encoding(error.to_string()))?;
+                    .map_err(Error::into_encode_refusal)?;
             }
             tags::encode_opening_tag(buf, 13);
             primitives::encode_ctx_enumerated(buf, 0, access_event.to_raw());

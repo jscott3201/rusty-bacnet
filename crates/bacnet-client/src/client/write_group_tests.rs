@@ -129,7 +129,7 @@ async fn write_group_sends_the_request_to_a_device_or_a_broadcast() {
         assert_eq!(frame.to.as_deref(), to, "{destination:?}");
         let npdu = decode_npdu(frame.npdu).unwrap();
         assert!(!npdu.expecting_reply, "{destination:?}");
-        assert_eq!(npdu.priority, NetworkPriority::NORMAL);
+        assert_eq!(npdu.priority, NetworkPriority::Normal);
         match network {
             Some(network) => {
                 let dnet = npdu.destination.expect("a DNET");
@@ -161,13 +161,13 @@ async fn write_group_refuses_a_bad_request_or_network_before_sending() {
     let result = client
         .write_group(&WriteGroupDestination::LocalBroadcast, &bad)
         .await;
-    assert!(matches!(result, Err(Error::Encoding(_))), "{result:?}");
+    assert!(matches!(result, Err(Error::Encode(_))), "{result:?}");
     bad = request();
     bad.change_list.clear();
     let result = client
         .write_group(&WriteGroupDestination::GlobalBroadcast, &bad)
         .await;
-    assert!(matches!(result, Err(Error::Encoding(_))), "{result:?}");
+    assert!(matches!(result, Err(Error::Encode(_))), "{result:?}");
     assert!(sent.try_recv().is_err(), "a refused request went out");
     client.stop().await.unwrap();
 }

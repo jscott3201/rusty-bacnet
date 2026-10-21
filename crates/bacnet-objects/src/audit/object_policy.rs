@@ -82,8 +82,8 @@ impl ObjectAuditPolicy {
             present?;
             if priority.is_some_and(|v| !(1..=16).contains(&v)) {
                 return Err(Error::Protocol {
-                    class: ErrorClass::SERVICES.to_raw() as u32,
-                    code: ErrorCode::PARAMETER_OUT_OF_RANGE.to_raw() as u32,
+                    class: ErrorClass::SERVICES,
+                    code: ErrorCode::PARAMETER_OUT_OF_RANGE,
                 });
             }
             // NULL relinquishes ordinary noncommandable properties without a

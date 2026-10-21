@@ -275,7 +275,7 @@ async fn confirmed_request_simple_ack() {
             let mut buf = BytesMut::new();
             encode_apdu(&mut buf, &ack).unwrap();
             net_b
-                .send_apdu(&buf, &received.source_mac, false, NetworkPriority::NORMAL)
+                .send_apdu(&buf, &received.source_mac, false, NetworkPriority::Normal)
                 .await
                 .unwrap();
         }
@@ -341,7 +341,7 @@ async fn confirmed_request_does_not_wrap_discovered_max_apdu_length() {
         let mut buf = BytesMut::new();
         encode_apdu(&mut buf, &ack).unwrap();
         remote_network
-            .send_apdu(&buf, &received.source_mac, false, NetworkPriority::NORMAL)
+            .send_apdu(&buf, &received.source_mac, false, NetworkPriority::Normal)
             .await
             .unwrap();
         remote_network.stop().await.unwrap();
@@ -385,7 +385,7 @@ async fn confirmed_request_complex_ack() {
             let mut buf = BytesMut::new();
             encode_apdu(&mut buf, &ack).unwrap();
             net_b
-                .send_apdu(&buf, &received.source_mac, false, NetworkPriority::NORMAL)
+                .send_apdu(&buf, &received.source_mac, false, NetworkPriority::Normal)
                 .await
                 .unwrap();
         }
@@ -458,7 +458,7 @@ async fn segmented_complex_ack_reassembly() {
             let mut buf = BytesMut::new();
             encode_apdu(&mut buf, &ack).unwrap();
             net_b
-                .send_apdu(&buf, &received.source_mac, false, NetworkPriority::NORMAL)
+                .send_apdu(&buf, &received.source_mac, false, NetworkPriority::Normal)
                 .await
                 .unwrap();
 
@@ -540,7 +540,7 @@ async fn segmented_confirmed_request_sends_segments() {
                 let mut buf = BytesMut::new();
                 encode_apdu(&mut buf, &seg_ack).unwrap();
                 net_b
-                    .send_apdu(&buf, &received.source_mac, false, NetworkPriority::NORMAL)
+                    .send_apdu(&buf, &received.source_mac, false, NetworkPriority::Normal)
                     .await
                     .unwrap();
 
@@ -559,7 +559,7 @@ async fn segmented_confirmed_request_sends_segments() {
         let mut buf = BytesMut::new();
         encode_apdu(&mut buf, &ack).unwrap();
         net_b
-            .send_apdu(&buf, &client_mac, false, NetworkPriority::NORMAL)
+            .send_apdu(&buf, &client_mac, false, NetworkPriority::Normal)
             .await
             .unwrap();
 
@@ -628,7 +628,7 @@ async fn segmented_request_with_complex_ack_response() {
                 let mut buf = BytesMut::new();
                 encode_apdu(&mut buf, &seg_ack).unwrap();
                 net_b
-                    .send_apdu(&buf, &received.source_mac, false, NetworkPriority::NORMAL)
+                    .send_apdu(&buf, &received.source_mac, false, NetworkPriority::Normal)
                     .await
                     .unwrap();
 
@@ -650,7 +650,7 @@ async fn segmented_request_with_complex_ack_response() {
         let mut buf = BytesMut::new();
         encode_apdu(&mut buf, &ack).unwrap();
         net_b
-            .send_apdu(&buf, &client_mac, false, NetworkPriority::NORMAL)
+            .send_apdu(&buf, &client_mac, false, NetworkPriority::Normal)
             .await
             .unwrap();
 

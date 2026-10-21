@@ -12,14 +12,17 @@ fn decode_event_transition_bits(
     data: &[u8],
     offset: usize,
     expected_tag: u8,
-    field: &str,
+    field: &'static str,
 ) -> Result<(EventTransitionBits, usize), Error> {
     let (content, end) = decode_ctx_primitive(data, offset, expected_tag, field)?;
     if content.len() != 2 || content[0] != 5 || content[1] & 0x1f != 0 {
-        return Err(Error::decoding(
+        return Err(DecodeError::new(
+            DecodingKind::InvalidEncoding,
             offset,
-            format!("{field} must contain three bits with zero padding"),
-        ));
+            "must contain three bits with zero padding",
+        )
+        .within(field)
+        .into());
     }
     Ok((EventTransitionBits::from_bacnet(&content[1..]), end))
 }
@@ -112,10 +115,13 @@ impl GetEventInformationAck {
                 break;
             }
             if list_of_event_summaries.len() >= MAX_DECODED_ITEMS {
-                return Err(Error::overflow(
+                return Err(DecodeError::new(
+                    DecodingKind::Overflow,
                     offset,
-                    format!("GetEventInformation ACK exceeds {MAX_DECODED_ITEMS} event summaries"),
-                ));
+                    "GetEventInformation ACK exceeds {} event summaries",
+                )
+                .with_value(MAX_DECODED_ITEMS as u64)
+                .into());
             }
 
             let (object_identifier, end) =

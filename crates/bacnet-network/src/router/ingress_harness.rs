@@ -8,8 +8,8 @@
 
 use super::*;
 use bacnet_encoding::npdu::{decode_npdu, NpduAddress};
+use bacnet_npdu::RejectMessageReason;
 use bacnet_transport::port::ReceivedNpdu;
-use bacnet_types::enums::RejectMessageReason;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
 
@@ -50,6 +50,9 @@ impl TransportPort for IngressTransport {
                 npdu: Bytes::copy_from_slice(npdu),
                 mac: MacAddr::from_slice(mac),
                 data_attributes: data_attributes.to_vec(),
+
+                response: None,
+                reject_origin: None,
             })
             .map_err(|_| Error::Encoding("test wire queue unavailable".into()))
     }
@@ -63,6 +66,8 @@ impl TransportPort for IngressTransport {
             .try_send(SendRequest::Broadcast {
                 npdu: Bytes::copy_from_slice(npdu),
                 data_attributes: data_attributes.to_vec(),
+
+                reject_origin: None,
             })
             .map_err(|_| Error::Encoding("test wire queue unavailable".into()))
     }
@@ -217,7 +222,7 @@ pub(super) async fn drain_announcements(peers: &mut [Peer]) {
                 panic!("expected startup announcement")
             };
             let npdu = decode_npdu(npdu).unwrap();
-            assert_eq!(npdu.message_type, Some(message_type.to_raw()));
+            assert_eq!(npdu.message_type, Some(message_type));
             assert_eq!(npdu.payload[..], data[..]);
         }
     }
@@ -240,12 +245,13 @@ pub(super) async fn barrier(peer: &mut Peer) {
                 npdu,
                 mac,
                 data_attributes,
+                ..
             } => break (npdu, mac, data_attributes),
             SendRequest::Broadcast { npdu, .. } => {
                 let decoded = decode_npdu(npdu).unwrap();
                 assert_eq!(
                     decoded.message_type,
-                    Some(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK.to_raw()),
+                    Some(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK),
                     "barrier expected reject, got unexpected broadcast"
                 );
                 assert_eq!(decoded.payload.as_ref(), 9000u16.to_be_bytes());
@@ -257,7 +263,7 @@ pub(super) async fn barrier(peer: &mut Peer) {
     assert_eq!(mac.as_slice(), &[0xA0]);
     assert_eq!(
         npdu.message_type,
-        Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK.to_raw())
+        Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK)
     );
     assert_eq!(
         npdu.payload.as_ref(),
@@ -285,10 +291,10 @@ pub(super) async fn branch_forward(peers: &mut [Peer], branch: LocalBranch, port
             SendRequest::Broadcast {
                 npdu,
                 data_attributes,
+                ..
             } => {
                 let decoded = decode_npdu(npdu.clone()).unwrap();
-                if decoded.message_type
-                    == Some(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK.to_raw())
+                if decoded.message_type == Some(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK)
                     && decoded.payload.as_ref() == 9000u16.to_be_bytes()
                 {
                     continue;
@@ -317,7 +323,7 @@ pub(super) async fn forwarding_progress(peers: &mut [Peer], port: usize) {
                 let decoded = decode_npdu(npdu).unwrap();
                 assert_eq!(
                     decoded.message_type,
-                    Some(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK.to_raw())
+                    Some(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK)
                 );
                 assert_eq!(decoded.payload.as_ref(), 9000u16.to_be_bytes());
                 continue;
@@ -339,7 +345,7 @@ pub(super) fn assert_quiet(peers: &mut [Peer]) {
                     let decoded = decode_npdu(npdu).unwrap();
                     assert_eq!(
                         decoded.message_type,
-                        Some(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK.to_raw())
+                        Some(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK)
                     );
                     assert_eq!(decoded.payload.as_ref(), 9000u16.to_be_bytes());
                 }

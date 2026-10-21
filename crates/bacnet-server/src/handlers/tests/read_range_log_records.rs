@@ -81,8 +81,8 @@ fn trend_log_read_range_serves_every_record_kind_with_exact_bytes() {
         // failure [8]: PROPERTY / UNKNOWN_PROPERTY.
         (
             LogDatum::Failure {
-                error_class: 2,
-                error_code: 32,
+                error_class: ErrorClass::PROPERTY,
+                error_code: ErrorCode::UNKNOWN_PROPERTY,
             },
             None,
             vec![0x1E, 0x8E, 0x91, 0x02, 0x91, 0x20, 0x8F, 0x1F],

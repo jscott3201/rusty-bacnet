@@ -55,7 +55,7 @@ impl Request<'_> {
         decode: impl FnOnce() -> Result<MutationTarget, Error>,
     ) -> Result<(), Error> {
         if self.config.mutation_policy == MutationPolicy::Permissive
-            && self.config.mutation_authorizer.is_none()
+            && self.config.mutation_decider().is_none()
         {
             return self.record(MutationDecision::Allow);
         }
@@ -63,13 +63,14 @@ impl Request<'_> {
         self.record(self.decide(target))
     }
 
-    /// What policy decides on `target`, calling the authorizer if one is
-    /// installed and the policy asks it. Nothing is recorded.
+    /// What policy decides on `target`, asking the installed
+    /// [`ServerPolicy`](crate::ServerPolicy) unless `DenyAll` answers first.
+    /// Nothing is recorded.
     fn decide(&self, target: MutationTarget) -> MutationDecision {
         if self.config.mutation_policy == MutationPolicy::DenyAll {
             return MutationDecision::PolicyDeny;
         }
-        let Some(authorizer) = &self.config.mutation_authorizer else {
+        let Some(policy) = self.config.mutation_decider() else {
             return MutationDecision::Allow;
         };
         let context = MutationAuthorizationContext {
@@ -81,7 +82,7 @@ impl Request<'_> {
             service_choice: self.req.service_choice.into(),
             target,
         };
-        if audit_notification::fail_closed_authorize(|| authorizer(&context)) {
+        if audit_notification::fail_closed_authorize(|| policy.authorize_mutation(&context)) {
             MutationDecision::Allow
         } else {
             MutationDecision::Deny

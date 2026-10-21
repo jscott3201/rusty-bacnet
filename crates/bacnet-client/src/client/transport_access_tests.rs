@@ -4,7 +4,7 @@
 use super::*;
 use bacnet_transport::any::AnyTransport;
 use bacnet_transport::bbmd::{BdtEntry, ForeignDevicePolicy};
-use bacnet_transport::bip::{AsBip, ManagementCounters};
+use bacnet_transport::bip::{AsBip, BvlcExchangeError, ManagementCounters};
 use bacnet_transport::bvll::decode_bip_mac;
 use bacnet_transport::bvll::BvlcResultCode;
 use bacnet_transport::loopback::LoopbackTransport;
@@ -96,17 +96,14 @@ async fn any_transport_bip_variant_runs_the_bbmd_helpers_against_an_in_process_b
     let bdt = client.read_bdt(&bbmd_mac).await.unwrap();
     assert!(bdt.contains(&PEER_ROW), "BDT {bdt:?} lacks the peer row");
     assert_eq!(
-        client.write_bdt(&bbmd_mac, &[]).await.unwrap(),
-        BvlcResultCode::WRITE_BROADCAST_DISTRIBUTION_TABLE_NAK
+        client.write_bdt(&bbmd_mac, &[]).await.unwrap_err().nak(),
+        Some(BvlcResultCode::WRITE_BROADCAST_DISTRIBUTION_TABLE_NAK)
     );
 
-    assert_eq!(
-        client
-            .register_foreign_device_bvlc(&bbmd_mac, 60)
-            .await
-            .unwrap(),
-        BvlcResultCode::SUCCESSFUL_COMPLETION
-    );
+    client
+        .register_foreign_device_bvlc(&bbmd_mac, 60)
+        .await
+        .unwrap();
     let fdt_counters = bbmd.transport().fdt_counters().expect("BBMD mode");
     assert_eq!(fdt_counters.registrations_accepted, 1);
     let (ip, port) = decode_bip_mac(client.local_mac()).unwrap();
@@ -116,10 +113,7 @@ async fn any_transport_bip_variant_runs_the_bbmd_helpers_against_an_in_process_b
             .any(|entry| entry.ip == ip && entry.port == port && entry.ttl == 60),
         "FDT {fdt:?} lacks this client"
     );
-    assert_eq!(
-        client.delete_fdt_entry(&bbmd_mac, ip, port).await.unwrap(),
-        BvlcResultCode::SUCCESSFUL_COMPLETION
-    );
+    client.delete_fdt_entry(&bbmd_mac, ip, port).await.unwrap();
     assert!(client.read_fdt(&bbmd_mac).await.unwrap().is_empty());
 
     // The B/IP counters are reachable through the same view.
@@ -143,13 +137,13 @@ async fn bbmd_helpers_on_a_non_bip_any_transport_fail_typed_before_sending() {
         .unwrap();
     let target = [127, 0, 0, 1, 0xBA, 0xC0];
 
-    fn refused<V>(result: Result<V, Error>) -> bool {
+    fn refused<V, E: Into<BvlcExchangeError>>(result: Result<V, E>) -> bool {
         matches!(
-            result,
-            Err(Error::UnsupportedTransport {
+            result.map_err(Into::into),
+            Err(BvlcExchangeError::Transport(Error::UnsupportedTransport {
                 required: DataLink::Bip,
                 actual: DataLink::Loopback,
-            })
+            }))
         )
     }
     assert!(refused(client.read_bdt(&target).await));

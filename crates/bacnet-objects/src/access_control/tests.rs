@@ -591,8 +591,8 @@ fn access_door_relinquish_default_write_recaptures_present_value() {
             .expect_err("out-of-production Relinquish_Default must refuse")
         {
             Error::Protocol { class, code: c } => {
-                assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
-                assert_eq!(c, code.to_raw() as u32);
+                assert_eq!(class, ErrorClass::PROPERTY);
+                assert_eq!(c, code);
             }
             other => panic!("expected protocol error, got {other:?}"),
         }

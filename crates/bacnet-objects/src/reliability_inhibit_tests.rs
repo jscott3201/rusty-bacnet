@@ -3,7 +3,7 @@ use crate::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
 use crate::multistate::{MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject};
 use crate::property_metadata::{PropertyConformance, PropertyWriteCapability};
 use crate::traits::{BACnetObject, ReliabilityEvaluation};
-use bacnet_types::enums::{EventState, PropertyIdentifier, Reliability};
+use bacnet_types::enums::{EngineeringUnits, EventState, PropertyIdentifier, Reliability};
 use bacnet_types::primitives::PropertyValue;
 
 const INHIBIT: PropertyIdentifier = PropertyIdentifier::RELIABILITY_EVALUATION_INHIBIT;
@@ -12,15 +12,17 @@ fn nine_objects() -> Vec<(&'static str, Box<dyn BACnetObject>)> {
     vec![
         (
             "analog-input",
-            Box::new(AnalogInputObject::new(1, "AI-1", 62).unwrap()),
+            Box::new(AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap()),
         ),
         (
             "analog-output",
-            Box::new(AnalogOutputObject::new(1, "AO-1", 62).unwrap()),
+            Box::new(
+                AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+            ),
         ),
         (
             "analog-value",
-            Box::new(AnalogValueObject::new(1, "AV-1", 62).unwrap()),
+            Box::new(AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap()),
         ),
         (
             "binary-input",
@@ -161,7 +163,7 @@ fn true_normalizes_existing_fault_and_false_does_not_restore_it_on_all_nine() {
 
 #[test]
 fn inhibited_ai_and_av_range_faults_skip_and_reenable_current_evaluation() {
-    let mut ai = AnalogInputObject::new(1, "AI-range", 62).unwrap();
+    let mut ai = AnalogInputObject::new(1, "AI-range", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ai.configure_fault_out_of_range(10.0, 20.0).unwrap();
     ai.set_present_value(21.0);
     assert!(matches!(
@@ -188,7 +190,7 @@ fn inhibited_ai_and_av_range_faults_skip_and_reenable_current_evaluation() {
         "inhibit must not clear the range detector's ownership"
     );
 
-    let mut av = AnalogValueObject::new(1, "AV-range", 62).unwrap();
+    let mut av = AnalogValueObject::new(1, "AV-range", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     av.configure_fault_out_of_range(10.0, 20.0).unwrap();
     av.set_relinquish_default(9.0).unwrap();
     write_bool(&mut av, INHIBIT, true);
@@ -343,7 +345,8 @@ fn repeated_oos_cycles_clear_old_client_ownership() {
 
 #[test]
 fn inhibit_does_not_change_detection_enable_and_recovery_is_reportable() {
-    let mut object = AnalogInputObject::new(1, "AI-report", 62).unwrap();
+    let mut object =
+        AnalogInputObject::new(1, "AI-report", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     object
         .set_reliability_internal(Reliability::NO_SENSOR)
         .unwrap();

@@ -283,7 +283,8 @@ async fn command_source_local_required_identity_membership_and_owner_replacement
                 .await
                 .add(Box::new(
                     DeviceObject::new(DeviceConfig {
-                        instance: 900,
+                        identity: bacnet_objects::DeviceIdentity::new(900, 0)
+                            .expect("valid Device identity"),
                         ..DeviceConfig::default()
                     })
                     .unwrap(),

@@ -276,7 +276,7 @@ fn request_rejects_undefined_acknowledgment_filter_and_inverted_priority() {
         assert!(matches!(
             GetEnrollmentSummaryRequest::decode(&encoded),
             Err(Error::Reject { reason })
-                if reason == bacnet_types::enums::RejectReason::UNDEFINED_ENUMERATION.to_raw()
+                if reason == bacnet_types::enums::RejectReason::UNDEFINED_ENUMERATION
         ));
     }
 
@@ -446,20 +446,20 @@ fn request_rejects_undefined_event_state_filter() {
         assert!(matches!(
             GetEnrollmentSummaryRequest::decode(&encoded),
             Err(Error::Reject { reason })
-                if reason == bacnet_types::enums::RejectReason::UNDEFINED_ENUMERATION.to_raw()
+                if reason == bacnet_types::enums::RejectReason::UNDEFINED_ENUMERATION
         ));
     }
     let above_u32 = [0x09, 0, 0x2D, 0x05, 1, 0, 0, 0, 0];
     assert!(matches!(
         GetEnrollmentSummaryRequest::decode(&above_u32),
         Err(Error::Reject { reason })
-            if reason == bacnet_types::enums::RejectReason::UNDEFINED_ENUMERATION.to_raw()
+            if reason == bacnet_types::enums::RejectReason::UNDEFINED_ENUMERATION
     ));
     let above_u64 = [0x09, 0, 0x2D, 0x09, 1, 0, 0, 0, 0, 0, 0, 0, 0];
     assert!(matches!(
         GetEnrollmentSummaryRequest::decode(&above_u64),
         Err(Error::Reject { reason })
-            if reason == bacnet_types::enums::RejectReason::UNDEFINED_ENUMERATION.to_raw()
+            if reason == bacnet_types::enums::RejectReason::UNDEFINED_ENUMERATION
     ));
 
     for noncanonical in [[0x09, 0, 0x28, 0, 0], [0x09, 0, 0x2A, 0, 4]] {
@@ -562,7 +562,7 @@ fn enrollment_filter_recipient_mac_holds_to_the_bacnet_address_bound() {
     let mut output = BytesMut::new();
     assert!(matches!(
         request(longest + 1).try_encode(&mut output),
-        Err(Error::Encoding(_))
+        Err(Error::Encode(_))
     ));
     assert!(output.is_empty());
 }

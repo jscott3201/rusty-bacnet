@@ -49,7 +49,7 @@ async fn current(session: &EndpointSession<BipTransport>) -> PropertyValue {
 async fn wire(
     session: &EndpointSession<BipTransport>,
     peer: &NetworkLayer<BipTransport>,
-    replies: &mut mpsc::Receiver<ReceivedApdu>,
+    replies: &mut bacnet_network::layer::ApduReceiver,
     bytes: Vec<u8>,
     invoke: u8,
 ) -> Apdu {
@@ -74,7 +74,7 @@ async fn wire(
                 destination_mac: MacAddr::from_slice(peer.local_mac()),
             },
             false,
-            NetworkPriority::NORMAL,
+            NetworkPriority::Normal,
             Vec::new(),
         )
         .await

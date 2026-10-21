@@ -175,8 +175,8 @@ impl ObjectDatabase {
         if let Some(&owner) = self.name_index.get(new_name) {
             if owner != *oid {
                 return Err(Error::Protocol {
-                    class: ErrorClass::PROPERTY.to_raw() as u32,
-                    code: ErrorCode::DUPLICATE_NAME.to_raw() as u32,
+                    class: ErrorClass::PROPERTY,
+                    code: ErrorCode::DUPLICATE_NAME,
                 });
             }
         }

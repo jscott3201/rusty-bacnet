@@ -66,9 +66,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             invoke_id,
             owner,
             None,
-            TsmResponse::Abort {
-                reason: reason.to_raw(),
-            },
+            TsmResponse::Abort { reason },
         );
     }
 }

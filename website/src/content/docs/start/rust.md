@@ -3,7 +3,7 @@ title: "Embed the Rust client"
 description: "Use a small set of aligned BACnet crates for a directed property read."
 ---
 
-The v0.13.0 workspace declares a minimum Rust version of **1.93**. Use a compatible stable toolchain; the website's Node tooling is unrelated to the Rust library minimum.
+The v0.14.0 workspace declares a minimum Rust version of **1.93**. Use a compatible stable toolchain; the website's Node tooling is unrelated to the Rust library minimum.
 
 ## Start a small client
 
@@ -16,9 +16,9 @@ Add these entries to the generated `Cargo.toml` dependency section:
 
 ```toml
 [dependencies]
-bacnet-client = "=0.13.0"
-bacnet-types = "=0.13.0"
-bacnet-encoding = "=0.13.0"
+bacnet-client = "=0.14.0"
+bacnet-types = "=0.14.0"
+bacnet-encoding = "=0.14.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -81,6 +81,6 @@ Use the server and object crates for a hosted device model, and the transport/ne
 
 ## Sources and release scope
 
-These instructions target **v0.13.0**. Source review is not a claim of hardware qualification.
+These instructions target **v0.14.0**. Source review is not a claim of hardware qualification.
 
-[Workspace versions and minimum](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/Cargo.toml) · [Rust API guide](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/docs/rust-api.md) · [Existing client example](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/README.md).
+[Workspace versions and minimum](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/Cargo.toml) · [Rust API guide](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/rust-api.md) · [Existing client example](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/README.md).

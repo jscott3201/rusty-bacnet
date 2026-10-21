@@ -147,7 +147,7 @@ impl Tsm {
             PendingRelease::Release,
         );
         let _ = responder.send(TsmResponse::Abort {
-            reason: AbortReason::INVALID_APDU_IN_THIS_STATE.to_raw(),
+            reason: AbortReason::INVALID_APDU_IN_THIS_STATE,
         });
     }
 }

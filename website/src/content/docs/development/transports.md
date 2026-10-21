@@ -13,12 +13,14 @@ Select the application owner, binding and data link separately. This is a naviga
 |---|---|---|
 | B/IP, NORMAL | Rust/Python standalone client and server; shared endpoint | Explicit local IPv4 interface and UDP port; selected Network Port registration is a separate opt-in |
 | B/IP, BBMD or foreign | Rust client, server and endpoint builders (`.mode(BipMode::…)`); Python `bbmd=` and `foreign_device=`; CLI `--foreign-bbmd` | BDT/FDT or configured BBMD; one transport is never both; shared-endpoint Number evidence does not qualify every administrative operation |
+| B/IP, BBMD behind NAT | `BbmdOptions::nat` (Rust); Python `Bbmd(nat_global_address=…)` | Configured global address and a port-forwarding router; two-hop BDT listing every site's global address; loopback NAT emulation in tests, real routers only in the manual Docker check (`examples/docker/nat`) |
+| B/IP multicast (B/IP-M) node | Rust client, server and endpoint builders (`.multicast(…)`); Python `multicast=Multicast(…)`; CLI `--bip-multicast` | Explicit interface (no `0.0.0.0`), class D group, TTL 1 unless the group spans routers; broadcasts only from the group; NORMAL mode, or a BBMD that serves the group (J.8.3) with an all-ones own BDT row; not a foreign device; loopback evidence on Linux and macOS, Windows untested |
 | B/IPv6 | Standalone Rust/Python client and server; Rust configured foreign-device mode | Select one usable interface/address; peers are named by 3-octet VMAC (`bip6:<instance>`); no shared endpoint builder or Python foreign-device entry point |
 | BACnet/SC | Rust/Python standalone owners and shared endpoint | Operational credentials, explicit CA and durable UUID/VMAC configuration; Rust TLS paths require `sc-tls` |
 | MS/TP | Rust transport/server/endpoint; Python standalone and endpoint paths | Serial adapter, station, baud and token participation; do not infer physical timing from simulation |
 | Ethernet | Linux Rust standalone client and server | AF_PACKET raw socket permissions; no shared endpoint builder or Python Ethernet API |
 
-The CLI has its own [configuration surface](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/docs/CLI.md). A Rust transport does not imply a matching CLI command or Python constructor. For exact feature gates, use the crate manifests and [Rust API](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/docs/rust-api.md#bacnet-transport); do not enable every feature merely to discover which one you need.
+The CLI has its own [configuration surface](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/CLI.md). A Rust transport does not imply a matching CLI command or Python constructor. For exact feature gates, use the crate manifests and [Rust API](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/rust-api.md#bacnet-transport); do not enable every feature merely to discover which one you need.
 
 ## Read the Number-control evidence at its actual scope
 
@@ -36,13 +38,13 @@ Standalone-client BBMD/foreign cases retain BDT/FDT admission, alternate-sender 
 
 Normal IPv6 startup chooses one unambiguous usable local link/address. A non-loopback multicast interface and a unique non-link-local address are preferred. If selection is ambiguous, supply a concrete local IPv6 address rather than assuming `::` means all interfaces. There is no silent physical-selection fallback to `::1`.
 
-Incoming destination and interface checks run before VMAC learning/application delivery; outgoing data and controls keep the selected source and bound port. Explicit loopback remains node-local. Windows has compile evidence for the described selection path, not the isolated Linux runtime qualification. See the [Python IPv6 contract](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/docs/python-api.md#bacnetipv6) before migrating an application that relied on `::` choosing an address for it.
+Incoming destination and interface checks run before VMAC learning/application delivery; outgoing data and controls keep the selected source and bound port. Explicit loopback remains node-local. Windows has compile evidence for the described selection path, not the isolated Linux runtime qualification. See the [Python IPv6 contract](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/python-api.md#bacnetipv6) before migrating an application that relied on `::` choosing an address for it.
 
 ## Plan your own validation
 
 Record the source revision, interface, feature set, OS and native artifact. Start with a known peer and bounded read. Add registration, discovery, subscriptions or writes only when the intended operation needs them. Preserve the distinction between a successful build, a loopback test, simulated serial frames, an actual isolated wire capture and a hardware deployment test.
 
-[Support and conformance](/rusty-bacnet/project/support/) summarizes what is supported. [MS/TP qualification](https://github.com/jscott3201/rusty-bacnet/blob/v0.13.0/docs/mstp-qualification.md) covers the separate hardware path. No page here claims BTL certification.
+[Support and conformance](/rusty-bacnet/project/support/) summarizes what is supported. [MS/TP qualification](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/mstp-qualification.md) covers the separate hardware path. No page here claims BTL certification.
 
 ## Next steps
 

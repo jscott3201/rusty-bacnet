@@ -190,10 +190,7 @@ fn access_rule_rejects_malformed_elements() {
     );
     let wrong_tag: &[u8] = &[0x09, 0x01, 0x29, 0x01, 0x39, 0x01];
     assert!(
-        matches!(
-            decode_access_rule(wrong_tag, 0),
-            Err(Error::Decoding { .. })
-        ),
+        matches!(decode_access_rule(wrong_tag, 0), Err(Error::Decoding(_))),
         "{:?}",
         decode_access_rule(wrong_tag, 0)
     );

@@ -17,7 +17,9 @@ arbitrary = { version = "1", features = ["derive"] }
 # The codec builds the frames the target feeds and decodes the line for the
 # checker; its own fuzz targets check it against an independent oracle.
 bacnet-mstp-codec = { path = "../../bacnet-mstp-codec" }
-bacnet-mstp-core = { path = "..", features = ["alloc"] }
+# `inspect` lets the checker see each frame when the core hands it over,
+# before the start that hands the adapter its octets.
+bacnet-mstp-core = { path = "..", features = ["alloc", "inspect"] }
 libfuzzer-sys = "0.4"
 
 [[bin]]

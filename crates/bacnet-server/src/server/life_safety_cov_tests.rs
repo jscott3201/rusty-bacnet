@@ -392,7 +392,9 @@ impl DispatchFixture {
             comm_state: Arc::new(CommState::default()),
             dcc_timer: Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default())),
             config: Arc::new(ServerConfig {
-                life_safety_operation_authorizer: Some(Arc::new(|_| true)),
+                policy: Some(Arc::new(
+                    crate::FnPolicy::new().life_safety_operation(|_| true),
+                )),
                 ..ServerConfig::default()
             }),
             source_mac: MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xD0]),

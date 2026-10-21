@@ -53,7 +53,7 @@ async fn every_broadcast_form(
     net: &NetworkLayer<LoopbackTransport>,
     apdu: &[u8],
 ) -> Vec<(&'static str, Result<(), Error>)> {
-    let p = NetworkPriority::NORMAL;
+    let p = NetworkPriority::Normal;
     let remote_broadcast = NpduAddress {
         network: 5,
         mac_address: MacAddr::new(),
@@ -148,7 +148,7 @@ async fn broadcast_forms_refuse_every_pdu_but_an_unconfirmed_request() {
             &PEER,
             Some(&remote_broadcast),
             false,
-            NetworkPriority::NORMAL,
+            NetworkPriority::Normal,
             || issued.store(true, Ordering::SeqCst),
         )
         .await;
@@ -189,7 +189,7 @@ async fn broadcast_forms_send_an_unconfirmed_request() {
 #[tokio::test(start_paused = true)]
 async fn routed_local_broadcast_forms_refuse_an_empty_dadr() {
     let (net, mut frames) = link().await;
-    let p = NetworkPriority::NORMAL;
+    let p = NetworkPriority::Normal;
     for apdu in [&WHO_IS[..], REFUSED[0].0] {
         for result in [
             net.send_apdu_routed_via_local_broadcast(apdu, 5, &[], false, p)
@@ -222,7 +222,7 @@ async fn routed_local_broadcast_forms_refuse_an_empty_dadr() {
 #[tokio::test(start_paused = true)]
 async fn sends_naming_one_device_take_any_pdu_type() {
     let (net, mut frames) = link().await;
-    let p = NetworkPriority::NORMAL;
+    let p = NetworkPriority::Normal;
     let device = NpduAddress {
         network: 5,
         mac_address: MacAddr::from_slice(&[7]),

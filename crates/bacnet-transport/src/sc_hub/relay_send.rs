@@ -90,13 +90,21 @@ pub(super) async fn unicast(
             if source != target.vmac {
                 super::outcomes::increment(&clients.outcomes.unicast_send_error);
             }
-            warn!("Hub: unicast relay failed to {:02x?}: {error}", target.vmac);
+            crate::warn_throttled!(
+                clients.relay_warning,
+                "Hub: unicast relay failed to {:02x?}: {error}",
+                target.vmac
+            );
         }
         Err(_) => {
             if source != target.vmac {
                 super::outcomes::increment(&clients.outcomes.unicast_send_timeout);
             }
-            warn!("Hub: unicast relay timed out to {:02x?}", target.vmac);
+            crate::warn_throttled!(
+                clients.relay_warning,
+                "Hub: unicast relay timed out to {:02x?}",
+                target.vmac
+            );
         }
     }
 }

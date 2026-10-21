@@ -36,7 +36,7 @@ pub struct LoopObject {
     proportional_constant: f32,
     integral_constant: f32,
     derivative_constant: f32,
-    output_units: u32,
+    output_units: EngineeringUnits,
     controlled_variable_units: EngineeringUnits,
     proportional_constant_units: EngineeringUnits,
     integral_constant_units: EngineeringUnits,
@@ -58,7 +58,11 @@ pub struct LoopObject {
 impl LoopObject {
     /// Create a new Loop object; `output_units` is a raw BACnetEngineeringUnits value for the
     /// output.
-    pub fn new(instance: u32, name: impl Into<String>, output_units: u32) -> Result<Self, Error> {
+    pub fn new(
+        instance: u32,
+        name: impl Into<String>,
+        output_units: EngineeringUnits,
+    ) -> Result<Self, Error> {
         let oid = ObjectIdentifier::new(ObjectType::LOOP, instance)?;
         Ok(Self {
             oid,
@@ -260,7 +264,7 @@ impl BACnetObject for LoopObject {
                 Ok(PropertyValue::Real(self.derivative_constant))
             }
             p if p == PropertyIdentifier::OUTPUT_UNITS => {
-                Ok(PropertyValue::Enumerated(self.output_units))
+                Ok(PropertyValue::Enumerated(self.output_units.to_raw()))
             }
             p if p == PropertyIdentifier::CONTROLLED_VARIABLE_UNITS => Ok(
                 PropertyValue::Enumerated(self.controlled_variable_units.to_raw()),
@@ -323,8 +327,8 @@ impl BACnetObject for LoopObject {
                 read_property_list_property(&self.property_list(), array_index)
             }
             _ => Err(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+                class: ErrorClass::PROPERTY,
+                code: ErrorCode::UNKNOWN_PROPERTY,
             }),
         }
     }
@@ -388,8 +392,8 @@ impl BACnetObject for LoopObject {
                     return Ok(());
                 }
                 Err(Error::Protocol {
-                    class: ErrorClass::PROPERTY.to_raw() as u32,
-                    code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
+                    class: ErrorClass::PROPERTY,
+                    code: ErrorCode::INVALID_DATA_TYPE,
                 })
             }
             // Clause 12.17 Table 12-20 lists Reliability O7; that footnote requires
@@ -414,8 +418,8 @@ impl BACnetObject for LoopObject {
                     return Ok(());
                 }
                 Err(Error::Protocol {
-                    class: ErrorClass::PROPERTY.to_raw() as u32,
-                    code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
+                    class: ErrorClass::PROPERTY,
+                    code: ErrorCode::INVALID_DATA_TYPE,
                 })
             }
             p if p == PropertyIdentifier::DESCRIPTION => {
@@ -424,8 +428,8 @@ impl BACnetObject for LoopObject {
                     return Ok(());
                 }
                 Err(Error::Protocol {
-                    class: ErrorClass::PROPERTY.to_raw() as u32,
-                    code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
+                    class: ErrorClass::PROPERTY,
+                    code: ErrorCode::INVALID_DATA_TYPE,
                 })
             }
             // Table 12-20 types the two variable references

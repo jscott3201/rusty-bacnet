@@ -41,9 +41,7 @@ impl ReadPropertyMultipleRequest {
                 .iter()
                 .any(|spec| spec.list_of_property_references.is_empty())
         {
-            return Err(Error::Encoding(
-                "RPM requires nonempty object and property lists".into(),
-            ));
+            return Err(Error::encode("RPM requires nonempty object and property lists"));
         }
         for spec in &self.list_of_read_access_specs {
             encode_read_access_specification(buf, spec);
@@ -145,8 +143,8 @@ impl ReadResultElement {
             tags::encode_closing_tag(buf, 4);
         } else if let Some((class, code)) = self.error {
             tags::encode_opening_tag(buf, 5);
-            primitives::encode_app_enumerated(buf, class.to_raw() as u32);
-            primitives::encode_app_enumerated(buf, code.to_raw() as u32);
+            primitives::encode_app_enumerated(buf, u32::from(class.to_raw()));
+            primitives::encode_app_enumerated(buf, u32::from(code.to_raw()));
             tags::encode_closing_tag(buf, 5);
         }
     }

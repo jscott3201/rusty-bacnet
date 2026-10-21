@@ -190,7 +190,7 @@ async fn expect_abort_result(task: RequestTask, expected_reason: AbortReason) {
         .expect("request remained pending")
         .expect("request task panicked")
     {
-        Err(Error::Abort { reason }) => assert_eq!(reason, expected_reason.to_raw()),
+        Err(Error::Abort { reason }) => assert_eq!(reason, expected_reason),
         other => panic!("expected local Abort indication, got {other:?}"),
     }
 }
@@ -262,6 +262,7 @@ async fn full_receive_capacity_aborts_only_the_new_transaction_and_reclaims_its_
             mac: SERVER_MAC,
             network: &None,
             provenance: TransportProvenance::unverified(),
+            warning: &bacnet_transport::warn_throttle::WarnThrottle::default(),
         },
         unsupported_ack,
         ResponseLimits {

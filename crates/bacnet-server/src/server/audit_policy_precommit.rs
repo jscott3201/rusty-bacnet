@@ -4,8 +4,8 @@ use bacnet_types::primitives::BACnetTimeStamp;
 
 fn denied() -> Error {
     Error::Protocol {
-        class: ErrorClass::SERVICES.to_raw() as u32,
-        code: ErrorCode::SERVICE_REQUEST_DENIED.to_raw() as u32,
+        class: ErrorClass::SERVICES,
+        code: ErrorCode::SERVICE_REQUEST_DENIED,
     }
 }
 
@@ -65,7 +65,7 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
                     let bytes = encode_notification(
                         &pending.notification,
                         pending.confirmed,
-                        self.config.max_apdu_length,
+                        u32::from(self.config.device.max_apdu_length()),
                         invoke,
                     )
                     .ok_or_else(denied)?;

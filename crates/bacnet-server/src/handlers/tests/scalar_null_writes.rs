@@ -4,7 +4,7 @@ use bacnet_objects::network_port::NetworkPortObject;
 use bacnet_objects::schedule::{CalendarObject, ScheduleObject};
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::wpm::WriteAccessSpecification;
-use bacnet_types::enums::Reliability;
+use bacnet_types::enums::{EngineeringUnits, Reliability};
 
 fn value(value: &PropertyValue) -> Vec<u8> {
     let mut bytes = BytesMut::new();
@@ -61,7 +61,7 @@ fn wpm(
 fn objects() -> Vec<Box<dyn BACnetObject>> {
     vec![
         Box::new(NetworkPortObject::new_bip(1, "NP", Default::default()).unwrap()),
-        Box::new(AnalogInputObject::new(1, "AI", 62).unwrap()),
+        Box::new(AnalogInputObject::new(1, "AI", EngineeringUnits::DEGREES_CELSIUS).unwrap()),
         Box::new(ScheduleObject::new(1, "Schedule", PropertyValue::Real(0.0)).unwrap()),
     ]
 }
@@ -77,7 +77,7 @@ fn snapshot(db: &ObjectDatabase, oid: ObjectIdentifier) -> Vec<PropertyValue> {
 }
 fn assert_error(error: Error, class: ErrorClass, code: ErrorCode) {
     assert!(
-        matches!(error,Error::Protocol {class:actual_class,code:actual_code} if actual_class == class.to_raw() as u32 && actual_code == code.to_raw() as u32),
+        matches!(error,Error::Protocol {class:actual_class,code:actual_code} if actual_class == class && actual_code == code),
         "{error:?}"
     );
 }
@@ -272,7 +272,7 @@ fn scalar_null_wpm_continues_and_failing_suffix_preserves_committed_prefix() {
 #[test]
 fn scalar_null_handlers_keep_commandable_nullable_and_readonly_semantics() {
     let mut db = ObjectDatabase::new();
-    let output = AnalogOutputObject::new(1, "AO", 62).unwrap();
+    let output = AnalogOutputObject::new(1, "AO", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let output_id = output.object_identifier();
     db.add(Box::new(output)).unwrap();
     wp(

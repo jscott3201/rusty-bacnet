@@ -11,16 +11,10 @@ impl BACnetClient {
     fn foreign_registration<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         crate::py_async::future_into_py(py, async move {
-            let registration = {
-                let guard = inner.lock().await;
-                guard
-                    .as_ref()
-                    .ok_or_else(|| {
-                        PyRuntimeError::new_err("client not started — use 'async with'")
-                    })?
-                    .foreign_registration()
-                    .map_err(to_py_err)?
-            };
+            let registration = started(&inner)
+                .await?
+                .foreign_registration()
+                .map_err(to_py_err)?;
             crate::bip_options::registration_dict(registration)
         })
     }

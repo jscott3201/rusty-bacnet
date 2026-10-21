@@ -4,7 +4,9 @@
 //! 13.2.2.1), and a configured text is what a transition stores.
 
 use bacnet_types::bitstring::LimitEnable;
-use bacnet_types::enums::{EventState, EventType, PropertyIdentifier as P, Reliability};
+use bacnet_types::enums::{
+    EngineeringUnits, EventState, EventType, PropertyIdentifier as P, Reliability,
+};
 use bacnet_types::primitives::{BACnetTimeStamp, PropertyValue};
 
 use super::{commit_test_proposal, EventTransitionCommit, TransitionOutcome};
@@ -40,7 +42,7 @@ fn step(object: &mut dyn BACnetObject, outcome: Option<TransitionOutcome>) -> Op
 
 /// An Analog Input above its High_Limit, with the delays given.
 fn high_input(time_delay: u32) -> AnalogInputObject {
-    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     write(&mut ai, P::HIGH_LIMIT, PropertyValue::Real(80.0));
     write(
         &mut ai,

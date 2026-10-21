@@ -395,8 +395,8 @@ fn operational_problem(
 ) -> Error {
     tracing::warn!(?object_identifier, reason = %detail, "GetEventInformation projection failed");
     Error::Protocol {
-        class: ErrorClass::DEVICE.to_raw() as u32,
-        code: ErrorCode::OPERATIONAL_PROBLEM.to_raw() as u32,
+        class: ErrorClass::DEVICE,
+        code: ErrorCode::OPERATIONAL_PROBLEM,
     }
 }
 

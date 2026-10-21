@@ -47,7 +47,7 @@ async fn send_raw_apdu(
     let mut buf = BytesMut::new();
     encode_apdu(&mut buf, &apdu).expect("valid APDU encoding");
     raw_network
-        .send_apdu(&buf, server_mac, true, NetworkPriority::NORMAL)
+        .send_apdu(&buf, server_mac, true, NetworkPriority::Normal)
         .await
         .unwrap();
 }
@@ -113,7 +113,7 @@ async fn server_handles_segmented_request() {
             &buf,
             &server_mac,
             true,
-            bacnet_types::enums::NetworkPriority::NORMAL,
+            bacnet_npdu::NetworkPriority::Normal,
         )
         .await
         .unwrap();
@@ -155,7 +155,7 @@ async fn server_handles_segmented_request() {
             &buf,
             &server_mac,
             true,
-            bacnet_types::enums::NetworkPriority::NORMAL,
+            bacnet_npdu::NetworkPriority::Normal,
         )
         .await
         .unwrap();
@@ -240,7 +240,7 @@ async fn server_aborts_segmented_request_with_invalid_window_size() {
     encode_apdu(&mut buf, &seg0).expect("valid APDU encoding");
     buf[4] = 0;
     raw_network
-        .send_apdu(&buf, &server_mac, true, NetworkPriority::NORMAL)
+        .send_apdu(&buf, &server_mac, true, NetworkPriority::Normal)
         .await
         .unwrap();
 

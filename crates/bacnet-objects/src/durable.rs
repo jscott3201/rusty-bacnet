@@ -7,6 +7,9 @@
 //! A storage call can be slow, since the file backends write, synchronize and
 //! rename, so none of these objects makes one while its caller holds the
 //! database's write guard. They all follow the pattern this module provides.
+//! The Trend Log, Trend Log Multiple and Event Log commit to their
+//! [`LogPersistence`] through the same writer, on a cadence rather than per
+//! request (see [`crate::log_persistence`]), so they never stage.
 //!
 //! - Under the guard, the object copies the state to keep and queues the copy
 //!   on its save writer. The writer's own thread makes the storage calls, one
@@ -118,6 +121,7 @@
 //! [`NotificationForwarderPersistence`]: crate::notification_forwarder::NotificationForwarderPersistence
 //! [`NotificationClassPersistence`]: crate::notification_class::NotificationClassPersistence
 //! [`AccessRightsPersistence`]: crate::access_control::AccessRightsPersistence
+//! [`LogPersistence`]: crate::log_persistence::LogPersistence
 
 use std::collections::VecDeque;
 use std::future::Future;
@@ -202,22 +206,40 @@ impl Event {
 #[derive(Clone)]
 pub struct SaveWait {
     event: Arc<Event>,
+    /// A second wait this one also ends after, when an object that keeps
+    /// two kinds of state in storage settles both ([`and`](Self::and)).
+    then: Option<Arc<SaveWait>>,
 }
 
 impl SaveWait {
     pub(crate) fn new(event: Arc<Event>) -> Self {
-        Self { event }
+        Self { event, then: None }
+    }
+
+    /// A wait that ends once both this wait and `other` have.
+    pub(crate) fn and(self, other: SaveWait) -> SaveWait {
+        let then = match self.then {
+            Some(then) => SaveWait::clone(&then).and(other),
+            None => other,
+        };
+        SaveWait {
+            event: self.event,
+            then: Some(Arc::new(then)),
+        }
     }
 
     /// Whether the wait is already over.
     pub fn is_ready(&self) -> bool {
-        self.event.is_set()
+        self.event.is_set() && self.then.as_ref().is_none_or(|then| then.is_ready())
     }
 
     /// Block this thread until the wait is over, for a caller that waits
     /// off its async runtime, such as on Tokio's blocking pool.
     pub fn block(&self) {
         self.event.wait_blocking();
+        if let Some(then) = &self.then {
+            then.block();
+        }
     }
 }
 
@@ -233,14 +255,19 @@ impl Future for SaveWait {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        let mut state = lock(&self.event.state);
-        if state.done {
-            return Poll::Ready(());
+        {
+            let mut state = lock(&self.event.state);
+            if !state.done {
+                if !state.wakers.iter().any(|waker| waker.will_wake(cx.waker())) {
+                    state.wakers.push(cx.waker().clone());
+                }
+                return Poll::Pending;
+            }
         }
-        if !state.wakers.iter().any(|waker| waker.will_wake(cx.waker())) {
-            state.wakers.push(cx.waker().clone());
+        match &self.then {
+            Some(then) => Pin::new(&mut SaveWait::clone(then)).poll(cx),
+            None => Poll::Ready(()),
         }
-        Poll::Pending
     }
 }
 
@@ -593,6 +620,19 @@ pub(crate) fn sync_parent_dir(path: &Path) {
     let _ = path;
 }
 
+/// The CRC-32 (IEEE 802.3, reflected) of `data`, which the two-slot
+/// snapshot files end with.
+pub(crate) fn crc32(data: &[u8]) -> u32 {
+    let mut crc = !0u32;
+    for byte in data {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            crc = (crc >> 1) ^ (0xedb8_8320 & (0u32.wrapping_sub(crc & 1)));
+        }
+    }
+    !crc
+}
+
 /// Whether a directory sync failed only because the filesystem cannot
 /// synchronize a directory.
 #[cfg(unix)]
@@ -683,8 +723,8 @@ pub trait DurableWrites {
     /// refuses with OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
     fn commit_purge(&mut self) -> Result<(), Error> {
         Err(Error::Protocol {
-            class: ErrorClass::OBJECT.to_raw() as u32,
-            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+            class: ErrorClass::OBJECT,
+            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
         })
     }
 

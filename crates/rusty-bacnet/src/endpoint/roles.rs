@@ -6,10 +6,10 @@
 //! `MstpEndpoint`). After the owner closes or drops, every call fails closed
 //! via `BacnetError` ("endpoint shutdown").
 //!
-//! No Python callables run under native locks: roles expose no callbacks.
-//! Concurrent use is `asyncio.gather` over `read_property` plus
-//! `is_session_alive` polling — the same poll pattern as COV iterators,
-//! never Rust-calls-Python.
+//! Roles expose no callbacks. Concurrent use is `asyncio.gather` over
+//! `read_property` plus `is_session_alive` polling, the same poll pattern as
+//! COV iterators. The only Python callable a native lock waits on is the
+//! owner's `on_reinitialize` (see [`crate::reinitialize`]).
 
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -260,7 +260,7 @@ impl PyEndpointClient {
 /// Server role: the owner's responder liveness + deferred-reply seam.
 ///
 /// The responder executes ReadProperty automatically; this handle exposes
-/// no request callback (poll via `is_session_alive`, never Rust-calls-Python).
+/// no request callback (poll via `is_session_alive`).
 /// `suspend_next_reply` arms the one-shot MS/TP deferred-reply path.
 #[pyclass(
     name = "EndpointServer",
@@ -271,11 +271,25 @@ impl PyEndpointClient {
 #[derive(Clone)]
 pub struct PyEndpointServer {
     inner: bacnet_endpoint::roles::ServerRoleHandle,
+    /// Whether the endpoint was built with `on_reinitialize` (#1566).
+    reinitialize: bool,
 }
 
 impl PyEndpointServer {
-    pub(crate) fn new(inner: bacnet_endpoint::roles::ServerRoleHandle) -> Self {
-        Self { inner }
+    pub(crate) fn new(inner: bacnet_endpoint::roles::ServerRoleHandle, reinitialize: bool) -> Self {
+        Self {
+            inner,
+            reinitialize,
+        }
+    }
+
+    /// The services the server role executes.
+    fn executes(&self) -> Vec<&'static str> {
+        let mut services = vec!["read_property"];
+        if self.reinitialize {
+            services.push("reinitialize_device");
+        }
+        services
     }
 }
 
@@ -298,16 +312,17 @@ impl PyEndpointServer {
         self.inner.suspend_next_reply().map_err(to_py_err)
     }
 
-    /// Narrow service scope: the endpoint server executes ReadProperty only.
+    /// Narrow service scope: the endpoint server executes ReadProperty, and
+    /// ReinitializeDevice when the endpoint was built with `on_reinitialize`.
     fn service_scope<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let dict = PyDict::new(py);
         dict.set_item("initiates", Vec::<String>::new())?;
-        dict.set_item("executes", vec!["read_property"])?;
+        dict.set_item("executes", self.executes())?;
         Ok(dict.into_any())
     }
 
     fn __repr__(&self) -> String {
-        "EndpointServer(read_property responder)".to_string()
+        format!("EndpointServer({} responder)", self.executes().join(" "))
     }
 
     /// Refuses `copy` and `pickle`: a handle on a live endpoint. See

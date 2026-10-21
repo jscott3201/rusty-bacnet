@@ -87,7 +87,7 @@ async fn receiver(foreign: bool) -> Receiver {
         local_ip: local_ip(),
         unicast_ips: vec![local_ip()],
         wildcard_bind: false,
-        foreign_bbmd: foreign.then(|| (*bbmd().ip(), bbmd().port())),
+        foreign_bbmd: foreign.then(|| super::foreign_target::ForeignTarget::at(bbmd())),
         neighbours: Resolver::with_own(LOCAL_VMAC),
         forwarded_group_origin_drops: Arc::default(),
         drops: Arc::default(),
@@ -103,6 +103,7 @@ fn datagram(data: &[u8], peer: SocketAddrV6, destination: Ipv6Addr) -> ReceivedD
         destination: IpAddr::V6(destination),
         arrival_index: Some(1),
         os_group_delivery: None,
+        arrival_stamp: None,
     }
 }
 

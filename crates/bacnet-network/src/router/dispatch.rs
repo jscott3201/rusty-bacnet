@@ -13,7 +13,7 @@
 
 use std::sync::Arc;
 
-use bacnet_router_core::npdu::{AddressField, Malformed};
+use bacnet_npdu::MAX_MAC_LEN;
 use bacnet_router_core::router::{Discard, Frame, Received};
 use bacnet_router_core::PortId;
 use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};
@@ -23,10 +23,10 @@ use tracing::{debug, warn};
 use super::actions::drain;
 use super::control_policy::ControlGate;
 use super::engine::Engine;
-use super::hosted_host::{EngineWarnings, HostedHost, PortGroups};
+use super::hosted_host::{EngineWarnings, HostedHost};
 use super::local_control::LocalControl;
 use super::local_delivery::Delivery;
-use super::SendRequest;
+use super::send_queue;
 use crate::layer::{AdmissionSender, ReceivedApdu};
 
 /// What the router, every port's dispatch and the sweep share.
@@ -35,8 +35,6 @@ pub(super) struct Shared {
     pub(super) engine: Engine,
     /// The RB-09 wire-control gate.
     pub(super) gate: Arc<ControlGate>,
-    /// Each port's group destinations, by port index.
-    pub(super) groups: Vec<PortGroups>,
     /// Each port's network number, by port index.
     pub(super) networks: Vec<u16>,
     /// The throttles for the engine's per-frame warnings.
@@ -45,16 +43,15 @@ pub(super) struct Shared {
 
 impl Shared {
     /// Queue the startup announcements and send them on `send_txs`.
-    pub(super) fn announce(&self, send_txs: &[mpsc::Sender<SendRequest>]) {
+    pub(super) fn announce(&self, send_txs: &[send_queue::Sender]) {
         let mut router = self.engine.lock();
         router.start();
-        drain(&mut router, &[], send_txs);
+        drain(&mut router, &[], send_txs, self.engine.now());
     }
 
     /// Run the engine's sweep if it is due, and return when the next is.
     pub(super) fn sweep(&self) -> Option<bacnet_router_core::Instant> {
         let mut host = HostedHost::new(
-            &self.groups,
             &self.gate,
             &self.warnings,
             TransportProvenance::unverified(),
@@ -63,7 +60,7 @@ impl Shared {
         router.on_deadline(self.engine.now(), &mut host);
         // The sweep queues no sends; were one to come, it would be refused
         // here rather than left waiting.
-        drain(&mut router, &[], &[]);
+        drain(&mut router, &[], &[], self.engine.now());
         router.next_deadline()
     }
 }
@@ -73,8 +70,9 @@ impl Shared {
 /// [`BACnetRouter::stop`](super::BACnetRouter::stop) ends them, the local
 /// receivers see their queues close.
 pub(super) struct Outputs {
+    pub(super) replies: Arc<super::replies::ReplyLifetime>,
     /// Each port's send queue, by port index.
-    pub(super) send_txs: Vec<mpsc::Sender<SendRequest>>,
+    pub(super) send_txs: Vec<send_queue::Sender>,
     /// The local application receive queue.
     pub(super) local_tx: AdmissionSender<ReceivedApdu>,
     /// The router's own network-control consumer.
@@ -122,17 +120,15 @@ impl PortDispatch {
             link_group: received.link_layer_group,
             npdu: &received.npdu,
         };
-        let mut host = HostedHost::new(
-            &shared.groups,
-            &shared.gate,
-            &shared.warnings,
-            received.provenance,
-        );
+        let mut host = HostedHost::new(&shared.gate, &shared.warnings, received.provenance);
         let outcome = {
             let mut router = shared.engine.lock();
             let failures = router.counters().write_failures;
             let outcome = match router.receive(frame, shared.engine.now(), &mut host) {
-                Received::Local(local) => Outcome::Local(Delivery::of(&local)),
+                Received::Local(local) => Outcome::Local(Delivery::of(
+                    &local,
+                    router.ports()[usize::from(port.0)].max_npdu.unicast,
+                )),
                 Received::ToRouter(_) => Outcome::ToRouter,
                 Received::Discarded(reason) => Outcome::Discarded(reason),
                 Received::Handled => Outcome::Handled,
@@ -144,7 +140,12 @@ impl PortDispatch {
             {
                 warn!(port = self.port, "Failed to encode forwarded NPDU");
             }
-            drain(&mut router, &received.data_attributes, &outputs.send_txs);
+            drain(
+                &mut router,
+                &received.data_attributes,
+                &outputs.send_txs,
+                shared.engine.now(),
+            );
             outcome
         };
         let network = shared
@@ -154,9 +155,11 @@ impl PortDispatch {
             .unwrap_or_default();
         match outcome {
             Outcome::Local(delivery) => {
-                let _ = outputs
-                    .local_tx
-                    .try_send_apdu(delivery.application(received, network));
+                let _ = outputs.local_tx.try_send_apdu(delivery.application(
+                    received,
+                    network,
+                    &self.outputs,
+                ));
             }
             Outcome::ToRouter => outputs.local_control.deliver(&received),
             Outcome::Discarded(reason) => {
@@ -174,34 +177,20 @@ fn log_discard(reason: Discard, port: u8, source_len: usize) {
     match reason {
         Discard::SourceTooLong { .. } => warn!(
             octets = source_len,
-            limit = bacnet_router_core::MAX_MAC_LEN,
+            limit = MAX_MAC_LEN,
             "Dropping a frame whose link-layer source MAC is over the limit"
         ),
         Discard::AddressTooLong { field, length } => {
-            let octet = match field {
-                AddressField::Destination => "DLEN",
-                AddressField::Source => "SLEN",
-            };
             warn!(
                 error = %format_args!(
-                    "NPDU {octet}={length} exceeds the {}-octet address limit",
-                    bacnet_router_core::MAX_MAC_LEN
+                    "NPDU {}={length} exceeds the {MAX_MAC_LEN}-octet address limit",
+                    field.length_octet()
                 ),
                 port,
                 "Router refused an NPDU"
             );
         }
-        Discard::Malformed(fault) => {
-            let error = match fault {
-                Malformed::Truncated => "NPDU truncated",
-                Malformed::Version => "unsupported BACnet protocol version",
-                Malformed::ReservedNetwork => "NPDU names a reserved network number",
-                Malformed::EmptySource => "NPDU source SLEN=0 is invalid",
-                // A fault a later engine adds.
-                _ => "NPDU malformed",
-            };
-            warn!(error, port, "Router decode failed");
-        }
+        Discard::Malformed(fault) => warn!(error = %fault, port, "Router decode failed"),
         Discard::GlobalWithDadr => {
             warn!("Dropping a global broadcast NPDU that also names a DADR")
         }

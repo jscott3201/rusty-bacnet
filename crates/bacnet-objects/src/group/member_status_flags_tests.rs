@@ -41,8 +41,8 @@ fn assert_write_denied(group: &mut GlobalGroupObject, property: PropertyIdentifi
     assert!(matches!(
         group.write_property(property, None, value.clone(), None),
         Err(Error::Protocol { class, code })
-            if class == ErrorClass::PROPERTY.to_raw() as u32
-                && code == ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32
+            if class == ErrorClass::PROPERTY
+                && code == ErrorCode::WRITE_ACCESS_DENIED
     ));
     assert_eq!(read(group, property), value);
 }

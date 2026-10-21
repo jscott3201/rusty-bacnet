@@ -1,0 +1,10 @@
+---
+source: crates/bacnet-cli/src/tui/tests/footer.rs
+expression: out
+---
+SC
+ Esc back  ? help  q quit                                                       
+MS/TP
+ Esc back  ? help  q quit                                                       
+SC session
+ Tab certificates/doctor/credentials  p profiles  x disconnect  Esc back  ? help  q quit

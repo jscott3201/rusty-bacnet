@@ -22,6 +22,8 @@ from rusty_bacnet import (
     PropertyIdentifier, ScHub,
 )
 
+from port_retry import rerun_on_lost_port
+
 # Deterministic test provisioning only, not defaults for deployed devices.
 SERVER_UUID = bytes.fromhex("8e62ac46d7084226913776a32b619315")
 CLIENT_UUID = bytes.fromhex("95dfe4ef97f6490d9a2cf2b4b0c0e682")
@@ -283,8 +285,6 @@ class HubMtlsTests(MtlsFixture):
                         self.assertIsNone(await hub.address())
                     finally:
                         await asyncio.wait_for(hub.stop(), 3)
-                with socket.socket() as probe:
-                    probe.bind(("127.0.0.1", int(address.rsplit(":", 1)[1])))
 
     async def test_rejected_peers_leave_trusted_read_property_usable(self):
         hub = self.hub()
@@ -656,6 +656,11 @@ class NodeIdentityMtlsTests(MtlsFixture):
             raise
 
     async def test_hub_owned_identity_survives_stop_start_and_fresh_object(self):
+        # The fresh object rebinds the stopped hub's port, which another
+        # process can take in between (#1419).
+        await rerun_on_lost_port(self.identity_survives_stop_start_and_fresh_object)
+
+    async def identity_survives_stop_start_and_fresh_object(self):
         # Sparse/non-RFC-shaped input proves only whole-zero is rejected. These
         # are caller-provisioned test identities, not deployment defaults.
         uuid = bytes.fromhex("000102030405000700090a0b0c0d0e0f")
@@ -680,19 +685,9 @@ class NodeIdentityMtlsTests(MtlsFixture):
                     await self.close_raw(writer)
             finally:
                 await self.stop_hub(hub)
-            with socket.socket() as probe:
-                if os.name == "nt":
-                    # On Windows SO_REUSEADDR would bind over a live listener,
-                    # proving nothing; exclusive use fails while anything
-                    # still holds the port.
-                    probe.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
-                else:
-                    # Match Tokio's listener reuse policy; established TCP
-                    # teardown may retain TIME_WAIT, which is not a live hub
-                    # listener.
-                    probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                probe.bind(("127.0.0.1", int(address.rsplit(":", 1)[1])))
-                probe.listen()
+            # No separate probe: the fresh object's start on the last
+            # lifecycle's address rebinds that port itself, and fails if the
+            # stopped hub kept it.
 
     async def test_distinct_nodes_and_same_uuid_replacement_leave_other_node_usable(self):
         hub = self.hub()

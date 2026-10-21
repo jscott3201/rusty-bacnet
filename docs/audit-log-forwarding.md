@@ -11,7 +11,8 @@ the actual log. Configure both ends consistently.
 
 ## Storage and delivery are separate
 
-- The existing authorizers remain mandatory and fail closed. Transport
+- The server's `ServerPolicy` must still allow each receipt, and denies by
+  default. Transport
   provenance, not a notification's claimed Source_Device, governs admission.
 - A confirmed batch commits records and its completed receipt atomically before
   forwarding or sending the local SimpleACK. An unconfirmed batch commits only

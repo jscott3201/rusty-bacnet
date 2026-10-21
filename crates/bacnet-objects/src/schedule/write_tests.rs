@@ -38,11 +38,7 @@ fn write(
 fn assert_code(result: Result<(), Error>, class: ErrorClass, code: ErrorCode, what: &str) {
     match result {
         Err(Error::Protocol { class: c, code: e }) => {
-            assert_eq!(
-                (c, e),
-                (class.to_raw() as u32, code.to_raw() as u32),
-                "{what}: expected {class:?}/{code:?}"
-            );
+            assert_eq!((c, e), (class, code), "{what}: expected {class:?}/{code:?}");
         }
         other => panic!("{what}: expected {code:?}, got {other:?}"),
     }

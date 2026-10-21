@@ -3,37 +3,40 @@
 //! Raw NPDU bytes go in through a [`LoopbackTransport`] peer, or through the
 //! shared [`RouterFixture`] for the router. The non-router [`NetworkLayer`]
 //! drops and counts an NPDU whose DLEN or SLEN is past
-//! [`NpduAddress::MAX_MAC_LEN`]; the router also refuses to forward or deliver
+//! [`MAX_MAC_LEN`](bacnet_npdu::MAX_MAC_LEN); the router also refuses to forward or deliver
 //! it, and rejects it with reason 6 when it names a specific DNET. Every case
 //! runs once per address field, and an NPDU sent right after the refused one
 //! is the first thing to come out, which shows the refused one went nowhere.
 
-use bacnet_encoding::npdu::{Npdu, NpduAddress, NpduAddressField, RejectMessageToNetwork};
+use bacnet_encoding::npdu::{Npdu, NpduAddress};
+use bacnet_npdu::AddressField;
+use bacnet_npdu::RejectMessageToNetwork;
+use bacnet_npdu::{NetworkMessageType, RejectMessageReason};
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::TransportPort;
-use bacnet_types::enums::{NetworkMessageType, RejectMessageReason};
 
 use crate::layer::NetworkLayer;
 use crate::loopback_fixture::{
-    next_from_router, recv, reject_of, wire, RouterFixture, APDU, LONGEST, ORIGIN, REMOTE, TOO_LONG,
+    next_from_router, pump, recv, reject_of, wire, RouterFixture, APDU, LONGEST, ORIGIN, REMOTE,
+    TOO_LONG,
 };
 
-const FIELDS: [NpduAddressField; 2] = [NpduAddressField::Destination, NpduAddressField::Source];
+const FIELDS: [AddressField; 2] = [AddressField::Destination, AddressField::Source];
 
-fn address_of(npdu: &Npdu, field: NpduAddressField) -> &NpduAddress {
+fn address_of(npdu: &Npdu, field: AddressField) -> &NpduAddress {
     match field {
-        NpduAddressField::Destination => npdu.destination.as_ref(),
-        NpduAddressField::Source => npdu.source.as_ref(),
+        AddressField::Destination => npdu.destination.as_ref(),
+        AddressField::Source => npdu.source.as_ref(),
     }
     .expect("NPDU carries the address under test")
 }
 
 /// A non-router frame: a global broadcast DNET with a `length`-octet DADR, or
 /// a local NPDU with a `length`-octet SADR.
-fn local_frame(field: NpduAddressField, length: u8, control: Option<u8>) -> Vec<u8> {
+fn local_frame(field: AddressField, length: u8, control: Option<NetworkMessageType>) -> Vec<u8> {
     match field {
-        NpduAddressField::Destination => wire(Some((0xFFFF, length)), None, control),
-        NpduAddressField::Source => wire(None, Some((ORIGIN, length)), control),
+        AddressField::Destination => wire(Some((0xFFFF, length)), None, control),
+        AddressField::Source => wire(None, Some((ORIGIN, length)), control),
     }
 }
 
@@ -43,7 +46,7 @@ async fn non_router_drops_and_counts_an_over_long_address_in_either_field() {
     let mut network = NetworkLayer::new(transport);
     let mut controls = network.enable_network_control_receiver().unwrap();
     let mut apdus = network.start().await.unwrap();
-    let control = Some(NetworkMessageType::I_AM_ROUTER_TO_NETWORK.to_raw());
+    let control = Some(NetworkMessageType::I_AM_ROUTER_TO_NETWORK);
 
     for field in FIELDS {
         for length in [TOO_LONG, 255] {
@@ -65,7 +68,7 @@ async fn non_router_drops_and_counts_an_over_long_address_in_either_field() {
         // it sits beside DNET 0xFFFF, the only DNET a non-router takes, and
         // any DADR there is dropped for that, apart from its length (#1379):
         // the plain local NPDUs sent after it come out first.
-        if field == NpduAddressField::Destination {
+        if field == AddressField::Destination {
             peer.send_unicast(&wire(None, None, None), &[0x01])
                 .await
                 .unwrap();
@@ -75,18 +78,21 @@ async fn non_router_drops_and_counts_an_over_long_address_in_either_field() {
         }
         let apdu = recv(&mut apdus).await;
         assert_eq!(apdu.apdu, APDU[..], "{field}");
+        // The controls behind the last APDU reach their receiver once the
+        // APDU receiver is polled again (#1713).
+        pump(&mut apdus);
         let received = recv(&mut controls).await;
         match field {
-            NpduAddressField::Destination => {
+            AddressField::Destination => {
                 assert!(apdu.source_network.is_none() && !apdu.global_broadcast);
                 assert_eq!(received.npdu.destination, None);
             }
-            NpduAddressField::Source => {
+            AddressField::Source => {
                 let source = apdu.source_network.expect("routed source survives");
-                assert_eq!(source.mac_address.len(), NpduAddress::MAX_MAC_LEN);
+                assert_eq!(source.mac_address.len(), bacnet_npdu::MAX_MAC_LEN);
                 assert_eq!(
                     address_of(&received.npdu, field).mac_address.len(),
-                    NpduAddress::MAX_MAC_LEN
+                    bacnet_npdu::MAX_MAC_LEN
                 );
             }
         }
@@ -100,10 +106,10 @@ async fn non_router_drops_and_counts_an_over_long_address_in_either_field() {
 
 /// A frame from peer A toward network 3000 whose `field` address is `length`
 /// octets long.
-fn routed_frame(field: NpduAddressField, length: u8) -> Vec<u8> {
+fn routed_frame(field: AddressField, length: u8) -> Vec<u8> {
     match field {
-        NpduAddressField::Destination => wire(Some((REMOTE, length)), None, None),
-        NpduAddressField::Source => wire(Some((REMOTE, 1)), Some((ORIGIN, length)), None),
+        AddressField::Destination => wire(Some((REMOTE, length)), None, None),
+        AddressField::Source => wire(Some((REMOTE, 1)), Some((ORIGIN, length)), None),
     }
 }
 
@@ -124,7 +130,7 @@ async fn router_rejects_an_over_long_address_toward_a_dnet_with_reason_6() {
             reject_of(&reject),
             RejectMessageToNetwork {
                 reason: RejectMessageReason::ADDRESSING_ERROR,
-                dnet: REMOTE,
+                network: REMOTE,
             },
             "{field}"
         );
@@ -135,7 +141,7 @@ async fn router_rejects_an_over_long_address_toward_a_dnet_with_reason_6() {
         assert_eq!(forwarded.destination.as_ref().unwrap().network, REMOTE);
         assert_eq!(
             address_of(&forwarded, field).mac_address.len(),
-            NpduAddress::MAX_MAC_LEN,
+            bacnet_npdu::MAX_MAC_LEN,
             "{field}: the boundary address is forwarded intact"
         );
         assert_eq!(fixture.router.address_length_drops(), 1, "{field}");
@@ -169,7 +175,7 @@ async fn router_drops_an_over_long_broadcast_or_local_npdu_without_a_reject() {
     let (solicit, _) = next_from_router(&mut fixture.from_router_b).await;
     assert_eq!(
         solicit.message_type,
-        Some(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK.to_raw())
+        Some(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK)
     );
 
     // Nor was any delivered locally: the boundary NPDU is the first to arrive.
@@ -178,7 +184,7 @@ async fn router_drops_an_over_long_broadcast_or_local_npdu_without_a_reject() {
         .await;
     let delivered = recv(&mut fixture.local).await;
     let source = delivered.source_network.expect("routed source survives");
-    assert_eq!(source.mac_address.len(), NpduAddress::MAX_MAC_LEN);
+    assert_eq!(source.mac_address.len(), bacnet_npdu::MAX_MAC_LEN);
     assert_eq!(fixture.router.address_length_drops(), refused.len() as u64);
     fixture.stop().await;
 }

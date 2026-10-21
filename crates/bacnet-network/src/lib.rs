@@ -1,11 +1,12 @@
-//! BACnet network layer: packet assembly, dispatch, and routing.
-
+#![doc = include_str!("../README.md")]
+#![forbid(unsafe_code)]
 pub mod layer;
 pub mod network_number;
 pub mod priority_channel;
 pub mod response_route;
 pub mod router;
 pub mod router_table;
+mod totals;
 
 #[cfg(test)]
 mod address_bound_tests;
@@ -19,9 +20,14 @@ mod group_dadr_tests;
 
 #[cfg(test)]
 mod link_source_bound_tests;
+#[cfg(test)]
+mod router_reply_capability_tests;
 
 #[cfg(test)]
 mod loopback_fixture;
+
+#[cfg(test)]
+mod node_receive_tests;
 
 #[cfg(test)]
 mod reject_route_tests;

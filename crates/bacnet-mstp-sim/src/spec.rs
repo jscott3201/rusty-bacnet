@@ -1,5 +1,5 @@
-//! What a scenario configures: master nodes, their adapters and
-//! applications, scripted stations' replies, and faults.
+//! What a scenario configures: master nodes and their adapters, scripted
+//! stations' replies, and faults. Applications are in `app`.
 
 use bacnet_mstp_codec::{Frame, FrameType, MAX_COBS_FRAME_LENGTH};
 use bacnet_mstp_core::{Duration, Instant, MstpCoreConfig};
@@ -7,23 +7,93 @@ use bacnet_mstp_core::{Duration, Instant, MstpCoreConfig};
 /// How a simulated master's platform adapter behaves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct AdapterSpec {
+    /// Extra idle time after each stop bit except the final one. Zero by
+    /// default; the normal maximum is 19 bit times after stop end, because
+    /// the 20-bit idle limit includes the stop bit (135-2020 9.2.3).
+    pub inter_octet_gap: Duration,
+    /// Idle-mark driver hold after the final data stop bit ends. Zero by
+    /// default; must not exceed [`crate::WireTiming::max_post_drive`]. This
+    /// delays physical release and receiver enable, not the core's final-stop
+    /// completion timestamp or the host's drain observation.
+    pub post_drive: Duration,
+    /// Chunked host reads and completion timing, or octet delivery when absent.
+    pub host: Option<HostSpec>,
     /// How long after the core hands it a frame the adapter confirms the
     /// start and enables its driver. Zero is an ideal adapter; anything more
     /// models a slow one (a busy executor, a DMA queue, a late interrupt).
     pub start_delay: Duration,
-    /// Feed the node its own octets while it transmits, as a transceiver
-    /// whose receiver stays enabled would. The core takes what it hears
-    /// after confirming a start for its own echo, and ignores it.
+    /// Feed the node its own observations while it transmits, as a transceiver
+    /// whose receiver stays enabled would. Octet mode delivers immediately;
+    /// buffered hosts apply [`HostSpec::echo_return_delay`] and their filter.
     pub echo: bool,
     /// How late the adapter services each core deadline. Zero services it
     /// exactly when it falls due.
     pub deadline_lateness: Duration,
     /// Further lateness drawn per deadline, uniformly from zero to this, from
     /// the run's seeded generator, in whole microseconds: the granularity of
-    /// a tick-driven timer. Below the core's `LATE_DEADLINE` (1 ms) it is not
-    /// a miss. Without
+    /// a tick-driven timer. Below the core's `late_deadline` (1 ms by
+    /// default) it is not counted late. Without
     /// any, two masters that start in step can stay in step for ever.
     pub deadline_jitter: Duration,
+}
+
+/// A buffered serial adapter. This is a deterministic model, not hardware
+/// qualification. The default 1 ms latency fits the response budget at the
+/// standard baud rates; 16 ms can exceed Tusage_delay on the physical wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HostSpec {
+    /// Local delay between observing an own transmitted character and making
+    /// it available to the serial receive buffer. Captured at transmit start;
+    /// ordinary receive latency follows it. Zero preserves immediate return.
+    /// This does not change physical line timing or enable echo generation.
+    /// Returns are FIFO: a shorter later profile cannot overtake queued data.
+    /// Each host retains at most 4096 pending characters; overflow is counted
+    /// and reported, and power loss cancels them. See [`crate::Report::local_echo`].
+    pub echo_return_delay: Duration,
+    /// Time from the first buffered character until the read becomes ready.
+    /// Later characters can coalesce into that read. Must be 1 through 16 ms.
+    pub receive_latency: Duration,
+    /// Maximum characters returned by one read, in 1..=4096.
+    pub max_chunk: usize,
+    /// Draw each read size uniformly from 1 through `max_chunk`, seeded by
+    /// the simulation seed, independently of scenario and deadline draws.
+    pub random_chunks: bool,
+    /// Time from write start until serial drain returns. Completion is the
+    /// later of this and the frame's captured physical gap schedule.
+    pub drain_duration: Duration,
+    /// Optional content-matching echo hunt. Physical echo generation remains
+    /// [`AdapterSpec::echo`], independently, to model missing echo.
+    pub echo_grace: Option<Duration>,
+}
+
+impl Default for HostSpec {
+    fn default() -> Self {
+        Self {
+            echo_return_delay: Duration::ZERO,
+            receive_latency: Duration::from_millis(1),
+            max_chunk: 512,
+            random_chunks: false,
+            drain_duration: Duration::ZERO,
+            echo_grace: None,
+        }
+    }
+}
+
+impl HostSpec {
+    pub(crate) fn validate(self) {
+        assert!(
+            (Duration::from_millis(1)..=Duration::from_millis(16)).contains(&self.receive_latency),
+            "host receive latency must be 1 through 16 ms"
+        );
+        assert!(
+            (1..=4096).contains(&self.max_chunk),
+            "host chunk size must be 1 through 4096"
+        );
+        assert!(
+            self.echo_grace.is_none_or(|grace| grace > Duration::ZERO),
+            "echo grace must be positive"
+        );
+    }
 }
 
 impl AdapterSpec {
@@ -34,47 +104,12 @@ impl AdapterSpec {
         self.start_delay > Duration::ZERO || self.deadline_lateness > Duration::ZERO
     }
 
-    /// Whether the core may count this adapter's deadline service as late
-    /// (`LATE_DEADLINE`, 1 ms, or more).
+    /// Whether a core that counts a deadline late at `late_deadline` or
+    /// more ([`MstpCoreConfig::late_deadline`]) may count this adapter's
+    /// deadline service late.
     #[must_use]
-    pub fn may_miss_deadlines(&self) -> bool {
-        self.deadline_lateness + self.deadline_jitter >= Duration::from_millis(1)
-    }
-}
-
-/// How a simulated application answers the requests its core delivers.
-///
-/// Whatever the policy, an answer the core refuses as too late (it already
-/// sent Reply Postponed, or the requester may have stopped waiting) is queued
-/// as an ordinary NPDU for the next token, as a real stack would send it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ReplyPolicy {
-    /// Answer every request with `payload` after `delay`.
-    Answer {
-        /// Time from the delivery to the answer.
-        delay: Duration,
-        /// Reply NPDU; it must not expect a reply itself.
-        payload: Vec<u8>,
-    },
-    /// Decide to postpone after `delay`, then queue `payload` for the next
-    /// token.
-    Postpone {
-        /// Time from the delivery to the decision.
-        delay: Duration,
-        /// Reply NPDU sent later.
-        payload: Vec<u8>,
-    },
-    /// Never decide. The core sends Reply Postponed when its decision
-    /// deadline passes.
-    Ignore,
-}
-
-impl Default for ReplyPolicy {
-    fn default() -> Self {
-        Self::Answer {
-            delay: Duration::from_millis(2),
-            payload: vec![0x01, 0x00, 0xAC],
-        }
+    pub fn may_miss_deadlines(&self, late_deadline: Duration) -> bool {
+        self.deadline_lateness + self.deadline_jitter >= late_deadline
     }
 }
 
@@ -90,11 +125,13 @@ pub struct MasterSpec {
     pub broadcast_capacity: usize,
     /// Adapter timing and echo.
     pub adapter: AdapterSpec,
-    /// How the node's application answers requests.
-    pub reply: ReplyPolicy,
+    /// The node's application. Clones of the spec share it.
+    pub(crate) application: crate::app::Shared,
     /// Whether the node is powered at the start. A node added unpowered
     /// joins with [`Fault::PowerOn`].
     pub powered: bool,
+    /// How far its UART and its clock run from nominal. None by default.
+    pub skew: crate::Skew,
 }
 
 impl MasterSpec {
@@ -115,8 +152,9 @@ impl MasterSpec {
             unicast_capacity: 16,
             broadcast_capacity: 16,
             adapter: AdapterSpec::default(),
-            reply: ReplyPolicy::default(),
+            application: crate::app::Shared::new(crate::ReplyPolicy::default()),
             powered: true,
+            skew: crate::Skew::default(),
         }
     }
 
@@ -148,10 +186,42 @@ impl MasterSpec {
         self
     }
 
-    /// Set the reply policy.
+    /// Use buffered host input and the host timeout defaults: 100 ms frame
+    /// abort, 300 ms reply timeout and 35 ms usage timeout. These receiver
+    /// allowances do not extend the 15 ms/250 ms peer response obligations.
+    ///
+    /// # Panics
+    ///
+    /// If the host read latency, chunk size or echo grace is invalid.
     #[must_use]
-    pub fn reply(mut self, reply: ReplyPolicy) -> Self {
-        self.reply = reply;
+    pub fn host(mut self, host: HostSpec) -> Self {
+        host.validate();
+        self.adapter.host = Some(host);
+        self.config.t_frame_abort = bacnet_mstp_core::MAX_FRAME_ABORT;
+        self.config.t_reply_timeout = bacnet_mstp_core::MAX_REPLY_TIMEOUT;
+        self.config.t_usage_timeout = bacnet_mstp_core::MAX_USAGE_TIMEOUT;
+        self
+    }
+
+    /// Set the node's application: a [`ReplyPolicy`](crate::ReplyPolicy)
+    /// or any [`Application`](crate::Application). The default answers
+    /// every request with a short fixed NPDU after 2 ms.
+    #[must_use]
+    pub fn application(mut self, application: impl crate::Application + 'static) -> Self {
+        self.application = crate::app::Shared::new(application);
+        self
+    }
+
+    /// Run the node's UART and clock off nominal, within the one percent
+    /// Clause 9.2.3 allows; see [`Skew`](crate::Skew).
+    ///
+    /// # Panics
+    ///
+    /// If either rate is off by more than one percent.
+    #[must_use]
+    pub fn skew(mut self, skew: crate::Skew) -> Self {
+        skew.validate();
+        self.skew = skew;
         self
     }
 
@@ -227,7 +297,9 @@ pub enum Fault {
     },
     /// Withdraw every corruption and cut-off armed but not yet fired.
     Disarm,
-    /// Replace a node's adapter timing from now on.
+    /// Replace a node's adapter timing from now on. Changing between host
+    /// and octet delivery requires the node to be powered off; buffered data
+    /// and in-flight completion cannot migrate between the two adapters.
     SetAdapter {
         /// The node's station.
         station: u8,
@@ -256,6 +328,12 @@ pub struct SeenFrame {
 pub struct ScriptSend {
     /// Delay from the frame that triggered it to the first octet.
     pub after: Duration,
+    /// Uniform extra idle time between octets, as in
+    /// [`AdapterSpec::inter_octet_gap`].
+    pub inter_octet_gap: Duration,
+    /// Idle-mark driver hold after the last stop bit, with the same limit
+    /// as [`AdapterSpec::post_drive`].
+    pub post_drive: Duration,
     /// The octets, preamble included.
     pub octets: Vec<u8>,
     /// Whether the octets are deliberately not a valid frame. Such a send
@@ -284,9 +362,27 @@ impl ScriptSend {
         octets.truncate(length);
         Self {
             after,
+            inter_octet_gap: Duration::ZERO,
+            post_drive: Duration::ZERO,
             octets,
             malformed: false,
         }
+    }
+
+    /// Hold the driver after the final stop bit. The simulator validates
+    /// the limit against its baud rate before transmitting.
+    #[must_use]
+    pub fn post_drive(mut self, hold: Duration) -> Self {
+        self.post_drive = hold;
+        self
+    }
+
+    /// Insert the same extra idle time after every non-final stop bit.
+    /// The simulator validates the gap against the line's baud rate.
+    #[must_use]
+    pub fn inter_octet_gap(mut self, gap: Duration) -> Self {
+        self.inter_octet_gap = gap;
+        self
     }
 
     /// A well-formed frame with one octet XORed by `mask` afterwards, so its

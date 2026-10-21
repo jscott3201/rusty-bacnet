@@ -78,8 +78,8 @@ impl TryFrom<&ErrorPdu> for CreateObjectError {
 impl From<CreateObjectError> for Error {
     fn from(error: CreateObjectError) -> Self {
         Error::protocol(
-            error.error_class.to_raw() as u32,
-            error.error_code.to_raw() as u32,
+            error.error_class,
+            error.error_code,
             Some(ErrorDetail::FirstFailedElementNumber(
                 error.first_failed_element_number,
             )),
@@ -127,7 +127,7 @@ mod tests {
         assert_eq!(CreateObjectError::try_from(&pdu).unwrap(), sample(2));
         assert!(matches!(
             Error::from(sample(2)),
-            Error::Structured { class: 2, code: 40, detail }
+            Error::Structured { class: ErrorClass::PROPERTY, code: ErrorCode::WRITE_ACCESS_DENIED, detail }
                 if *detail == ErrorDetail::FirstFailedElementNumber(2)
         ));
     }

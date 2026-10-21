@@ -155,8 +155,8 @@ impl BACnetObject for SourceReporter {
     ) -> Result<(), Error> {
         if self.active() && property == PropertyIdentifier::AUDIT_SOURCE_REPORTER {
             return Err(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
+                class: ErrorClass::PROPERTY,
+                code: ErrorCode::WRITE_ACCESS_DENIED,
             });
         }
         self.wrapped
@@ -173,8 +173,8 @@ impl BACnetObject for SourceReporter {
     ) -> Result<(), Error> {
         if self.active() && property == PropertyIdentifier::AUDIT_SOURCE_REPORTER {
             return Err(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
+                class: ErrorClass::PROPERTY,
+                code: ErrorCode::WRITE_ACCESS_DENIED,
             });
         }
         self.wrapped
@@ -203,6 +203,10 @@ impl BACnetObject for SourceReporter {
 
     fn bind_deadline_waker_internal(&mut self, waker: Option<Arc<DeadlineWaker>>) {
         self.wrapped.bind_deadline_waker_internal(waker)
+    }
+
+    fn start_output_internal(&mut self) {
+        self.wrapped.start_output_internal()
     }
 
     fn advance_monotonic_time_internal(&mut self, now: Duration) -> bool {
@@ -595,6 +599,10 @@ impl BACnetObject for SourceReporter {
 
     fn refresh_log_window_internal(&mut self) -> bool {
         self.wrapped.refresh_log_window_internal()
+    }
+
+    fn log_collecting_internal(&self) -> bool {
+        self.wrapped.log_collecting_internal()
     }
 
     fn logs_received_event_notifications_internal(&self) -> bool {

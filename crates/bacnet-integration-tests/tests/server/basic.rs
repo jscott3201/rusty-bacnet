@@ -25,7 +25,7 @@ async fn rpm_default_work_budget_aborts_whole_service() {
     client.stop().await.unwrap();
     server.stop().await.unwrap();
     assert!(
-        matches!(result, Err(Error::Abort { reason }) if reason == AbortReason::OUT_OF_RESOURCES.to_raw()),
+        matches!(result, Err(Error::Abort { reason }) if reason == AbortReason::OUT_OF_RESOURCES),
         "{result:?}"
     );
 }

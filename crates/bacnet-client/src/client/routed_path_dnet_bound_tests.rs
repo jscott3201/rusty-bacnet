@@ -180,7 +180,7 @@ async fn add_routed_device_refuses_a_destination_no_request_could_reach() {
         segmentation_supported: Segmentation::NONE,
         max_segments_accepted: None,
     };
-    let too_long = vec![3; NpduAddress::MAX_MAC_LEN + 1];
+    let too_long = vec![3; bacnet_npdu::MAX_MAC_LEN + 1];
     for (dnet, dadr) in [
         (0, DADR.to_vec()),
         (u16::MAX, DADR.to_vec()),
@@ -190,7 +190,7 @@ async fn add_routed_device_refuses_a_destination_no_request_could_reach() {
         assert!(matches!(result, Err(Error::Encoding(_))), "{result:?}");
         assert!(client.get_device(ROUTED_DEVICE).await.is_none());
     }
-    let longest = vec![3; NpduAddress::MAX_MAC_LEN];
+    let longest = vec![3; bacnet_npdu::MAX_MAC_LEN];
     client
         .add_routed_device(config(u16::MAX - 1, longest))
         .await

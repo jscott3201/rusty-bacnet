@@ -13,7 +13,9 @@ use bacnet_objects::binary::{BinaryInputObject, BinaryValueObject};
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::ReadAccessSpecification;
-use bacnet_types::enums::{ErrorClass, ErrorCode, Segmentation, ServiceSupported};
+use bacnet_types::enums::{
+    EngineeringUnits, ErrorClass, ErrorCode, Segmentation, ServiceSupported,
+};
 use pyo3::exceptions::PyValueError;
 use pyo3::{PyErr, PyResult};
 
@@ -93,7 +95,7 @@ pub(crate) fn parse_segmentation(segmentation: Option<PySegmentation>) -> Segmen
 
 /// Build the single validated DeviceIdentity (builder-time only).
 ///
-/// All Encoding failures (instance range, APDU table, duplicate ports) map
+/// All Encoding failures (instance range, receive ceiling, duplicate ports) map
 /// to ValueError before any bind/dial. No post-start mutation exists.
 pub(crate) fn build_identity(
     device_instance: u32,
@@ -153,8 +155,7 @@ pub(crate) fn build_database(
 ) -> PyResult<ObjectDatabase> {
     build_database_with_extra(identity, extra).map_err(|e| match &e {
         bacnet_types::error::Error::Protocol { class, code }
-            if *class == u32::from(ErrorClass::PROPERTY.to_raw())
-                && *code == u32::from(ErrorCode::DUPLICATE_NAME.to_raw()) =>
+            if *class == ErrorClass::PROPERTY && *code == ErrorCode::DUPLICATE_NAME =>
         {
             PyValueError::new_err(format!("duplicate object name: {e}"))
         }
@@ -291,7 +292,8 @@ pub(crate) fn make_analog_input(
     units: u32,
     present_value: f32,
 ) -> PyResult<Box<dyn BACnetObject>> {
-    let mut object = AnalogInputObject::new(instance, name, units).map_err(to_py_err)?;
+    let mut object = AnalogInputObject::new(instance, name, EngineeringUnits::from_raw(units))
+        .map_err(to_py_err)?;
     object.set_present_value(present_value);
     Ok(Box::new(object))
 }
@@ -303,7 +305,8 @@ pub(crate) fn make_analog_value(
     units: u32,
     audit_policy: ObjectAuditPolicy,
 ) -> PyResult<Box<dyn BACnetObject>> {
-    let mut object = AnalogValueObject::new(instance, name, units).map_err(to_py_err)?;
+    let mut object = AnalogValueObject::new(instance, name, EngineeringUnits::from_raw(units))
+        .map_err(to_py_err)?;
     object.set_audit_policy(audit_policy);
     Ok(Box::new(object))
 }

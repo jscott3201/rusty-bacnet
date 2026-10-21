@@ -413,10 +413,13 @@ pub(super) fn property_state_from_pv(pv: &PropertyValue) -> Result<BACnetPropert
             BACnetPropertyStates::Other(BACnetProprietaryPropertyState::primitive(other, data)?)
         }
         reserved => {
-            return Err(Error::decoding(
+            return Err(DecodeError::new(
+                DecodingKind::InvalidEncoding,
                 0,
-                format!("property state tag {reserved} is reserved"),
-            ));
+                "property state tag {} is reserved",
+            )
+            .with_value(reserved.into())
+            .into());
         }
     })
 }

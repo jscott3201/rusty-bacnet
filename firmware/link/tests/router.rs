@@ -6,8 +6,8 @@
 use core::mem::size_of;
 
 use firmware_link::router::{
-    expected, run, Actions, BbmdTables, BipPort, Core, Memory, Queues, RouterEngine, RouterStorage,
-    Summary,
+    expected, run, Bbmd, BbmdTables, Core, Memory, MstpStorage, Queues, RouterEngine,
+    RouterStorage, Summary,
 };
 
 /// The whole summary against the one the emulation build checks too
@@ -25,17 +25,20 @@ fn scenario_summary() {
 fn ram_sizes() {
     let router = size_of::<RouterEngine<'static>>();
     let core = size_of::<Core<'static>>();
-    let port = size_of::<BipPort<'static>>();
+    let port = size_of::<Bbmd<'static>>();
     println!(
         "Storage<2, 8, 8, 4> (the router's, in the static): {} octets",
         size_of::<RouterStorage>()
     );
-    println!("HeaplessQueues<1, 2, 1497>: {} octets", size_of::<Queues>());
-    println!("ExtendedActionBuffers<1>: {} octets", size_of::<Actions>());
+    println!("FixedQueues<1, 2, 1497>: {} octets", size_of::<Queues>());
+    println!(
+        "ExtendedStorage<1, 2, 1> (the MS/TP core's): {} octets",
+        size_of::<MstpStorage>()
+    );
     println!("Memory: {} octets", size_of::<Memory>());
     println!("Router (on the stack): {router} octets");
     println!("MasterCore (on the stack): {core} octets");
-    println!("BbmdPort with its Node<1> (on the stack): {port} octets");
+    println!("BbmdPort (on the stack): {port} octets");
     println!(
         "Tables<2, 2> (on the stack): {} octets",
         size_of::<BbmdTables>()

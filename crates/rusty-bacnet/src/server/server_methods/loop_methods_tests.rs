@@ -64,8 +64,8 @@ fn python_add_loop_settings_are_checked_like_the_rust_setters() {
         let error = loop_object(1, "LOOP-1", 62, settings).err().unwrap();
         assert!(
             matches!(error, Error::Protocol { class, code }
-                if class == ErrorClass::PROPERTY.to_raw() as u32
-                    && code == ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32),
+                if class == ErrorClass::PROPERTY
+                    && code == ErrorCode::VALUE_OUT_OF_RANGE),
             "{error:?}"
         );
     }

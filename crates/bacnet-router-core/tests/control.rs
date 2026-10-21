@@ -3,11 +3,13 @@
 
 mod fixture;
 
-use bacnet_router_core::message::{MessageType, RejectReason};
+use bacnet_router_core::npdu::Mac;
+use bacnet_router_core::npdu::NetworkPriority;
 use bacnet_router_core::npdu::Npdu;
+use bacnet_router_core::npdu::{NetworkMessageType, RejectMessageReason};
 use bacnet_router_core::router::{ControlClass, Discard, Event, Kind, Options};
 use bacnet_router_core::table::{Convergence, Reachability};
-use bacnet_router_core::{Mac, PortId};
+use bacnet_router_core::PortId;
 use fixture::{
     addr, at, bytes, deliver, deliver_broadcast, i_am, learn_9_via_r7, listed, message, networks,
     options, port_on, router, router_with, sent_reject, Outcome, Recorder, NODE_A, OWN_0, OWN_1,
@@ -24,10 +26,10 @@ const R8: &[u8] = &[0x08];
 fn unknown_types_draw_reason_3() {
     let mut router = router();
     let mut host = Recorder::default();
-    let mut proprietary = Npdu::message(MessageType::from_raw(0x80), &[1]);
+    let mut proprietary = Npdu::message(NetworkMessageType::from_raw(0x80), &[1]);
     proprietary.vendor_id = Some(260);
     for (kind, frame) in [
-        (0x14, message(MessageType::from_raw(0x14), &[])),
+        (0x14, message(NetworkMessageType::from_raw(0x14), &[])),
         (0x80, bytes(&proprietary)),
     ] {
         let (outcome, sent) = deliver(&mut router, &mut host, 0, NODE_A, &frame, at(1));
@@ -36,12 +38,12 @@ fn unknown_types_draw_reason_3() {
         assert_eq!(sent[0].to.as_deref(), Some(NODE_A));
         assert_eq!(
             sent_reject(&sent[0]),
-            (RejectReason::UNKNOWN_MESSAGE_TYPE, 0, None)
+            (RejectMessageReason::UNKNOWN_MESSAGE_TYPE, 0, None)
         );
         assert_eq!(
             host.events.pop(),
             Some(Event::UnknownMessage {
-                message_type: MessageType::from_raw(kind)
+                message_type: NetworkMessageType::from_raw(kind)
             })
         );
     }
@@ -50,7 +52,7 @@ fn unknown_types_draw_reason_3() {
         &mut host,
         0,
         NODE_A,
-        &message(MessageType::from_raw(0x0A), &[]),
+        &message(NetworkMessageType::from_raw(0x0A), &[]),
         at(1),
     );
     assert_eq!(outcome, Outcome::Handled);
@@ -58,7 +60,7 @@ fn unknown_types_draw_reason_3() {
     assert_eq!(
         host.events,
         [Event::SecurityMessage {
-            message_type: MessageType::from_raw(0x0A)
+            message_type: NetworkMessageType::from_raw(0x0A)
         }]
     );
 }
@@ -72,8 +74,8 @@ fn i_am_router_learns_then_rebroadcasts() {
     let ports = [port_on(1, OWN_0), port_on(2, OWN_1), port_on(3, &[0x33])];
     let mut router = router_with(&ports, Options::HOSTED);
     let mut host = Recorder::default();
-    let mut frame = Npdu::message(MessageType::I_AM_ROUTER_TO_NETWORK, &[0, 9, 0, 10]);
-    frame.priority = 2;
+    let mut frame = Npdu::message(NetworkMessageType::I_AM_ROUTER_TO_NETWORK, &[0, 9, 0, 10]);
+    frame.priority = NetworkPriority::CriticalEquipment;
     let (outcome, sent) = deliver_broadcast(&mut router, &mut host, 1, R7, &bytes(&frame), at(1));
     assert_eq!(outcome, Outcome::Handled);
     for network in [9, 10] {
@@ -83,7 +85,10 @@ fn i_am_router_learns_then_rebroadcasts() {
     let ports: Vec<u8> = sent.iter().map(|sent| sent.port).collect();
     assert_eq!(ports, [0, 2]);
     for sent in &sent {
-        assert_eq!(sent.kind, Kind::Relay(MessageType::I_AM_ROUTER_TO_NETWORK));
+        assert_eq!(
+            sent.kind,
+            Kind::Relay(NetworkMessageType::I_AM_ROUTER_TO_NETWORK)
+        );
         // Re-sent as a fresh message: data verbatim, priority normal.
         assert_eq!(sent.npdu, i_am(&[9, 10]));
     }
@@ -94,8 +99,8 @@ fn i_am_router_learns_then_rebroadcasts() {
     );
 
     for bad in [
-        message(MessageType::I_AM_ROUTER_TO_NETWORK, &[]),
-        message(MessageType::I_AM_ROUTER_TO_NETWORK, &[0, 44, 0]),
+        message(NetworkMessageType::I_AM_ROUTER_TO_NETWORK, &[]),
+        message(NetworkMessageType::I_AM_ROUTER_TO_NETWORK, &[0, 44, 0]),
     ] {
         let (outcome, sent) = deliver_broadcast(&mut router, &mut host, 1, R7, &bad, at(2));
         assert_eq!(outcome, Outcome::Discarded(Discard::BadMessage));
@@ -142,11 +147,10 @@ fn one_message_never_corroborates_itself() {
 }
 
 /// The route cap: an I-Am-Router stops learning new networks there but
-/// still refreshes ones the table holds; an Init-ACK learns nothing more,
-/// as today (control_messages.rs:247 against :762). Direct routes count.
+/// still refreshes ones the table holds. Direct routes count.
 #[test]
 fn the_route_cap_ends_learning() {
-    let options = options(|o| o.route_cap = 4);
+    let options = options(|o| o.route_cap = Some(4));
     let mut router = router_with(&fixture::two_ports(), options);
     let mut host = Recorder::default();
     deliver_broadcast(&mut router, &mut host, 1, R7, &i_am(&[9, 10, 11]), at(1));
@@ -158,12 +162,34 @@ fn the_route_cap_ends_learning() {
     deliver_broadcast(&mut router, &mut host, 1, R8, &i_am(&[10, 12, 9]), at(2));
     assert_eq!(router.table().lookup(10).unwrap().next_hop().as_slice(), R8);
     assert_eq!(router.table().lookup(9).unwrap().next_hop().as_slice(), R7);
-    // An Init-ACK at the cap stops at once, even for a held network.
-    let ack = message(MessageType::INITIALIZE_ROUTING_TABLE_ACK, &[1, 0, 9, 1, 0]);
-    deliver(&mut router, &mut host, 1, R8, &ack, at(3));
-    assert_eq!(router.table().lookup(9).unwrap().next_hop().as_slice(), R7);
     let counters = router.table().claim_counters();
-    assert_eq!((counters.learned_ok, counters.learned_cap_ignored), (3, 3));
+    assert_eq!((counters.learned_ok, counters.learned_cap_ignored), (3, 2));
+}
+
+/// An Init-ACK at the route cap does what an I-Am-Router does there
+/// (#1698): a network the table holds is refreshed, and a new one is
+/// refused, counted, and ends the message's learning.
+#[test]
+fn an_init_ack_at_the_cap_refreshes_held_networks() {
+    let options = options(|o| o.route_cap = Some(4));
+    let mut router = router_with(&fixture::two_ports(), options);
+    let mut host = Recorder::default();
+    deliver_broadcast(&mut router, &mut host, 1, R7, &i_am(&[9, 10]), at(1));
+    assert_eq!(router.table().networks().collect::<Vec<_>>(), [1, 2, 9, 10]);
+    host.events.clear();
+    // Network 9, held; 12, new; then 10, held, which 12 keeps unread.
+    let entries = [3, 0, 9, 1, 0, 0, 12, 1, 0, 0, 10, 1, 0];
+    let ack = message(NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK, &entries);
+    deliver(&mut router, &mut host, 1, R8, &ack, at(2));
+    let table = router.table();
+    assert_eq!(table.lookup(9).unwrap().next_hop().as_slice(), R8);
+    assert!(table.lookup(12).is_none());
+    assert_eq!(table.lookup(10).unwrap().next_hop().as_slice(), R7);
+    assert!(host.events.contains(&Event::RouteCap {
+        class: ControlClass::InitAck
+    }));
+    let counters = table.claim_counters();
+    assert_eq!((counters.learned_ok, counters.learned_cap_ignored), (3, 1));
 }
 
 /// Clause 6.6.3.2, scoped: answered with the network when it lies beyond
@@ -179,7 +205,7 @@ fn scoped_who_is_router_cases() {
     router.table_mut().mark_unreachable(9);
     let who_is = |network: u16| {
         message(
-            MessageType::WHO_IS_ROUTER_TO_NETWORK,
+            NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK,
             &network.to_be_bytes(),
         )
     };
@@ -190,19 +216,19 @@ fn scoped_who_is_router_cases() {
     assert_eq!((sent[0].port, sent[0].is_broadcast()), (0, true));
     assert_eq!(
         sent[0].kind,
-        Kind::Answer(MessageType::I_AM_ROUTER_TO_NETWORK)
+        Kind::Answer(NetworkMessageType::I_AM_ROUTER_TO_NETWORK)
     );
     assert_eq!(listed(&sent[0]), [9]);
 
     // Unknown: searched for on port 1, with A as the origin.
-    let mut asked = Npdu::message(MessageType::WHO_IS_ROUTER_TO_NETWORK, &[0, 44]);
-    asked.priority = 1;
+    let mut asked = Npdu::message(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK, &[0, 44]);
+    asked.priority = NetworkPriority::Urgent;
     let (_, sent) = deliver(&mut router, &mut host, 0, NODE_A, &bytes(&asked), at(1));
     assert_eq!(sent.len(), 1);
     assert_eq!((sent[0].port, sent[0].is_broadcast()), (1, true));
     assert_eq!(
         sent[0].kind,
-        Kind::Relay(MessageType::WHO_IS_ROUTER_TO_NETWORK)
+        Kind::Relay(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK)
     );
     let expected = Npdu {
         source: Some(addr(1, NODE_A)),
@@ -210,7 +236,7 @@ fn scoped_who_is_router_cases() {
     };
     assert_eq!(sent[0].npdu, bytes(&expected));
     // A request a router passed on keeps its origin.
-    let mut routed = Npdu::message(MessageType::WHO_IS_ROUTER_TO_NETWORK, &[0, 44]);
+    let mut routed = Npdu::message(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK, &[0, 44]);
     routed.source = Some(addr(7, &[1]));
     let (_, sent) = deliver(&mut router, &mut host, 1, R8, &bytes(&routed), at(1));
     assert_eq!(sent[0].port, 0);
@@ -226,7 +252,7 @@ fn scoped_who_is_router_cases() {
 
     for bad in [
         who_is(0),
-        message(MessageType::WHO_IS_ROUTER_TO_NETWORK, &[0, 9, 0]),
+        message(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK, &[0, 9, 0]),
     ] {
         let (outcome, sent) = deliver(&mut router, &mut host, 0, NODE_A, &bad, at(1));
         assert_eq!(outcome, Outcome::Discarded(Discard::BadMessage));
@@ -241,7 +267,7 @@ fn scoped_who_is_router_cases() {
 #[test]
 fn unscoped_answer_lists_reachable_networks() {
     let ports = [port_on(1, OWN_0), port_on(2, OWN_1), port_on(3, &[0x33])];
-    let who_is_all = message(MessageType::WHO_IS_ROUTER_TO_NETWORK, &[]);
+    let who_is_all = message(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK, &[]);
     let mut router = router_with(&ports, Options::HOSTED);
     let mut host = Recorder::default();
     let r8 = Mac::from_slice(R8).unwrap();
@@ -256,7 +282,7 @@ fn unscoped_answer_lists_reachable_networks() {
     assert_eq!((sent[0].port, sent[0].is_broadcast()), (0, true));
     assert_eq!(
         sent[0].kind,
-        Kind::Answer(MessageType::I_AM_ROUTER_TO_NETWORK)
+        Kind::Answer(NetworkMessageType::I_AM_ROUTER_TO_NETWORK)
     );
     assert_eq!(listed(&sent[0]), [2, 3, 10]);
 
@@ -278,7 +304,7 @@ fn flow_control_covers_what_the_sender_serves() {
     learn_9_via_r7(&mut router, at(0));
     let r8 = Mac::from_slice(R8).unwrap();
     router.table_mut().add_learned(4000, PortId(1), r8, at(0));
-    let busy = |list: &[u16]| message(MessageType::ROUTER_BUSY_TO_NETWORK, &networks(list));
+    let busy = |list: &[u16]| message(NetworkMessageType::ROUTER_BUSY_TO_NETWORK, &networks(list));
 
     // R7's list names 9, R8's 4000, and direct 2: only 9 is R7's.
     let (_, sent) = deliver_broadcast(&mut router, &mut host, 1, R7, &busy(&[9, 4000, 2]), at(1));
@@ -314,7 +340,7 @@ fn flow_control_covers_what_the_sender_serves() {
         router.table().lookup(4000).unwrap().reachability(),
         Reachability::Unreachable
     );
-    let available = message(MessageType::ROUTER_AVAILABLE_TO_NETWORK, &[]);
+    let available = message(NetworkMessageType::ROUTER_AVAILABLE_TO_NETWORK, &[]);
     deliver_broadcast(&mut router, &mut host, 1, R8, &available, at(4));
     assert_eq!(
         router.table().lookup(4000).unwrap().reachability(),
@@ -326,7 +352,7 @@ fn flow_control_covers_what_the_sender_serves() {
     let (outcome, sent) = deliver_broadcast(&mut router, &mut host, 1, R8, &busy(&[4000]), at(5));
     assert_eq!(outcome, Outcome::Discarded(Discard::Denied));
     assert!(sent.is_empty());
-    let odd = message(MessageType::ROUTER_AVAILABLE_TO_NETWORK, &[0]);
+    let odd = message(NetworkMessageType::ROUTER_AVAILABLE_TO_NETWORK, &[0]);
     let (outcome, sent) = deliver_broadcast(&mut router, &mut host, 1, R8, &odd, at(5));
     assert_eq!(outcome, Outcome::Discarded(Discard::BadMessage));
     assert!(sent.is_empty());
@@ -350,29 +376,32 @@ fn flow_control_covers_what_the_sender_serves() {
 fn network_number_messages_stay_local() {
     let mut router = router();
     let mut host = Recorder::default();
-    let what_is = message(MessageType::WHAT_IS_NETWORK_NUMBER, &[]);
+    let what_is = message(NetworkMessageType::WHAT_IS_NETWORK_NUMBER, &[]);
     let (outcome, sent) = deliver(&mut router, &mut host, 1, R7, &what_is, at(1));
     assert_eq!(outcome, Outcome::Handled);
     assert_eq!(sent.len(), 1);
     assert_eq!((sent[0].port, sent[0].is_broadcast()), (1, true));
-    assert_eq!(sent[0].kind, Kind::Answer(MessageType::NETWORK_NUMBER_IS));
+    assert_eq!(
+        sent[0].kind,
+        Kind::Answer(NetworkMessageType::NETWORK_NUMBER_IS)
+    );
     assert_eq!(
         sent[0].npdu,
-        message(MessageType::NETWORK_NUMBER_IS, &[0, 2, 1])
+        message(NetworkMessageType::NETWORK_NUMBER_IS, &[0, 2, 1])
     );
 
     learn_9_via_r7(&mut router, at(0));
-    let mut directed = Npdu::message(MessageType::WHAT_IS_NETWORK_NUMBER, &[]);
+    let mut directed = Npdu::message(NetworkMessageType::WHAT_IS_NETWORK_NUMBER, &[]);
     directed.destination = Some(addr(9, &[5]));
-    let with_data = Npdu::message(MessageType::WHAT_IS_NETWORK_NUMBER, &[0]);
-    let mut number_routed = Npdu::message(MessageType::NETWORK_NUMBER_IS, &[0, 1, 1]);
+    let with_data = Npdu::message(NetworkMessageType::WHAT_IS_NETWORK_NUMBER, &[0]);
+    let mut number_routed = Npdu::message(NetworkMessageType::NETWORK_NUMBER_IS, &[0, 1, 1]);
     number_routed.source = Some(addr(7, &[1]));
     for frame in [bytes(&directed), bytes(&with_data), bytes(&number_routed)] {
         let (outcome, sent) = deliver_broadcast(&mut router, &mut host, 0, NODE_A, &frame, at(2));
         assert_eq!(outcome, Outcome::Discarded(Discard::BadMessage));
         assert!(sent.is_empty(), "never routed");
     }
-    let number = message(MessageType::NETWORK_NUMBER_IS, &[0, 5, 1]);
+    let number = message(NetworkMessageType::NETWORK_NUMBER_IS, &[0, 5, 1]);
     let (outcome, _) = deliver(&mut router, &mut host, 0, NODE_A, &number, at(3));
     assert_eq!(
         outcome,
@@ -391,7 +420,7 @@ fn network_number_messages_stay_local() {
             configured: true
         }]
     );
-    let same = message(MessageType::NETWORK_NUMBER_IS, &[0, 1, 0]);
+    let same = message(NetworkMessageType::NETWORK_NUMBER_IS, &[0, 1, 0]);
     deliver_broadcast(&mut router, &mut host, 0, NODE_A, &same, at(4));
     assert_eq!(host.events.len(), 1);
 }
@@ -404,8 +433,14 @@ fn ptp_messages_change_nothing() {
     let mut host = Recorder::default();
     learn_9_via_r7(&mut router, at(0));
     let before = router.table().lookup(9);
-    let establish = message(MessageType::ESTABLISH_CONNECTION_TO_NETWORK, &[0, 9, 5]);
-    let disconnect = message(MessageType::DISCONNECT_CONNECTION_TO_NETWORK, &[0, 9]);
+    let establish = message(
+        NetworkMessageType::ESTABLISH_CONNECTION_TO_NETWORK,
+        &[0, 9, 5],
+    );
+    let disconnect = message(
+        NetworkMessageType::DISCONNECT_CONNECTION_TO_NETWORK,
+        &[0, 9],
+    );
     for frame in [&establish, &disconnect] {
         let (outcome, sent) = deliver(&mut router, &mut host, 1, R7, frame, at(1));
         assert_eq!(outcome, Outcome::Handled);
@@ -427,8 +462,11 @@ fn ptp_messages_change_nothing() {
         1
     );
     for bad in [
-        message(MessageType::ESTABLISH_CONNECTION_TO_NETWORK, &[0, 9]),
-        message(MessageType::DISCONNECT_CONNECTION_TO_NETWORK, &[0, 9, 0]),
+        message(NetworkMessageType::ESTABLISH_CONNECTION_TO_NETWORK, &[0, 9]),
+        message(
+            NetworkMessageType::DISCONNECT_CONNECTION_TO_NETWORK,
+            &[0, 9, 0],
+        ),
     ] {
         let (outcome, _) = deliver(&mut router, &mut host, 1, R7, &bad, at(1));
         assert_eq!(outcome, Outcome::Discarded(Discard::BadMessage));
@@ -448,7 +486,10 @@ fn i_could_be_router_fills_only_gaps() {
     learn_9_via_r7(&mut router, at(0));
     let could_be = |network: u16| {
         let [high, low] = network.to_be_bytes();
-        message(MessageType::I_COULD_BE_ROUTER_TO_NETWORK, &[high, low, 7])
+        message(
+            NetworkMessageType::I_COULD_BE_ROUTER_TO_NETWORK,
+            &[high, low, 7],
+        )
     };
     deliver(&mut router, &mut host, 1, R8, &could_be(9), at(1));
     deliver(&mut router, &mut host, 1, R8, &could_be(44), at(1));
@@ -482,12 +523,15 @@ fn i_could_be_router_fills_only_gaps() {
 /// router stored these past its cap before #1679.
 #[test]
 fn the_route_cap_turns_i_could_be_router_away() {
-    let options = options(|o| o.route_cap = 3);
+    let options = options(|o| o.route_cap = Some(3));
     let mut router = router_with(&fixture::two_ports(), options);
     let mut host = Recorder::default();
     let could_be = |network: u16| {
         let [high, low] = network.to_be_bytes();
-        message(MessageType::I_COULD_BE_ROUTER_TO_NETWORK, &[high, low, 7])
+        message(
+            NetworkMessageType::I_COULD_BE_ROUTER_TO_NETWORK,
+            &[high, low, 7],
+        )
     };
     deliver(&mut router, &mut host, 1, R8, &could_be(44), at(1));
     assert!(router.table().lookup(44).is_some());
@@ -522,7 +566,7 @@ fn the_gate_sees_each_protected_class_with_its_claims() {
     let mut router = router();
     let mut host = Recorder::default();
     learn_9_via_r7(&mut router, at(0));
-    let mut routed = Npdu::message(MessageType::ROUTER_BUSY_TO_NETWORK, &[0, 9]);
+    let mut routed = Npdu::message(NetworkMessageType::ROUTER_BUSY_TO_NETWORK, &[0, 9]);
     routed.source = Some(addr(7, &[1]));
     routed.destination = Some(addr(2, &[]));
     let frames = [
@@ -530,23 +574,32 @@ fn the_gate_sees_each_protected_class_with_its_claims() {
         (ControlClass::Busy, bytes(&routed)),
         (
             ControlClass::Available,
-            message(MessageType::ROUTER_AVAILABLE_TO_NETWORK, &[0, 9]),
+            message(NetworkMessageType::ROUTER_AVAILABLE_TO_NETWORK, &[0, 9]),
         ),
         (
             ControlClass::Reject,
-            message(MessageType::REJECT_MESSAGE_TO_NETWORK, &[1, 0, 9]),
+            message(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK, &[1, 0, 9]),
         ),
         (
             ControlClass::ICouldBe,
-            message(MessageType::I_COULD_BE_ROUTER_TO_NETWORK, &[0, 45, 1]),
+            message(
+                NetworkMessageType::I_COULD_BE_ROUTER_TO_NETWORK,
+                &[0, 45, 1],
+            ),
         ),
         (
             ControlClass::InitMgmt,
-            message(MessageType::INITIALIZE_ROUTING_TABLE, &[1, 0, 46, 2, 0]),
+            message(
+                NetworkMessageType::INITIALIZE_ROUTING_TABLE,
+                &[1, 0, 46, 2, 0],
+            ),
         ),
         (
             ControlClass::InitAck,
-            message(MessageType::INITIALIZE_ROUTING_TABLE_ACK, &[1, 0, 47, 1, 0]),
+            message(
+                NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK,
+                &[1, 0, 47, 1, 0],
+            ),
         ),
     ];
     for (class, frame) in &frames {
@@ -564,14 +617,20 @@ fn the_gate_sees_each_protected_class_with_its_claims() {
         (busy.snet, busy.dnet, busy.targets.as_slice()),
         (Some(7), Some(2), &[9][..])
     );
-    assert_eq!(busy.message_type, MessageType::ROUTER_BUSY_TO_NETWORK);
+    assert_eq!(
+        busy.message_type,
+        NetworkMessageType::ROUTER_BUSY_TO_NETWORK
+    );
     assert_eq!(host.asked[5].targets, [46]);
 
     for read_only in [
-        message(MessageType::WHO_IS_ROUTER_TO_NETWORK, &[]),
-        message(MessageType::INITIALIZE_ROUTING_TABLE, &[0]),
-        message(MessageType::WHAT_IS_NETWORK_NUMBER, &[]),
-        message(MessageType::DISCONNECT_CONNECTION_TO_NETWORK, &[0, 9]),
+        message(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK, &[]),
+        message(NetworkMessageType::INITIALIZE_ROUTING_TABLE, &[0]),
+        message(NetworkMessageType::WHAT_IS_NETWORK_NUMBER, &[]),
+        message(
+            NetworkMessageType::DISCONNECT_CONNECTION_TO_NETWORK,
+            &[0, 9],
+        ),
     ] {
         deliver_broadcast(&mut router, &mut host, 1, R7, &read_only, at(2));
     }
@@ -590,7 +649,7 @@ fn the_gate_sees_each_protected_class_with_its_claims() {
 fn messages_for_other_networks_are_routed_first() {
     let mut router = router();
     let mut host = Recorder::default();
-    let mut directed = Npdu::message(MessageType::I_AM_ROUTER_TO_NETWORK, &[0, 44]);
+    let mut directed = Npdu::message(NetworkMessageType::I_AM_ROUTER_TO_NETWORK, &[0, 44]);
     directed.destination = Some(addr(77, &[5]));
     let (outcome, sent) = deliver(&mut router, &mut host, 0, NODE_A, &bytes(&directed), at(1));
     assert_eq!(outcome, Outcome::Handled);
@@ -599,7 +658,7 @@ fn messages_for_other_networks_are_routed_first() {
         kinds,
         [
             Kind::Solicit,
-            Kind::Reject(RejectReason::NOT_DIRECTLY_CONNECTED)
+            Kind::Reject(RejectMessageReason::NOT_DIRECTLY_CONNECTED)
         ]
     );
     assert!(router.table().lookup(44).is_none());
@@ -609,7 +668,7 @@ fn messages_for_other_networks_are_routed_first() {
         let (_, sent) = deliver(&mut router, &mut host, 0, NODE_A, &bytes(&directed), at(10));
         assert_eq!(
             sent[0].kind,
-            Kind::Relay(MessageType::I_AM_ROUTER_TO_NETWORK)
+            Kind::Relay(NetworkMessageType::I_AM_ROUTER_TO_NETWORK)
         );
     }
     assert!(router.table().lookup(44).is_some());

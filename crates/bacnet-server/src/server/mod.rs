@@ -31,6 +31,7 @@ use bacnet_encoding::segmentation::{
     duplicate_in_window, max_segment_payload, split_payload, SegmentReceiver, SegmentedPduType,
 };
 use bacnet_network::layer::NetworkLayer;
+use bacnet_npdu::NetworkPriority;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::notification_class::{
     lookup_notification_recipients, resolve_transition_priority_ack,
@@ -40,27 +41,27 @@ use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::cov::COVNotificationRequest;
 use bacnet_services::cov_multiple::COVNotificationMultipleRequest;
 use bacnet_services::who_is::{DeviceInstanceRange, IAmRequest, WhoIsRequest};
-use bacnet_transport::bip::{BipMode, BipTransport};
+use bacnet_transport::bip::{BipMode, BipMulticast, BipTransport};
 use bacnet_transport::port::TransportPort;
+use bacnet_transport::warn_throttle::WarnThrottle;
+use bacnet_transport::warn_throttled;
 use bacnet_types::enums::{
-    AbortReason, ConfirmedServiceChoice, ErrorClass, ErrorCode, LifeSafetyOperation,
-    NetworkPriority, NotifyType, ObjectType, PropertyIdentifier, RejectReason, Segmentation,
-    UnconfirmedServiceChoice,
+    AbortReason, ConfirmedServiceChoice, ErrorClass, ErrorCode, LifeSafetyOperation, NotifyType,
+    ObjectType, PropertyIdentifier, RejectReason, Segmentation, UnconfirmedServiceChoice,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use bacnet_types::MacAddr;
 
 use crate::audit_notification::{
-    AuditNotificationAuthorizationContext, AuditNotificationAuthorizer,
-    UnconfirmedAuditNotificationAuthorizationContext, UnconfirmedAuditNotificationAuthorizer,
+    AuditNotificationAuthorizationContext, UnconfirmedAuditNotificationAuthorizationContext,
     MAX_AUDIT_NOTIFICATIONS, MAX_AUDIT_NOTIFICATION_BYTES,
 };
 pub use crate::cov::{CovCounters, CovPolicy};
 use crate::cov::{
     CovNotificationKind, CovSubscription, CovSubscriptionSnapshot, CovSubscriptionTable,
 };
-use crate::life_safety::{LifeSafetyOperationAuthorizationContext, LifeSafetyOperationAuthorizer};
+use crate::life_safety::LifeSafetyOperationAuthorizationContext;
 use crate::{handlers, runtime_clock};
 use confirmed_request_tracker::{
     ConfirmedRequestAdmission, ConfirmedRequestTracker, PendingConfirmedRequest,
@@ -151,15 +152,22 @@ mod audit_reporter_tests;
 /// Generic builder for BACnetServer with a pre-built transport.
 pub struct ServerBuilder<T: TransportPort> {
     config: ServerConfig,
-    db: ObjectDatabase,
+    db: Option<ObjectDatabase>,
     transport: Option<T>,
     configured_device_bindings: Vec<DeviceBinding>,
 }
 
 impl<T: TransportPort + 'static> ServerBuilder<T> {
+    /// Set the one Device identity. With no supplied database, startup creates
+    /// a stock Device after resolving the owned transport's receive capacity.
+    pub fn device(mut self, identity: bacnet_objects::DeviceIdentity) -> Self {
+        self.config.device = identity;
+        self
+    }
+
     /// Set the object database (transfers ownership).
     pub fn database(mut self, db: ObjectDatabase) -> Self {
-        self.db = db;
+        self.db = Some(db);
         self
     }
 
@@ -175,36 +183,9 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
         Ok(self)
     }
 
-    /// Set the policy that authorizes inbound LifeSafetyOperation requests.
-    pub fn life_safety_operation_authorizer<F>(mut self, authorizer: F) -> Self
-    where
-        F: Fn(&LifeSafetyOperationAuthorizationContext) -> bool + Send + Sync + 'static,
-    {
-        self.config.life_safety_operation_authorizer = Some(Arc::new(authorizer));
-        self
-    }
-
     /// Select the only local Audit Log that receives authorized notifications.
     pub fn audit_notification_sink(mut self, sink: ObjectIdentifier) -> Self {
         self.config.audit_notification_sink = Some(sink);
-        self
-    }
-
-    /// Set the fail-closed ConfirmedAuditNotification authorization policy.
-    pub fn audit_notification_authorizer<F>(mut self, authorizer: F) -> Self
-    where
-        F: Fn(&AuditNotificationAuthorizationContext) -> bool + Send + Sync + 'static,
-    {
-        self.config.audit_notification_authorizer = Some(Arc::new(authorizer));
-        self
-    }
-
-    /// Set the fail-closed UnconfirmedAuditNotification authorization policy.
-    pub fn unconfirmed_audit_notification_authorizer<F>(mut self, authorizer: F) -> Self
-    where
-        F: Fn(&UnconfirmedAuditNotificationAuthorizationContext) -> bool + Send + Sync + 'static,
-    {
-        self.config.unconfirmed_audit_notification_authorizer = Some(Arc::new(authorizer));
         self
     }
 
@@ -230,23 +211,6 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
     /// (default 10).
     pub fn event_enrollment_interval_secs(mut self, secs: u64) -> Self {
         self.config.event_enrollment_interval_secs = secs;
-        self
-    }
-
-    /// Set the segmentation support this device advertises and enforces.
-    ///
-    /// The dispatch loop honors the advertisement (Clause 5.4.5.1): inbound
-    /// segmented requests are reassembled only under `BOTH` or `RECEIVE`, and
-    /// draw a SEGMENTATION_NOT_SUPPORTED Abort otherwise. The default is
-    /// `NONE`.
-    pub fn segmentation_supported(mut self, segmentation: Segmentation) -> Self {
-        self.config.segmentation_supported = segmentation;
-        self
-    }
-
-    /// Set the vendor identifier (used in IAm responses and protocol operations).
-    pub fn vendor_id(mut self, id: u16) -> Self {
-        self.config.vendor_id = id;
         self
     }
 
@@ -264,13 +228,18 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
     }
 
     /// Build and start the server.
-    pub async fn build(self) -> Result<BACnetServer<T>, Error> {
+    pub async fn build(mut self) -> Result<BACnetServer<T>, Error> {
         let transport = self
             .transport
             .ok_or_else(|| Error::Encoding("transport not set on ServerBuilder".into()))?;
+        let db = crate::local_device::prepare_database(
+            &mut self.config,
+            self.db,
+            transport.local_receive_apdu_capacity(),
+        )?;
         BACnetServer::start_with_clock_mode_and_bindings(
             self.config,
-            self.db,
+            db,
             transport,
             Some(ClockConfig::default()),
             self.configured_device_bindings,
@@ -282,33 +251,23 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
 /// BIP-specific builder that constructs `BipTransport` from interface/port/broadcast fields.
 pub struct BipServerBuilder {
     config: ServerConfig,
-    db: ObjectDatabase,
+    db: Option<ObjectDatabase>,
     configured_device_bindings: Vec<DeviceBinding>,
     mode: BipMode,
+    multicast: Option<BipMulticast>,
 }
 
 impl BipServerBuilder {
-    /// Set the local interface IP.
-    pub fn interface(mut self, ip: Ipv4Addr) -> Self {
-        self.config.interface = ip;
-        self
-    }
-
-    /// Set the UDP port.
-    pub fn port(mut self, port: u16) -> Self {
-        self.config.port = port;
-        self
-    }
-
-    /// Set the directed broadcast address.
-    pub fn broadcast_address(mut self, addr: Ipv4Addr) -> Self {
-        self.config.broadcast_address = addr;
+    /// Set the one Device identity. With no supplied database, startup creates
+    /// a stock Device after resolving the owned transport's receive capacity.
+    pub fn device(mut self, identity: bacnet_objects::DeviceIdentity) -> Self {
+        self.config.device = identity;
         self
     }
 
     /// Set the object database (transfers ownership).
     pub fn database(mut self, db: ObjectDatabase) -> Self {
-        self.db = db;
+        self.db = Some(db);
         self
     }
 
@@ -318,36 +277,9 @@ impl BipServerBuilder {
         Ok(self)
     }
 
-    /// Set the policy that authorizes inbound LifeSafetyOperation requests.
-    pub fn life_safety_operation_authorizer<F>(mut self, authorizer: F) -> Self
-    where
-        F: Fn(&LifeSafetyOperationAuthorizationContext) -> bool + Send + Sync + 'static,
-    {
-        self.config.life_safety_operation_authorizer = Some(Arc::new(authorizer));
-        self
-    }
-
     /// Select the only local Audit Log that receives authorized notifications.
     pub fn audit_notification_sink(mut self, sink: ObjectIdentifier) -> Self {
         self.config.audit_notification_sink = Some(sink);
-        self
-    }
-
-    /// Set the fail-closed ConfirmedAuditNotification authorization policy.
-    pub fn audit_notification_authorizer<F>(mut self, authorizer: F) -> Self
-    where
-        F: Fn(&AuditNotificationAuthorizationContext) -> bool + Send + Sync + 'static,
-    {
-        self.config.audit_notification_authorizer = Some(Arc::new(authorizer));
-        self
-    }
-
-    /// Set the fail-closed UnconfirmedAuditNotification authorization policy.
-    pub fn unconfirmed_audit_notification_authorizer<F>(mut self, authorizer: F) -> Self
-    where
-        F: Fn(&UnconfirmedAuditNotificationAuthorizationContext) -> bool + Send + Sync + 'static,
-    {
-        self.config.unconfirmed_audit_notification_authorizer = Some(Arc::new(authorizer));
         self
     }
 
@@ -376,23 +308,6 @@ impl BipServerBuilder {
         self
     }
 
-    /// Set the segmentation support this device advertises and enforces.
-    ///
-    /// The dispatch loop honors the advertisement (Clause 5.4.5.1): inbound
-    /// segmented requests are reassembled only under `BOTH` or `RECEIVE`, and
-    /// draw a SEGMENTATION_NOT_SUPPORTED Abort otherwise. The default is
-    /// `NONE`.
-    pub fn segmentation_supported(mut self, segmentation: Segmentation) -> Self {
-        self.config.segmentation_supported = segmentation;
-        self
-    }
-
-    /// Set the vendor identifier advertised in I-Am responses.
-    pub fn vendor_id(mut self, id: u16) -> Self {
-        self.config.vendor_id = id;
-        self
-    }
-
     /// Set the discovery rate-limiting and duplicate suppression policy.
     pub fn discovery_policy(mut self, policy: DiscoveryPolicy) -> Self {
         self.config.discovery_policy = policy;
@@ -407,15 +322,21 @@ impl BipServerBuilder {
     }
 
     /// Build and start the server, constructing a BipTransport from the config.
-    pub async fn build(self) -> Result<BACnetServer<BipTransport>, Error> {
+    pub async fn build(mut self) -> Result<BACnetServer<BipTransport>, Error> {
         let config = &self.config;
         let mut transport =
             BipTransport::new(config.interface, config.port, config.broadcast_address);
         transport.set_share_port_by_address(config.share_port_by_address);
         transport.set_mode(self.mode);
+        transport.set_multicast(self.multicast)?;
+        let db = crate::local_device::prepare_database(
+            &mut self.config,
+            self.db,
+            transport.local_receive_apdu_capacity(),
+        )?;
         BACnetServer::start_with_clock_mode_and_bindings(
             self.config,
-            self.db,
+            db,
             transport,
             Some(ClockConfig::default()),
             self.configured_device_bindings,
@@ -516,9 +437,10 @@ impl BACnetServer<BipTransport> {
     pub fn bip_builder() -> BipServerBuilder {
         BipServerBuilder {
             config: ServerConfig::default(),
-            db: ObjectDatabase::new(),
+            db: None,
             configured_device_bindings: Vec::new(),
             mode: BipMode::Normal,
+            multicast: None,
         }
     }
 }
@@ -527,6 +449,8 @@ mod clock;
 mod command_runs;
 mod reinitialize;
 mod time_sync_policy;
+#[doc(hidden)]
+pub use reinitialize::EndpointReinitializeAudit as __endpoint_ReinitializeAudit;
 pub use reinitialize::{ReinitializeContext, ReinitializeHandler};
 mod write_group;
 #[cfg(test)]
@@ -592,6 +516,11 @@ mod local_writes;
 mod network_port;
 #[cfg(test)]
 mod network_port_tests;
+/// Reruns a test whose closing rebind loses the freed port to another
+/// process (#1419).
+#[cfg(test)]
+#[path = "../../../bacnet-endpoint/tests/support/port_retry.rs"]
+mod port_retry;
 pub use confirmed_answer::{CovAckResult, Refusal};
 mod remote_writes;
 pub(crate) use remote_writes::RemoteRequestError;
@@ -847,19 +776,10 @@ mod truncated_request_wire_tests;
 mod value_cov_increment_tests;
 #[cfg(test)]
 mod value_source_local_tests;
+#[cfg(test)]
+mod warn_spy;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
-    /// Start a server builder for a caller-supplied transport type, with default configuration and
-    /// an empty object database.
-    pub fn generic_builder() -> ServerBuilder<T> {
-        ServerBuilder {
-            config: ServerConfig::default(),
-            db: ObjectDatabase::new(),
-            transport: None,
-            configured_device_bindings: Vec::new(),
-        }
-    }
-
     /// Get a snapshot of discovery rate-limiting counters.
     pub fn discovery_counters(&self) -> DiscoveryCounters {
         self.discovery_limiter.counters()
@@ -894,3 +814,5 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 mod cov_identity_completion_tests;
 
 mod broadcaster;
+#[cfg(test)]
+mod r7_reply_tests;

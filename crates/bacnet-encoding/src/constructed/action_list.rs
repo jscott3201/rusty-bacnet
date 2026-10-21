@@ -14,7 +14,7 @@ use alloc::vec::Vec;
 
 use bacnet_types::constructed::{BACnetActionCommand, BACnetActionList};
 use bacnet_types::enums::PropertyIdentifier;
-use bacnet_types::error::Error;
+use bacnet_types::error::{DecodeError, DecodingKind, Error, RangeError};
 use bytes::BytesMut;
 
 use super::tagged::{
@@ -36,9 +36,11 @@ pub fn encode_action_command(
 ) -> Result<(), Error> {
     if let Some(priority) = command.priority {
         if !(1..=16).contains(&priority) {
-            return Err(Error::OutOfRange(format!(
-                "{WHAT}: priority {priority} is outside 1..=16"
-            )));
+            return Err(
+                RangeError::new("BACnetActionCommand: priority {} is outside 1..=16")
+                    .with_value(priority.into())
+                    .into(),
+            );
         }
     }
     let start = buf.len();
@@ -99,10 +101,13 @@ pub fn decode_action_command(
                 .ok()
                 .filter(|p| (1..=16).contains(p))
                 .ok_or_else(|| {
-                    Error::decoding(
+                    DecodeError::new(
+                        DecodingKind::InvalidEncoding,
                         offset,
-                        format!("{WHAT}: priority {value} is outside 1..=16"),
+                        "priority {} is outside 1..=16",
                     )
+                    .within(WHAT)
+                    .with_value(value.into())
                 })
         })
         .transpose()?;

@@ -11,6 +11,9 @@ ipv6 = ["bacnet-transport/ipv6"]
 ethernet = ["bacnet-transport/ethernet"]
 
 [dev-dependencies]
+bacnet-bip-codec.workspace = true
+bacnet-mstp-codec.workspace = true
+bacnet-npdu = { workspace = true }
 bacnet-types = { workspace = true, features = ["std"] }
 bacnet-encoding = { workspace = true, features = ["std"] }
 bacnet-services = { workspace = true, features = ["std"] }
@@ -24,6 +27,26 @@ serde_json = "1"
 socket2 = { workspace = true, features = ["all"] }
 libc.workspace = true
 tokio = { workspace = true, features = ["net", "rt-multi-thread", "sync", "macros", "time", "test-util", "io-util"] }
+
+# Interface indexes and the B/IPv6 packet-info oracle (#1881).
+[target.'cfg(unix)'.dev-dependencies]
+nix = { workspace = true, features = ["net", "uio"] }
+
+# The standalone Rust examples in examples/rust (#1723). They live beside the
+# Python examples, so they name their paths; CI's clippy --all-targets and
+# nextest runs compile them. Run one with
+# `cargo run -p bacnet-integration-tests --example <name>`.
+[[example]]
+name = "bip_client_server"
+path = "../../examples/rust/bip_client_server.rs"
+
+[[example]]
+name = "cov_subscriptions"
+path = "../../examples/rust/cov_subscriptions.rs"
+
+[[example]]
+name = "multi_object_server"
+path = "../../examples/rust/multi_object_server.rs"
 
 [lints]
 workspace = true

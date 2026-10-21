@@ -116,10 +116,7 @@ fn read_property_ack() {
 
 #[test]
 fn write_property_request() {
-    let out_of_range = Kind::Protocol(
-        ErrorClass::SERVICES.to_raw() as u32,
-        ErrorCode::PARAMETER_OUT_OF_RANGE.to_raw() as u32,
-    );
+    let out_of_range = Kind::Protocol(ErrorClass::SERVICES, ErrorCode::PARAMETER_OUT_OF_RANGE);
     let rows: &[Row<'_>] = &[
         ("well formed", &cat(&[AV_1, PV, VALUE_72]), Decodes),
         (

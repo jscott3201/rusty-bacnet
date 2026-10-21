@@ -8,6 +8,7 @@
 //!
 //! Bind UDP on 0.0.0.0 with a directed broadcast so
 //! subnet Who-Is reaches the socket on Linux; advertise the NIC IP in I-Am.
+#![forbid(unsafe_code)]
 
 use std::env;
 use std::net::{Ipv4Addr, SocketAddrV4};
@@ -27,7 +28,9 @@ use bacnet_objects::traits::BACnetObject;
 use bacnet_server::server::{BACnetServer, IAmBroadcaster};
 use bacnet_transport::bip::DEFAULT_BACNET_PORT;
 use bacnet_transport::bvll::encode_bip_mac;
-use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{
+    EngineeringUnits, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier,
+};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use clap::Parser;
@@ -276,8 +279,8 @@ fn verify_server_mac(device_ip: Ipv4Addr, port: u16, mac: &[u8]) {
 /// has disabled initiation: an expected state while it lasts, not a fault.
 fn held_back_by_dcc(error: &Error) -> bool {
     matches!(error, Error::Protocol { class, code }
-        if *class == ErrorClass::SERVICES.to_raw() as u32
-            && *code == ErrorCode::COMMUNICATION_DISABLED.to_raw() as u32)
+        if *class == ErrorClass::SERVICES
+            && *code == ErrorCode::COMMUNICATION_DISABLED)
 }
 
 async fn iam_announcement_task(
@@ -305,7 +308,8 @@ fn build_database(args: &Args) -> Result<ObjectDatabase, Box<dyn std::error::Err
     let device_oid = ObjectIdentifier::new(ObjectType::DEVICE, args.instance)?;
 
     // --- Read-only analogInput:1 (input objects reject Present_Value writes) ---
-    let mut read_only_ai = AnalogInputObject::new(1, "read-only-ai", UNITS_DEGF)?;
+    let mut read_only_ai =
+        AnalogInputObject::new(1, "read-only-ai", EngineeringUnits::from_raw(UNITS_DEGF))?;
     read_only_ai.set_description("Simulated Read-Only Analog Input");
     read_only_ai.set_present_value(4.0);
     db.add(Box::new(read_only_ai))?;
@@ -317,7 +321,8 @@ fn build_database(args: &Args) -> Result<ObjectDatabase, Box<dyn std::error::Err
     db.add(Box::new(read_only_bi))?;
 
     // --- Commandable analogValue:2 ---
-    let mut commandable_av = AnalogValueObject::new(2, "commandable-av", UNITS_DEGF)?;
+    let mut commandable_av =
+        AnalogValueObject::new(2, "commandable-av", EngineeringUnits::from_raw(UNITS_DEGF))?;
     commandable_av.set_description("Commandable Analog Value (Simulated)");
     commandable_av.set_relinquish_default(0.0)?;
     commandable_av.write_property(
@@ -347,13 +352,14 @@ fn build_database(args: &Args) -> Result<ObjectDatabase, Box<dyn std::error::Err
     object_list.extend(point_oids);
 
     let mut device = DeviceObject::new(DeviceConfig {
-        instance: args.instance,
-        name: args.name.clone(),
+        identity: bacnet_objects::DeviceIdentity::new(args.instance, VENDOR_ID)
+            .expect("valid Device identity")
+            .with_name(args.name.clone())
+            .with_max_apdu(u16::try_from(MAX_APDU_LENGTH).expect("Device APDU fits u16"))
+            .expect("valid Device APDU"),
         vendor_name: "rs-bacnet-testers".into(),
-        vendor_id: VENDOR_ID,
         model_name: "mini-device-revisited".into(),
         application_software_version: env!("CARGO_PKG_VERSION").into(),
-        max_apdu_length: MAX_APDU_LENGTH,
         ..DeviceConfig::default()
     })?;
     device.set_object_list(object_list);
@@ -520,7 +526,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .interface(net.socket_bind)
         .port(args.port)
         .broadcast_address(net.broadcast)
-        .vendor_id(VENDOR_ID)
+        .device(bacnet_objects::DeviceIdentity::new(
+            args.instance,
+            VENDOR_ID,
+        )?)
         .database(db)
         .build()
         .await

@@ -23,13 +23,14 @@ use crate::property_metadata::{
 // Multiple, its write capability follows Logging_Type rather than its class;
 // this device also takes Log_DeviceObjectProperty writes held to this device
 // (#1234). There is no Out_Of_Service
-// row (#985), and Reliability stays read-only. Logging_Type takes POLLED or
-// TRIGGERED. The device supports clock-aligned logging, so Align_Intervals
+// row (#985), and Reliability stays read-only. Logging_Type takes POLLED,
+// TRIGGERED or COV (#1480). The device supports clock-aligned logging, so Align_Intervals
 // and Interval_Offset are present (footnote 5) and writable, as Trigger is,
-// to ask for an acquisition. The log reports BUFFER_READY (#1347), so the
+// to ask for an acquisition. The two COV rows Table 12-29 lists follow, both
+// optional and writable (#1480). The log reports BUFFER_READY (#1347), so the
 // intrinsic reporting rows footnote 4 asks for come last, each marked as
 // present for that reason.
-const fn rows(log_interval: PropertyWriteCapability) -> [PropertyMetadata; 35] {
+const fn rows(log_interval: PropertyWriteCapability) -> [PropertyMetadata; 37] {
     let r = BUFFER_READY_METADATA;
     [
         PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
@@ -53,6 +54,8 @@ const fn rows(log_interval: PropertyWriteCapability) -> [PropertyMetadata; 35] {
         PropertyMetadata::new(P::ALIGN_INTERVALS, Optional, None, Always),
         PropertyMetadata::new(P::INTERVAL_OFFSET, Optional, None, Always),
         PropertyMetadata::new(P::TRIGGER, Optional, None, Always),
+        PropertyMetadata::new(P::COV_RESUBSCRIPTION_INTERVAL, Optional, None, Always),
+        PropertyMetadata::new(P::CLIENT_COV_INCREMENT, Optional, None, Always),
         r[0],
         r[1],
         r[2],
@@ -70,8 +73,8 @@ const fn rows(log_interval: PropertyWriteCapability) -> [PropertyMetadata; 35] {
     ]
 }
 
-const WRITABLE_INTERVAL: [PropertyMetadata; 35] = rows(Always);
-const READ_ONLY_INTERVAL: [PropertyMetadata; 35] = rows(ReadOnly);
+const WRITABLE_INTERVAL: [PropertyMetadata; 37] = rows(Always);
+const READ_ONLY_INTERVAL: [PropertyMetadata; 37] = rows(ReadOnly);
 
 pub(super) fn for_object(object: &TrendLogObject) -> Cow<'_, [PropertyMetadata]> {
     Cow::Borrowed(if object.acquisition.log_interval_writable() {
@@ -94,7 +97,8 @@ mod tests {
     use bacnet_types::primitives::{Date, PropertyValue, Time};
     use std::sync::Arc;
 
-    /// Both trend objects refuse COV, so neither can be put in it.
+    /// The modes both trend objects take; only a Trend Log takes COV
+    /// (#1480), which leaves its rows as POLLED does.
     const LOGGING_TYPES: [LoggingType; 2] = [LoggingType::POLLED, LoggingType::TRIGGERED];
 
     /// Every log's window (#1235, #1353).
@@ -102,6 +106,9 @@ mod tests {
 
     /// The rows only the two trend objects serve (#1235, #1354).
     const TREND_ONLY: [P; 3] = [P::ALIGN_INTERVALS, P::INTERVAL_OFFSET, P::TRIGGER];
+
+    /// The COV rows only a Trend Log serves (Table 12-29, #1480).
+    const TREND_LOG_COV: [P; 2] = [P::COV_RESUBSCRIPTION_INTERVAL, P::CLIENT_COV_INCREMENT];
 
     /// Every log's BUFFER_READY rows, last before Property_List (#1347),
     /// with the message texts and the inhibit pair where the tables put
@@ -178,7 +185,7 @@ mod tests {
     fn assert_error(error: Error, class: ErrorClass, code: ErrorCode) {
         assert!(
             matches!(error, Error::Protocol { class: c, code: e }
-            if c == class.to_raw() as u32 && e == code.to_raw() as u32),
+            if c == class && e == code),
             "{error:?}"
         );
     }
@@ -229,6 +236,9 @@ mod tests {
                         all.extend([P::LOGGING_TYPE, P::LOG_DEVICE_OBJECT_PROPERTY]);
                         all.extend(WINDOW);
                         all.extend(TREND_ONLY);
+                        if kind == ObjectType::TREND_LOG {
+                            all.extend(TREND_LOG_COV);
+                        }
                         required.push(P::LOGGING_TYPE);
                     }
                     all.extend(REPORTING);
@@ -345,7 +355,12 @@ mod tests {
                         P::LOG_INTERVAL if logging_type == LoggingType::TRIGGERED => ReadOnly,
                         P::LOG_INTERVAL | P::LOGGING_TYPE => Always,
                         p if REPORTING_WRITABLE.contains(&p) => Always,
-                        p if WINDOW.contains(&p) || TREND_ONLY.contains(&p) => Always,
+                        p if WINDOW.contains(&p)
+                            || TREND_ONLY.contains(&p)
+                            || TREND_LOG_COV.contains(&p) =>
+                        {
+                            Always
+                        }
                         _ => ReadOnly,
                     };
                     assert_eq!(row.write_capability, capability, "{kind:?} {p:?}");
@@ -380,6 +395,14 @@ mod tests {
                         );
                     }
                     let before = object.read_property(p, None).unwrap();
+                    if p == P::CLIENT_COV_INCREMENT {
+                        // NULL is a Client_COV_Increment (Clause 12.25.11).
+                        object
+                            .write_property(p, None, PropertyValue::Null, None)
+                            .unwrap();
+                        assert_eq!(object.read_property(p, None).unwrap(), PropertyValue::Null);
+                        continue;
+                    }
                     if capability == Always && p == P::DESCRIPTION {
                         object
                             .write_property(p, None, PropertyValue::Null, None)

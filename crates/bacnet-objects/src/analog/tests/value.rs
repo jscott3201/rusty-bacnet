@@ -6,7 +6,7 @@ use bacnet_types::enums::EventState;
 
 #[test]
 fn av_read_present_value_default() {
-    let av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let val = av
         .read_property(PropertyIdentifier::PRESENT_VALUE, None)
         .unwrap();
@@ -15,7 +15,7 @@ fn av_read_present_value_default() {
 
 #[test]
 fn av_set_present_value() {
-    let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let mut av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     av.set_relinquish_default(42.5).unwrap();
     let val = av
         .read_property(PropertyIdentifier::PRESENT_VALUE, None)
@@ -25,7 +25,7 @@ fn av_set_present_value() {
 
 #[test]
 fn av_read_object_type_returns_analog_value() {
-    let av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let val = av
         .read_property(PropertyIdentifier::OBJECT_TYPE, None)
         .unwrap();
@@ -37,14 +37,14 @@ fn av_read_object_type_returns_analog_value() {
 
 #[test]
 fn av_read_units() {
-    let av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let val = av.read_property(PropertyIdentifier::UNITS, None).unwrap();
     assert_eq!(val, PropertyValue::Enumerated(62));
 }
 
 #[test]
 fn av_write_with_priority() {
-    let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let mut av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
 
     // Write at priority 8
     av.write_property_from(
@@ -76,7 +76,7 @@ fn av_write_with_priority() {
 
 #[test]
 fn av_relinquish_falls_to_default() {
-    let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let mut av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
 
     // Write at priority 16 (lowest)
     av.write_property_from(
@@ -113,7 +113,7 @@ fn av_relinquish_falls_to_default() {
 
 #[test]
 fn av_higher_priority_wins() {
-    let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let mut av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
 
     av.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
@@ -142,7 +142,7 @@ fn av_higher_priority_wins() {
 
 #[test]
 fn av_priority_array_read_all_slots_none_by_default() {
-    let av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let val = av
         .read_property(PropertyIdentifier::PRIORITY_ARRAY, None)
         .unwrap();
@@ -158,7 +158,7 @@ fn av_priority_array_read_all_slots_none_by_default() {
 
 #[test]
 fn av_priority_array_index_zero_returns_size() {
-    let av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let val = av
         .read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(0))
         .unwrap();
@@ -167,21 +167,21 @@ fn av_priority_array_index_zero_returns_size() {
 
 #[test]
 fn av_priority_array_index_out_of_bounds() {
-    let av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let result = av.read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(17));
     assert!(result.is_err());
 }
 
 #[test]
 fn av_priority_array_index_u32_max_out_of_bounds() {
-    let av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let result = av.read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(u32::MAX));
     assert!(result.is_err());
 }
 
 #[test]
 fn av_write_with_priority_zero_rejected() {
-    let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let mut av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let result = av.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
@@ -194,7 +194,7 @@ fn av_write_with_priority_zero_rejected() {
 
 #[test]
 fn av_write_with_priority_17_rejected() {
-    let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let mut av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let result = av.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
@@ -207,7 +207,7 @@ fn av_write_with_priority_17_rejected() {
 
 #[test]
 fn av_write_with_all_valid_priorities() {
-    let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let mut av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     for prio in 1..=16u8 {
         av.write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
@@ -227,7 +227,7 @@ fn av_write_with_all_valid_priorities() {
 
 #[test]
 fn av_present_value_priority_write_value() {
-    let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let mut av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     av.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
@@ -250,7 +250,7 @@ fn av_present_value_priority_write_value() {
 
 #[test]
 fn av_present_value_priority_relinquish() {
-    let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let mut av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     av.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
@@ -281,7 +281,7 @@ fn av_present_value_priority_relinquish() {
 
 #[test]
 fn av_direct_priority_array_no_index_error() {
-    let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let mut av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let result = av.write_property(
         PropertyIdentifier::PRIORITY_ARRAY,
         None,
@@ -293,7 +293,7 @@ fn av_direct_priority_array_no_index_error() {
 
 #[test]
 fn av_direct_priority_array_index_zero_error() {
-    let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let mut av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let result = av.write_property(
         PropertyIdentifier::PRIORITY_ARRAY,
         Some(0),
@@ -305,7 +305,7 @@ fn av_direct_priority_array_index_zero_error() {
 
 #[test]
 fn av_direct_priority_array_index_17_error() {
-    let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let mut av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let result = av.write_property(
         PropertyIdentifier::PRIORITY_ARRAY,
         Some(17),
@@ -317,7 +317,7 @@ fn av_direct_priority_array_index_17_error() {
 
 #[test]
 fn av_intrinsic_reporting_normal_to_high_limit_to_normal() {
-    let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let mut av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     // Configure: high=80, low=20, deadband=2, both limits enabled
     av.write_property(
         PropertyIdentifier::HIGH_LIMIT,
@@ -388,7 +388,7 @@ fn av_intrinsic_reporting_normal_to_high_limit_to_normal() {
 
 #[test]
 fn av_intrinsic_reporting_after_priority_write() {
-    let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let mut av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     av.write_property(
         PropertyIdentifier::HIGH_LIMIT,
         None,
@@ -446,7 +446,7 @@ fn av_intrinsic_reporting_after_priority_write() {
 
 #[test]
 fn av_read_reliability_default() {
-    let av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let val = av
         .read_property(PropertyIdentifier::RELIABILITY, None)
         .unwrap();
@@ -455,7 +455,7 @@ fn av_read_reliability_default() {
 
 #[test]
 fn av_description_read_write() {
-    let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let mut av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     // Default description is empty
     let val = av
         .read_property(PropertyIdentifier::DESCRIPTION, None)
@@ -477,7 +477,7 @@ fn av_description_read_write() {
 
 #[test]
 fn av_set_description_convenience() {
-    let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let mut av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     av.set_description("Zone temperature setpoint");
     assert_eq!(
         av.read_property(PropertyIdentifier::DESCRIPTION, None)
@@ -488,7 +488,7 @@ fn av_set_description_convenience() {
 
 #[test]
 fn av_description_in_property_list() {
-    let av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     assert!(av
         .property_list()
         .contains(&PropertyIdentifier::DESCRIPTION));
@@ -496,7 +496,7 @@ fn av_description_in_property_list() {
 
 #[test]
 fn av_property_list_includes_priority_array_and_relinquish_default() {
-    let av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let list = av.property_list();
     assert!(list.contains(&PropertyIdentifier::PRIORITY_ARRAY));
     assert!(list.contains(&PropertyIdentifier::RELINQUISH_DEFAULT));
@@ -506,7 +506,7 @@ fn av_property_list_includes_priority_array_and_relinquish_default() {
 
 #[test]
 fn av_read_event_state_default_normal() {
-    let av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let val = av
         .read_property(PropertyIdentifier::EVENT_STATE, None)
         .unwrap();
@@ -515,7 +515,7 @@ fn av_read_event_state_default_normal() {
 
 #[test]
 fn av_cov_increment_read_write() {
-    let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let mut av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     av.write_property(
         PropertyIdentifier::COV_INCREMENT,
         None,
@@ -533,7 +533,7 @@ fn av_cov_increment_read_write() {
 
 #[test]
 fn av_read_relinquish_default() {
-    let av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let val = av
         .read_property(PropertyIdentifier::RELINQUISH_DEFAULT, None)
         .unwrap();
@@ -542,7 +542,7 @@ fn av_read_relinquish_default() {
 
 #[test]
 fn av_unknown_property_returns_error() {
-    let av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     // File-object property does not exist on AV
     let result = av.read_property(PropertyIdentifier::FILE_SIZE, None);
     assert!(result.is_err());
@@ -552,7 +552,7 @@ fn av_unknown_property_returns_error() {
 
 #[test]
 fn ai_property_list_returns_full_list() {
-    let ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let result = ai
         .read_property(PropertyIdentifier::PROPERTY_LIST, None)
         .unwrap();
@@ -566,7 +566,7 @@ fn ai_property_list_returns_full_list() {
 
 #[test]
 fn ai_property_list_index_zero_returns_count() {
-    let ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     // Property_List excludes OBJECT_IDENTIFIER, OBJECT_NAME,
     // OBJECT_TYPE, and PROPERTY_LIST itself.
     let filtered_count = ai
@@ -587,7 +587,7 @@ fn ai_property_list_index_zero_returns_count() {
 
 #[test]
 fn ai_property_list_index_one_returns_first_prop() {
-    let ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     // First property after filtering the 4 excluded ones
     let first_filtered = ai
         .property_list()
@@ -608,7 +608,7 @@ fn ai_property_list_index_one_returns_first_prop() {
 
 #[test]
 fn ai_property_list_invalid_index_returns_error() {
-    let ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let count = ai.property_list().len() as u32;
     let result = ai.read_property(PropertyIdentifier::PROPERTY_LIST, Some(count + 1));
     assert!(result.is_err());
@@ -619,7 +619,7 @@ fn ai_property_list_invalid_index_returns_error() {
 #[test]
 fn av_is_not_createable_matches_factory() {
     use crate::traits::BACnetObject;
-    let av = AnalogValueObject::new(1, "av-1", 95).unwrap();
+    let av = AnalogValueObject::new(1, "av-1", EngineeringUnits::NO_UNITS).unwrap();
     // handle_create_object has NO branch for ANALOG_VALUE — it falls through
     // to UNSUPPORTED_OBJECT_TYPE. PICS must not advertise createability.
     assert!(!av.is_createable(), "AnalogValue must NOT be createable");
@@ -628,7 +628,7 @@ fn av_is_not_createable_matches_factory() {
 #[test]
 fn av_is_writable_property_mirrors_write_property() {
     use crate::traits::BACnetObject;
-    let av = AnalogValueObject::new(1, "av-1", 95).unwrap();
+    let av = AnalogValueObject::new(1, "av-1", EngineeringUnits::NO_UNITS).unwrap();
     // Commandable (same as AO).
     assert!(!av.is_writable_property(PropertyIdentifier::PRIORITY_ARRAY));
     assert!(av.is_writable_property(PropertyIdentifier::PRESENT_VALUE));
@@ -647,7 +647,7 @@ fn av_is_writable_property_mirrors_write_property() {
 /// Present_Value immediately resolves to the written default.
 #[test]
 fn av_relinquish_default_write_recaptures_present_value() {
-    let mut av = AnalogValueObject::new(1, "av-1", 95).unwrap();
+    let mut av = AnalogValueObject::new(1, "av-1", EngineeringUnits::NO_UNITS).unwrap();
     av.write_property(
         PropertyIdentifier::RELINQUISH_DEFAULT,
         None,

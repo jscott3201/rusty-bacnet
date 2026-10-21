@@ -1,7 +1,7 @@
 //! Pre-start execution profile and authority for the endpoint Device responder.
 
 use super::*;
-use bacnet_server::mutation::MutationAuthorizer;
+use bacnet_server::mutation::DeviceWriteAuthorizer;
 use bacnet_server::server::ReinitializeContext;
 use bacnet_types::enums::ServiceSupported;
 
@@ -10,7 +10,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     ///
     /// The callback is mandatory and receives the existing redacted mutation
     /// context. A refusal or panic denies the request before mutation. It must
-    /// be fast, nonblocking and side-effect-free; see [`MutationAuthorizer`].
+    /// be fast, nonblocking and side-effect-free; see [`DeviceWriteAuthorizer`].
     /// Other objects/properties and WritePropertyMultiple remain unsupported.
     /// An authorized NULL relinquishment succeeds without changing Description.
     /// Recipient writes require the complete source runtime installed by source selection.
@@ -26,7 +26,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     ///
     /// # Panics
     /// Panics if startup has already consumed the session configuration.
-    pub fn with_device_writes(mut self, authorizer: MutationAuthorizer) -> Self {
+    pub fn with_device_writes(mut self, authorizer: DeviceWriteAuthorizer) -> Self {
         self.assert_configurable();
         self.device_write_authorizer = Some(authorizer);
         self
@@ -39,8 +39,10 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// [`with_device_writes`](Self::with_device_writes). The handler follows
     /// the rules on
     /// [`ReinitializeHandler`](bacnet_server::server::ReinitializeHandler).
-    /// The SimpleACK goes out only after it returns, so schedule any restart
-    /// for after the reply instead of restarting inline. It runs synchronously
+    /// The SimpleACK goes out only after it returns, so register any restart
+    /// with [`ReinitializeContext::after_reply`] instead of restarting
+    /// inline: the hook runs once the egress has sent the SimpleACK, on the
+    /// same dispatch task, and never for a refusal. It runs synchronously
     /// on the session's single dispatch task, so a slow or blocking handler
     /// stalls the whole session: hand slow work such as backup files to a
     /// task. Without a password set by

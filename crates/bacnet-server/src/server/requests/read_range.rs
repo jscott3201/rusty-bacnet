@@ -43,6 +43,7 @@ pub(super) async fn response(
     {
         Ok(decoded) => {
             let view = DeviceReadContext::new(&db, DeviceExecution::FullServer)
+                .with_identity(Some(&config.device))
                 .with_work_limit(config.read_property_multiple_budget.max_result_elements);
             match handlers::plan_read_range(&db, Some(&view), &decoded) {
                 Ok(plan) => {

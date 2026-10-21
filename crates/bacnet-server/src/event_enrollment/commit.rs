@@ -439,7 +439,10 @@ pub(super) fn apply_updates_for_delivery(
                 coordinate,
                 ack_required: reliability.ack_required,
                 timestamp: staged_timestamp.sample.timestamp.clone(),
-                message_text: None,
+                // The server has no text of its own for an enrollment, so
+                // the slot is empty unless Event_Message_Texts_Config
+                // supplies one (#1507).
+                message_text: Some(String::new()),
             };
             let commit = EventEnrollmentReliabilityCommit {
                 reliability: reliability.desired,
@@ -539,7 +542,8 @@ pub(super) fn apply_updates_for_delivery(
             coordinate,
             ack_required: fired.ack_required,
             timestamp: staged_timestamp.sample.timestamp.clone(),
-            message_text: None,
+            // As for the Reliability commit above.
+            message_text: Some(String::new()),
         };
         let commit_result = db
             .get_mut(&oid)

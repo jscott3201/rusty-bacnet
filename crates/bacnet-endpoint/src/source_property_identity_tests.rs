@@ -158,7 +158,7 @@ async fn source_read_alias_failure_keeps_requested_identity_without_trusting_bad
             match failure {
                 5 => assert!(matches!(result, Err(Error::Protocol { .. }))),
                 6 => assert!(matches!(result, Err(Error::Timeout(_)))),
-                _ => assert!(matches!(result, Err(Error::Decoding { .. }))),
+                _ => assert!(matches!(result, Err(Error::Decoding(_)))),
             }
             let (record, _) = notification(&receive(&mut records).await, false);
             value_free(&record);

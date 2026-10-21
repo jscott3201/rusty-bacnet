@@ -18,7 +18,7 @@ fn call(
 /// is a local range error, never a Protocol error that would read as a
 /// remote device's Error-PDU.
 fn is_out_of_range(error: &Error) -> bool {
-    matches!(error, Error::OutOfRange(_))
+    matches!(error, Error::Range(_))
 }
 
 fn encode(value: &BACnetLandingCallStatus) -> Vec<u8> {

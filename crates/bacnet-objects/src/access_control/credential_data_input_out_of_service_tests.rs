@@ -149,8 +149,8 @@ fn status_flags(fault: bool, out_of_service: bool) -> PropertyValue {
 pub(super) fn assert_property_error(result: Result<(), Error>, code: ErrorCode) {
     assert!(
         matches!(result, Err(Error::Protocol { class, code: actual })
-            if class == ErrorClass::PROPERTY.to_raw() as u32
-                && actual == code.to_raw() as u32),
+            if class == ErrorClass::PROPERTY
+                && actual == code),
         "expected PROPERTY / {code:?}, got {result:?}"
     );
 }

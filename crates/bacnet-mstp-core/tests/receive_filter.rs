@@ -3,15 +3,16 @@
 
 use bacnet_mstp_codec::crc::crc8;
 use bacnet_mstp_codec::{
-    Frame, FrameError, FrameType, BROADCAST_MAC, MAX_COBS_FRAME_LENGTH, MAX_EXTENDED_FRAME_LENGTH,
+    Frame, FrameType, BROADCAST_MAC, MAX_COBS_FRAME_LENGTH, MAX_EXTENDED_FRAME_LENGTH,
     MAX_EXTENDED_MPDU_DATA, PREAMBLE,
 };
+use bacnet_mstp_core::npdu::NetworkPriority;
 use bacnet_mstp_core::{
-    Action, CoreError, Direction, Duration, HeaplessQueues, Instant, MasterCore, MasterState,
-    MstpCoreConfig, NetworkPriority, ReceiveError,
+    Action, Direction, Duration, FixedQueues, Instant, MasterCore, MasterState, MstpCoreConfig,
+    ReceiveError,
 };
 
-type Queues = HeaplessQueues<4, 4>;
+type Queues = FixedQueues<4, 4>;
 type Actions = bacnet_mstp_core::ActionBuffers;
 
 const STATION: u8 = 1;
@@ -48,10 +49,9 @@ fn raw_header(frame_type: u8, destination: u8, source: u8, length: u16) -> Vec<u
 fn wait_for_reply(core: &mut MasterCore<'_, Queues>) -> Instant {
     core.enqueue_npdu(ASKED, &[1, 0x04], NetworkPriority::Normal, Instant::ZERO)
         .unwrap();
-    core.on_validated_frame(Frame::new(FrameType::TOKEN, STATION, 0, &[]), Instant::ZERO)
-        .unwrap();
+    core.on_validated_frame(Frame::new(FrameType::TOKEN, STATION, 0, &[]), Instant::ZERO);
     let due = core.next_deadline().unwrap();
-    core.on_deadline(due).unwrap();
+    core.on_deadline(due);
     assert_eq!(
         core.poll_action(),
         Action::SetDirection(Direction::Transmit)
@@ -61,7 +61,7 @@ fn wait_for_reply(core: &mut MasterCore<'_, Queues>) -> Instant {
     };
     core.on_transmit_started(id, due).unwrap();
     let done = due + Duration::from_millis(1);
-    core.on_transmit_complete(id, done).unwrap();
+    core.on_transmit_complete(id, done);
     assert_eq!(core.poll_action(), Action::SetDirection(Direction::Receive));
     assert_eq!(core.state(), MasterState::WaitForReply);
     done
@@ -72,7 +72,7 @@ fn feed(core: &mut MasterCore<'_, Queues>, wire: &[u8], start: Instant) -> Insta
     let mut now = start;
     for &octet in wire {
         now += Duration::from_micros(100);
-        core.on_octet(octet, now).unwrap();
+        core.on_octet(octet, now);
     }
     now
 }
@@ -85,7 +85,7 @@ fn feed(core: &mut MasterCore<'_, Queues>, wire: &[u8], start: Instant) -> Insta
 fn counted_invalid(storage: usize, wire: &[u8]) -> bool {
     let mut rx = vec![0u8; storage];
     let mut actions = Actions::new();
-    let mut core = MasterCore::new(
+    let mut core = MasterCore::from_parts(
         config(),
         Queues::new(),
         &mut rx,
@@ -115,7 +115,7 @@ fn a_reply_type_frame_from_any_station_ends_the_wait() {
     ] {
         let mut rx = [0u8; 64];
         let mut actions = Actions::new();
-        let mut core = MasterCore::new(
+        let mut core = MasterCore::from_parts(
             config(),
             Queues::new(),
             &mut rx,
@@ -125,8 +125,7 @@ fn a_reply_type_frame_from_any_station_ends_the_wait() {
         .unwrap();
         let now = wait_for_reply(&mut core);
         let data: &[u8] = if frame_type.allows_data() { &[7] } else { &[] };
-        core.on_validated_frame(Frame::new(frame_type, STATION, source, data), now)
-            .unwrap();
+        core.on_validated_frame(Frame::new(frame_type, STATION, source, data), now);
         // DONE_WITH_TOKEN, which polls for a successor here, not IDLE.
         assert_eq!(core.state(), MasterState::PollForMaster, "{frame_type:?}");
         if frame_type == FrameType::BACNET_DATA_NOT_EXPECTING_REPLY {
@@ -145,7 +144,7 @@ fn a_reply_type_frame_from_any_station_ends_the_wait() {
     // A reply addressed elsewhere is an unexpected frame: back to IDLE.
     let mut rx = [0u8; 64];
     let mut actions = Actions::new();
-    let mut core = MasterCore::new(
+    let mut core = MasterCore::from_parts(
         config(),
         Queues::new(),
         &mut rx,
@@ -157,8 +156,7 @@ fn a_reply_type_frame_from_any_station_ends_the_wait() {
     core.on_validated_frame(
         Frame::new(FrameType::BACNET_DATA_NOT_EXPECTING_REPLY, 2, ASKED, &[7]),
         now,
-    )
-    .unwrap();
+    );
     assert_eq!(core.state(), MasterState::Idle);
 }
 
@@ -166,7 +164,7 @@ fn a_reply_type_frame_from_any_station_ends_the_wait() {
 fn validated_frame_the_codec_would_refuse_changes_nothing() {
     let mut rx = [0u8; 64];
     let mut actions = Actions::new();
-    let mut core = MasterCore::new(
+    let mut core = MasterCore::from_parts(
         config(),
         Queues::new(),
         &mut rx,
@@ -176,45 +174,36 @@ fn validated_frame_the_codec_would_refuse_changes_nothing() {
     .unwrap();
     let late = Instant::from_micros(10_000);
     let data = [0u8; 502];
-    assert_eq!(
-        core.on_validated_frame(
-            Frame::new(
-                FrameType::BACNET_DATA_NOT_EXPECTING_REPLY,
-                STATION,
-                5,
-                &data
-            ),
-            late,
+    // Too long for its type, from station 255, and a COBS type without
+    // extended frames: each one ignored and counted as the adapter's error.
+    core.on_validated_frame(
+        Frame::new(
+            FrameType::BACNET_DATA_NOT_EXPECTING_REPLY,
+            STATION,
+            5,
+            &data,
         ),
-        Err(CoreError::Frame(FrameError::Oversize {
-            length: 502,
-            maximum: 501,
-        }))
+        late,
     );
-    assert_eq!(
-        core.on_validated_frame(Frame::new(FrameType::TOKEN, STATION, 255, &[]), late),
-        Err(CoreError::Frame(FrameError::BroadcastSource))
-    );
-    assert_eq!(
-        core.on_validated_frame(
-            Frame::new(
-                FrameType::BACNET_EXTENDED_DATA_EXPECTING_REPLY,
-                STATION,
-                5,
-                &[1]
-            ),
-            late
+    assert_eq!(core.counters().adapter_errors, 1);
+    core.on_validated_frame(Frame::new(FrameType::TOKEN, STATION, 255, &[]), late);
+    assert_eq!(core.counters().adapter_errors, 2);
+    core.on_validated_frame(
+        Frame::new(
+            FrameType::BACNET_EXTENDED_DATA_EXPECTING_REPLY,
+            STATION,
+            5,
+            &[1],
         ),
-        Err(CoreError::Frame(FrameError::UnsupportedCobsFrame {
-            raw_type: 0x20
-        }))
+        late,
     );
+    assert_eq!(core.counters().adapter_errors, 3);
     assert_eq!(core.counters().frames_received, 0);
     assert_eq!(core.state(), MasterState::Idle);
     assert_eq!(core.poll_action(), Action::Idle);
     assert_eq!(core.next_deadline(), Some(Instant::from_micros(500_000)));
     // The refused frames did not move the core's clock either.
-    core.on_silence(Instant::from_micros(1)).unwrap();
+    core.on_silence(Instant::from_micros(1));
 }
 
 #[test]
@@ -283,7 +272,7 @@ fn an_extended_frame_for_this_station_counts_when_it_completes() {
     for (storage, counted_at) in [(MAX_EXTENDED_FRAME_LENGTH, wire.len()), (64, 8)] {
         let mut rx = vec![0u8; storage];
         let mut actions = Actions::new();
-        let mut core = MasterCore::new(
+        let mut core = MasterCore::from_parts(
             config(),
             Queues::new(),
             &mut rx,
@@ -320,7 +309,7 @@ fn an_abort_while_skipping_another_stations_frame_counts_once() {
     for silence in [true, false] {
         let mut rx = vec![0u8; 32];
         let mut actions = Actions::new();
-        let mut core = MasterCore::new(
+        let mut core = MasterCore::from_parts(
             config(),
             Queues::new(),
             &mut rx,
@@ -334,11 +323,10 @@ fn an_abort_while_skipping_another_stations_frame_counts_once() {
         assert_eq!(core.state(), MasterState::WaitForReply);
         if silence {
             let abort = last + core.config().t_frame_abort + Duration::from_micros(1);
-            core.on_silence(abort).unwrap();
+            core.on_silence(abort);
             assert_eq!(core.counters().frame_aborts, 1);
         } else {
-            core.on_receive_error(ReceiveError::Framing, last + Duration::from_micros(100))
-                .unwrap();
+            core.on_receive_error(ReceiveError::Framing, last + Duration::from_micros(100));
         }
         assert_eq!(core.counters().parser_errors, 1, "silence: {silence}");
         assert_eq!(
@@ -411,7 +399,7 @@ fn the_decoder_is_drained_after_a_dropped_candidate() {
 
     let mut rx = [0u8; 64];
     let mut actions = Actions::new();
-    let mut core = MasterCore::new(
+    let mut core = MasterCore::from_parts(
         config(),
         Queues::new(),
         &mut rx,

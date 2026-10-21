@@ -17,7 +17,7 @@ use bacnet_services::wpm::WriteAccessSpecification;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::ReceivedNpdu;
 use bacnet_types::constructed::{BACnetObjectPropertyReference, PropertyReference};
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
 use bacnet_types::error::ErrorDetail;
 use bacnet_types::primitives::ObjectIdentifier;
 use std::future::Future;
@@ -56,7 +56,11 @@ async fn answered<T>(
     result
 }
 
-fn structured<T: std::fmt::Debug>(result: Result<T, Error>, class: u32, code: u32) -> ErrorDetail {
+fn structured<T: std::fmt::Debug>(
+    result: Result<T, Error>,
+    class: ErrorClass,
+    code: ErrorCode,
+) -> ErrorDetail {
     match result {
         Err(Error::Structured {
             class: c,
@@ -117,7 +121,7 @@ async fn create_object_error_surfaces_the_failed_initial_value() {
     )
     .await;
     assert_eq!(
-        structured(result, 2, 40),
+        structured(result, ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED),
         ErrorDetail::FirstFailedElementNumber(2)
     );
     assert_eq!(client.tsm.lock().await.coordinated_active_count(), 0);
@@ -151,7 +155,7 @@ async fn write_property_multiple_error_surfaces_the_failed_write() {
     )
     .await;
     assert_eq!(
-        structured(result, 2, 40),
+        structured(result, ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED),
         ErrorDetail::FirstFailedWriteAttempt(reference(Some(3)))
     );
     client.stop().await.unwrap();
@@ -198,14 +202,20 @@ async fn subscribe_cov_property_multiple_error_surfaces_the_failed_subscription(
     ];
     let result = answered(&peer, &mut received, &subscription, send()).await;
     assert_eq!(
-        structured(result, 2, 44),
+        structured(result, ErrorClass::PROPERTY, ErrorCode::NOT_COV_PROPERTY),
         ErrorDetail::FirstFailedSubscription(reference(Some(8)))
     );
     // The general choice: [0] { SERVICES (5), VALUE_OUT_OF_RANGE (37) }.
     let general = [0x0E, 0x91, 5, 0x91, 37, 0x0F];
     let result = answered(&peer, &mut received, &general, send()).await;
     assert!(
-        matches!(result, Err(Error::Protocol { class: 5, code: 37 })),
+        matches!(
+            result,
+            Err(Error::Protocol {
+                class: ErrorClass::SERVICES,
+                code: ErrorCode::VALUE_OUT_OF_RANGE
+            })
+        ),
         "{result:?}"
     );
     client.stop().await.unwrap();
@@ -238,7 +248,11 @@ async fn confirmed_private_transfer_error_surfaces_vendor_service_and_parameters
     )
     .await;
     assert_eq!(
-        structured(result, 5, 45),
+        structured(
+            result,
+            ErrorClass::SERVICES,
+            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED
+        ),
         ErrorDetail::PrivateTransfer {
             vendor_id: 555,
             service_number: 7,
@@ -264,14 +278,24 @@ async fn vt_close_error_surfaces_the_sessions_not_closed() {
     let with_list = [0x0E, 0x91, 5, 0x91, 39, 0x0F, 0x1E, 0x21, 1, 0x21, 4, 0x1F];
     let result = answered(&peer, &mut received, &with_list, send()).await;
     assert_eq!(
-        structured(result, 5, 39),
+        structured(
+            result,
+            ErrorClass::SERVICES,
+            ErrorCode::VT_SESSION_TERMINATION_FAILURE
+        ),
         ErrorDetail::VtSessionIdentifiers(vec![1, 4])
     );
     // Any other error omits the list: [0] { SERVICES, UNKNOWN_VT_SESSION (35) }.
     let without_list = [0x0E, 0x91, 5, 0x91, 35, 0x0F];
     let result = answered(&peer, &mut received, &without_list, send()).await;
     assert!(
-        matches!(result, Err(Error::Protocol { class: 5, code: 35 })),
+        matches!(
+            result,
+            Err(Error::Protocol {
+                class: ErrorClass::SERVICES,
+                code: ErrorCode::UNKNOWN_VT_SESSION
+            })
+        ),
         "{result:?}"
     );
     client.stop().await.unwrap();

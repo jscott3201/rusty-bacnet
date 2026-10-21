@@ -18,19 +18,24 @@ RUN cargo build --locked --release -p bacnet-benchmarks \
     --bin bacnet-router \
     --bin bacnet-bbmd \
     --bin bacnet-sc-hub \
+    --bin nat-probe \
     --bin stress-orchestrator
 
 # ── Runtime ──────────────────────────────────────────────────────────────────
 FROM alpine:3.21 AS runtime
 
-RUN apk add --no-cache ca-certificates
+# iptables for the NAT routers of examples/docker/nat.
+RUN apk add --no-cache ca-certificates iptables
 
 COPY --from=builder /src/target/release/stress-test       /usr/local/bin/
 COPY --from=builder /src/target/release/bacnet-device     /usr/local/bin/
 COPY --from=builder /src/target/release/bacnet-router     /usr/local/bin/
 COPY --from=builder /src/target/release/bacnet-bbmd       /usr/local/bin/
 COPY --from=builder /src/target/release/bacnet-sc-hub     /usr/local/bin/
+COPY --from=builder /src/target/release/nat-probe         /usr/local/bin/
 COPY --from=builder /src/target/release/stress-orchestrator /usr/local/bin/
+# Static routes for the foreign-device scenario (see the script and compose file).
+COPY --chmod=755 examples/docker/net-entrypoint.sh /usr/local/bin/bacnet-net
 
 # Default command — override with docker-compose command.
 CMD ["stress-test"]

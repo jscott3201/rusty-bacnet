@@ -11,6 +11,7 @@
 #    maturin wheel that maturin-requirements.txt pins by version and sha256,
 #    installed into a venv of the first one;
 # 2. the CLI with sc-tls into out/<cli asset name>.
+# Both use the `dist` profile (fat LTO, #973; Cargo.toml).
 #
 # macOS: MACOSX_DEPLOYMENT_TARGET must be set. It is the binaries' minimum
 # macOS, for the C code too, and maturin takes the wheel tag from it.
@@ -63,13 +64,17 @@ if [ -d "$venv/Scripts" ]; then bin=$venv/Scripts; fi
 "$bin/maturin" --version
 
 echo "::group::Wheels"
-RUSTFLAGS=$wheel_flags "$bin/maturin" build --release --locked --target "$target" -i "${interpreters[@]}" \
+RUSTFLAGS=$wheel_flags "$bin/maturin" build --profile dist --locked --target "$target" -i "${interpreters[@]}" \
   -m crates/rusty-bacnet/Cargo.toml --out dist
 echo "::endgroup::"
 
+# No `serial` (MS/TP) here yet: it ships in the Linux CLI only until a USB
+# RS-485 adapter has been tested on macOS and on Windows (#969). On macOS it
+# would link IOKit and CoreFoundation for the port listing, as the wheels do.
+# The default features add the terminal UI (`tui`, #974).
 echo "::group::CLI"
-RUSTFLAGS=$cli_flags cargo build --release --locked -p bacnet-cli --features sc-tls --target "$target"
+RUSTFLAGS=$cli_flags cargo build --profile dist --locked -p bacnet-cli --features sc-tls --target "$target"
 mkdir -p out
-cp "target/$target/release/bacnet$exe" "out/$cli"
+cp "target/$target/dist/bacnet$exe" "out/$cli"
 echo "::endgroup::"
 ls -l dist out

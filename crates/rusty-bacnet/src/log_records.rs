@@ -66,7 +66,7 @@ fn log_datum<'py>(py: Python<'py>, value: &LogDatum) -> PyResult<Bound<'py, PyDi
         LogDatum::Failure {
             error_class,
             error_code,
-        } => datum_with(py, "failure", (*error_class, *error_code)),
+        } => datum_with(py, "failure", (error_class.to_raw(), error_code.to_raw())),
         LogDatum::TimeChange(seconds) => datum_with(py, "time_change", seconds),
         LogDatum::AnyValue(bytes) => datum_with(py, "any", PyBytes::new(py, bytes)),
     }

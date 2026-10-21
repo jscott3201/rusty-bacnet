@@ -9,6 +9,7 @@ use bacnet_transport::{
     mstp::{LoopbackSerial, MstpConfig, MstpExecutionMode, MstpTransport, SerialPort},
     port::{ReceivedNpdu, TransportPort},
 };
+use bacnet_types::enums::EngineeringUnits;
 use bacnet_types::error::Error;
 use bytes::{Bytes, BytesMut};
 use std::{future::Future, sync::Arc, time::Duration};
@@ -168,7 +169,8 @@ pub enum Owner {
 impl Owner {
     async fn start(role: Role, transport: GatedTransport) -> Self {
         let mut db = ObjectDatabase::new();
-        let mut analog = AnalogInputObject::new(1, "number-progress", 0).unwrap();
+        let mut analog =
+            AnalogInputObject::new(1, "number-progress", EngineeringUnits::SQUARE_METERS).unwrap();
         analog.set_present_value(42.0);
         db.add(Box::new(analog)).unwrap();
         match role {

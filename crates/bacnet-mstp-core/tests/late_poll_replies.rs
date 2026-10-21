@@ -4,7 +4,7 @@
 mod support;
 
 use bacnet_mstp_codec::FrameType;
-use bacnet_mstp_core::{Action, CoreError, Direction, Duration, MasterState};
+use bacnet_mstp_core::{Action, Direction, Duration, MasterState, TransmitError};
 
 use support::*;
 
@@ -26,7 +26,7 @@ fn a_late_answer_to_a_poll_still_finds_the_successor() {
         assert!(is(header, FrameType::POLL_FOR_MASTER, PEER));
         let timeout = core.next_deadline().unwrap();
         let late = if handed {
-            core.on_deadline(timeout).unwrap();
+            core.on_deadline(timeout);
             timeout + us(500)
         } else {
             // A damaged answer first: the next poll waits out its tail.
@@ -58,12 +58,12 @@ fn a_late_answer_to_a_poll_still_finds_the_successor() {
             assert_eq!(core.poll_action(), Action::SetDirection(Direction::Receive));
             assert_eq!(
                 core.on_transmit_started(poll, late),
-                Err(CoreError::StaleTransmit)
+                Err(TransmitError::Stale)
             );
         }
         let due = late + turnaround(&core);
         assert_eq!(core.next_deadline(), Some(due));
-        core.on_deadline(due).unwrap();
+        core.on_deadline(due);
         let (_, header) = handed_over(&mut core);
         assert!(is(header, FrameType::TOKEN, PEER));
     }
@@ -80,7 +80,7 @@ fn a_late_answer_is_dropped_while_the_token_goes_to_the_successor() {
     let mut core = new_core(&mut rx, &mut actions);
     maintenance_poll_sent(&mut core);
     let timeout = core.next_deadline().unwrap();
-    core.on_deadline(timeout).unwrap();
+    core.on_deadline(timeout);
     let (token, header) = handed_over(&mut core);
     assert!(is(header, FrameType::TOKEN, 3));
     let late = timeout + us(500);
@@ -97,11 +97,11 @@ fn a_late_answer_is_dropped_while_the_token_goes_to_the_successor() {
     assert_eq!(core.snapshot().next_station, 3);
     assert_eq!(
         core.on_transmit_started(token, late + us(100)),
-        Err(CoreError::TransmitDeferred)
+        Err(TransmitError::Deferred)
     );
     expect_receive_only(&mut core);
     let due = late + turnaround(&core);
-    core.on_deadline(due).unwrap();
+    core.on_deadline(due);
     let (again, header) = handed_over(&mut core);
     assert!(is(header, FrameType::TOKEN, 3));
     core.on_transmit_started(again, due).unwrap();

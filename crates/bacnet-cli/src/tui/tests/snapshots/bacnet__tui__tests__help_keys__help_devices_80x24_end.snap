@@ -1,0 +1,28 @@
+---
+source: crates/bacnet-cli/src/tui/tests/help_keys.rs
+expression: end
+---
+" [1 Devices] 2 3 4 7 | BIP 10.0.0.1:47808 | up | READ-ONLY | drop 0      ? help "
+"┌ ┌ Help (? or Esc to close) ────────────────────────────────────────────────┐─┐"
+"│ │   Esc              Clear the filter, or a notice                         │ │"
+"│ │ Who-Is form (d)                                                          │ │"
+"│ │   Tab Up Down      Next or previous field                                │ │"
+"│ │   Left Right Space Change the scope                                      │ │"
+"│ │   Enter Esc        Send (again past a warning); close                    │ │"
+"│ │ Commands (:)                                                             │ │"
+"│ │   watch DEVICE OBJECT [PROPERTY]                                         │ │"
+"│ │                    Watch a property (present-value by default); w for    │ │"
+"│ │                    short                                                 │ │"
+"│ │   csv on|off       Log the watched values to the workspace, or stop      │ │"
+"│ │   writem DEVICE OBJECT PROPERTY VALUE[@P] ...                            │ │"
+"│ │                    One WritePropertyMultiple to a device, previewed      │ │"
+"│ │                    first                                                 │ │"
+"│ │   bbmd [ADDRESS]   Another BBMD's tables; alone, back to our own BBMD's  │ │"
+"│ │   find NAME        Who-Has by object name; alone, close the list         │ │"
+"│ │   mstp rotation|hold MS                                                  │ │"
+"│ │                    The MS/TP monitor's thresholds; how long a safe join  │ │"
+"│ │                    listens                                               │ │"
+"│ │   mstp listen SECS The MS/TP monitor's thresholds; how long a safe join  │ │"
+"│ │                    listens                                               │ │"
+"└─└─────────────────────────────────── 22-41 of 41  Up Down PgUp PgDn scroll ┘─┘"
+"                                                                                "

@@ -7,12 +7,17 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use bacnet_bip_codec::{BvlcFunction, BvllFrame};
 use bacnet_bip_core::node::{Addressed, Datagram, Discard, LocalAddresses, Path};
 use tracing::{debug, warn};
 
-use crate::udp_metadata::{DestinationReceiver, IpVersion, ReceivedDatagram};
+use crate::tap::FrameTap;
+use crate::udp_metadata::{
+    request_arrival_stamps, DestinationReceiver, IpVersion, ReceivedDatagram,
+};
 
 use super::io::{receive, RecvContext};
+use super::multicast::GroupSwap;
 use super::receive_counters::{DropReason, ReceiveDrops};
 use super::socket::{BipSocket, BoundSockets};
 
@@ -31,30 +36,103 @@ pub(super) struct Listener {
     socket: Arc<BipSocket>,
     receiver: DestinationReceiver,
     buf: Vec<u8>,
+    /// The primary reports each datagram to the tap as it is handed up; a
+    /// broadcast listener only what the node keeps ([`handle_datagram`]).
+    tap_at_read: bool,
+    /// In ordered mode, a datagram read ahead of its turn, whose payload
+    /// waits in `buf` ([`Listeners::recv_in_order`]).
+    held: Option<Held>,
+}
+
+/// A datagram read and not yet handed up, numbered in the order the
+/// ordered receive read it.
+pub(super) struct Held {
+    pub(super) datagram: ReceivedDatagram,
+    pub(super) read: u64,
+}
+
+impl Held {
+    /// Whether this datagram goes up before `other`: by the kernel's
+    /// receive time where both have one and they differ, or else by the
+    /// order the two were read.
+    pub(super) fn before(&self, other: &Held) -> bool {
+        match (self.datagram.arrival_stamp, other.datagram.arrival_stamp) {
+            (Some(own), Some(theirs)) if own != theirs => own < theirs,
+            _ => self.read < other.read,
+        }
+    }
 }
 
 impl Listener {
     /// Hand a bound socket to tokio, reading the destination of each
-    /// datagram. Must run inside a tokio runtime.
-    fn open(socket: socket2::Socket, lease: Option<Arc<()>>) -> io::Result<Self> {
+    /// datagram, and with `arrival_stamp` the time it arrived. Must run inside
+    /// a tokio runtime.
+    fn open(
+        socket: socket2::Socket,
+        lease: Option<Arc<()>>,
+        tap: &FrameTap,
+        tap_at_read: bool,
+        arrival_stamp: bool,
+    ) -> io::Result<Self> {
         let receiver = DestinationReceiver::configure(&socket, IpVersion::V4)?;
+        if arrival_stamp {
+            if let Err(error) = request_arrival_stamps(&socket) {
+                debug!(%error, "No receive timestamps; datagrams go up in the order they are read");
+            }
+        }
         let socket = tokio::net::UdpSocket::from_std(socket.into())?;
         Ok(Self {
-            socket: Arc::new(BipSocket::new(socket, lease)),
+            socket: Arc::new(BipSocket::new(socket, lease).tapped(tap.clone())),
             receiver,
             buf: vec![0; 2048],
+            tap_at_read,
+            held: None,
         })
     }
 
+    /// A B/IP-M group listener an activation opened (multicast.rs): set up
+    /// as a listener that reads in arrival order, keeping `lease` and
+    /// reporting what the node keeps to `tap`. Must run inside a tokio
+    /// runtime. Not used on Windows, whose primary socket joins the group.
+    #[cfg_attr(windows, allow(dead_code))]
+    pub(super) fn open_group(
+        socket: socket2::Socket,
+        lease: Option<Arc<()>>,
+        tap: &FrameTap,
+    ) -> io::Result<Self> {
+        Self::open(socket, lease, tap, false, true)
+    }
+
+    /// The next datagram, which the primary's tap sees as it is read.
     async fn recv(&mut self) -> io::Result<ReceivedDatagram> {
+        let received = self.receiver.recv_from(&self.socket, &mut self.buf).await?;
+        self.tap_read(&received);
+        Ok(received)
+    }
+
+    /// The next datagram, unseen by the tap until it is handed up.
+    async fn read(&mut self) -> io::Result<ReceivedDatagram> {
         self.receiver.recv_from(&self.socket, &mut self.buf).await
+    }
+
+    /// The datagram the kernel already holds for this socket, or
+    /// `WouldBlock`.
+    fn read_queued(&mut self) -> io::Result<ReceivedDatagram> {
+        self.receiver.recv_queued(&self.socket, &mut self.buf)
+    }
+
+    fn tap_read(&self, received: &ReceivedDatagram) {
+        if self.tap_at_read {
+            let datagram = self.buf.get(..received.len).unwrap_or_default();
+            self.socket.tap_inbound(datagram, received.peer);
+        }
     }
 }
 
 /// A listener's next datagram, or never, once it is closed.
-async fn recv_on(listener: Option<&mut Listener>) -> io::Result<ReceivedDatagram> {
+async fn read_on(listener: Option<&mut Listener>) -> io::Result<ReceivedDatagram> {
     match listener {
-        Some(listener) => listener.recv().await,
+        Some(listener) => listener.read().await,
         None => std::future::pending().await,
     }
 }
@@ -64,6 +142,12 @@ async fn recv_on(listener: Option<&mut Listener>) -> io::Result<ReceivedDatagram
 pub(super) struct Listeners {
     primary: Listener,
     broadcast: [Option<Listener>; 2],
+    /// Whether the start bound broadcast listeners, so that datagrams are
+    /// handed up in the order the kernel received them across the sockets
+    /// (#1546). Fixed at open: it stays on after a listener closes.
+    ordered: bool,
+    /// How many datagrams the ordered receive has read, which numbers each.
+    reads: u64,
 }
 
 /// Which socket [`Listeners::recv`] read: `None` for the primary, or the
@@ -72,14 +156,41 @@ pub(super) type Source = Option<usize>;
 
 impl Listeners {
     /// Hand the sockets one start bound to tokio. Each keeps `lease` until
-    /// it closes.
-    pub(super) fn open(bound: BoundSockets, lease: Option<Arc<()>>) -> io::Result<Self> {
+    /// it closes, and reports its datagrams to `tap`. With broadcast
+    /// listeners, every socket asks for receive timestamps.
+    pub(super) fn open(
+        bound: BoundSockets,
+        lease: Option<Arc<()>>,
+        tap: &FrameTap,
+    ) -> io::Result<Self> {
+        let ordered = !bound.listeners.is_empty();
         let mut broadcast = [None, None];
         for (slot, socket) in broadcast.iter_mut().zip(bound.listeners) {
-            *slot = Some(Listener::open(socket, lease.clone())?);
+            *slot = Some(Listener::open(socket, lease.clone(), tap, false, ordered)?);
         }
-        let primary = Listener::open(bound.primary, lease)?;
-        Ok(Self { primary, broadcast })
+        let primary = Listener::open(bound.primary, lease, tap, true, ordered)?;
+        Ok(Self {
+            primary,
+            broadcast,
+            ordered,
+            reads: 0,
+        })
+    }
+
+    /// Read a B/IP-M node's new group listener in place of the old one, or,
+    /// with `None`, no listener: an activation moved the group or ended it
+    /// (multicast.rs), and opened the listener already, so nothing here can
+    /// fail. A member binds no other listener, so the group's is the first.
+    /// A datagram the old listener read ahead and still held is dropped
+    /// with it: it was sent to the group being left. From here on the
+    /// sockets are read in arrival order, as with any listener; the primary
+    /// reports no receive stamps unless it started with a listener, and
+    /// read order then decides.
+    pub(super) fn replace_group(&mut self, listener: Option<Listener>) {
+        if listener.is_some() {
+            self.ordered = true;
+        }
+        self.broadcast[0] = listener;
     }
 
     /// The socket every send leaves from.
@@ -87,25 +198,100 @@ impl Listeners {
         &self.primary.socket
     }
 
-    /// The next datagram on any socket. Each read is cancel-safe: the
-    /// datagram leaves the socket only inside the read that returns it. With
-    /// no listener, only the primary is read, in arrival order.
-    async fn recv(&mut self) -> (Source, io::Result<ReceivedDatagram>) {
+    /// The next datagram. Each read is cancel-safe: a datagram leaves its
+    /// socket only inside the read that returns it, or is held in its
+    /// listener. With no broadcast listener, only the primary is read, in
+    /// arrival order, as before #1546.
+    pub(super) async fn recv(&mut self) -> (Source, io::Result<ReceivedDatagram>) {
+        if !self.ordered {
+            return (None, self.primary.recv().await);
+        }
+        self.recv_in_order().await
+    }
+
+    /// The next datagram across every socket, in the order the kernel
+    /// received them (#1546). Each socket holds at most one datagram read
+    /// ahead. With none held, it waits for any socket; then it reads what
+    /// the others already have queued, without waiting, and hands up the
+    /// earliest. A datagram found alone goes up at once, so ordering adds a
+    /// read attempt per other socket and no delay. One that the kernel
+    /// stamped earlier but queued only after that check goes up next. Equal
+    /// or missing stamps (coarse ticks, Linux's start-up moment) fall back to
+    /// read order, and a step of Linux's realtime clock between two arrivals
+    /// can reorder them.
+    async fn recv_in_order(&mut self) -> (Source, io::Result<ReceivedDatagram>) {
         let Self {
             primary,
             broadcast: [first, second],
+            reads,
+            ..
         } = self;
-        if first.is_none() && second.is_none() {
-            return (None, primary.recv().await);
+        let mut slots = [
+            (None, Some(primary)),
+            (Some(0), first.as_mut()),
+            (Some(1), second.as_mut()),
+        ];
+        if slots
+            .iter()
+            .all(|(_, listener)| listener.as_ref().is_none_or(|l| l.held.is_none()))
+        {
+            let [(_, primary), (_, first), (_, second)] = &mut slots;
+            let (source, received) = tokio::select! {
+                received = read_on(primary.as_deref_mut()) => (None, received),
+                received = read_on(first.as_deref_mut()) => (Some(0), received),
+                received = read_on(second.as_deref_mut()) => (Some(1), received),
+            };
+            let Some((_, Some(listener))) = slots.iter_mut().find(|(at, _)| *at == source) else {
+                unreachable!("the source is one of the slots, and only an open one reads");
+            };
+            match received {
+                Ok(datagram) => {
+                    listener.held = Some(Held {
+                        datagram,
+                        read: next(reads),
+                    })
+                }
+                Err(error) => return (source, Err(error)),
+            }
         }
-        tokio::select! {
-            received = primary.recv() => (None, received),
-            received = recv_on(first.as_mut()) => (Some(0), received),
-            received = recv_on(second.as_mut()) => (Some(1), received),
+        for (source, listener) in &mut slots {
+            let Some(listener) = listener.as_deref_mut().filter(|l| l.held.is_none()) else {
+                continue;
+            };
+            match listener.read_queued() {
+                Ok(datagram) => {
+                    listener.held = Some(Held {
+                        datagram,
+                        read: next(reads),
+                    })
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+                Err(error) => return (*source, Err(error)),
+            }
         }
+        let mut earliest: Option<usize> = None;
+        for index in 0..slots.len() {
+            let Some(held) = held_in(&slots[index]) else {
+                continue;
+            };
+            if earliest
+                .and_then(|e| held_in(&slots[e]))
+                .is_none_or(|e| held.before(e))
+            {
+                earliest = Some(index);
+            }
+        }
+        let Some((source, Some(listener))) = earliest.map(|index| &mut slots[index]) else {
+            unreachable!("the wait above leaves a datagram held, or returns");
+        };
+        let (source, Some(held)) = (*source, listener.held.take()) else {
+            unreachable!("only a listener holding a datagram is chosen");
+        };
+        listener.tap_read(&held.datagram);
+        (source, Ok(held.datagram))
     }
 
-    fn data(&self, source: Source, len: usize) -> &[u8] {
+    pub(super) fn data(&self, source: Source, len: usize) -> &[u8] {
         let listener = source
             .and_then(|index| self.broadcast[index].as_ref())
             .unwrap_or(&self.primary);
@@ -113,15 +299,43 @@ impl Listeners {
     }
 }
 
+/// The datagram a slot's listener holds, if it is open and holds one.
+fn held_in<'a>((_, listener): &'a (Source, Option<&mut Listener>)) -> Option<&'a Held> {
+    listener.as_ref()?.held.as_ref()
+}
+
+/// The next number in `reads`.
+fn next(reads: &mut u64) -> u64 {
+    *reads += 1;
+    *reads
+}
+
 /// Read every datagram the transport's sockets receive, until the primary
-/// fails. A failed broadcast listener is closed, and unicast goes on.
+/// fails. A failed broadcast listener is closed, and unicast goes on. A
+/// B/IP-M group listener that `swap` hands over replaces the one read
+/// before (multicast.rs).
 pub(super) async fn receive_loop(
     mut listeners: Listeners,
     local: IngressAddresses,
     ctx: RecvContext,
+    swap: Option<Arc<GroupSwap>>,
 ) {
     loop {
-        let (source, received) = listeners.recv().await;
+        // Only a transport that can change its group waits on the
+        // hand-off, so the others pay nothing for it. Both arms are
+        // cancel-safe and take no lock across an await: the receive holds
+        // a datagram it read ahead in its listener.
+        let (source, received) = match swap.as_deref() {
+            Some(swap) => tokio::select! {
+                biased;
+                listener = swap.next() => {
+                    listeners.replace_group(listener);
+                    continue;
+                }
+                received = listeners.recv() => received,
+            },
+            None => listeners.recv().await,
+        };
         let arrival = match source {
             None => Arrival::Primary,
             Some(_) => Arrival::BroadcastListener,
@@ -269,8 +483,39 @@ pub(super) async fn handle_datagram(
     let to = addressed(received.destination, received.os_group_delivery, local, ctx);
     let mut datagram = Datagram::new(data, source, Some(to));
     datagram.path = path;
+    if arrival == Arrival::BroadcastListener && kept_by_listener(&datagram) {
+        ctx.socket().tap_inbound(data, received.peer);
+    }
     if let Some(Discard::ListenerMismatch { other_interface }) = receive(&datagram, ctx).await {
         log_listener_mismatch(other_interface, received, local);
+    }
+}
+
+/// Whether the node keeps a datagram a broadcast listener read, by the
+/// check its receive makes before anything else (`bacnet-bip-core`,
+/// node/receive.rs). It is made here first so that the tap sees only what
+/// the node keeps, and sees it before the node acts on it, which may send.
+/// `tap_tests` holds the two to the same verdict.
+pub(super) fn kept_by_listener(datagram: &Datagram<'_>) -> bool {
+    let (Some(to), Path::Listener { other_interface }) = (datagram.to, datagram.path) else {
+        return true;
+    };
+    if !to.broadcast || other_interface {
+        return false;
+    }
+    // With a broadcast address that is also the node's own, as in loopback
+    // tests, a point-to-point function passes the address checks, and the
+    // listener refuses it. A frame that doesn't decode is the node's to
+    // count as malformed.
+    match BvllFrame::decode(datagram.payload) {
+        Ok(frame) => {
+            !to.node
+                || matches!(
+                    frame.function,
+                    BvlcFunction::ORIGINAL_BROADCAST_NPDU | BvlcFunction::FORWARDED_NPDU
+                )
+        }
+        Err(_) => true,
     }
 }
 

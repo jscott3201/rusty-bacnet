@@ -59,11 +59,11 @@ fn subscribe_cov_property_parameter_errors_precede_lookup_and_expired_entry_purg
             .unwrap_err();
             if reject {
                 assert!(matches!(error, Error::Reject { reason }
-                    if reason == RejectReason::INCONSISTENT_PARAMETERS.to_raw()));
+                    if reason == RejectReason::INCONSISTENT_PARAMETERS));
             } else {
                 assert!(matches!(error, Error::Protocol { class, code }
-                    if class == ErrorClass::SERVICES.to_raw() as u32
-                    && code == ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32));
+                    if class == ErrorClass::SERVICES
+                    && code == ErrorCode::VALUE_OUT_OF_RANGE));
             }
             assert_eq!(
                 table.len(),

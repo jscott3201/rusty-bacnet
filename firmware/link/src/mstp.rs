@@ -1,7 +1,7 @@
 //! The MS/TP image's scenario.
 //!
 //! [`run`] drives `bacnet-mstp-codec` and `bacnet-mstp-core`, both with
-//! default features plus the core's `heapless` queues, through the paths a
+//! default features plus the core's fixed queues, through the paths a
 //! small MS/TP device uses. It returns a [`Summary`] of what it saw.
 //!
 //! - **Codec:** encode a few frame types, refuse one bad frame, and decode the
@@ -26,7 +26,7 @@ mod link;
 pub use expected::EXPECTED;
 
 use bacnet_mstp_codec::{FrameType, MAX_STANDARD_FRAME_LENGTH, MAX_STANDARD_MPDU_DATA};
-use bacnet_mstp_core::{ActionBuffers, HeaplessQueues, MasterCore, MasterState};
+use bacnet_mstp_core::{FixedQueues, MasterCore, MasterState, StandardStorage};
 
 /// Unicast slots in the transmit queue.
 pub const UNICAST_SLOTS: usize = 4;
@@ -36,15 +36,15 @@ pub const BROADCAST_SLOTS: usize = 2;
 /// scenario polls every action after each call into the core.
 pub const DELIVERY_SLOTS: usize = 1;
 
-/// The core's transmit queues: heapless, with standard-frame slots.
-pub type Queues = HeaplessQueues<UNICAST_SLOTS, BROADCAST_SLOTS>;
+/// The core's transmit queues: fixed arrays, with standard-frame slots.
+pub type Queues = FixedQueues<UNICAST_SLOTS, BROADCAST_SLOTS>;
 
-/// The core's action buffers.
-pub type Actions = ActionBuffers<DELIVERY_SLOTS>;
+/// The storage the core borrows: its receive buffer, queues and action
+/// buffers, all for standard frames.
+pub type Storage = StandardStorage<UNICAST_SLOTS, BROADCAST_SLOTS, DELIVERY_SLOTS>;
 
-/// The master core as the image configures it: it borrows its queues, as it
-/// does its receive storage and action buffers, so all three can live in a
-/// static and the core itself is small.
+/// The master core as the image configures it: it borrows its [`Storage`],
+/// so that can live in a static and the core itself is small.
 pub type Core<'m> = MasterCore<'m, &'m mut Queues>;
 
 /// An NPDU with an unconfirmed Who-Is: version 1, no addressing, no reply
@@ -54,8 +54,8 @@ const WHO_IS: [u8; 4] = [0x01, 0x00, 0x10, 0x08];
 /// Octets of encoded frames the scenario keeps at once.
 const WIRE_LENGTH: usize = 128;
 
-/// Storage the scenario works in besides its stack: everything the core
-/// borrows (its receive buffer, queues and action buffers), the stream
+/// Storage the scenario works in besides its stack: the [`Storage`] the
+/// core borrows (its receive buffer, queues and action buffers), the stream
 /// decoder's buffer and an encode buffer.
 ///
 /// [`Memory::new`] is all zero bits, so the image keeps it in a static that
@@ -63,12 +63,8 @@ const WIRE_LENGTH: usize = 128;
 /// is the pattern for firmware: the large buffers in a zeroed static, and the
 /// core, which borrows them, built on the stack.
 pub struct Memory {
-    /// The core's receive storage, which its stream decoder borrows.
-    rx: [u8; MAX_STANDARD_FRAME_LENGTH],
-    /// The core's transmit queues.
-    queues: Queues,
-    /// The core's action buffers.
-    actions: Actions,
+    /// What the core borrows.
+    core: Storage,
     /// The standalone stream decoder's storage. Once the codec part is done,
     /// its first octets serve as the oversized NPDU.
     stream: [u8; MAX_STANDARD_FRAME_LENGTH],
@@ -80,9 +76,7 @@ impl Memory {
     /// Zeroed storage.
     pub const fn new() -> Self {
         Self {
-            rx: [0; MAX_STANDARD_FRAME_LENGTH],
-            queues: Queues::new(),
-            actions: Actions::new(),
+            core: Storage::new(),
             stream: [0; MAX_STANDARD_FRAME_LENGTH],
             wire: [0; WIRE_LENGTH],
         }
@@ -186,27 +180,12 @@ impl Summary {
 /// [`Summary::errors`] and carries on, or returns early when it cannot
 /// continue.
 pub fn run(memory: &mut Memory) -> Summary {
-    let Memory {
-        rx,
-        queues,
-        actions,
-        stream,
-        wire,
-    } = memory;
+    let Memory { core, stream, wire } = memory;
     let mut summary = Summary::new();
     codec::run(stream, wire, &mut summary);
     // The decoder is done with its storage, which now serves as an NPDU one
     // octet longer than a standard frame carries.
     let oversize = stream.get(..MAX_STANDARD_MPDU_DATA + 1).unwrap_or_default();
-    link::run(
-        link::Storage {
-            rx,
-            queues,
-            actions,
-        },
-        wire,
-        oversize,
-        &mut summary,
-    );
+    link::run(core, wire, oversize, &mut summary);
     summary
 }

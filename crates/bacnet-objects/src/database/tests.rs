@@ -6,16 +6,18 @@ use crate::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
 use crate::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
 use crate::event::{EventStateChange, EventTransition, EventTransitionCommit};
 use crate::multistate::{MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject};
-use bacnet_types::enums::{ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{
+    EngineeringUnits, ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier,
+};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, PropertyValue};
 
 #[test]
 fn all_eleven_builtin_intrinsic_families_implement_atomic_commit() {
     let mut objects: Vec<Box<dyn BACnetObject>> = vec![
-        Box::new(AnalogInputObject::new(1, "AI", 0).unwrap()),
-        Box::new(AnalogOutputObject::new(1, "AO", 0).unwrap()),
-        Box::new(AnalogValueObject::new(1, "AV", 0).unwrap()),
+        Box::new(AnalogInputObject::new(1, "AI", EngineeringUnits::SQUARE_METERS).unwrap()),
+        Box::new(AnalogOutputObject::new(1, "AO", EngineeringUnits::SQUARE_METERS).unwrap()),
+        Box::new(AnalogValueObject::new(1, "AV", EngineeringUnits::SQUARE_METERS).unwrap()),
         Box::new(BinaryInputObject::new(1, "BI").unwrap()),
         Box::new(BinaryOutputObject::new(1, "BO").unwrap()),
         Box::new(BinaryValueObject::new(1, "BV").unwrap()),
@@ -119,8 +121,8 @@ impl BACnetObject for TestObject {
             Ok(PropertyValue::CharacterString(self.name.clone()))
         } else {
             Err(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+                class: ErrorClass::PROPERTY,
+                code: ErrorCode::UNKNOWN_PROPERTY,
             })
         }
     }
@@ -133,8 +135,8 @@ impl BACnetObject for TestObject {
         _priority: Option<u8>,
     ) -> Result<(), Error> {
         Err(Error::Protocol {
-            class: ErrorClass::PROPERTY.to_raw() as u32,
-            code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
+            class: ErrorClass::PROPERTY,
+            code: ErrorCode::WRITE_ACCESS_DENIED,
         })
     }
 
@@ -301,8 +303,8 @@ fn duplicate_name_rejected() {
             matches!(
                 result,
                 Err(Error::Protocol { class, code })
-                    if class == ErrorClass::PROPERTY.to_raw() as u32
-                        && code == ErrorCode::DUPLICATE_NAME.to_raw() as u32
+                    if class == ErrorClass::PROPERTY
+                        && code == ErrorCode::DUPLICATE_NAME
             ),
             "expected PROPERTY / DUPLICATE_NAME, got {result:?}"
         );

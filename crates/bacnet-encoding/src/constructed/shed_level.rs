@@ -7,7 +7,7 @@
 //! that one tag, with no frame around it.
 
 use bacnet_types::constructed::BACnetShedLevel;
-use bacnet_types::error::Error;
+use bacnet_types::error::{DecodeError, DecodingKind, Error};
 use bytes::BytesMut;
 
 use super::tagged::contents;
@@ -36,22 +36,25 @@ pub fn decode_shed_level(data: &[u8], offset: usize) -> Result<(BACnetShedLevel,
     let (tag, pos) = tags::decode_tag(data, offset)?;
     let alternative = (0..=2u8).find(|&number| tag.is_context(number));
     let Some(alternative) = alternative else {
-        return Err(Error::decoding(
+        return Err(DecodeError::new(
+            DecodingKind::InvalidEncoding,
             offset,
-            format!("{WHAT}: expected percent [0], level [1] or amount [2]"),
-        ));
+            "expected percent [0], level [1] or amount [2]",
+        )
+        .within(WHAT)
+        .into());
     };
     let (contents, end) = contents(data, pos, tag.length)?;
-    let unsigned = |name: &str| {
-        primitives::decode_unsigned(contents)
-            .map_err(|_| Error::decoding(pos, format!("{WHAT}: {name} needs 1 to 8 octets")))
+    let refused = |label: &'static str| {
+        DecodeError::new(DecodingKind::InvalidEncoding, pos, label).within(WHAT)
     };
+    let unsigned =
+        |label: &'static str| primitives::decode_unsigned(contents).map_err(|_| refused(label));
     let value = match alternative {
-        0 => BACnetShedLevel::Percent(unsigned("percent [0]")?),
-        1 => BACnetShedLevel::Level(unsigned("level [1]")?),
+        0 => BACnetShedLevel::Percent(unsigned("percent [0] needs 1 to 8 octets")?),
+        1 => BACnetShedLevel::Level(unsigned("level [1] needs 1 to 8 octets")?),
         _ => BACnetShedLevel::Amount(
-            primitives::decode_real(contents)
-                .map_err(|_| Error::decoding(pos, format!("{WHAT}: amount [2] needs 4 octets")))?,
+            primitives::decode_real(contents).map_err(|_| refused("amount [2] needs 4 octets"))?,
         ),
     };
     Ok((value, end))

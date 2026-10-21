@@ -17,10 +17,7 @@ use std::collections::hash_map::{Entry, HashMap};
 use std::mem::{discriminant, Discriminant};
 
 fn protocol_error(class: ErrorClass, code: ErrorCode) -> Error {
-    Error::Protocol {
-        class: class.to_raw() as u32,
-        code: code.to_raw() as u32,
-    }
+    Error::Protocol { class, code }
 }
 
 /// A refusal of the element at `position` (from 1) of the request's List of
@@ -28,8 +25,8 @@ fn protocol_error(class: ErrorClass, code: ErrorCode) -> Error {
 /// Every other refusal of these services goes out with element number 0.
 fn element_error(class: ErrorClass, code: ErrorCode, position: u32) -> Error {
     Error::protocol(
-        class.to_raw() as u32,
-        code.to_raw() as u32,
+        class,
+        code,
         Some(ErrorDetail::FirstFailedElementNumber(position)),
     )
 }
@@ -532,10 +529,10 @@ fn object_refusal(error: Error, remove: bool, added: &Added) -> Error {
         other => return other,
     };
     let code = if !remove
-        && class == ErrorClass::RESOURCES.to_raw() as u32
-        && code == ErrorCode::NO_SPACE_TO_WRITE_PROPERTY.to_raw() as u32
+        && class == ErrorClass::RESOURCES
+        && code == ErrorCode::NO_SPACE_TO_WRITE_PROPERTY
     {
-        ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT.to_raw() as u32
+        ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT
     } else {
         code
     };
@@ -546,8 +543,7 @@ fn object_refusal(error: Error, remove: bool, added: &Added) -> Error {
         ErrorCode::VALUE_OUT_OF_RANGE,
         ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT,
     ]
-    .iter()
-    .any(|element_code| element_code.to_raw() as u32 == code);
+    .contains(&code);
     let element = match named {
         _ if remove => None,
         Some(named) => added.request_position(named),

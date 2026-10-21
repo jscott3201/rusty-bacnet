@@ -80,10 +80,7 @@ fn database() -> ObjectDatabase {
 
 async fn start(mode: BipPortMode) -> BACnetServer<TestTransport> {
     let transport = TestTransport::builder()
-        .bip_port(BipPort {
-            endpoint: SocketAddrV4::new(PORT_IP.into(), UDP),
-            mode,
-        })
+        .bip_port(BipPort::new(SocketAddrV4::new(PORT_IP.into(), UDP), mode))
         .build();
     let config = ServerConfig {
         registered_network_port: Some(port_oid()),
@@ -95,7 +92,7 @@ async fn start(mode: BipPortMode) -> BACnetServer<TestTransport> {
 }
 
 /// Answer one confirmed request from the server's request path.
-async fn confirmed<T: TransportPort + 'static>(
+pub(super) async fn confirmed<T: TransportPort + 'static>(
     server: &BACnetServer<T>,
     service: ConfirmedServiceChoice,
     request: BytesMut,
@@ -241,11 +238,7 @@ async fn normal_mode_has_no_bbmd_or_foreign_rows() {
 
 #[tokio::test]
 async fn foreign_mode_serves_its_bbmd_and_lifetime_through_rp_and_rpm() {
-    let server = start(BipPortMode::Foreign {
-        bbmd: host([10, 0, 0, 1], 0xBAC1),
-        subscription_lifetime: 300,
-    })
-    .await;
+    let server = start(BipPortMode::fixed_foreign(host([10, 0, 0, 1], 0xBAC1), 300)).await;
     // BACnetIPMode FOREIGN (1).
     assert_eq!(rp(&server, P::BACNET_IP_MODE).await.unwrap(), [0x91, 1]);
     // [0] { ip-address [1] 10.0.0.1 } [1] 47809

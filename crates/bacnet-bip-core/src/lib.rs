@@ -20,6 +20,11 @@
 //!   mode: its receive rules and NAKs, what it sends, its own management
 //!   exchanges, and a foreign device's registration lifecycle (Annex J.2,
 //!   J.4, J.5).
+//! - [`port`]: the port driver that joins a node to a socket and carries
+//!   out what it asks: [`NodePort`](port::NodePort) for a node in normal or
+//!   foreign-device mode, and [`BbmdPort`](port::BbmdPort) for a BBMD,
+//!   which forwards broadcasts and answers management requests from its
+//!   tables.
 //! - [`Arrival`]: whether a datagram was addressed to the node or to its
 //!   subnet's broadcast address, which the rules above and a node's own
 //!   both depend on, and [`LocalSubnet`], the subnet it reaches that way.
@@ -94,6 +99,7 @@
 mod arrival;
 pub mod bbmd;
 pub mod node;
+pub mod port;
 mod subnet;
 
 pub use arrival::Arrival;

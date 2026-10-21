@@ -107,7 +107,7 @@ impl<T: TransportPort + 'static> WriteCommitObserver for WriteAudit<'_, T> {
             .read_property(write.property, write.array_index)
             .ok()
             .and_then(|value| small_value(&value));
-        self.pending = Some(PendingWrite {
+        self.pending = Some(Box::new(PendingWrite {
             delay: (!reporter_attempt)
                 .then_some(reporter.maximum_send_delay)
                 .flatten(),
@@ -139,7 +139,7 @@ impl<T: TransportPort + 'static> WriteCommitObserver for WriteAudit<'_, T> {
                 current_value,
                 result: None,
             },
-        });
+        }));
     }
 
     fn commit_policy(

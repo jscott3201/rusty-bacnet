@@ -19,8 +19,8 @@ fn size(object: &dyn BACnetObject, property: PropertyIdentifier) -> PropertyValu
 
 fn is_value_out_of_range(error: &Error) -> bool {
     matches!(error, Error::Protocol { class, code }
-        if *class == ErrorClass::PROPERTY.to_raw() as u32
-            && *code == ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32)
+        if *class == ErrorClass::PROPERTY
+            && *code == ErrorCode::VALUE_OUT_OF_RANGE)
 }
 
 /// The references Python gives, converted as the registration methods do.
@@ -493,8 +493,8 @@ fn python_door_alarm_lists_reach_the_door() {
     // A reserved state, or NORMAL in any list (#1149).
     let out_of_range = |error: &Error| {
         matches!(error, Error::Structured { class, code, .. }
-            if *class == ErrorClass::PROPERTY.to_raw() as u32
-                && *code == ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32)
+            if *class == ErrorClass::PROPERTY
+                && *code == ErrorCode::VALUE_OUT_OF_RANGE)
     };
     for settings in [
         DoorSettings {
@@ -569,8 +569,8 @@ fn python_zone_alarm_values_reach_the_zone() {
         let refused = access_zone(2, "ZONE-2", settings).err().unwrap();
         assert!(
             matches!(&refused, Error::Structured { class, code, detail }
-                if *class == ErrorClass::PROPERTY.to_raw() as u32
-                    && *code == ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32
+                if *class == ErrorClass::PROPERTY
+                    && *code == ErrorCode::VALUE_OUT_OF_RANGE
                     && **detail == ErrorDetail::FirstFailedElementNumber(position)),
             "{values:?}: {refused:?}"
         );

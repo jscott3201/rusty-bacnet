@@ -1,5 +1,6 @@
 //! Outbound wire admission and saturated intake do not stall control progress.
 use super::*;
+use crate::sc::npdu_admission::DEFAULT_NPDU_PER_ORIGIN_LIMIT as QUOTA;
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
 
@@ -82,10 +83,10 @@ async fn outbound_wire_shapes_options_and_saturated_npdu_intake_preserve_control
         assert_eq!(nak.function, ScFunction::Result);
         assert_eq!(nak.message_id, 67);
         assert_eq!(nak.payload.as_ref(), &[1, 1, 0x42, 0, 7, 0, 146]);
-        // The default per-origin intake quota is four, even though aggregate
-        // storage has 64 slots. Do not drain until Disconnect ACK proves all
-        // five application frames passed the worker's read turn.
-        for index in 0..5 {
+        // The default per-origin intake quota is 32, even though aggregate
+        // storage has 256 slots. Do not drain until Disconnect ACK proves all
+        // 33 application frames passed the worker's read turn.
+        for index in 0..=QUOTA as u8 {
             let mut frame = base.clone();
             frame.payload = Bytes::from(vec![1, 0, index]);
             frame.data_options = vec![crate::sc_frame::ScOption {
@@ -119,7 +120,7 @@ async fn outbound_wire_shapes_options_and_saturated_npdu_intake_preserve_control
         .unwrap()
         .unwrap();
     assert_eq!(transport.npdu_drop_counts().fairness_drops, 1);
-    for index in 0..4 {
+    for index in 0..QUOTA as u8 {
         let received = rx.try_recv().unwrap();
         assert_eq!(received.npdu.as_ref(), &[1, 0, index]);
         assert_eq!(received.source_mac.as_slice(), &LISTENER_VMAC);

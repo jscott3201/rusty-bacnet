@@ -268,8 +268,8 @@ impl CovSubscriptionTable {
                 .subscriptions_rejected_capacity
                 .fetch_add(1, Ordering::Relaxed);
             return Err(Error::Protocol {
-                class: ErrorClass::RESOURCES.to_raw() as u32,
-                code: ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT.to_raw() as u32,
+                class: ErrorClass::RESOURCES,
+                code: ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT,
             });
         };
         let first = self.generation + 1;
@@ -353,8 +353,8 @@ impl CovSubscriptionTable {
                 .subscriptions_rejected_indefinite
                 .fetch_add(1, Ordering::Relaxed);
             return Err(Error::Protocol {
-                class: ErrorClass::SERVICES.to_raw() as u32,
-                code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+                class: ErrorClass::SERVICES,
+                code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
             });
         }
 
@@ -394,8 +394,8 @@ impl CovSubscriptionTable {
                     .subscriptions_rejected_indefinite
                     .fetch_add(1, Ordering::Relaxed);
                 return Err(Error::Protocol {
-                    class: ErrorClass::SERVICES.to_raw() as u32,
-                    code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+                    class: ErrorClass::SERVICES,
+                    code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
                 });
             }
             let current_indefinite = self.peer_indefinite_counts.get(peer).copied().unwrap_or(0);
@@ -404,8 +404,8 @@ impl CovSubscriptionTable {
                     .subscriptions_rejected_indefinite
                     .fetch_add(1, Ordering::Relaxed);
                 return Err(Error::Protocol {
-                    class: ErrorClass::RESOURCES.to_raw() as u32,
-                    code: ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT.to_raw() as u32,
+                    class: ErrorClass::RESOURCES,
+                    code: ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT,
                 });
             }
         }
@@ -453,8 +453,8 @@ impl CovSubscriptionTable {
         };
         counter.fetch_add(1, Ordering::Relaxed);
         Error::Protocol {
-            class: ErrorClass::RESOURCES.to_raw() as u32,
-            code: ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT.to_raw() as u32,
+            class: ErrorClass::RESOURCES,
+            code: ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT,
         }
     }
 }

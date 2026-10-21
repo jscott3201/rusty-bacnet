@@ -8,7 +8,7 @@ use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::event_enrollment::EventEnrollmentObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetEventParameter};
-use bacnet_types::enums::ErrorCode;
+use bacnet_types::enums::{EngineeringUnits, ErrorCode};
 use bacnet_types::error::Error;
 
 // ---- OUT_OF_RANGE tests ----
@@ -121,7 +121,7 @@ fn out_of_range_no_change_when_already_faulted() {
 fn out_of_range_event_enable_suppresses_distribution_not_the_transition() {
     let mut db = ObjectDatabase::new();
 
-    let mut ai = AnalogInputObject::new(10, "AI-10", 62).unwrap();
+    let mut ai = AnalogInputObject::new(10, "AI-10", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ai.set_present_value(85.0);
     let ai_oid = ai.object_identifier();
     db.add(Box::new(ai)).unwrap();
@@ -181,7 +181,7 @@ fn out_of_range_event_enable_suppresses_distribution_not_the_transition() {
 fn out_of_range_suppressed_offnormal_still_yields_enabled_return_to_normal() {
     let mut db = ObjectDatabase::new();
 
-    let mut ai = AnalogInputObject::new(11, "AI-11", 62).unwrap();
+    let mut ai = AnalogInputObject::new(11, "AI-11", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ai.set_present_value(85.0);
     let ai_oid = ai.object_identifier();
     db.add(Box::new(ai)).unwrap();
@@ -254,7 +254,7 @@ fn out_of_range_suppressed_offnormal_still_yields_enabled_return_to_normal() {
 fn out_of_range_event_enable_zero_still_tracks_event_state() {
     let mut db = ObjectDatabase::new();
 
-    let mut ai = AnalogInputObject::new(12, "AI-12", 62).unwrap();
+    let mut ai = AnalogInputObject::new(12, "AI-12", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ai.set_present_value(15.0);
     let ai_oid = ai.object_identifier();
     db.add(Box::new(ai)).unwrap();
@@ -304,7 +304,7 @@ fn out_of_range_enrollment_has_no_out_of_service_gate() {
             PropertyValue::Boolean(true),
             None,
         ),
-        Err(Error::Protocol { code, .. }) if code == ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32
+        Err(Error::Protocol { code, .. }) if code == ErrorCode::UNKNOWN_PROPERTY
     ));
 
     let transitions = evaluate_event_enrollments(&mut db, 1);

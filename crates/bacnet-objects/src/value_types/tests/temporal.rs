@@ -397,14 +397,8 @@ fn datetime_value_relinquish_default_write_recaptures_present_value() {
         .expect_err("a bare Date is not a BACnetDateTime")
     {
         Error::Protocol { class, code } => {
-            assert_eq!(
-                class,
-                bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
-            );
-            assert_eq!(
-                code,
-                bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE.to_raw() as u32
-            );
+            assert_eq!(class, bacnet_types::enums::ErrorClass::PROPERTY);
+            assert_eq!(code, bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE);
         }
         other => panic!("expected PROPERTY / INVALID_DATA_TYPE, got {other:?}"),
     }

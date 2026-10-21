@@ -197,7 +197,9 @@ fn offset_codecs_refuse_a_device_member_and_a_crowded_frame() {
         &ObjectIdentifier::new(ObjectType::DEVICE, 77).unwrap(),
     );
     match decode_object_property_reference_at(&bare, 0) {
-        Err(Error::Decoding { offset, .. }) => assert_eq!(offset, device_at),
+        Err(error) if error.decode_fault().is_some() => {
+            assert_eq!(error.decode_fault().map(|(offset, _)| offset), Some(device_at))
+        }
         other => panic!("expected a decoding error, got {other:?}"),
     }
     // Inside the setpoint frame the members must fill it.

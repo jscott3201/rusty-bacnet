@@ -3,7 +3,7 @@
 //! counted microseconds, printed from that build; each must now be exactly
 //! 1000 times as many nanoseconds.
 
-use bacnet_mstp_core::{ConfigError, Duration, MstpCoreConfig, LATE_DEADLINE, T_NO_TOKEN, T_SLOT};
+use bacnet_mstp_core::{ConfigError, Duration, MstpCoreConfig, T_NO_TOKEN, T_SLOT};
 
 /// One baud rate's values from the microsecond core, all in microseconds.
 struct Golden {
@@ -165,7 +165,7 @@ fn fixed_timers_keep_their_values() {
         ("reply margin", config.reply_transmit_margin, 25_000),
         ("queue age", config.queue_max_age, 5_000_000),
         ("watchdog", config.transmit_watchdog, 1_000_000),
-        ("late deadline", LATE_DEADLINE, 1_000),
+        ("late deadline", config.late_deadline, 1_000),
     ] {
         assert_eq!(value.as_nanos(), ns(micros), "{name}");
     }

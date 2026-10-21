@@ -45,12 +45,8 @@ fn direction_bytes(raw: u32) -> Vec<u8> {
 fn assert_invalid_data_encoding(result: Result<(), Error>, context: &str) {
     match result.expect_err(&format!("{context}: write must be refused")) {
         Error::Protocol { class, code } => {
-            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32, "{context}");
-            assert_eq!(
-                code,
-                ErrorCode::INVALID_DATA_ENCODING.to_raw() as u32,
-                "{context}"
-            );
+            assert_eq!(class, ErrorClass::PROPERTY, "{context}");
+            assert_eq!(code, ErrorCode::INVALID_DATA_ENCODING, "{context}");
         }
         other => panic!("{context}: expected PROPERTY/INVALID_DATA_ENCODING, got {other:?}"),
     }

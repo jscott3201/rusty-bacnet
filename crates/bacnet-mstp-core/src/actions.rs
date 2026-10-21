@@ -27,7 +27,7 @@ pub enum Direction {
     ///
     /// Do not enable the line driver yet: only once
     /// [`MasterCore::on_transmit_started`](crate::MasterCore::on_transmit_started)
-    /// returns `Ok`. On a transceiver whose receiver and driver enables are
+    /// returns the frame. On a transceiver whose receiver and driver enables are
     /// tied, enabling the driver early also turns the receiver off, and the
     /// core stops hearing the very activity that must refuse the start.
     Transmit,
@@ -95,33 +95,39 @@ pub enum TransmitFailure {
 /// An operation emitted by the core.
 ///
 /// The byte slices borrow the core only until the next call that needs it
-/// mutably. A platform should copy a transmit frame into its UART/DMA storage
-/// before polling the next action.
+/// mutably. A transmit carries no octets: the adapter gets them from
+/// [`MasterCore::on_transmit_started`](crate::MasterCore::on_transmit_started),
+/// and only when the core confirms the start.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[must_use = "an action the adapter doesn't carry out is lost: a frame unsent, an NPDU undelivered"]
 pub enum Action<'a> {
     /// Change the serial transceiver direction.
     SetDirection(Direction),
-    /// Send one complete MS/TP frame.
+    /// A frame is ready to send.
     ///
-    /// Enable the line driver for it (prepared by the
-    /// [`SetDirection`](Self::SetDirection) polled just before) only once
+    /// Call
     /// [`MasterCore::on_transmit_started`](crate::MasterCore::on_transmit_started)
-    /// has returned `Ok`, and send only then. Until then keep the receiver on
-    /// and feed the core what it hears. Right before that call, drain the
-    /// receive FIFO or DMA buffer and feed the core every octet and receive
-    /// error in it: activity the core has not been given cannot refuse the
-    /// start. The core may also take the frame back first, which it shows by
-    /// queueing `SetDirection(Direction::Receive)` before the start; drop the
-    /// frame then. After an error for this id, or an abort, send nothing
-    /// more for it. The exception is
-    /// [`CoreError::TransmitNotPolled`](crate::CoreError::TransmitNotPolled),
+    /// with `id` right before enabling the line driver (prepared by the
+    /// [`SetDirection`](Self::SetDirection) polled just before). It returns
+    /// the frame's octets only if the start is confirmed, so the line is
+    /// driven only then. Until then keep the receiver on and feed the core
+    /// what it hears. Right before that call, drain the receive FIFO or DMA
+    /// buffer and feed the core every octet and receive error in it:
+    /// activity the core has not been given cannot refuse the start. The
+    /// core may also take the frame back first, which it shows by queueing
+    /// `SetDirection(Direction::Receive)` before the start; forget the id
+    /// then. After an error for this id, or an abort, there is nothing to
+    /// send for it. The exception is
+    /// [`TransmitError::NotPolled`](crate::TransmitError::NotPolled),
     /// an adapter bug that leaves the id live: poll this action, then start.
     Transmit {
         /// Generation-bound operation identifier.
         id: TransmitId,
-        /// Complete encoded frame, including preamble and CRCs.
-        frame: &'a [u8],
+        /// The frame's type and addresses, for the adapter's own records.
+        header: FrameHeader,
+        /// The frame's length on the wire in octets, preamble and CRCs
+        /// included: what the start will hand over.
+        length: usize,
     },
     /// Deliver a validated NPDU to the network layer, from a BACnet data
     /// frame: standard (Types 5 and 6) or, with
@@ -398,6 +404,22 @@ impl<'b, const NPDU: usize> ActionQueue<'b, NPDU> {
         self.receive = true;
     }
 
+    /// The frame encoded last, which a confirmed start hands the adapter.
+    pub(crate) fn frame(&self) -> &[u8] {
+        &self.frame[..self.frame_length]
+    }
+
+    /// The header of the frame encoded last: its type, destination and
+    /// source follow the two preamble octets.
+    fn header(&self) -> FrameHeader {
+        let preamble = PREAMBLE.len();
+        FrameHeader::new(
+            FrameType::from_raw(self.frame[preamble]),
+            self.frame[preamble + 1],
+            self.frame[preamble + 2],
+        )
+    }
+
     /// Queue the encoded frame: a switch to transmit, then the frame.
     pub(crate) fn queue_transmit(&mut self, id: TransmitId) {
         debug_assert!(self.transmit.is_none(), "two transmits queued");
@@ -464,7 +486,8 @@ impl<'b, const NPDU: usize> ActionQueue<'b, NPDU> {
             self.transmit = None;
             return Action::Transmit {
                 id,
-                frame: &self.frame[..self.frame_length],
+                header: self.header(),
+                length: self.frame_length,
             };
         }
         if self.waiting == 0 {
@@ -534,7 +557,11 @@ mod tests {
 
     fn polled_frame(actions: &mut ActionQueue<'_, MAX_STANDARD_MPDU_DATA>) -> (TransmitId, u8) {
         match actions.poll() {
-            Action::Transmit { id, frame } => (id, frame[8]),
+            Action::Transmit { id, header, length } => {
+                assert_eq!(header.frame_type, FrameType::TEST_REQUEST);
+                assert_eq!(length, actions.frame().len());
+                (id, actions.frame()[8])
+            }
             other => panic!("expected a transmit, got {other:?}"),
         }
     }

@@ -11,15 +11,21 @@
 //! which also lets a value encoded in the pre-framing EventParameters form be
 //! told apart from the frame around it.
 
+#[cfg(feature = "alloc")]
 use bacnet_types::constructed::BACnetPropertyValue;
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;
+#[cfg(feature = "alloc")]
 use bytes::{BufMut, BytesMut};
 
-use crate::{primitives, tags};
+#[cfg(feature = "alloc")]
+use crate::primitives;
+use crate::tags;
 
+#[cfg(feature = "alloc")]
 mod decode;
 
+#[cfg(feature = "alloc")]
 pub use decode::{
     decode_bacnet_property_value, decode_bacnet_property_value_in_list,
     decode_bacnet_property_value_in_list_detailed, PropertyValueDecodeError,
@@ -29,7 +35,8 @@ pub use decode::{
 /// Append the encoding of one property value to `buf`.
 ///
 /// The value bytes are copied inside the `[2]` pair as they are; callers that
-/// accept values from outside check them first.
+/// accept values from outside check them first. Only with `alloc`.
+#[cfg(feature = "alloc")]
 pub fn encode_bacnet_property_value(value: &BACnetPropertyValue, buf: &mut BytesMut) {
     // [0] propertyIdentifier
     primitives::encode_ctx_unsigned(buf, 0, value.property_identifier.to_raw() as u64);

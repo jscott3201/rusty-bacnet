@@ -101,9 +101,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let mut db = Arc::clone(&self.db).write_owned().await;
         let mut commit = crate::committed_cov::BackgroundCommit::new();
         commit.before_change(&db, *oid);
-        let object = db.get_mut(oid).ok_or_else(|| Error::Protocol {
-            class: ErrorClass::OBJECT.to_raw() as u32,
-            code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
+        let object = db.get_mut(oid).ok_or(Error::Protocol {
+            class: ErrorClass::OBJECT,
+            code: ErrorCode::UNKNOWN_OBJECT,
         })?;
         object.set_life_safety_operation_expected_internal(operation)?;
         // Only a Life Safety Point or Zone reports the change. Another object
@@ -607,7 +607,7 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
             device_bindings: self.device_bindings,
             suppressions: self.event_suppressions,
             retry_timeout_ms: self.config.cov_retry_timeout_ms,
-            local_apdu_capacity: self.config.max_apdu_length,
+            local_apdu_capacity: u32::from(self.config.device.max_apdu_length()),
         }
     }
 
@@ -935,8 +935,8 @@ fn precheck(
     value: &PropertyValue,
 ) -> Result<(), Error> {
     let object = db.get(oid).ok_or(Error::Protocol {
-        class: ErrorClass::OBJECT.to_raw() as u32,
-        code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
+        class: ErrorClass::OBJECT,
+        code: ErrorCode::UNKNOWN_OBJECT,
     })?;
     let LocalWrite::Property {
         property,

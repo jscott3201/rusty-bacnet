@@ -20,8 +20,16 @@ pub(super) struct DispatchContext<'a, T: TransportPort + 'static> {
     pub(super) device_tx: &'a broadcast::Sender<DeviceEvent>,
     /// Broadcast channel for device address collision events.
     pub(super) device_collision_tx: &'a broadcast::Sender<DeviceCollisionEvent>,
+    /// Broadcast channel for received I-Haves.
+    pub(super) i_have_tx: &'a broadcast::Sender<ReceivedIHave>,
     /// Routes for SegmentAcks awaiting an outgoing segmented request.
     pub(super) seg_ack_senders: &'a Arc<Mutex<HashMap<SegAckKey, SegmentAckRoute>>>,
+    /// The client's throttle on warnings for received APDUs and service
+    /// requests that fail to decode (#1950).
+    pub(super) decode_warning: &'a WarnThrottle,
+    /// The client's throttle on warnings for responses it refuses: segments
+    /// it aborts or NAKs, and acknowledgments for another service (#1950).
+    pub(super) response_warning: &'a WarnThrottle,
 }
 
 /// Where an inbound APDU came from and how to reply to it.
@@ -32,8 +40,8 @@ pub(super) struct InboundApdu<'a> {
     pub(super) source_network: &'a Option<NpduAddress>,
     /// Transport provenance snapshot for this APDU.
     pub(super) provenance: TransportProvenance,
-    /// Sealed direct-response handle for an accepted direct request.
-    pub(super) direct_response: Option<bacnet_transport::port::DirectResponse>,
+    /// Complete original response context for an accepted request.
+    pub(super) response_route: bacnet_network::response_route::ResponseRoute,
     /// Whether the APDU was addressed to a group (broadcast or multicast).
     pub(super) is_group: bool,
     /// Channel for handing a reply to the transport, when it supplied one.

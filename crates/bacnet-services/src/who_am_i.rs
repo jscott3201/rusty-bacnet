@@ -166,15 +166,11 @@ impl YouAreRequest {
     /// cannot be encoded.
     pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
         if self.device_identifier.is_none() && self.device_mac_address.is_none() {
-            return Err(Error::Encoding(
-                "YouAre needs a device identifier, a device MAC address, or both".into(),
-            ));
+            return Err(Error::encode("YouAre needs a device identifier, a device MAC address, or both"));
         }
         if let Some(oid) = &self.device_identifier {
             if oid.object_type() != ObjectType::DEVICE {
-                return Err(Error::Encoding(
-                    "YouAre device identifier must name a Device object".into(),
-                ));
+                return Err(Error::encode("YouAre device identifier must name a Device object"));
             }
         }
         if let Some(mac) = &self.device_mac_address {

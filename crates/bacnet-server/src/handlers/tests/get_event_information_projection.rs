@@ -123,8 +123,8 @@ impl BACnetObject for ProjectionFixture {
             .find(|(candidate, _)| *candidate == property)
             .map(|(_, value)| value.clone())
             .ok_or(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+                class: ErrorClass::PROPERTY,
+                code: ErrorCode::UNKNOWN_PROPERTY,
             })
     }
 
@@ -136,8 +136,8 @@ impl BACnetObject for ProjectionFixture {
         _priority: Option<u8>,
     ) -> Result<(), Error> {
         Err(Error::Protocol {
-            class: ErrorClass::PROPERTY.to_raw() as u32,
-            code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
+            class: ErrorClass::PROPERTY,
+            code: ErrorCode::WRITE_ACCESS_DENIED,
         })
     }
 
@@ -222,8 +222,8 @@ fn assert_operational_problem(error: Error) {
     assert!(matches!(
         error,
         Error::Protocol { class, code }
-            if class == ErrorClass::DEVICE.to_raw() as u32
-                && code == ErrorCode::OPERATIONAL_PROBLEM.to_raw() as u32
+            if class == ErrorClass::DEVICE
+                && code == ErrorCode::OPERATIONAL_PROBLEM
     ));
 }
 

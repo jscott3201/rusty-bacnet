@@ -10,10 +10,10 @@ const GLOBAL_BROADCAST_NETWORK: u16 = 0xFFFF;
 
 pub(super) fn network_priority_for_event(priority: u8) -> NetworkPriority {
     match priority {
-        0..=63 => NetworkPriority::LIFE_SAFETY,
-        64..=127 => NetworkPriority::CRITICAL_EQUIPMENT,
-        128..=191 => NetworkPriority::URGENT,
-        192..=255 => NetworkPriority::NORMAL,
+        0..=63 => NetworkPriority::LifeSafety,
+        64..=127 => NetworkPriority::CriticalEquipment,
+        128..=191 => NetworkPriority::Urgent,
+        192..=255 => NetworkPriority::Normal,
     }
 }
 

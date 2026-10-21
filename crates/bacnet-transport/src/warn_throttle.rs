@@ -3,6 +3,9 @@
 //! [`WARNING_INTERVAL`] has passed, and the next warning reports how many
 //! there were since the last one. A flood then shows in the log without
 //! flooding it.
+//!
+//! [`warn_throttled!`](crate::warn_throttled) logs one event through a
+//! throttle, for a warning a peer can set off once per frame or connection.
 
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
@@ -44,6 +47,47 @@ impl WarnThrottle {
     }
 }
 
+#[doc(hidden)]
+pub use tracing as __tracing;
+
+/// Log a warning through a [`WarnThrottle`]: at warn level, with an
+/// `occurrences` field counting the occurrences since the last warning (this
+/// one included), at most once per [`WARNING_INTERVAL`], and at debug level
+/// otherwise. The first argument is the throttle, or a reference to it; the
+/// rest are fields and a message, written as `tracing::warn!` takes them.
+/// `target:` and `parent:` aren't accepted: the event's target is the
+/// caller's module. Evaluates to what
+/// [`WarnThrottle::note`] returned, so a test can see whether it warned.
+///
+/// ```
+/// use bacnet_transport::warn_throttle::WarnThrottle;
+///
+/// let throttle = WarnThrottle::default();
+/// let error = "truncated";
+/// assert_eq!(
+///     bacnet_transport::warn_throttled!(throttle, %error, "Failed to decode a frame"),
+///     Some(1)
+/// );
+/// assert_eq!(
+///     bacnet_transport::warn_throttled!(throttle, %error, "Failed to decode a frame"),
+///     None,
+///     "logged at debug"
+/// );
+/// ```
+#[macro_export]
+macro_rules! warn_throttled {
+    ($throttle:expr, $($event:tt)+) => {{
+        let occurrences = $crate::warn_throttle::WarnThrottle::note(&$throttle);
+        match occurrences {
+            Some(occurrences) => {
+                $crate::warn_throttle::__tracing::warn!(occurrences, $($event)+)
+            }
+            None => $crate::warn_throttle::__tracing::debug!($($event)+),
+        }
+        occurrences
+    }};
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -66,5 +110,22 @@ mod tests {
             "the one held back is still reported"
         );
         assert_eq!(throttle.note(), None);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_macro_warns_through_the_throttle_it_is_given() {
+        let throttle = WarnThrottle::default();
+        let by_ref = &throttle;
+        let peer = "192.0.2.1";
+        assert_eq!(
+            crate::warn_throttled!(throttle, %peer, "bad frame"),
+            Some(1)
+        );
+        assert_eq!(
+            crate::warn_throttled!(by_ref, "bad frame from {peer}"),
+            None
+        );
+        tokio::time::advance(WARNING_INTERVAL).await;
+        assert_eq!(crate::warn_throttled!(by_ref, "bad frame"), Some(2));
     }
 }

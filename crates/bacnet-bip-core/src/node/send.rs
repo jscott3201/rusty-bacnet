@@ -6,7 +6,9 @@ use core::net::SocketAddrV4;
 
 use bacnet_bip_codec::{Bvll, HEADER_LENGTH, MAX_BVLL_LENGTH};
 
-use super::config::{Link, Mode, MAX_NPDU};
+use bacnet_npdu::MAX_NPDU;
+
+use super::config::{Link, Mode};
 
 /// A message to send. The caller encodes it
 /// ([`Bvll::encode_into`](bacnet_bip_codec::Bvll::encode_into)) and sends
@@ -31,6 +33,10 @@ pub enum Cast {
 
 /// Why a send was refused. Nothing went out.
 ///
+/// The link refuses an NPDU it can't carry, a foreign device's node a
+/// broadcast it can't hold, and the host's socket, through a port's
+/// [`Datagrams`](crate::port::Datagrams), a datagram it can't take.
+///
 /// It is `#[non_exhaustive]`, so a later reason isn't a breaking change: a
 /// `match` needs a wildcard arm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,6 +57,11 @@ pub enum SendRefusal {
     /// Original-Unicast-NPDU goes to one node's own address; to reach the
     /// group, broadcast ([`Link::broadcast`]).
     GroupDestination,
+    /// The host's socket can't take the datagram now: its queue is full.
+    SocketFull,
+    /// The host's socket couldn't send the datagram: its buffer can't hold
+    /// the encoded message, or the send failed.
+    SocketError,
 }
 
 impl fmt::Display for SendRefusal {
@@ -61,6 +72,8 @@ impl fmt::Display for SendRefusal {
             Self::GroupDestination => {
                 f.write_str("a unicast can't go to a group address; send a broadcast instead")
             }
+            Self::SocketFull => f.write_str("the socket can't take the datagram now"),
+            Self::SocketError => f.write_str("the socket couldn't send the datagram"),
         }
     }
 }

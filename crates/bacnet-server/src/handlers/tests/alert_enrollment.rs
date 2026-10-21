@@ -67,8 +67,8 @@ fn assert_property_error<T: std::fmt::Debug>(
 ) {
     match result.expect_err(context) {
         Error::Protocol { class, code } => {
-            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32, "{context}");
-            assert_eq!(code, expected.to_raw() as u32, "{context}");
+            assert_eq!(class, ErrorClass::PROPERTY, "{context}");
+            assert_eq!(code, expected, "{context}");
         }
         other => panic!("{context}: expected property error, got {other:?}"),
     }
@@ -181,4 +181,91 @@ fn alert_notify_type_wire_domain_is_alarm_or_event() {
         PropertyValue::Enumerated(NotifyType::ALARM.to_raw()),
         "every refused write must preserve Notify_Type"
     );
+}
+
+/// Table 12-61 lists Event_Message_Texts, Event_Message_Texts_Config and the
+/// Event_Algorithm_Inhibit pair as optional rows; Alert Enrollment serves and
+/// takes them over the wire as Event Enrollment does (#1865).
+#[test]
+fn alert_reporting_options_round_trip_on_the_wire() {
+    let (mut db, oid, _) = make_alert_db();
+    let read_raw = |db: &ObjectDatabase, property: PropertyIdentifier| {
+        let request = ReadPropertyRequest {
+            object_identifier: oid,
+            property_identifier: property,
+            property_array_index: None,
+        };
+        let mut request_bytes = BytesMut::new();
+        request.encode(&mut request_bytes);
+        let mut response_bytes = BytesMut::new();
+        handle_read_property(db, &request_bytes, &mut response_bytes).unwrap();
+        ReadPropertyACK::decode(&response_bytes)
+            .unwrap()
+            .property_value
+            .to_vec()
+    };
+    let strings = |texts: [&str; 3]| {
+        PropertyValue::List(
+            texts
+                .iter()
+                .map(|text| PropertyValue::CharacterString((*text).into()))
+                .collect(),
+        )
+    };
+    let encoded = |value: &PropertyValue| {
+        let mut buf = BytesMut::new();
+        encode_property_value(&mut buf, value).unwrap();
+        buf.to_vec()
+    };
+
+    // Event_Message_Texts: three empty strings, read-only.
+    assert_eq!(
+        read_raw(&db, PropertyIdentifier::EVENT_MESSAGE_TEXTS),
+        encoded(&strings(["", "", ""]))
+    );
+    assert_property_error(
+        write_wire(
+            &mut db,
+            oid,
+            PropertyIdentifier::EVENT_MESSAGE_TEXTS,
+            strings(["a", "b", "c"]),
+        ),
+        ErrorCode::WRITE_ACCESS_DENIED,
+        "Event_Message_Texts write",
+    );
+
+    let config = strings(["Alert", "", "Clear"]);
+    write_wire(
+        &mut db,
+        oid,
+        PropertyIdentifier::EVENT_MESSAGE_TEXTS_CONFIG,
+        config.clone(),
+    )
+    .unwrap();
+    assert_eq!(
+        read_raw(&db, PropertyIdentifier::EVENT_MESSAGE_TEXTS_CONFIG),
+        encoded(&config)
+    );
+
+    // No reference: the inhibit takes a write and reads it back.
+    assert_eq!(
+        read_wire(&db, oid, PropertyIdentifier::EVENT_ALGORITHM_INHIBIT).unwrap(),
+        PropertyValue::Boolean(false)
+    );
+    write_wire(
+        &mut db,
+        oid,
+        PropertyIdentifier::EVENT_ALGORITHM_INHIBIT,
+        PropertyValue::Boolean(true),
+    )
+    .unwrap();
+    assert_eq!(
+        read_wire(&db, oid, PropertyIdentifier::EVENT_ALGORITHM_INHIBIT).unwrap(),
+        PropertyValue::Boolean(true)
+    );
+    // The unset reference reads as the reserved-instance form (#1417).
+    let reference = read_raw(&db, PropertyIdentifier::EVENT_ALGORITHM_INHIBIT_REF);
+    let decoded =
+        bacnet_encoding::constructed::decode_object_property_reference(&reference).unwrap();
+    assert_eq!(decoded.object_identifier.instance_number(), 4_194_303);
 }

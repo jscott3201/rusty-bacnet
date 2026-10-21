@@ -20,7 +20,7 @@
 
 use std::any::Any;
 use std::future::Future;
-use std::sync::{Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::panic::PanicException;
@@ -72,6 +72,27 @@ fn exiting() -> PyErr {
     PyRuntimeError::new_err("the Python interpreter is exiting")
 }
 
+thread_local! {
+    /// Set while this thread runs a Python callback that a native lock waits
+    /// on, such as a ReinitializeDevice handler (#1566).
+    static UNDER_NATIVE_LOCK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `f`, a synchronous Python callback called while a native lock is
+/// held, with [`future_into_py`] refused on this thread. A binding
+/// operation the callback started would wait for that same lock, and one it
+/// then blocked on (with `asyncio.run`, say) would never finish.
+pub(crate) fn under_native_lock<R>(f: impl FnOnce() -> R) -> R {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            UNDER_NATIVE_LOCK.with(|flag| flag.set(self.0));
+        }
+    }
+    let _restore = Restore(UNDER_NATIVE_LOCK.with(|flag| flag.replace(true)));
+    f()
+}
+
 /// The Tokio runtime binding futures run on. It is never shut down: the exit
 /// gate, not the runtime, keeps its threads out of a finalizing interpreter.
 fn runtime() -> &'static Runtime {
@@ -96,8 +117,70 @@ where
     F: Future<Output = PyResult<T>> + Send + 'static,
     T: for<'py> IntoPyObject<'py> + Send + 'static,
 {
+    spawn_into_py(py, fut, None)
+}
+
+/// Takes back a value whose asyncio future was already done, cancelled
+/// most often, when the value reached it (#1858). An event iterator keeps
+/// it for its next `__anext__`, so a cancelled wait loses no item.
+pub(crate) trait PutBack: Send + Sync + 'static {
+    /// Called on the thread that found the future done, attached to the
+    /// interpreter.
+    fn put_back(&self, py: Python<'_>, value: Py<PyAny>, via: Via);
+
+    /// Called once a value has reached its future or gone to `put_back`,
+    /// so the iterator can hand out the next one in order.
+    fn settled(&self);
+
+    /// Called once the `set_result` callback is queued on the loop.
+    #[cfg(test)]
+    fn queued(&self) {}
+}
+
+/// Where a value that could no longer reach its future was handed back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Via {
+    /// The binding thread found the future already done.
+    BeforeDelivery,
+    /// The `set_result` callback found it done on the loop.
+    OnLoop,
+    /// The loop was closed, so no callback could be queued.
+    ClosedLoop,
+}
+
+/// [`future_into_py`], except that a successful value that finds its
+/// asyncio future already done goes to `put_back` instead of being dropped.
+/// That happens when the future is cancelled after the Rust future finished
+/// but before the event loop set the result: while the value waits for the
+/// GIL, or while its `set_result` callback is queued on the loop.
+pub(crate) fn future_into_py_or_put_back<F, T>(
+    py: Python<'_>,
+    fut: F,
+    put_back: Arc<dyn PutBack>,
+) -> PyResult<Bound<'_, PyAny>>
+where
+    F: Future<Output = PyResult<T>> + Send + 'static,
+    T: for<'py> IntoPyObject<'py> + Send + 'static,
+{
+    spawn_into_py(py, fut, Some(put_back))
+}
+
+fn spawn_into_py<F, T>(
+    py: Python<'_>,
+    fut: F,
+    put_back: Option<Arc<dyn PutBack>>,
+) -> PyResult<Bound<'_, PyAny>>
+where
+    F: Future<Output = PyResult<T>> + Send + 'static,
+    T: for<'py> IntoPyObject<'py> + Send + 'static,
+{
     if GATE.is_closed() {
         return Err(exiting());
+    }
+    if UNDER_NATIVE_LOCK.with(std::cell::Cell::get) {
+        return Err(PyRuntimeError::new_err(
+            "a callback that runs under a server lock cannot start a binding operation",
+        ));
     }
     let event_loop = py
         .import(intern!(py, "asyncio"))?
@@ -114,6 +197,7 @@ where
     let completion = Completion {
         event_loop: event_loop.unbind(),
         future: future.clone().unbind(),
+        put_back,
     };
     runtime().spawn(async move {
         let result = match task.await {
@@ -145,6 +229,8 @@ fn panic_error(payload: Box<dyn Any + Send>) -> PyErr {
 struct Completion {
     event_loop: Py<PyAny>,
     future: Py<PyAny>,
+    /// Takes back a successful value the future can no longer take.
+    put_back: Option<Arc<dyn PutBack>>,
 }
 
 impl Completion {
@@ -167,21 +253,29 @@ impl Completion {
         T: for<'py> IntoPyObject<'py>,
     {
         let future = self.future.bind(py);
-        if future.call_method0(intern!(py, "done"))?.is_truthy()? {
-            return Ok(());
-        }
-        let (setter, value) = match result.and_then(|value| value.into_bound_py_any(py)) {
-            Ok(value) => (intern!(py, "set_result"), value),
+        let done = future.call_method0(intern!(py, "done"))?.is_truthy()?;
+        // Only a value goes back; an error has nobody left to raise to.
+        let (setter, value, put_back) = match result.and_then(|value| value.into_bound_py_any(py)) {
+            Ok(value) => (intern!(py, "set_result"), value, self.put_back.clone()),
+            Err(_) if done => return Ok(()),
             Err(err) => (
                 intern!(py, "set_exception"),
                 err.into_value(py).into_bound(py).into_any(),
+                None,
             ),
         };
+        if done {
+            if let Some(put_back) = put_back {
+                put_back.put_back(py, value.unbind(), Via::BeforeDelivery);
+                put_back.settled();
+            }
+            return Ok(());
+        }
         let setter = future.getattr(setter)?;
         let event_loop = self.event_loop.bind(py);
         if let Err(err) = event_loop.call_method1(
             intern!(py, "call_soon_threadsafe"),
-            (SetUnlessDone, future, setter, value),
+            (SetUnlessDone(put_back.clone()), future, setter, &value),
         ) {
             // A closed loop has nobody left to wake.
             if !event_loop
@@ -190,15 +284,26 @@ impl Completion {
             {
                 return Err(err);
             }
+            if let Some(put_back) = put_back {
+                put_back.put_back(py, value.unbind(), Via::ClosedLoop);
+                put_back.settled();
+            }
+            return Ok(());
+        }
+        #[cfg(test)]
+        if let Some(put_back) = &put_back {
+            put_back.queued();
         }
         Ok(())
     }
 }
 
 /// Runs on the event loop: set the result unless the future was cancelled
-/// while the result was on its way.
+/// while the result was on its way; a value it can no longer take goes to
+/// the put-back hook, when there is one. Either way the hook then hears that
+/// the value settled; one that errors out settles when the hook drops.
 #[pyclass(frozen)]
-struct SetUnlessDone;
+struct SetUnlessDone(Option<Arc<dyn PutBack>>);
 
 #[pymethods]
 impl SetUnlessDone {
@@ -208,11 +313,14 @@ impl SetUnlessDone {
         setter: &Bound<'_, PyAny>,
         value: &Bound<'_, PyAny>,
     ) -> PyResult<()> {
-        if !future
-            .call_method0(intern!(future.py(), "done"))?
-            .is_truthy()?
-        {
+        let py = future.py();
+        if !future.call_method0(intern!(py, "done"))?.is_truthy()? {
             setter.call1((value,))?;
+        } else if let Some(put_back) = &self.0 {
+            put_back.put_back(py, value.clone().unbind(), Via::OnLoop);
+        }
+        if let Some(put_back) = &self.0 {
+            put_back.settled();
         }
         Ok(())
     }

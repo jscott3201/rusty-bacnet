@@ -384,13 +384,14 @@ async fn audit_reporter_denied_wp_and_wpm_suffix_have_no_audit_side_effects() {
     assert_eq!(fixture.writes.load(Ordering::Acquire), 0);
     assert_eq!(fixture.attempts.load(Ordering::Acquire), 0);
     fixture.server.config_mut().mutation_policy = crate::mutation::MutationPolicy::Permissive;
-    fixture.server.config_mut().mutation_authorizer =
-        Some(Arc::new(|context| match &context.target {
+    fixture.server.config_mut().policy = Some(Arc::new(crate::FnPolicy::new().mutation(
+        |context| match &context.target {
             crate::mutation::MutationTarget::WritePropertyMultiple(attempt) => {
                 attempt.reference.property_identifier == PropertyIdentifier::PRESENT_VALUE.to_raw()
             }
             _ => false,
-        }));
+        },
+    )));
     assert!(matches!(
         dispatch(
             &fixture.server,
@@ -695,6 +696,9 @@ mod local_source;
 
 #[path = "audit_dcc_tests.rs"]
 mod dcc;
+
+#[path = "reinitialize_reply_tests.rs"]
+mod reinitialize_reply;
 
 #[path = "audit_write_group_tests.rs"]
 mod write_group;

@@ -25,6 +25,7 @@ pub mod endpoint_responder;
 mod endpoint_shared_runtime_tests;
 mod enrollment_summary;
 mod event_information;
+mod issue;
 mod mutations;
 use mutations::{InitialCovNotification, MutationEffects};
 #[cfg(test)]
@@ -58,6 +59,7 @@ mod mutation_wpm_tests;
 #[cfg(test)]
 mod notification_class_durable_tests;
 
+pub(super) mod read_property;
 mod read_range;
 #[cfg(test)]
 mod recipient_mac_bound_tests;
@@ -82,20 +84,34 @@ pub(super) enum ConfirmedRequestOwnership {
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Execute admitted work with its single response owner. Direct handler
     /// tests may omit ownership; production dispatch always supplies it.
+    /// ReadProperty runs on its own path (see `read_property.rs`).
     pub(in crate::server) async fn handle_admitted_confirmed_request(
-        services: &RequestServices<T>,
+        services: &Arc<RequestServices<T>>,
         request_tasks: &super::request_tasks::RequestTaskSpawner,
         origin: RequestOrigin<'_>,
         req: bacnet_encoding::apdu::ConfirmedRequest,
         reply_tx: Option<tokio::sync::oneshot::Sender<Bytes>>,
         ownership: Option<ConfirmedRequestOwnership>,
     ) {
+        if req.service_choice == ConfirmedServiceChoice::READ_PROPERTY {
+            let admitted = read_property::AdmittedRequest {
+                services: Arc::clone(services),
+                request_tasks: request_tasks.clone(),
+                source_mac: MacAddr::from_slice(origin.mac),
+                source_network: origin.network,
+                route: origin.route,
+                req,
+                reply_tx,
+                ownership,
+            };
+            return Self::handle_admitted_read_property(admitted).await;
+        }
         let RequestServices {
             db,
             network,
             cov_table,
-            seg_ack_senders,
-            seg_send_permits,
+            seg_ack_senders: _,
+            seg_send_permits: _,
             cov_in_flight,
             learned_routers: _,
             notification_transactions,
@@ -107,8 +123,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             confirmed_event_repeats,
             received_event_log,
             mutation_decisions,
+            warnings: _,
             config,
-        } = services;
+        } = &**services;
         let RequestOrigin {
             mac: source_mac,
             network: source_network,
@@ -122,23 +139,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         };
         let invoke_id = req.invoke_id;
         let service_choice = req.service_choice;
-        let client_max_apdu = req.max_apdu_length;
-        let client_accepts_segmented = req.segmented_response_accepted;
         let client_max_segments = req.max_segments;
-        let effective_max_apdu = event_information::limit(client_max_apdu, config.max_apdu_length);
-        let effective_max_apdu = route
-            .max_apdu_length(effective_max_apdu, source_network.as_ref())
-            // Invalid reply authority must not revoke already-admitted service
-            // execution. Keep its construction budget; issuance still fails
-            // closed on the same invalid route without any fallback.
-            .unwrap_or(effective_max_apdu);
-        let device_transmits_segments =
-            event_information::can_segment(config.segmentation_supported);
-        let segmented_response_available = client_accepts_segmented && device_transmits_segments;
+        let (effective_max_apdu, segmented_response_available) =
+            issue::response_limits(config, &route, &req, source_network.as_ref());
         let mut effects = MutationEffects::default();
         let mut initial_cov_notifications: Vec<InitialCovNotification> = Vec::new();
         let mut accepted_acknowledgment = None;
         let mut received_event = None;
+        let mut after_reply = reinitialize::AfterReply::default();
 
         let complex_ack = |ack_buf: BytesMut| -> Apdu {
             Apdu::ComplexAck(ComplexAck {
@@ -197,33 +205,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         .await;
         let mut read_audits = Vec::new();
         let response = match service_choice {
-            s if s == ConfirmedServiceChoice::READ_PROPERTY => {
-                confirmed_response::read_property_response_observed(
-                    db,
-                    Some(services.live_tables()),
-                    crate::device_view::DeviceExecution::FullServer,
-                    config.registered_network_port,
-                    config.read_property_multiple_budget.max_result_elements,
-                    &req,
-                    |db, oid, req, result| {
-                        let result = match result {
-                            Ok(()) => None,
-                            Err(Error::Timeout(_) | Error::Reject { .. } | Error::Abort { .. }) => {
-                                return
-                            }
-                            Err(error) => Some(confirmed_response::error_fields(error)),
-                        };
-                        read_audits.extend(audit.read_intent(
-                            db,
-                            oid,
-                            req.property_identifier,
-                            req.property_array_index,
-                            result,
-                        ));
-                    },
-                )
-                .await
-            }
             s if s == ConfirmedServiceChoice::WRITE_PROPERTY => {
                 mutation
                     .write_property::<T>(db, cov_table, &mut effects, &mut audit)
@@ -235,8 +216,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     services.live_tables(),
                     &req.service_request,
                     &mut ack_buf,
-                    config.read_property_multiple_budget,
-                    config.registered_network_port,
+                    config,
                     |db, oid, property, index, result| {
                         read_audits.extend(audit.read_intent(db, oid, property, index, result));
                     },
@@ -302,7 +282,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             s if s == ConfirmedServiceChoice::REINITIALIZE_DEVICE => {
                 let requester =
                     reinitialize::Requester::new(source_mac, source_network.as_ref(), provenance);
-                reinitialize::server_response(services, &req, requester).await
+                let (reply, hooks) =
+                    reinitialize::server_response(services, &req, requester, &mut audit).await;
+                after_reply = hooks;
+                reply
             }
             s if s == ConfirmedServiceChoice::GET_EVENT_INFORMATION => {
                 event_information::response(
@@ -427,7 +410,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                 network,
                                 notification_transactions,
                                 device_bindings,
-                                config.max_apdu_length,
+                                u32::from(config.device.max_apdu_length()),
                             );
                         }
                         simple_ack()
@@ -507,15 +490,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                     invoke_id,
                                     request: request.clone(),
                                 };
-                                let authorized = config
-                                    .life_safety_operation_authorizer
-                                    .as_ref()
-                                    .is_some_and(|authorizer| {
-                                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-                                            || authorizer(&context),
-                                        ))
-                                        .unwrap_or(false)
-                                    });
+                                let authorized = config.policy.as_ref().is_some_and(|policy| {
+                                    fail_closed_authorize(|| {
+                                        policy.authorize_life_safety_operation(&context)
+                                    })
+                                });
                                 if !authorized {
                                     Err(handlers::life_safety_error(
                                         ErrorClass::SERVICES,
@@ -611,104 +590,56 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             super::command_runs::CommandRunner::new(services, request_tasks).start(command_runs);
         }
 
-        if let Apdu::ComplexAck(ref ack) = response {
-            let mut full_buf = BytesMut::new();
-            encode_apdu(&mut full_buf, &response).expect("valid APDU encoding");
-
-            if full_buf.len() > effective_max_apdu as usize {
-                // Clause 5.4.5.3 CannotSendSegmentedComplexACK reads both
-                // sides of the exchange: case (a), no local capability to
-                // transmit segmented messages, and case
-                // (b), the client not accepting one. Either way the response
-                // fits neither an unsegmented nor a segmented send and draws the
-                // same Abort; SendSegmentedComplexACK is available only when
-                // the device supports transmitting segments (#381).
-                if !client_accepts_segmented || !device_transmits_segments {
-                    let abort = Apdu::Abort(AbortPdu {
-                        sent_by_server: true,
-                        invoke_id,
-                        abort_reason: AbortReason::SEGMENTATION_NOT_SUPPORTED,
-                    });
-                    let mut buf = BytesMut::new();
-                    encode_apdu(&mut buf, &abort).expect("valid APDU encoding");
-                    if let Err(e) = Self::issue_terminal_response(
-                        network,
-                        &buf,
-                        source_mac,
-                        source_network.as_ref(),
-                        &route,
-                        pending,
-                    )
-                    .await
-                    {
-                        warn!(error = %e, "Failed to send Abort for segmentation-not-supported");
-                    }
-                } else {
-                    Self::spawn_segmented_complex_ack(
-                        SegmentedSendResources {
-                            network,
-                            seg_ack_senders,
-                            seg_send_permits,
-                        },
-                        request_tasks,
-                        ResponseTarget {
-                            source_mac,
-                            source_network: source_network.as_ref(),
-                            route: &route,
-                        },
-                        ComplexAckParams {
-                            invoke_id,
-                            service_choice,
-                            client_max_apdu: effective_max_apdu,
-                            client_max_segments,
-                        },
-                        ack.service_ack.clone(),
-                        pending,
-                        Duration::from_millis(config.apdu_segment_timeout_ms),
-                    );
-                }
-
-                Self::fire_written_event_notifications(
-                    &services.event_delivery(),
-                    cov_table,
-                    &written_oids,
-                )
+        let plan = issue::ResponsePlan {
+            services,
+            request_tasks,
+            target: ResponseTarget {
+                source_mac,
+                source_network: source_network.as_ref(),
+                route: &route,
+            },
+            ack: ComplexAckParams {
+                invoke_id,
+                service_choice,
+                client_max_apdu: effective_max_apdu,
+                client_max_segments,
+            },
+            segmented_response_available,
+        };
+        let issued =
+            Self::issue_confirmed_response(plan, &response, &audit, read_audits, reply_tx, pending)
                 .await;
-                Self::fire_post_write_cov_notifications(
-                    &cov_ctx,
-                    &coarse_cov_oids,
-                    &life_safety_cov_changes,
-                )
-                .await;
-                for notification in &initial_cov_notifications {
-                    match notification {
-                        InitialCovNotification::Single(subscription) => {
-                            Self::fire_initial_cov_notification(&cov_ctx, subscription).await;
-                        }
-                        InitialCovNotification::Multiple(subscriptions) => {
-                            Self::fire_initial_cov_notification_multiple(&cov_ctx, subscriptions)
-                                .await;
-                        }
-                    }
-                }
-                return;
-            }
+        // A ReinitializeDevice restart waits for its SimpleACK's handoff
+        // (Clause 16.4.2, #1565); no lock is held here.
+        match issued {
+            issue::Issued::Unsegmented { handed_off: true } => after_reply.run(),
+            _ => drop(after_reply),
         }
-
-        // Read execution is observed under the DB read guard, but admission is
-        // deferred until the complete response exists and that guard is gone.
-        // Segmentation/post-execution transport divergence does not add records.
-        audit.admit_reads(db, read_audits).await;
-        confirmed_response::send_unsegmented_response(
-            network,
-            &response,
-            source_mac,
-            source_network.as_ref(),
-            &route,
-            reply_tx,
-            pending,
-        )
-        .await;
+        if issued == issue::Issued::Segmented {
+            Self::fire_written_event_notifications(
+                &services.event_delivery(),
+                cov_table,
+                &written_oids,
+            )
+            .await;
+            Self::fire_post_write_cov_notifications(
+                &cov_ctx,
+                &coarse_cov_oids,
+                &life_safety_cov_changes,
+            )
+            .await;
+            for notification in &initial_cov_notifications {
+                match notification {
+                    InitialCovNotification::Single(subscription) => {
+                        Self::fire_initial_cov_notification(&cov_ctx, subscription).await;
+                    }
+                    InitialCovNotification::Multiple(subscriptions) => {
+                        Self::fire_initial_cov_notification_multiple(&cov_ctx, subscriptions).await;
+                    }
+                }
+            }
+            return;
+        }
 
         if let Some(accepted) = accepted_acknowledgment {
             Self::send_acknowledgment_notification_with_bindings(

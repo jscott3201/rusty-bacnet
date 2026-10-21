@@ -246,6 +246,7 @@ pub(super) fn plan_specs(
             db,
             &spec.object_identifier,
             view.and_then(|view| view.registered_port),
+            view.and_then(|view| view.device_oid()),
         );
         let stored = read_property::read_target_object(db, &lookup_oid);
         let served = stored.and_then(|object| view.map(|view| view.object(object)));
@@ -336,10 +337,7 @@ pub(super) fn element(
                     .map(|()| encoded.to_vec())
                     .map_err(|_| (ErrorClass::PROPERTY, ErrorCode::OTHER))
             }
-            Err(Error::Protocol { class, code }) => Err((
-                ErrorClass::from_raw(class as u16),
-                ErrorCode::from_raw(code as u16),
-            )),
+            Err(Error::Protocol { class, code }) => Err((class, code)),
             Err(_) => Err((ErrorClass::PROPERTY, ErrorCode::UNKNOWN_PROPERTY)),
         },
     };

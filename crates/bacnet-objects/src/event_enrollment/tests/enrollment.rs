@@ -28,25 +28,6 @@ fn read_object_type() {
 }
 
 #[test]
-fn read_event_type() {
-    let ee = EventEnrollmentObject::new(1, "EE-1", EventType::COMMAND_FAILURE).unwrap();
-    let val = ee
-        .read_property(PropertyIdentifier::EVENT_TYPE, None)
-        .unwrap();
-    assert_eq!(val, PropertyValue::Enumerated(3));
-}
-
-#[test]
-fn read_event_type_preserves_a_proprietary_value() {
-    let ee = EventEnrollmentObject::new(1, "EE-1", EventType::from_raw(600)).unwrap();
-    assert_eq!(
-        ee.read_property(PropertyIdentifier::EVENT_TYPE, None)
-            .unwrap(),
-        PropertyValue::Enumerated(600)
-    );
-}
-
-#[test]
 fn read_event_enable() {
     let ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     let val = ee
@@ -328,18 +309,12 @@ fn write_event_parameters_framed_trailing_garbage_rejected() {
         );
         match result.unwrap_err() {
             bacnet_types::error::Error::Protocol { class, code } => {
-                assert_eq!(
-                    class,
-                    bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
-                );
-                assert_eq!(
-                    code,
-                    bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE.to_raw() as u32
-                );
+                assert_eq!(class, bacnet_types::enums::ErrorClass::PROPERTY);
+                assert_eq!(code, bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE);
             }
             other => panic!("expected PROPERTY/INVALID_DATA_TYPE, got {other:?}"),
         }
-        // Stored value is untouched: the default Opaque placeholder remains.
+        // Stored value is untouched: the unset `none` alternative remains.
         let val = ee
             .read_property(PropertyIdentifier::EVENT_PARAMETERS, None)
             .unwrap();
@@ -350,7 +325,7 @@ fn write_event_parameters_framed_trailing_garbage_rejected() {
         assert_eq!(
             decoded,
             BACnetEventParameter::Opaque {
-                tag: 0xFF,
+                tag: 20,
                 data: Vec::new()
             }
         );
@@ -591,8 +566,8 @@ fn set_event_state_internal_default_rejects() {
                 Ok(PropertyValue::CharacterString("default-only".to_string()))
             } else {
                 Err(bacnet_types::error::Error::Protocol {
-                    class: ErrorClass::PROPERTY.to_raw() as u32,
-                    code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+                    class: ErrorClass::PROPERTY,
+                    code: ErrorCode::UNKNOWN_PROPERTY,
                 })
             }
         }
@@ -604,8 +579,8 @@ fn set_event_state_internal_default_rejects() {
             _priority: Option<u8>,
         ) -> Result<(), bacnet_types::error::Error> {
             Err(bacnet_types::error::Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
+                class: ErrorClass::PROPERTY,
+                code: ErrorCode::WRITE_ACCESS_DENIED,
             })
         }
         fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
@@ -624,11 +599,8 @@ fn set_event_state_internal_default_rejects() {
     let err = result.unwrap_err();
     match err {
         bacnet_types::error::Error::Protocol { class, code } => {
-            assert_eq!(class, ErrorClass::OBJECT.to_raw() as u32);
-            assert_eq!(
-                code,
-                ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32
-            );
+            assert_eq!(class, ErrorClass::OBJECT);
+            assert_eq!(code, ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED);
         }
         _ => panic!("expected Error::Protocol from default set_event_state_internal"),
     }
@@ -677,8 +649,8 @@ fn ee_notify_type_rejects_out_of_production_values() {
             .expect_err("an out-of-production Notify_Type write must be refused")
         {
             Error::Protocol { class, code } => {
-                assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
-                assert_eq!(code, ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32);
+                assert_eq!(class, ErrorClass::PROPERTY);
+                assert_eq!(code, ErrorCode::VALUE_OUT_OF_RANGE);
             }
             other => panic!("expected PROPERTY / VALUE_OUT_OF_RANGE, got {other:?}"),
         }
@@ -727,8 +699,8 @@ fn ee_event_enable_rejects_noncanonical_bit_strings() {
             .expect_err("a noncanonical Event_Enable shape must be refused")
         {
             Error::Protocol { class, code } => {
-                assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
-                assert_eq!(code, ErrorCode::INVALID_DATA_ENCODING.to_raw() as u32);
+                assert_eq!(class, ErrorClass::PROPERTY);
+                assert_eq!(code, ErrorCode::INVALID_DATA_ENCODING);
             }
             other => panic!("expected PROPERTY / INVALID_DATA_ENCODING, got {other:?}"),
         }
@@ -784,8 +756,8 @@ fn alert_enrollment_event_enable_rejects_noncanonical_bit_strings() {
         .expect_err("an 8-bit string must be refused where 3 bits are defined")
     {
         Error::Protocol { class, code } => {
-            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
-            assert_eq!(code, ErrorCode::INVALID_DATA_ENCODING.to_raw() as u32);
+            assert_eq!(class, ErrorClass::PROPERTY);
+            assert_eq!(code, ErrorCode::INVALID_DATA_ENCODING);
         }
         other => panic!("expected PROPERTY / INVALID_DATA_ENCODING, got {other:?}"),
     }

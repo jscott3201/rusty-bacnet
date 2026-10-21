@@ -3,8 +3,9 @@ use std::sync::Arc;
 
 use bacnet_encoding::apdu::{decode_apdu, encode_apdu, Apdu, ConfirmedRequest, UnconfirmedRequest};
 use bacnet_encoding::npdu::{decode_npdu, NpduAddress};
+use bacnet_npdu::NetworkPriority;
 use bacnet_transport::port::{DataAttribute, ReceivedNpdu, TransportPort};
-use bacnet_types::enums::{ConfirmedServiceChoice, NetworkPriority, UnconfirmedServiceChoice};
+use bacnet_types::enums::{ConfirmedServiceChoice, UnconfirmedServiceChoice};
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 use bytes::{Bytes, BytesMut};
@@ -272,7 +273,7 @@ async fn network_service_delegates_every_apdu_destination_with_attributes() {
             expected_npdu_destination: None,
             attribute_type: 1,
             expecting_reply: true,
-            priority: NetworkPriority::URGENT,
+            priority: NetworkPriority::Urgent,
         },
     )
     .await;
@@ -293,7 +294,7 @@ async fn network_service_delegates_every_apdu_destination_with_attributes() {
             expected_npdu_destination: Some(routed_destination),
             attribute_type: 2,
             expecting_reply: false,
-            priority: NetworkPriority::CRITICAL_EQUIPMENT,
+            priority: NetworkPriority::CriticalEquipment,
         },
     )
     .await;
@@ -313,7 +314,7 @@ async fn network_service_delegates_every_apdu_destination_with_attributes() {
             expected_npdu_destination: Some(unknown_router_destination),
             attribute_type: 3,
             expecting_reply: true,
-            priority: NetworkPriority::LIFE_SAFETY,
+            priority: NetworkPriority::LifeSafety,
         },
     )
     .await;
@@ -326,7 +327,7 @@ async fn network_service_delegates_every_apdu_destination_with_attributes() {
             expected_npdu_destination: None,
             attribute_type: 4,
             expecting_reply: false,
-            priority: NetworkPriority::NORMAL,
+            priority: NetworkPriority::Normal,
         },
     )
     .await;
@@ -344,7 +345,7 @@ async fn network_service_delegates_every_apdu_destination_with_attributes() {
             }),
             attribute_type: 5,
             expecting_reply: true,
-            priority: NetworkPriority::URGENT,
+            priority: NetworkPriority::Urgent,
         },
     )
     .await;
@@ -360,7 +361,7 @@ async fn network_service_delegates_every_apdu_destination_with_attributes() {
             }),
             attribute_type: 6,
             expecting_reply: false,
-            priority: NetworkPriority::CRITICAL_EQUIPMENT,
+            priority: NetworkPriority::CriticalEquipment,
         },
     )
     .await;
@@ -400,7 +401,7 @@ async fn effective_group_destinations_reject_confirmed_and_malformed_apdus_witho
                         apdu,
                         destination.clone(),
                         false,
-                        NetworkPriority::NORMAL,
+                        NetworkPriority::Normal,
                         Vec::new(),
                     )
                     .await,
@@ -422,7 +423,7 @@ async fn effective_group_destinations_reject_confirmed_and_malformed_apdus_witho
                 destination_mac: MacAddr::from_slice(&BROADCAST_MAC),
             },
             false,
-            NetworkPriority::NORMAL,
+            NetworkPriority::Normal,
             Vec::new(),
         )
         .await
@@ -462,7 +463,7 @@ async fn routed_destinations_without_a_dadr_refuse_all_but_an_unconfirmed_reques
             apdu,
             destination,
             false,
-            NetworkPriority::NORMAL,
+            NetworkPriority::Normal,
             Vec::new(),
         )
     };
@@ -529,7 +530,7 @@ async fn routed_via_local_broadcast_accepts_confirmed_request_for_ultimate_unica
                 destination_mac: destination.mac_address.clone(),
             },
             true,
-            NetworkPriority::LIFE_SAFETY,
+            NetworkPriority::LifeSafety,
             Vec::new(),
         )
         .await
@@ -543,7 +544,7 @@ async fn routed_via_local_broadcast_accepts_confirmed_request_for_ultimate_unica
     let npdu = decode_npdu(captured.npdu).unwrap();
     assert_eq!(npdu.destination, Some(destination));
     assert!(npdu.expecting_reply);
-    assert_eq!(npdu.priority, NetworkPriority::LIFE_SAFETY);
+    assert_eq!(npdu.priority, NetworkPriority::LifeSafety);
     assert_eq!(npdu.payload.as_ref(), apdu);
     assert!(matches!(
         decode_apdu(npdu.payload),
@@ -624,7 +625,7 @@ async fn the_egress_sends_a_destination_as_named_once_a_number_is_published() {
                 router_mac: MacAddr::from_slice(&[0x09]),
             },
             false,
-            NetworkPriority::NORMAL,
+            NetworkPriority::Normal,
             Vec::new(),
         )
         .await

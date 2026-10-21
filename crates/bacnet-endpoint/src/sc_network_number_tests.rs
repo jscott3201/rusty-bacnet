@@ -20,8 +20,10 @@ async fn sc_number_control_queue_full_closed_and_apdu_progress() {
     let mut apdus = apdus.unwrap();
     for sequence in 1..=257 {
         peer.send(false, &[1, 0x80, 0x12]).await;
+        // Controls are decoded as the APDU receiver is polled (#1713).
         bounded(async {
             while network.network_control_ingress_sequence() < sequence {
+                assert!(apdus.try_recv().is_err());
                 tokio::task::yield_now().await;
             }
         })

@@ -3,7 +3,8 @@ use super::*;
 use crate::event::{EventStateChange, EventTransition, EventTransitionCommit, PendingTransition};
 
 fn committed_input() -> AnalogInputObject {
-    let mut object = AnalogInputObject::new(1, "AI-correlated", 62).unwrap();
+    let mut object =
+        AnalogInputObject::new(1, "AI-correlated", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     object
         .commit_event_transition_internal(EventTransitionCommit {
             change: EventStateChange {
@@ -28,8 +29,8 @@ fn assert_invalid_event_state(error: Error) {
     assert!(matches!(
         error,
         Error::Protocol { class, code }
-            if class == ErrorClass::SERVICES.to_raw() as u32
-                && code == ErrorCode::INVALID_EVENT_STATE.to_raw() as u32
+            if class == ErrorClass::SERVICES
+                && code == ErrorCode::INVALID_EVENT_STATE
     ));
 }
 

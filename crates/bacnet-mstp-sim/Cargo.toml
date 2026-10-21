@@ -13,5 +13,13 @@ bacnet-mstp-codec.workspace = true
 # AllocQueues lets each simulated node size its queues at run time.
 bacnet-mstp-core = { workspace = true, features = ["alloc"] }
 
+[dev-dependencies]
+bacnet-transport.workspace = true
+# The device image's application runs on the simulated bus (#1796). The
+# image's crate depends on no simulator, so the test lives here.
+firmware-link = { path = "../../firmware/link" }
+bacnet-types.workspace = true
+tokio = { workspace = true, features = ["test-util", "rt", "macros", "sync", "time"] }
+
 [lints]
 workspace = true

@@ -11,8 +11,9 @@ fn bindings() -> Vec<DeviceBinding> {
 fn device(instance: u32) -> Box<DeviceObject> {
     Box::new(
         DeviceObject::new(DeviceConfig {
-            instance,
-            name: format!("replacement-{instance}"),
+            identity: bacnet_objects::DeviceIdentity::new(instance, 0)
+                .expect("valid Device identity")
+                .with_name(format!("replacement-{instance}")),
             ..Default::default()
         })
         .unwrap(),

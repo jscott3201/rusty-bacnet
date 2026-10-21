@@ -5,7 +5,7 @@ use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetEventParameter, ChangeOfValueCriteria,
 };
-use bacnet_types::enums::{ErrorClass, ErrorCode};
+use bacnet_types::enums::{EngineeringUnits, ErrorClass, ErrorCode};
 use bacnet_types::error::Error;
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -93,8 +93,12 @@ impl IndexedReadProbe {
         };
         (
             Self {
-                inner: AnalogValueObject::new(instance, format!("AV-probe-{instance}"), 62)
-                    .unwrap(),
+                inner: AnalogValueObject::new(
+                    instance,
+                    format!("AV-probe-{instance}"),
+                    EngineeringUnits::DEGREES_CELSIUS,
+                )
+                .unwrap(),
                 control: control.clone(),
             },
             control,
@@ -125,8 +129,8 @@ impl BACnetObject for IndexedReadProbe {
         }
         if array_index == Some(17) {
             return Err(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::INVALID_ARRAY_INDEX.to_raw() as u32,
+                class: ErrorClass::PROPERTY,
+                code: ErrorCode::INVALID_ARRAY_INDEX,
             });
         }
         Ok(PropertyValue::Real(90.0))
@@ -160,7 +164,8 @@ impl BACnetObject for IndexedReadProbe {
 #[test]
 fn indexed_priority_array_element_drives_evaluation() {
     let mut db = ObjectDatabase::new();
-    let mut value = AnalogValueObject::new(1, "AV-indexed", 62).unwrap();
+    let mut value =
+        AnalogValueObject::new(1, "AV-indexed", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     value
         .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
@@ -190,7 +195,7 @@ fn indexed_priority_array_element_drives_evaluation() {
 #[test]
 fn array_index_zero_monitors_the_element_count() {
     let mut db = ObjectDatabase::new();
-    let value = AnalogValueObject::new(2, "AV-count", 62).unwrap();
+    let value = AnalogValueObject::new(2, "AV-count", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let value_oid = value.object_identifier();
     db.add(Box::new(value)).unwrap();
     add_out_of_range_enrollment(
@@ -258,7 +263,8 @@ fn out_of_range_index_clears_state_without_whole_property_fallback() {
 #[test]
 fn index_on_scalar_property_does_not_read_the_scalar() {
     let mut db = ObjectDatabase::new();
-    let mut value = AnalogValueObject::new(4, "AV-scalar", 62).unwrap();
+    let mut value =
+        AnalogValueObject::new(4, "AV-scalar", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     value.set_relinquish_default(90.0).unwrap();
     let value_oid = value.object_identifier();
     db.add(Box::new(value)).unwrap();
@@ -277,7 +283,8 @@ fn index_on_scalar_property_does_not_read_the_scalar() {
 #[test]
 fn index_change_restarts_the_pending_delay() {
     let mut db = ObjectDatabase::new();
-    let mut value = AnalogValueObject::new(5, "AV-retarget", 62).unwrap();
+    let mut value =
+        AnalogValueObject::new(5, "AV-retarget", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     for priority in [1, 2] {
         value
             .write_property_from(
@@ -341,7 +348,8 @@ fn index_change_restarts_the_pending_delay() {
 #[test]
 fn index_change_discards_the_previous_element_baselines() {
     let mut db = ObjectDatabase::new();
-    let mut value = AnalogValueObject::new(6, "AV-COV-retarget", 62).unwrap();
+    let mut value =
+        AnalogValueObject::new(6, "AV-COV-retarget", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     for (priority, sample) in [(1, 10.0), (2, 90.0)] {
         value
             .write_property_from(
@@ -396,7 +404,8 @@ fn index_change_discards_the_previous_element_baselines() {
 #[test]
 fn null_indexed_element_interrupts_the_pending_delay() {
     let mut db = ObjectDatabase::new();
-    let mut value = AnalogValueObject::new(7, "AV-null", 62).unwrap();
+    let mut value =
+        AnalogValueObject::new(7, "AV-null", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     value
         .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
@@ -502,12 +511,22 @@ fn transient_indexed_read_failure_clears_private_continuity() {
 #[test]
 fn null_indexed_floating_setpoint_interrupts_the_pending_delay() {
     let mut db = ObjectDatabase::new();
-    let mut monitored = AnalogValueObject::new(9, "AV-floating-monitored", 62).unwrap();
+    let mut monitored = AnalogValueObject::new(
+        9,
+        "AV-floating-monitored",
+        EngineeringUnits::DEGREES_CELSIUS,
+    )
+    .unwrap();
     monitored.set_relinquish_default(90.0).unwrap();
     let monitored_oid = monitored.object_identifier();
     db.add(Box::new(monitored)).unwrap();
 
-    let mut setpoint = AnalogValueObject::new(10, "AV-floating-setpoint", 62).unwrap();
+    let mut setpoint = AnalogValueObject::new(
+        10,
+        "AV-floating-setpoint",
+        EngineeringUnits::DEGREES_CELSIUS,
+    )
+    .unwrap();
     setpoint
         .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,

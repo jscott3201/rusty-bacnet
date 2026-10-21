@@ -214,10 +214,12 @@ async fn pending_in_flight_duplicate_discards_without_replay() {
     let authorizations = Arc::new(AtomicUsize::new(0));
     let observed = Arc::clone(&authorizations);
     let config = ServerConfig {
-        life_safety_operation_authorizer: Some(Arc::new(move |_| {
-            observed.fetch_add(1, Ordering::AcqRel);
-            true
-        })),
+        policy: Some(Arc::new(crate::FnPolicy::new().life_safety_operation(
+            move |_| {
+                observed.fetch_add(1, Ordering::AcqRel);
+                true
+            },
+        ))),
         ..ServerConfig::default()
     };
     let tracker = Arc::new(ConfirmedRequestTracker::default());
@@ -303,10 +305,12 @@ async fn a_completed_operation_replays_until_exactly_its_window_ends() {
     let authorizations = Arc::new(AtomicUsize::new(0));
     let observed = Arc::clone(&authorizations);
     let config = ServerConfig {
-        life_safety_operation_authorizer: Some(Arc::new(move |_| {
-            observed.fetch_add(1, Ordering::AcqRel);
-            true
-        })),
+        policy: Some(Arc::new(crate::FnPolicy::new().life_safety_operation(
+            move |_| {
+                observed.fetch_add(1, Ordering::AcqRel);
+                true
+            },
+        ))),
         ..ServerConfig::default()
     };
     let tracker = Arc::new(ConfirmedRequestTracker::default());
@@ -350,7 +354,9 @@ async fn routed_same_origin_replays_while_other_origins_execute_independently() 
     // origin via a different router replays; a different network, a direct
     // peer, and a different direct MAC are independent executions.
     let config_allow = || ServerConfig {
-        life_safety_operation_authorizer: Some(Arc::new(|_| true)),
+        policy: Some(Arc::new(
+            crate::FnPolicy::new().life_safety_operation(|_| true),
+        )),
         ..ServerConfig::default()
     };
     let tracker = Arc::new(ConfirmedRequestTracker::default());
@@ -462,10 +468,12 @@ async fn invoke_reuse_with_changed_bytes_and_new_invoke_execute() {
     let authorizations = Arc::new(AtomicUsize::new(0));
     let observed = Arc::clone(&authorizations);
     let config = ServerConfig {
-        life_safety_operation_authorizer: Some(Arc::new(move |_| {
-            observed.fetch_add(1, Ordering::AcqRel);
-            true
-        })),
+        policy: Some(Arc::new(crate::FnPolicy::new().life_safety_operation(
+            move |_| {
+                observed.fetch_add(1, Ordering::AcqRel);
+                true
+            },
+        ))),
         ..ServerConfig::default()
     };
     let tracker = Arc::new(ConfirmedRequestTracker::default());
@@ -540,7 +548,9 @@ async fn oversize_lso_request_executes_untracked_without_suppression() {
     // suppresses the next one.
     let db = Arc::new(RwLock::new(ObjectDatabase::new()));
     let config = ServerConfig {
-        life_safety_operation_authorizer: Some(Arc::new(|_| true)),
+        policy: Some(Arc::new(
+            crate::FnPolicy::new().life_safety_operation(|_| true),
+        )),
         ..ServerConfig::default()
     };
     let tracker = Arc::new(ConfirmedRequestTracker::default());

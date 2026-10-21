@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use bacnet_encoding::apdu::{decode_apdu, Apdu};
 use bacnet_network::layer::{IssuedApdu, NetworkLayer, ReceivedApdu, RoutedTarget};
+use bacnet_npdu::NetworkPriority;
 use bacnet_transport::port::{DataAttribute, TransportPort};
-use bacnet_types::enums::NetworkPriority;
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 use tokio::sync::{mpsc, oneshot};
@@ -350,7 +350,7 @@ struct IngressQueues {
 
 async fn session_task<T: TransportPort + 'static>(
     mut network: NetworkLayer<T>,
-    mut apdu_rx: mpsc::Receiver<ReceivedApdu>,
+    mut apdu_rx: bacnet_network::layer::ApduReceiver,
     queues: IngressQueues,
     mut egress_rx: mpsc::Receiver<NetworkServiceCommand>,
     mut cancel_rx: oneshot::Receiver<()>,
@@ -441,7 +441,7 @@ enum PendingEvent {
 async fn drive_network_service<T: TransportPort + 'static>(
     network: &NetworkLayer<T>,
     command: NetworkServiceCommand,
-    apdu_rx: &mut mpsc::Receiver<ReceivedApdu>,
+    apdu_rx: &mut bacnet_network::layer::ApduReceiver,
     queues: &IngressQueues,
     cancel_rx: &mut oneshot::Receiver<()>,
     prefer_ingress: &mut bool,

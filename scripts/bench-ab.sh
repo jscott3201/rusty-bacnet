@@ -202,13 +202,18 @@ def load(side, suite):
 def metric(parsed):
     if not parsed:
         return None
-    results = parsed.get("results", {})
-    latency = results.get("latency_us", {})
+    # Both sides come from the per-step degradation curve, which output from
+    # before and after #1714 both have, never from the summary fields (whose
+    # meaning changed in #1714): throughput is the fastest step's, p50 and
+    # p99 the slowest step's, errors the steps' sum.
+    curve = parsed.get("results", {}).get("degradation_curve") or []
+    if not curve:
+        return None
     return {
-        "throughput": results.get("throughput_ops_sec"),
-        "p50": latency.get("p50"),
-        "p99": latency.get("p99"),
-        "errors": results.get("failed"),
+        "throughput": max(pt.get("throughput", 0.0) for pt in curve),
+        "p50": max(pt.get("p50_us", 0) for pt in curve),
+        "p99": max(pt.get("p99_us", 0) for pt in curve),
+        "errors": sum(pt.get("errors", 0) for pt in curve),
     }
 
 def pct(base, head):
@@ -225,6 +230,7 @@ lines = [
     f"- Rust: {env['environment']['rustc']}",
     f"- Cargo: {env['environment']['cargo']}",
     f"- OS: {env['environment']['os']}",
+    "- Stress metrics, from each side's per-step curve: throughput is the fastest step's, p99 the slowest step's, errors the sum over steps.",
     "",
     "| Suite | Base status | Head status | Base throughput | Head throughput | Throughput delta | Base p99 | Head p99 | p99 delta | Errors | Result |",
     "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",

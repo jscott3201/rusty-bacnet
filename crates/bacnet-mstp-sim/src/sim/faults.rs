@@ -66,8 +66,18 @@ impl Sim {
             }
             Fault::Disarm => self.armed.clear(),
             Fault::SetAdapter { station, adapter } => {
+                self.timing.validate_post_drive(adapter.post_drive);
+                self.timing
+                    .validate_inter_octet_gap(adapter.inter_octet_gap);
+                if let Some(host) = adapter.host {
+                    host.validate();
+                }
                 let node = self.index_of(station);
                 if let NodeKind::Master(master) = &mut self.nodes[node].kind {
+                    assert!(
+                        master.core.is_none() || adapter.host.is_some() == master.host.is_some(),
+                        "change host/octet mode while the node is powered off"
+                    );
                     master.spec.adapter = adapter;
                     self.arm_deadline(node);
                 }
@@ -106,10 +116,13 @@ impl Sim {
         let now = self.now;
         let station = self.nodes[node].station;
         self.perturb("a node powered off");
+        self.cancel_local_echo(node);
+        self.receiver_power_off(node);
         if let Some(tx) = self.nodes[node].driving.take() {
             if let Some(transmission) = self.line.truncate(tx, now) {
                 self.record_frame(tx, transmission);
             }
+            self.release_driver(tx, crate::DriverReleaseCause::PowerLoss);
         }
         self.nodes[node].listening_since = None;
         if let NodeKind::Master(master) = &mut self.nodes[node].kind {

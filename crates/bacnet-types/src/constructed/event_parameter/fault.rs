@@ -199,7 +199,15 @@ impl crate::constructed::FaultParameters {
                 let reference = take_dopr(rest, &mut idx)?;
                 F::FaultListed { reference }
             }
-            other => return Err(Error::decoding(0, format!("unknown fault tag {other}"))),
+            other => {
+                return Err(DecodeError::new(
+                    DecodingKind::InvalidEncoding,
+                    0,
+                    "unknown fault tag {}",
+                )
+                .with_value(other)
+                .into());
+            }
         };
         if idx != rest.len() {
             return Err(Error::decoding(

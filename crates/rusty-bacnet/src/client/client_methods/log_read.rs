@@ -1,16 +1,5 @@
 use super::super::*;
 
-/// The started client, or RuntimeError outside `async with`.
-async fn started(
-    inner: &ClientInner,
-) -> PyResult<Arc<client::BACnetClient<AnyTransport<crate::mstp_py::PySerial>>>> {
-    let guard = inner.lock().await;
-    guard
-        .as_ref()
-        .map(Arc::clone)
-        .ok_or_else(|| PyRuntimeError::new_err("client not started — use 'async with'"))
-}
-
 #[pymethods]
 impl BACnetClient {
     /// Read a range of items from a list or log object.

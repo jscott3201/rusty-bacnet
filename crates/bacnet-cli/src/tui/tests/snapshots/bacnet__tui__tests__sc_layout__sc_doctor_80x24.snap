@@ -1,0 +1,28 @@
+---
+source: crates/bacnet-cli/src/tui/tests/sc_layout.rs
+expression: text
+---
+" bacnet | 1 2 3 [5 SC] 7 | SC | failed | READ-ONLY | COV 0 | drop 0      ? help "
+"┌ Hub connector ─────────────┐┌ VMAC and UUID ─────────────────────────────────┐"
+"│Not connected: the doctor   ││Local VMAC  22:10:20:30:40:50                   │"
+"│(Tab) shows where the dial  ││Device UUID 6f1c2a9e-4407-4b3d-9a51-0e7c8821d40b│"
+"│failed.                     ││Hub VMAC    unknown                             │"
+"│                            ││Dup. VMAC   no NAK seen                         │"
+"└────────────────────────────┘└────────────────────────────────────────────────┘"
+"┌ Hub certificates [Doctor] My credentials | last failure 3s ago ──────────────┐"
+"│[ ok ] URL, DNS, TCP                                                          │"
+"│[FAIL] TLS       hub certificate expired 400 days ago                         │"
+"│[ -- ] WebSocket, Connect                                                     │"
+"│                                                                              │"
+"│Hint     The hub's certificate is past its not-after date: its owner needs to │"
+"│         renew it, or this computer's clock is far ahead.                     │"
+"│Detail   BACnet/SC WebSocket tls-handshake failure: WebSocket TLS handshake   │"
+"│         with hub.site.example:443 failed: invalid peer certificate:          │"
+"│         certificate expired                                                  │"
+"│Hub sent subject CN=primary hub, issued by CN=site CA, expires                │"
+"│         2025-01-01T00:00:00Z (Unix 1735689600), signed with ecdsa-with-SHA256│"
+"└──────────────────────────────────────────────────────────────────────────────┘"
+"┌ Events ──────────────────────────────────────────────────────────────────────┐"
+"│   3s ago error could not connect: hub certificate expired 400 days ago       │"
+"└──────────────────────────────────────────────────────────────────────────────┘"
+" Connection failed: TLS handshake failed      Tab view  Esc back  ? help  q quit"

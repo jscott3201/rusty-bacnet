@@ -63,7 +63,11 @@ pub fn encode_log_record(record: &BACnetLogRecord, buf: &mut BytesMut) -> Result
         }
         LogDatum::SignedValue(value) => encode_ctx_integer(&mut out, INTEGER, *value),
         LogDatum::BitstringValue { unused_bits, data } => {
-            check_bit_string(*unused_bits, data, "bitstring-value")?;
+            check_bit_string(
+                *unused_bits,
+                data,
+                "bitstring-value has {} unused bits over {} octets",
+            )?;
             primitives::encode_ctx_bit_string(&mut out, BIT_STRING, *unused_bits, data);
         }
         LogDatum::NullValue => tags::encode_tag(&mut out, NULL, tags::TagClass::Context, 0),

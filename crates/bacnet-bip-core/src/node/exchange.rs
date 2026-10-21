@@ -397,6 +397,13 @@ impl<const X: usize> Exchanges<X> {
         ended
     }
 
+    /// The live automatic registration attempt, if one is in flight.
+    pub(crate) fn automatic(&self) -> Option<usize> {
+        self.slots
+            .iter()
+            .position(|slot| slot.is_live() && slot.automatic)
+    }
+
     /// The sent exchange whose deadline comes first, and that deadline.
     pub(crate) fn next_deadline(&self) -> Option<(usize, Instant)> {
         let mut first: Option<(usize, Instant)> = None;

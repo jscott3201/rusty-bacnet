@@ -1,5 +1,6 @@
 [package]
 name = "bacnet-encoding"
+readme = "README.md"
 description = "BACnet ASN.1/BER encoding, APDU and NPDU codecs per ASHRAE 135-2020"
 version.workspace = true
 edition.workspace = true
@@ -9,21 +10,35 @@ repository.workspace = true
 keywords = ["bacnet", "asn1", "encoding", "apdu", "npdu"]
 categories = ["network-programming", "encoding", "no-std"]
 
-# One of `std` or `alloc` is required; with neither the crate refuses to build.
-# Leaving both off is reserved for a future allocation-free subset.
+# Without `std` or `alloc` the crate builds allocation-free (#1614): tag and
+# primitive decoding, the sink encoders, the tagged-field readers, borrowed
+# string and application-value views, and the APDU header view and writer.
+# The owned APDU and NPDU, segmentation, the constructed codecs and every
+# BytesMut encoder need `alloc`.
 [features]
 default = ["std"]
 # Hosted builds: std in the dependencies, and a tracing warning for an NPDU
 # with reserved control bits set. tracing-core needs atomic compare-and-swap,
 # which some bare-metal targets lack, so only std brings it in.
 std = ["alloc", "bacnet-types/std", "bytes/std", "dep:tracing"]
-# no_std with a global allocator.
-alloc = ["bacnet-types/alloc"]
+# no_std with a global allocator: the owned types and the BytesMut encoders.
+alloc = ["bacnet-types/alloc", "dep:bytes"]
+# A bounded output adapter for the sink encoders.
+heapless = ["dep:heapless"]
 
 [dependencies]
+bacnet-npdu = { workspace = true }
 bacnet-types = { workspace = true }
-bytes = { workspace = true }
+bytes = { workspace = true, optional = true }
+heapless = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
+
+[package.metadata.docs.rs]
+no-default-features = true
+features = ["std", "heapless"]
+default-target = "x86_64-unknown-linux-gnu"
+targets = []
+rustdoc-args = ["--cfg", "docsrs"]
 
 [lints]
 workspace = true

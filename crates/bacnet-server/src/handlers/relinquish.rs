@@ -90,8 +90,7 @@ fn refused_as_datatype(error: &Error) -> bool {
     let (Error::Protocol { class, code } | Error::Structured { class, code, .. }) = error else {
         return false;
     };
-    *class == ErrorClass::PROPERTY.to_raw() as u32
-        && *code == ErrorCode::INVALID_DATA_TYPE.to_raw() as u32
+    *class == ErrorClass::PROPERTY && *code == ErrorCode::INVALID_DATA_TYPE
 }
 
 /// Present_Value is the standard commandable property (Clause 19.2.1.1): on

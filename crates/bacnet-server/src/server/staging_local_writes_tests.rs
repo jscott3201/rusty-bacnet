@@ -7,7 +7,7 @@ use bacnet_objects::lighting::BinaryLightingOutputObject;
 use bacnet_objects::staging::{StagingConfig, StagingObject};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::{BACnetDeviceObjectReference, BACnetStageLimitValue};
-use bacnet_types::enums::Reliability;
+use bacnet_types::enums::{EngineeringUnits, Reliability};
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::Arc as StdArc;
@@ -27,7 +27,7 @@ fn config(
     StagingConfig {
         present_value: 5.0,
         min_present_value: 0.0,
-        units: 62,
+        units: EngineeringUnits::DEGREES_CELSIUS,
         priority_for_writing: 8,
         stages: vec![
             BACnetStageLimitValue {
@@ -49,8 +49,9 @@ fn config(
 fn add_device(db: &mut ObjectDatabase) {
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
-            instance: 100,
-            name: "Staging test device".into(),
+            identity: bacnet_objects::DeviceIdentity::new(100, 0)
+                .expect("valid Device identity")
+                .with_name("Staging test device"),
             ..DeviceConfig::default()
         })
         .unwrap(),
@@ -113,6 +114,7 @@ async fn staging_writes_bo_bv_blo_at_priority_skips_wildcard_and_notifies_target
     ))
     .unwrap();
     let server = BACnetServer::generic_builder()
+        .device(bacnet_objects::DeviceIdentity::new(100, 0).unwrap())
         .transport(transport)
         .database(db)
         .enable_event_enrollment(false)
@@ -214,6 +216,7 @@ async fn out_of_service_suppresses_targets_and_in_service_reapplies_current_stag
     ))
     .unwrap();
     let server = BACnetServer::generic_builder()
+        .device(bacnet_objects::DeviceIdentity::new(100, 0).unwrap())
         .transport(recording_transport().0)
         .database(db)
         .enable_event_enrollment(false)
@@ -284,6 +287,7 @@ async fn target_failure_faults_source_and_current_success_recovers() {
     ))
     .unwrap();
     let server = BACnetServer::generic_builder()
+        .device(bacnet_objects::DeviceIdentity::new(100, 0).unwrap())
         .transport(recording_transport().0)
         .database(db)
         .enable_event_enrollment(false)
@@ -351,8 +355,8 @@ impl BACnetObject for CountingBinaryOutput {
             )),
             PropertyIdentifier::PRESENT_VALUE => Ok(PropertyValue::Enumerated(0)),
             _ => Err(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+                class: ErrorClass::PROPERTY,
+                code: ErrorCode::UNKNOWN_PROPERTY,
             }),
         }
     }
@@ -372,8 +376,8 @@ impl BACnetObject for CountingBinaryOutput {
             return Ok(());
         }
         Err(Error::Protocol {
-            class: ErrorClass::PROPERTY.to_raw() as u32,
-            code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
+            class: ErrorClass::PROPERTY,
+            code: ErrorCode::WRITE_ACCESS_DENIED,
         })
     }
 
@@ -412,6 +416,7 @@ async fn retained_stage_does_not_emit_a_duplicate_plan() {
     ))
     .unwrap();
     let server = BACnetServer::generic_builder()
+        .device(bacnet_objects::DeviceIdentity::new(100, 0).unwrap())
         .transport(recording_transport().0)
         .database(db)
         .enable_event_enrollment(false)

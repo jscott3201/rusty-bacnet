@@ -1,4 +1,5 @@
-//! BACnet endpoint ownership and transaction coordination primitives.
+#![doc = include_str!("../README.md")]
+#![forbid(unsafe_code)]
 
 /// Device-wide outbound invoke-ID leasing and response admission.
 pub mod coordinator;

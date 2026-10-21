@@ -17,7 +17,10 @@ Use the [result template](mstp-qualification-result.json) for each campaign.
   `mstp_extended_frames`) raises those to 1497 and 1476, and `BACnetRouter` turns
   it on for every MS/TP port it routes, so record the setting for each cell. A
   routed ReadProperty experiment is diagnostic evidence, **not a conformant MS/TP
-  router claim**. Linux RT/affinity controls (RB-24/#501) are not implemented. The
+  router claim**. On Linux the dedicated thread can run under `SCHED_FIFO` and be
+  pinned to CPUs (`MstpThreadConfig::with_realtime_priority` and
+  `with_cpu_affinity`, CLI `--mstp-rt-priority` and `--mstp-cpus`, #501), so
+  record the requested settings and `execution_status()` for each cell. The
   host's timer defaults are under **Host timeouts and USB latency** below; this
   method changes no timers, queue sizes or direction policies.
 - Neither dedicated-thread execution nor PREEMPT_RT promises on-wire timing.
@@ -27,14 +30,20 @@ Use the [result template](mstp-qualification-result.json) for each campaign.
   Publish only redacted counts, settings and synthetic role labels. An independent
   analyzer must observe the bus without becoming another active master or opening
   either application's serial device a second time.
+  `bacnet_transport::mstp::monitor::MstpMonitor` over a
+  `mstp_serial::ReceiveOnlyPort` on a second adapter is such an analyzer: it
+  only reads, and its statistics carry the timestamp resolution to quote with
+  any interval it reports.
 
 ## Host counters: obtain before moving the transport
 
 `bacnet_transport::mstp::{MstpDiagnostics, MstpDiagnosticsSnapshot}` is Rust-only.
 Keep the handle in each downstream router/mini process before its existing owner
 consumes `MstpTransport`. No change to `TransportPort` or Python status is required.
-Builders that construct the transport internally do not automatically expose it;
-this slice does not add a generic endpoint status API.
+A session that `MstpEndpointBuilder::build_session` builds keeps the handle for you:
+`EndpointSession::mstp_diagnostics` returns it, before start, while running and
+after stop. The client and server builders take a transport you built, so take
+`MstpTransport::diagnostics` before handing it over.
 
 ```rust
 use bacnet_transport::mstp::{LoopbackSerial, MstpConfig, MstpTransport};
@@ -77,7 +86,7 @@ and mark saturated fields indeterminate rather than claiming exact counts.
 | `late_answers_queued`, `late_answers_dropped`, `late_answers_expired` | Application answers that came after Reply Postponed (or after the core gave up) and were queued for the token; reply channels given up because more than eight were waiting, or at the queue's maximum age. |
 | `mac.frames_received`, `mac.npdus_delivered`, `mac.frames_delivered` | Valid frames the core's decoder assembled (any destination), and data it passed up. |
 | `mac.parser_errors`, `mac.frame_aborts` | Frames invalid for this station per the receive rules (bad header, or bad data for this station or broadcast), and partial frames abandoned by T_frame_abort (100 ms on a host) or at a transmit start. Chunk gaps under 100 ms are not aborts. |
-| `mac.deadline_misses` | Deadlines the MAC task serviced 1 ms or more late. |
+| `mac.late_deadlines`, `mac.deadline_lateness` | Deadlines the MAC task serviced 5 ms or more late (`HOST_LATE_DEADLINE`), and every serviced deadline by lateness: under 1 ms, 1-2, 2-5, 5-10, 10-25 and 25 ms or more, with the largest. Tokio's timer alone puts most wakes in the first two bands. |
 | `mac.token_rotations`, `mac.token_retries`, `mac.token_regenerations`, `mac.deferred_starts`, `mac.late_replies`, `mac.expired_requests`, `mac.cancelled_sends`, `mac.discarded_while_busy`, `mac.own_address_frames` | The core's protocol counters, which `bacnet_mstp_core::MstpCounters` describes; the transport adds up each take of them (`bacnet_transport::mstp::MstpCounters`). |
 | `mac.transmit_io_errors`, `mac.transmit_timeouts` | Frames aborted because a serial write or drain failed, and frames the core's transmit watchdog aborted. The receive-error counts (`mac.framing_errors` and the rest) stay zero on a host: its serial API reports no per-octet errors. So do `mac.transmit_aborts` and `mac.transmit_rejections`: the transport reports only `Io` aborts, and `Timeout` comes from the core's watchdog alone. |
 | `mac.unicast`, `mac.broadcast` | The two transmit queues' depth when last published, highest depth, and drops. |
@@ -227,7 +236,7 @@ RP success is a functional outcome separate from timing verdicts.
 | ReplyPostponed on wire / mini `reply_postponed_tx`, then token and queued DNER | Deferred path only when the independent capture/application result correlates it. `dner_tx_queued` alone cannot. |
 | Router `wait_for_reply_timeouts` increases | MAC wait expired; distinguish missing reply, late reply, host decode loss and application APDU timeout with capture. |
 | `mac.parser_errors` or `mac.frame_aborts` increases | Frames invalid for this station, or partial frames abandoned (by 100 ms of silence or at a transmit start); not automatically a wire CRC/timing violation. Compare homogeneous controls and independent capture. |
-| `mac.deadline_misses` increases | The MAC task woke a millisecond or more late for a protocol deadline; look at host load and execution mode. |
+| `mac.late_deadlines` increases | The MAC task woke 5 ms or more late for a protocol deadline, beyond the timer's own rounding; compare the lateness bands and maximum, and look at host load and execution mode. |
 | `outbound_queue_full`/`outbound_oversize`, `ingress_full`/`ingress_closed`, or serial errors | Local rejection/delivery/I/O evidence; record exact deltas and unchanged returned errors, rather than interpreting no response as only a timer problem. |
 
 If a specific path cannot meet measured limits, evaluate a different serial path

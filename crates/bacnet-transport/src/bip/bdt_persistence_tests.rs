@@ -101,13 +101,13 @@ async fn seeded_persisted_bdt_loads_on_startup_and_network_write_bdt_mutates_nei
         port: 0xBAC0,
         broadcast_mask: [255, 255, 255, 0],
     };
-    let result = client_transport
-        .write_bdt(&bbmd_mac, std::slice::from_ref(&replacement))
-        .await
-        .unwrap();
     assert_eq!(
-        result,
-        BvlcResultCode::WRITE_BROADCAST_DISTRIBUTION_TABLE_NAK
+        client_transport
+            .write_bdt(&bbmd_mac, std::slice::from_ref(&replacement))
+            .await
+            .unwrap_err()
+            .nak(),
+        Some(BvlcResultCode::WRITE_BROADCAST_DISTRIBUTION_TABLE_NAK)
     );
     let bdt = client_transport.read_bdt(&bbmd_mac).await.unwrap();
     assert!(

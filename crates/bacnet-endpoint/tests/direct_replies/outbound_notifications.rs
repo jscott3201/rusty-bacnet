@@ -5,12 +5,12 @@ use super::*;
 use bacnet_encoding::apdu::SimpleAck;
 use bacnet_endpoint_core::coordinator::{CanonicalPeer, OutboundTransactionCoordinator};
 use bacnet_network::layer::NetworkLayer;
+use bacnet_npdu::NetworkPriority;
 use bacnet_server::server::{
     __endpoint_NotificationTransactions as NotificationTransactions,
     __endpoint_NotificationWorkerResult as NotificationWorkerResult,
     __endpoint_run_notification_worker as run_notification_worker,
 };
-use bacnet_types::enums::NetworkPriority;
 use std::{sync::Arc, time::Duration};
 
 #[tokio::test]
@@ -42,7 +42,7 @@ async fn standard_native_notification_owner_accepts_hub_direct_path_switches() {
         let send =
             run_notification_worker(operation, receiver, Duration::from_secs(3), 0, |attempt| {
                 assert_eq!(attempt, 0);
-                network.send_apdu(&encoded, &REMOTE, true, NetworkPriority::NORMAL)
+                network.send_apdu(&encoded, &REMOTE, true, NetworkPriority::Normal)
             });
         let remote = async {
             let observed = if hub_request {

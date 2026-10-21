@@ -6,13 +6,19 @@ use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::{
     BACnetEventParameter, BACnetPropertyStates, ChangeOfValueCriteria,
 };
+use bacnet_types::enums::EngineeringUnits;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 #[test]
 fn unreadable_parameters_cancel_pending_countdown() {
     let mut db = ObjectDatabase::new();
-    let mut target = AnalogValueObject::new(97, "AV-unreadable-params", 62).unwrap();
+    let mut target = AnalogValueObject::new(
+        97,
+        "AV-unreadable-params",
+        EngineeringUnits::DEGREES_CELSIUS,
+    )
+    .unwrap();
     target
         .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
@@ -55,7 +61,8 @@ fn unreadable_parameters_cancel_pending_countdown() {
 #[test]
 fn source_less_indexed_cov_retains_its_baseline_and_retargets_safely() {
     let mut db = ObjectDatabase::new();
-    let mut target = AnalogValueObject::new(98, "AV-custom-source", 62).unwrap();
+    let mut target =
+        AnalogValueObject::new(98, "AV-custom-source", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     target
         .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
@@ -142,7 +149,8 @@ fn source_less_indexed_cov_retains_its_baseline_and_retargets_safely() {
 #[test]
 fn failed_indexed_reset_cannot_resume_after_restoring_the_reference() {
     let mut db = ObjectDatabase::new();
-    let mut target = AnalogValueObject::new(103, "AV-reset-retry", 62).unwrap();
+    let mut target =
+        AnalogValueObject::new(103, "AV-reset-retry", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     target
         .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
@@ -197,11 +205,13 @@ fn failed_indexed_reset_cannot_resume_after_restoring_the_reference() {
 #[test]
 fn source_less_unindexed_cov_does_not_reuse_a_retargeted_baseline() {
     let mut db = ObjectDatabase::new();
-    let mut first = AnalogInputObject::new(104, "AI-COV-first", 62).unwrap();
+    let mut first =
+        AnalogInputObject::new(104, "AI-COV-first", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     first.set_present_value(10.0);
     let first_oid = first.object_identifier();
     db.add(Box::new(first)).unwrap();
-    let mut second = AnalogInputObject::new(105, "AI-COV-second", 62).unwrap();
+    let mut second =
+        AnalogInputObject::new(105, "AI-COV-second", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     second.set_present_value(90.0);
     let second_oid = second.object_identifier();
     db.add(Box::new(second)).unwrap();
@@ -308,7 +318,9 @@ fn source_write_failure_allows_one_immediate_change_of_state_transition() {
 #[test]
 fn invalidation_survives_failed_state_and_source_writes() {
     let mut db = ObjectDatabase::new();
-    let mut target = AnalogValueObject::new(107, "AV-double-failure", 62).unwrap();
+    let mut target =
+        AnalogValueObject::new(107, "AV-double-failure", EngineeringUnits::DEGREES_CELSIUS)
+            .unwrap();
     target
         .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
@@ -362,7 +374,12 @@ fn invalidation_survives_failed_state_and_source_writes() {
 #[test]
 fn source_less_custom_enrollment_retains_unindexed_delay_behavior() {
     let mut db = ObjectDatabase::new();
-    let mut target = AnalogInputObject::new(102, "AI-unindexed-source", 62).unwrap();
+    let mut target = AnalogInputObject::new(
+        102,
+        "AI-unindexed-source",
+        EngineeringUnits::DEGREES_CELSIUS,
+    )
+    .unwrap();
     target.set_present_value(90.0);
     let target_oid = target.object_identifier();
     db.add(Box::new(target)).unwrap();
@@ -385,7 +402,9 @@ fn source_less_custom_enrollment_retains_unindexed_delay_behavior() {
 #[test]
 fn source_less_custom_enrollment_retains_indexed_delay_behavior() {
     let mut db = ObjectDatabase::new();
-    let mut target = AnalogValueObject::new(108, "AV-indexed-source", 62).unwrap();
+    let mut target =
+        AnalogValueObject::new(108, "AV-indexed-source", EngineeringUnits::DEGREES_CELSIUS)
+            .unwrap();
     target
         .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
@@ -410,7 +429,9 @@ fn source_less_custom_enrollment_retains_indexed_delay_behavior() {
 #[test]
 fn replacing_the_monitored_object_restarts_an_indexed_delay() {
     let mut db = ObjectDatabase::new();
-    let mut target = AnalogValueObject::new(109, "AV-replaced-source", 62).unwrap();
+    let mut target =
+        AnalogValueObject::new(109, "AV-replaced-source", EngineeringUnits::DEGREES_CELSIUS)
+            .unwrap();
     target
         .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
@@ -428,7 +449,8 @@ fn replacing_the_monitored_object_restarts_an_indexed_delay() {
     db.add(Box::new(enrollment)).unwrap();
     assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
 
-    let mut replacement = AnalogValueObject::new(109, "AV-replacement", 62).unwrap();
+    let mut replacement =
+        AnalogValueObject::new(109, "AV-replacement", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     replacement
         .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
@@ -449,7 +471,12 @@ fn replacing_the_monitored_object_restarts_an_indexed_delay() {
 #[test]
 fn failed_eval_state_write_cannot_leak_an_unreported_event_state() {
     let mut db = ObjectDatabase::new();
-    let mut target = AnalogValueObject::new(110, "AV-event-state-order", 62).unwrap();
+    let mut target = AnalogValueObject::new(
+        110,
+        "AV-event-state-order",
+        EngineeringUnits::DEGREES_CELSIUS,
+    )
+    .unwrap();
     target
         .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
@@ -484,7 +511,12 @@ fn failed_eval_state_write_cannot_leak_an_unreported_event_state() {
 #[test]
 fn same_state_transition_does_not_depend_on_rewriting_event_state() {
     let mut db = ObjectDatabase::new();
-    let mut target = AnalogValueObject::new(111, "AV-same-state-write", 62).unwrap();
+    let mut target = AnalogValueObject::new(
+        111,
+        "AV-same-state-write",
+        EngineeringUnits::DEGREES_CELSIUS,
+    )
+    .unwrap();
     target
         .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
@@ -527,7 +559,8 @@ fn same_state_transition_does_not_depend_on_rewriting_event_state() {
 #[test]
 fn mutation_then_error_is_visible_but_never_reports_a_transition() {
     let mut db = ObjectDatabase::new();
-    let mut target = AnalogValueObject::new(112, "AV-landed-error", 62).unwrap();
+    let mut target =
+        AnalogValueObject::new(112, "AV-landed-error", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     target
         .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
@@ -576,7 +609,9 @@ fn mutation_then_error_is_visible_but_never_reports_a_transition() {
 #[test]
 fn detached_enrollment_does_not_resume_state_after_target_replacement() {
     let mut db = ObjectDatabase::new();
-    let mut target = AnalogValueObject::new(113, "AV-detached-source", 62).unwrap();
+    let mut target =
+        AnalogValueObject::new(113, "AV-detached-source", EngineeringUnits::DEGREES_CELSIUS)
+            .unwrap();
     target
         .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
@@ -596,7 +631,12 @@ fn detached_enrollment_does_not_resume_state_after_target_replacement() {
 
     let enrollment = db.remove(&enrollment_oid).unwrap().unwrap();
     db.remove(&target_oid).unwrap().unwrap();
-    let mut replacement = AnalogValueObject::new(113, "AV-detached-replacement", 62).unwrap();
+    let mut replacement = AnalogValueObject::new(
+        113,
+        "AV-detached-replacement",
+        EngineeringUnits::DEGREES_CELSIUS,
+    )
+    .unwrap();
     replacement
         .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,

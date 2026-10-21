@@ -271,8 +271,8 @@ fn only_a_framed_list_of_whole_entries_is_written() {
             matches!(
                 result,
                 Err(Error::Protocol { class, code })
-                    if class == ErrorClass::PROPERTY.to_raw() as u32
-                        && code == ErrorCode::INVALID_DATA_TYPE.to_raw() as u32
+                    if class == ErrorClass::PROPERTY
+                        && code == ErrorCode::INVALID_DATA_TYPE
             ),
             "{refused:?}: {result:?}"
         );

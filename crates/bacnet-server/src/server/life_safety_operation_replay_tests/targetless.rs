@@ -84,10 +84,12 @@ async fn targetless_reset_duplicate_replays_identical_simple_ack_without_second_
     let authorizations = Arc::new(AtomicUsize::new(0));
     let observed_auth = Arc::clone(&authorizations);
     let config = ServerConfig {
-        life_safety_operation_authorizer: Some(Arc::new(move |_| {
-            observed_auth.fetch_add(1, Ordering::AcqRel);
-            true
-        })),
+        policy: Some(Arc::new(crate::FnPolicy::new().life_safety_operation(
+            move |_| {
+                observed_auth.fetch_add(1, Ordering::AcqRel);
+                true
+            },
+        ))),
         ..ServerConfig::default()
     };
     let db = Arc::new(RwLock::new(db));

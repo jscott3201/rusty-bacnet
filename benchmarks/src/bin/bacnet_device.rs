@@ -2,6 +2,7 @@
 //!
 //! Supports BIP and SC transports. Creates a server with N AnalogInput objects.
 #![allow(clippy::print_stdout, clippy::print_stderr)] // benchmark binaries report progress and results on the console
+#![forbid(unsafe_code)]
 
 use std::net::Ipv4Addr;
 
@@ -18,6 +19,7 @@ use bacnet_server::server::BACnetServer;
 use bacnet_transport::bip::{BipTransport, ForeignDeviceConfig};
 use bacnet_transport::sc::ScTransport;
 use bacnet_transport::sc_tls::TlsWebSocket;
+use bacnet_types::enums::EngineeringUnits;
 use clap::Parser;
 
 #[derive(Parser)]
@@ -31,7 +33,9 @@ struct Args {
     #[arg(long, default_value = "bip")]
     transport: String,
 
-    /// Local interface IP (BIP only)
+    /// Local interface IP (BIP only), or `auto` for the address this host
+    /// sends to `--broadcast` from (a scaled service's replicas each get
+    /// their own)
     #[arg(long, default_value = "0.0.0.0")]
     interface: String,
 
@@ -46,6 +50,11 @@ struct Args {
     /// Device instance number
     #[arg(long, default_value_t = 1000)]
     device_instance: u32,
+
+    /// Add the interface address's low 16 bits to --device-instance, so
+    /// each replica of a scaled service has its own instance (BIP only)
+    #[arg(long)]
+    instance_from_address: bool,
 
     /// Number of AnalogInput objects to create
     #[arg(long, default_value_t = 100)]
@@ -92,28 +101,49 @@ fn make_db(device_instance: u32, object_count: u32) -> ObjectDatabase {
     let mut db = ObjectDatabase::new();
 
     let device = DeviceObject::new(DeviceConfig {
-        instance: device_instance,
-        name: format!("Device-{device_instance}"),
+        identity: bacnet_objects::DeviceIdentity::new(device_instance, 555)
+            .expect("valid Device identity")
+            .with_name(format!("Device-{device_instance}")),
         vendor_name: "Rusty BACnet".into(),
-        vendor_id: 555,
         ..DeviceConfig::default()
     })
     .unwrap();
     db.add(Box::new(device)).unwrap();
 
     for i in 1..=object_count {
-        let mut ai = AnalogInputObject::new(i, format!("AI-{i}"), 62).unwrap();
+        let mut ai =
+            AnalogInputObject::new(i, format!("AI-{i}"), EngineeringUnits::DEGREES_CELSIUS)
+                .unwrap();
         ai.set_present_value(20.0 + (i as f32 * 0.1));
         db.add(Box::new(ai)).unwrap();
     }
 
-    let ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
+    let ao = AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     db.add(Box::new(ao)).unwrap();
 
     let bv = BinaryValueObject::new(1, "BV-1").unwrap();
     db.add(Box::new(bv)).unwrap();
 
     db
+}
+
+/// The address this host sends to `broadcast` from: the interface on that
+/// subnet. Connecting a UDP socket sends nothing.
+fn interface_toward(broadcast: Ipv4Addr) -> std::io::Result<Ipv4Addr> {
+    let socket = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))?;
+    socket.set_broadcast(true)?;
+    socket.connect((broadcast, 47808))?;
+    match socket.local_addr()?.ip() {
+        std::net::IpAddr::V4(ip) if !ip.is_unspecified() => Ok(ip),
+        other => Err(std::io::Error::other(format!(
+            "no IPv4 interface toward {broadcast} (got {other})"
+        ))),
+    }
+}
+
+/// `base` plus the low 16 bits of `ip`, the host part on a /16 or smaller.
+fn instance_for(base: u32, ip: Ipv4Addr) -> u32 {
+    base + (u32::from(ip) & 0xffff)
 }
 
 fn format_mac(mac: &[u8]) -> String {
@@ -141,12 +171,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         tracing_subscriber::fmt::init();
     }
-    let db = make_db(args.device_instance, args.objects);
+    let mut bip_interface = None;
+    let mut device_instance = args.device_instance;
+    if args.transport == "bip" {
+        let broadcast: Ipv4Addr = args.broadcast.parse()?;
+        let interface = if args.interface == "auto" {
+            interface_toward(broadcast)?
+        } else {
+            args.interface.parse()?
+        };
+        if args.instance_from_address {
+            device_instance = instance_for(device_instance, interface);
+        }
+        bip_interface = Some((interface, broadcast));
+    }
+    let db = make_db(device_instance, args.objects);
 
     match args.transport.as_str() {
         "bip" => {
-            let interface: Ipv4Addr = args.interface.parse()?;
-            let broadcast: Ipv4Addr = args.broadcast.parse()?;
+            let (interface, broadcast) = bip_interface.expect("resolved above for bip");
 
             let mut server = if let Some(ref bbmd_addr) = args.foreign_bbmd {
                 let parts: Vec<&str> = bbmd_addr.split(':').collect();
@@ -162,12 +205,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 });
 
                 BACnetServer::generic_builder()
+                    .device(bacnet_objects::DeviceIdentity::new(device_instance, 555).unwrap())
                     .transport(transport)
                     .database(db)
                     .build()
                     .await?
             } else {
                 BACnetServer::bip_builder()
+                    .device(bacnet_objects::DeviceIdentity::new(device_instance, 555).unwrap())
                     .interface(interface)
                     .port(args.port)
                     .broadcast_address(broadcast)
@@ -179,7 +224,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!(
                 "BIP device {} listening (instance={}, objects={})",
                 format_mac(server.local_mac()),
-                args.device_instance,
+                device_instance,
                 args.objects
             );
 
@@ -193,6 +238,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let ws = TlsWebSocket::connect(hub_url, sc.tls).await?;
             let transport = ScTransport::new(ws, vmac).with_device_uuid(sc.uuid);
             let mut server = BACnetServer::generic_builder()
+                .device(bacnet_objects::DeviceIdentity::new(device_instance, 555).unwrap())
                 .transport(transport)
                 .database(db)
                 .build()
@@ -201,7 +247,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!(
                 "SC device connected to {} (instance={}, vmac={}, objects={})",
                 hub_url,
-                args.device_instance,
+                device_instance,
                 format_mac(&vmac),
                 args.objects
             );
@@ -216,4 +262,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn replicas_take_their_instance_from_their_address() {
+        assert_eq!(instance_for(100_000, Ipv4Addr::new(172, 20, 5, 7)), 101_287);
+        assert_ne!(
+            instance_for(100_000, Ipv4Addr::new(172, 20, 5, 7)),
+            instance_for(100_000, Ipv4Addr::new(172, 20, 5, 8)),
+        );
+    }
+
+    #[test]
+    fn auto_interface_is_a_loopback_address_toward_loopback() {
+        assert!(interface_toward(Ipv4Addr::LOCALHOST).unwrap().is_loopback());
+    }
 }

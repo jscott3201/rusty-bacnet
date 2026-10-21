@@ -27,10 +27,13 @@ pub(super) fn decode_complex_event_type(
     let mut pos = inner_start;
     while pos < variant_body_end {
         if property_values.len() >= MAX_FRAMED_ITEMS {
-            return Err(Error::overflow(
+            return Err(DecodeError::new(
+                DecodingKind::Overflow,
                 pos,
-                format!("ComplexEventType exceeds {MAX_FRAMED_ITEMS} property values"),
-            ));
+                "ComplexEventType exceeds {} property values",
+            )
+            .with_value(MAX_FRAMED_ITEMS as u64)
+            .into());
         }
         let (property_value, next) = decode_bacnet_property_value_in_list(data, pos, 6)?;
         if next <= pos || next > variant_body_end {
@@ -55,7 +58,7 @@ fn decode_object_identifier(
     data: &[u8],
     offset: usize,
     context_tag: u8,
-    field: &str,
+    field: &'static str,
 ) -> Result<(ObjectIdentifier, usize), Error> {
     let (content, next) = decode_context(data, offset, context_tag, field)?;
     Ok((ObjectIdentifier::decode(content)?, next))

@@ -3,11 +3,9 @@ use bacnet_endpoint_core::endpoint_ingress::{
     EndpointApduDestination, EndpointEgressAdmissionError, EndpointIngress,
 };
 use bacnet_network::response_route::ResponseRoute;
+use bacnet_npdu::NetworkPriority;
 use bacnet_transport::{port::DirectResponseScope, sc::WebSocketPort};
-use bacnet_types::{
-    enums::{NetworkPriority, PropertyIdentifier},
-    MacAddr,
-};
+use bacnet_types::{enums::PropertyIdentifier, MacAddr};
 
 #[tokio::test]
 async fn checked_response_queue_is_bounded_caller_owned_and_does_not_retarget() {
@@ -27,7 +25,7 @@ async fn checked_response_queue_is_bounded_caller_owned_and_does_not_retarget() 
                 destination_mac: MacAddr::from_slice(&[1]),
             },
             false,
-            NetworkPriority::NORMAL,
+            NetworkPriority::Normal,
             Vec::new(),
         )
         .unwrap();

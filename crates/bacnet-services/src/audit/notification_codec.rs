@@ -6,17 +6,18 @@ use crate::common::MAX_DECODED_ITEMS;
 use bacnet_encoding::constructed::tagged::{expect_end, misplaced_tag};
 use bacnet_encoding::constructed::{decode_audit_notification_at, encode_audit_notification};
 use bacnet_encoding::tags;
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RangeError};
 use bytes::BytesMut;
 
 const NOTIFICATIONS_TAG: u8 = 0;
 
 pub(super) fn encode(request: &AuditNotificationRequest, buf: &mut BytesMut) -> Result<(), Error> {
     if request.notifications.is_empty() || request.notifications.len() > MAX_DECODED_ITEMS {
-        return Err(Error::OutOfRange(format!(
-            "AuditNotification notifications count {} is outside 1..={MAX_DECODED_ITEMS}",
-            request.notifications.len()
-        )));
+        return Err(
+            RangeError::new("AuditNotification notifications count {} is outside 1..={}")
+                .with_values(request.notifications.len() as u64, MAX_DECODED_ITEMS as u64)
+                .into(),
+        );
     }
 
     let mut encoded = BytesMut::new();

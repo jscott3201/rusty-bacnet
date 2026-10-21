@@ -55,12 +55,8 @@ fn group(instance: u32) -> ObjectIdentifier {
 fn assert_write_access_denied(result: Result<(), Error>, context: &str) {
     match result {
         Err(Error::Protocol { class, code }) => {
-            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32, "{context}");
-            assert_eq!(
-                code,
-                ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
-                "{context}"
-            );
+            assert_eq!(class, ErrorClass::PROPERTY, "{context}");
+            assert_eq!(code, ErrorCode::WRITE_ACCESS_DENIED, "{context}");
         }
         other => panic!("{context}: expected PROPERTY/WRITE_ACCESS_DENIED, got {other:?}"),
     }

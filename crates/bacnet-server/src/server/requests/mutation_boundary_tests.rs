@@ -53,6 +53,7 @@ async fn deny_all_leaves_read_discovery_and_password_authorized_dcc_working() {
             service_request: Bytes::new(),
         },
         &ReceivedApdu {
+            router_response: None,
             direct_response: None,
             apdu: Bytes::new(),
             source_mac: MacAddr::from_slice(SOURCE),
@@ -122,7 +123,7 @@ async fn denied_subscription_cancellations_preserve_existing_entries() {
         ));
         let before = fixture.table.read().await.len();
         assert!(before > 0);
-        fixture.config.mutation_authorizer = Some(Arc::new(|_| false));
+        fixture.config.policy = Some(Arc::new(crate::FnPolicy::new().mutation(|_| false)));
         let mut cancellation = BytesMut::new();
         match target {
             MutationTarget::SubscribeCov(mut request) => {
@@ -152,7 +153,7 @@ async fn denied_subscription_cancellations_preserve_existing_entries() {
             2,
         );
         assert_eq!(fixture.table.read().await.len(), before);
-        fixture.config.mutation_authorizer = None;
+        fixture.config.policy = None;
         assert!(matches!(
             apdu(fixture.dispatch(service, cancellation, 3).await.unwrap()),
             Apdu::SimpleAck(_)

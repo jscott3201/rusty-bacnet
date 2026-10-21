@@ -243,10 +243,16 @@ async fn builder_rejects_max_segments_below_protocol_minimum() {
             .await;
 
         match result {
-            Err(Error::Encoding(message)) => {
-                assert!(message.contains("max-segments-accepted"));
+            Err(Error::Range(refused)) => {
+                assert_eq!(
+                    refused.to_string(),
+                    format!(
+                        "value out of range: invalid max-segments-accepted {invalid}; \
+                         expected 2..=255 or unspecified"
+                    )
+                );
             }
-            Err(other) => panic!("expected encoding error, got {other}"),
+            Err(other) => panic!("expected a range error, got {other}"),
             Ok(mut client) => {
                 client.stop().await.unwrap();
                 panic!("max_segments={invalid} must be rejected");
@@ -269,4 +275,41 @@ async fn bip_builder_shares_the_port_by_address_only_with_an_address() {
         panic!("build must refuse");
     };
     assert_eq!(refused.kind(), std::io::ErrorKind::InvalidInput);
+}
+
+/// The B/IP builder hands its multicast group to the transport, which
+/// refuses it without an explicit interface (#941).
+#[tokio::test]
+async fn bip_builder_joins_a_multicast_group_only_with_an_interface() {
+    let group_port = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let group = bacnet_transport::bip::BipMulticast::new(Ipv4Addr::new(239, 255, 96, 1))
+        .unwrap()
+        .with_port(group_port)
+        .unwrap();
+    let Err(refused) = BACnetClient::bip_builder()
+        .port(0)
+        .multicast(Some(group))
+        .build()
+        .await
+    else {
+        panic!("build must refuse a wildcard interface");
+    };
+    assert!(
+        refused.to_string().contains("explicit interface"),
+        "{refused}"
+    );
+    // The transport at the group's port, as Windows requires.
+    let mut client = BACnetClient::bip_builder()
+        .interface(Ipv4Addr::LOCALHOST)
+        .port(group_port)
+        .multicast(Some(group))
+        .build()
+        .await
+        .unwrap();
+    assert_eq!(client.transport().multicast(), Some(group));
+    client.stop().await.unwrap();
 }

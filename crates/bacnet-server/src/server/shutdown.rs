@@ -16,6 +16,10 @@ mod transport_shutdown_tests;
 #[path = "owned_shutdown_tests.rs"]
 mod owned_shutdown_tests;
 
+#[cfg(test)]
+#[path = "log_persistence_tests.rs"]
+mod log_persistence_tests;
+
 async fn stop_producer(slot: &mut Option<JoinHandle<()>>) {
     // Borrow across the join so cancellation leaves the handle recoverable.
     // Clear synchronously after completion: a later stop must not poll it twice.
@@ -42,7 +46,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// staged for one of them is dropped, and stop waits until every save
     /// those objects have queued has run, so storage holds the state each
     /// object serves (#1363); see
-    /// [`DurableWrites::settle_forgotten_writes`]. That wait has no limit:
+    /// [`DurableWrites::settle_forgotten_writes`]. A Trend Log, Trend Log
+    /// Multiple or Event Log kept in storage commits once more there, if it
+    /// changed since its last commit, and stop waits for that commit too
+    /// (#1541). That wait has no limit:
     /// storage that stalls holds stop up, and a warning naming the objects
     /// still saving is logged after 5 s and every 30 s after that. Stop does
     /// not wait while the application holds the database: the objects then

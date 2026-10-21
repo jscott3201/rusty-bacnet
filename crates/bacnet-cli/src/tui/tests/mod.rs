@@ -6,9 +6,36 @@
 //!   line and a directed Who-Is to an IPv6 address.
 //! - `frames`: `TestBackend` frames at 80x24 and 120x40, compared with
 //!   insta snapshots in `snapshots/`.
-//! - `inprocess`: real `BACnetServer`s and a client on an in-memory network.
+//! - `inprocess`: discovery with real `BACnetServer`s and a client on the
+//!   in-memory network of `site`.
+//! - `browser`: the device browser against the lab device of
+//!   `tests/support/lab.rs` on that network.
 //! - `load`: a 1,000 events/s burst, and the render-time budget.
 //! - `event_loop`: the `select!` loop on a `TestBackend` with scripted input.
+//! - `network`: the Network screen against real B/IP transports and BBMDs
+//!   on loopback; `network_frames`: its frames from synthetic events.
+//! - `discovery`: the `:find` panel and the Networks tab, from synthetic
+//!   events and against a real BBMD and `BACnetRouter`.
+//! - `sc_profiles`: profiles created through the screen and reloaded, the
+//!   refusal of an invalid SC profile before any dial, the flags-only path,
+//!   and the SC connection screen's frames.
+//! - `sc_screen`: the SC screen from synthetic reports, with its frames;
+//!   `sc_hub`: the SC worker against in-process mTLS hubs; `sc_lint`: the
+//!   credential lint on the preview, in the coordinator and on the SC screen.
+//! - `mstp_monitor`: the MS/TP monitor and the safe-join wizard end to end,
+//!   on the scripted ring of `bacnet-transport`'s `test-support`.
+//! - `mstp_screen`: the MS/TP screen and the join confirmation from
+//!   synthetic reports and keys, with their frames, and the sampler.
+//! - `footer`: the footer and the status bar at 80, 120 and 200 columns:
+//!   notices, hint priorities, the failure summary and the `FD` state.
+//! - `help_keys`: the screen strip, help against the key map, and the
+//!   command bar's syntax hints.
+//! - `names`: object and device names (#1896): only the rows on screen
+//!   are asked for, in one command a tick, free names cost nothing, and
+//!   refusals and timeouts are kept apart; `names_site`: the reads through
+//!   the per-device gate and the rate cap, against the lab device.
+//! - `watch_rows`: watch rows' names, routed devices and column fit at
+//!   80, 120 and 200 columns, and the name read against refusing devices.
 //!
 //! Snapshot workflow: CI runs plain `cargo nextest run -p bacnet-cli`, where a
 //! changed frame fails the test. After an intended UI change, run
@@ -17,10 +44,61 @@
 
 mod app_core;
 mod bip6_worker;
+mod browser;
+mod build_retirement;
+mod capture;
+mod capture_frames;
+mod capture_live;
+mod capture_pcap;
+mod capture_views;
+mod connections;
+#[cfg(unix)]
+mod crash;
+mod devices_layout;
+mod discovery;
 mod event_loop;
+mod footer;
 mod frames;
+mod help_keys;
 mod inprocess;
+#[allow(dead_code)] // The integration tests use the rest.
+#[path = "../../../tests/support/lab.rs"]
+mod lab;
 mod load;
+mod mstp_join_audit;
+mod mstp_layout;
+mod mstp_monitor;
+#[cfg(all(target_os = "linux", feature = "serial"))]
+mod mstp_monitor_pty;
+mod mstp_screen;
+mod multicast_profile;
+mod names;
+mod names_cache;
+mod names_filter;
+mod names_site;
+mod network;
+mod network_frames;
+/// Reruns a test whose freed ephemeral port another process takes (#1877).
+#[path = "../../../../bacnet-endpoint/tests/support/port_retry.rs"]
+mod port_retry;
+mod profile_ui;
+#[cfg(feature = "sc-tls")]
+mod sc_hub;
+mod sc_layout;
+mod sc_lint;
+mod sc_profiles;
+#[cfg(feature = "sc-tls")]
+mod sc_reconnect;
+mod sc_screen;
+mod site;
+mod values;
+mod watch;
+mod watch_rows;
+mod writes;
+mod writes_app;
+mod writes_arrays;
+mod writes_indexed;
+mod writes_ledger;
 
 use std::net::Ipv4Addr;
 use std::sync::OnceLock;
@@ -35,8 +113,9 @@ use super::app::picker::Picker;
 use super::app::{update, Action, App, AppConfig};
 use super::keymap::map_key;
 use super::log_layer::LogRing;
-use super::message::{AddressStyle, Command, DeviceRow, WorkerEvent};
+use super::message::{Command, DeviceRow, WorkerEvent};
 use crate::core::interfaces::Ipv4Interface;
+use crate::core::target::AddressStyle;
 
 /// One fixed start time per test process, so ages are exact offsets from it.
 pub(super) fn t0() -> Instant {
@@ -57,6 +136,8 @@ pub(super) fn new_app(picker: Option<Picker>) -> App {
             style: AddressStyle::Bip,
             color: false,
             picker,
+            join: None,
+            passive: false,
             now: t0(),
         },
         LogRing::new(100),
@@ -80,12 +161,29 @@ pub(super) fn row(instance: u32, address: &str, vendor_id: u16, seen: u64) -> De
     DeviceRow {
         instance,
         address: address.into(),
+        via: None,
         network: None,
         vendor_id,
         max_apdu: 1476,
         segmentation: Segmentation::NONE,
         last_seen: at(seen),
     }
+}
+
+/// A synthetic row for a device a router at `router` passed on: station
+/// `station` on network `network`, written as the worker writes it.
+pub(super) fn routed_row(
+    instance: u32,
+    (network, station): (u16, &[u8]),
+    router: &str,
+    vendor_id: u16,
+    seen: u64,
+) -> DeviceRow {
+    let address = crate::core::target::routed_station(network, station).expect("a station");
+    let mut row = row(instance, &address, vendor_id, seen);
+    row.network = Some(network);
+    row.via = Some(router.into());
+    row
 }
 
 /// Apply an action.

@@ -8,6 +8,17 @@ use bacnet_transport::sc_frame::{
 use tokio::time::{timeout, Duration};
 
 async fn sc_hub_accept(ws_hub: &LoopbackWebSocket, hub_vmac: Vmac) {
+    sc_hub_accept_with_limits(ws_hub, hub_vmac, 1476, 1476).await;
+}
+
+/// Act as a hub: take the node's Connect-Request and accept it with the
+/// hub's Max-BVLC-Length and Max-NPDU-Length.
+pub(super) async fn sc_hub_accept_with_limits(
+    ws_hub: &LoopbackWebSocket,
+    hub_vmac: Vmac,
+    max_bvlc: u16,
+    max_npdu: u16,
+) {
     let data = ws_hub.recv().await.unwrap();
     let req = decode_sc_message(&data).unwrap();
     assert_eq!(req.function, ScFunction::ConnectRequest);
@@ -15,8 +26,8 @@ async fn sc_hub_accept(ws_hub: &LoopbackWebSocket, hub_vmac: Vmac) {
     let mut accept_payload = Vec::with_capacity(26);
     accept_payload.extend_from_slice(&hub_vmac);
     accept_payload.extend_from_slice(&[0x33; 16]);
-    accept_payload.extend_from_slice(&1476u16.to_be_bytes());
-    accept_payload.extend_from_slice(&1476u16.to_be_bytes());
+    accept_payload.extend_from_slice(&max_bvlc.to_be_bytes());
+    accept_payload.extend_from_slice(&max_npdu.to_be_bytes());
 
     let accept = ScMessage {
         function: ScFunction::ConnectAccept,
@@ -36,9 +47,8 @@ async fn sc_hub_accept(ws_hub: &LoopbackWebSocket, hub_vmac: Vmac) {
 async fn forward_unicast_preserves_data_attributes() {
     let mut h = Harness::two_port();
     let npdu = Npdu {
-        is_network_message: false,
         expecting_reply: false,
-        priority: bacnet_types::enums::NetworkPriority::NORMAL,
+        priority: bacnet_npdu::NetworkPriority::Normal,
         destination: Some(NpduAddress {
             network: 2000,
             mac_address: MacAddr::from_slice(&[0x01, 0x02]),
@@ -83,9 +93,8 @@ async fn forward_unicast_preserves_data_attributes() {
 async fn forward_broadcast_preserves_data_attributes_on_each_output_port() {
     let mut h = Harness::with_networks(&[1000, 2000, 3000]);
     let npdu = Npdu {
-        is_network_message: false,
         expecting_reply: false,
-        priority: bacnet_types::enums::NetworkPriority::NORMAL,
+        priority: bacnet_npdu::NetworkPriority::Normal,
         destination: Some(NpduAddress {
             network: 0xFFFF,
             mac_address: MacAddr::new(),
@@ -109,6 +118,7 @@ async fn forward_broadcast_preserves_data_attributes_on_each_output_port() {
             SendRequest::Broadcast {
                 npdu: data,
                 data_attributes: sent_attributes,
+                ..
             } => {
                 let decoded = decode_npdu(data).unwrap();
                 assert_eq!(decoded.destination.as_ref().unwrap().network, 0xFFFF);
@@ -158,9 +168,8 @@ async fn sc_to_sc_forwarding_preserves_data_attributes_as_data_options() {
 
     let apdu = Bytes::from_static(&[0x10, 0x08]);
     let npdu = Npdu {
-        is_network_message: false,
         expecting_reply: false,
-        priority: bacnet_types::enums::NetworkPriority::NORMAL,
+        priority: bacnet_npdu::NetworkPriority::Normal,
         destination: Some(NpduAddress {
             network: 2000,
             mac_address: MacAddr::from_slice(&dest_vmac),
@@ -205,7 +214,7 @@ async fn sc_to_sc_forwarding_preserves_data_attributes_as_data_options() {
                 continue;
             }
             let decoded = decode_npdu(msg.payload.clone()).unwrap();
-            if !decoded.is_network_message && decoded.payload == apdu {
+            if !decoded.is_network_message() && decoded.payload == apdu {
                 return msg;
             }
         }

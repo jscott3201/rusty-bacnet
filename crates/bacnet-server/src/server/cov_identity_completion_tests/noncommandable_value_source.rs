@@ -5,6 +5,7 @@ use bacnet_objects::{
     binary::BinaryValueObject, multistate::MultiStateValueObject,
     present_value_access::PresentValueAccess, traits::BACnetObject,
 };
+use bacnet_types::enums::EngineeringUnits;
 
 const FIELDS: [PropertyIdentifier; 3] = [
     PropertyIdentifier::PRESENT_VALUE,
@@ -13,7 +14,8 @@ const FIELDS: [PropertyIdentifier; 3] = [
 ];
 
 fn families(access: PresentValueAccess, tracked: bool) -> Vec<Box<dyn BACnetObject>> {
-    let mut av = AnalogValueObject::with_access(3, "av", 95, access).unwrap();
+    let mut av =
+        AnalogValueObject::with_access(3, "av", EngineeringUnits::NO_UNITS, access).unwrap();
     av.set_value_source_tracking(tracked);
     av.write_property(
         PropertyIdentifier::COV_INCREMENT,
@@ -29,7 +31,7 @@ fn families(access: PresentValueAccess, tracked: bool) -> Vec<Box<dyn BACnetObje
     vec![Box::new(av), Box::new(bv), Box::new(msv)]
 }
 
-async fn fixture(obj: Box<dyn BACnetObject>, hold: bool) -> Fixture {
+pub(super) async fn fixture(obj: Box<dyn BACnetObject>, hold: bool) -> Fixture {
     let f = Fixture::new(hold);
     let mut db = clocked_test_database();
     db.add(obj).unwrap();
@@ -37,7 +39,7 @@ async fn fixture(obj: Box<dyn BACnetObject>, hold: bool) -> Fixture {
     f
 }
 
-async fn subscribe(
+pub(super) async fn subscribe(
     f: &Fixture,
     oid: ObjectIdentifier,
     kind: CovNotificationKind,
@@ -51,7 +53,7 @@ async fn subscribe(
     f.table.write().await.admit_for_test(sub, 0).unwrap()
 }
 
-async fn fire(f: &Fixture, oid: ObjectIdentifier) {
+pub(super) async fn fire(f: &Fixture, oid: ObjectIdentifier) {
     BACnetServer::<TestTransport>::fire_cov_notifications(
         &crate::server::cov_notify_context::CovNotifyContext {
             db: &f.db,
@@ -67,7 +69,7 @@ async fn fire(f: &Fixture, oid: ObjectIdentifier) {
     .await;
 }
 
-async fn write(
+pub(super) async fn write(
     f: &Fixture,
     oid: ObjectIdentifier,
     property: PropertyIdentifier,
@@ -364,8 +366,8 @@ fn value_source_cov_noncommandable_admission_requires_tracking() {
                         assert!(
                             matches!(result.unwrap_err(), Error::Protocol { class, code }
                             | Error::Structured { class, code, .. }
-                            if class == ErrorClass::PROPERTY.to_raw() as u32
-                                && code == ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32)
+                            if class == ErrorClass::PROPERTY
+                                && code == ErrorCode::UNKNOWN_PROPERTY)
                         );
                         assert!(table.is_empty());
                     }

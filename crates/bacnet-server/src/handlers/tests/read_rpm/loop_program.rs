@@ -4,6 +4,7 @@ use super::*;
 fn rpm_loop_program_metadata_selectors_preserve_bytes_and_budgets() {
     use super::super::property_metadata::assert_rpm_selector_bytes;
     use bacnet_objects::{loop_obj::LoopObject, program::ProgramObject, traits::BACnetObject};
+    use bacnet_types::enums::EngineeringUnits;
     use bacnet_types::primitives::PropertyValue;
     use PropertyIdentifier as P;
 
@@ -64,7 +65,7 @@ fn rpm_loop_program_metadata_selectors_preserve_bytes_and_budgets() {
     ];
     let program_optional = [P::DESCRIPTION, P::REASON_FOR_HALT, P::RELIABILITY];
     for configured in [false, true] {
-        let mut lo = LoopObject::new(1, "LOOP-1", 62).unwrap();
+        let mut lo = LoopObject::new(1, "LOOP-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
         let mut program = ProgramObject::new(1, "PRG-1").unwrap();
         if configured {
             let reference = bacnet_types::constructed::BACnetObjectPropertyReference::new_indexed(

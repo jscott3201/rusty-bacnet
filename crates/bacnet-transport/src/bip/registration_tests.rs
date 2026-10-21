@@ -1,7 +1,22 @@
 use super::*;
+use crate::port_ownership::{lost_port, ATTEMPTS};
+use bacnet_types::constructed::BACnetHostNPort;
 
+/// The worker that holds the socket last also holds the lease to the end. Its
+/// closing rebind can lose the freed port to another process, which runs it
+/// again on a fresh port (#1419).
 #[tokio::test]
 async fn registration_token_follows_last_socket_worker_after_abort() {
+    for attempt in 1..=ATTEMPTS {
+        match token_follows_last_socket_worker().await {
+            Ok(()) => return,
+            Err(e) if lost_port(attempt, &e) => continue,
+            Err(e) => panic!("the released port did not rebind: {e}"),
+        }
+    }
+}
+
+async fn token_follows_last_socket_worker() -> std::io::Result<()> {
     let token = Arc::new(());
     let weak = Arc::downgrade(&token);
     let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
@@ -30,7 +45,7 @@ async fn registration_token_follows_last_socket_worker_after_abort() {
     release.send(()).unwrap();
     worker.await.unwrap();
     assert!(weak.upgrade().is_none());
-    let _reused = std::net::UdpSocket::bind(address).unwrap();
+    std::net::UdpSocket::bind(address).map(drop)
 }
 
 #[tokio::test]
@@ -132,18 +147,14 @@ async fn foreign_device_reports_its_bbmd_and_lifetime() {
         ttl: 60,
     });
     assert!(foreign.supports_local_nonrouter_number_controls());
-    let BipPortMode::Foreign {
-        bbmd,
-        subscription_lifetime,
-    } = foreign.bip_port().unwrap().mode
-    else {
+    let BipPortMode::Foreign { registration } = foreign.bip_port().unwrap().mode else {
         panic!("foreign mode");
     };
     assert_eq!(
-        bbmd,
+        registration.bbmd(),
         BACnetHostNPort::from_socket_addr(SocketAddrV4::new([10, 0, 0, 1].into(), 47809).into())
     );
-    assert_eq!(subscription_lifetime, 60);
+    assert_eq!(registration.subscription_lifetime(), 60);
     foreign
         .retain_network_port_lease_internal(Arc::new(()))
         .unwrap();

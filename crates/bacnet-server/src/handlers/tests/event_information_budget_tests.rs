@@ -240,7 +240,7 @@ fn get_event_information_configured_late_errors_win_and_normals_do_not_imply_mor
             };
             assert!(
                 matches!(configured(&db, None, budget), Err(EventInformationFailure::Service(Error::Protocol { class, code }))
-                if class == ErrorClass::DEVICE.to_raw() as u32 && code == ErrorCode::OPERATIONAL_PROBLEM.to_raw() as u32)
+                if class == ErrorClass::DEVICE && code == ErrorCode::OPERATIONAL_PROBLEM)
             );
             assert!(handle_get_event_information(&db, &[], &mut BytesMut::new()).is_err());
         }

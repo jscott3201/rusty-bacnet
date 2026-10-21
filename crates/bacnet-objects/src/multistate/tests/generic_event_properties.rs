@@ -118,12 +118,12 @@ fn assert_write_access_denied(
         Error::Protocol { class, code } => {
             assert_eq!(
                 class,
-                ErrorClass::PROPERTY.to_raw() as u32,
+                ErrorClass::PROPERTY,
                 "{label}: {property:?} error class"
             );
             assert_eq!(
                 code,
-                ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
+                ErrorCode::WRITE_ACCESS_DENIED,
                 "{label}: {property:?} error code"
             );
         }
@@ -443,8 +443,8 @@ fn assert_property_read_error(result: Result<PropertyValue, Error>, code: ErrorC
             class,
             code: actual,
         } => {
-            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
-            assert_eq!(actual, code.to_raw() as u32);
+            assert_eq!(class, ErrorClass::PROPERTY);
+            assert_eq!(actual, code);
         }
         other => panic!("expected protocol error, got {other:?}"),
     }

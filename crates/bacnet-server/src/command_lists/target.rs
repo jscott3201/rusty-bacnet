@@ -126,7 +126,7 @@ fn log_failure(
 }
 
 /// The error code `error` carries, if it's an Error answer.
-fn code(error: &Error) -> Option<u32> {
+fn code(error: &Error) -> Option<ErrorCode> {
     match error {
         Error::Protocol { code, .. } | Error::Structured { code, .. } => Some(*code),
         _ => None,
@@ -137,10 +137,10 @@ fn code(error: &Error) -> Option<u32> {
 /// of INVALID_DATA_TYPE or a Reject for an invalid parameter datatype, the
 /// two answers Clause 12.53.7 names for a NULL.
 pub(super) fn refuses_datatype(error: &Error) -> bool {
-    let invalid = u32::from(ErrorCode::INVALID_DATA_TYPE.to_raw());
+    let invalid = ErrorCode::INVALID_DATA_TYPE;
     code(error) == Some(invalid)
         || matches!(error, Error::Reject { reason }
-            if *reason == RejectReason::INVALID_PARAMETER_DATA_TYPE.to_raw())
+            if *reason == RejectReason::INVALID_PARAMETER_DATA_TYPE)
 }
 
 /// How a write the target refused with `error` failed.
@@ -152,12 +152,8 @@ fn refused(error: &Error) -> WriteFailure {
         ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
         ErrorCode::DATATYPE_NOT_SUPPORTED,
     ];
-    let configuration = refuses_datatype(error)
-        || code(error).is_some_and(|code| {
-            CONFIGURATION
-                .iter()
-                .any(|known| u32::from(known.to_raw()) == code)
-        });
+    let configuration =
+        refuses_datatype(error) || code(error).is_some_and(|code| CONFIGURATION.contains(&code));
     if configuration {
         WriteFailure::Configuration
     } else {

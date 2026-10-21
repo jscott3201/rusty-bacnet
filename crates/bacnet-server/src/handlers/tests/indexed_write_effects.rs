@@ -1,5 +1,6 @@
 use super::*;
 use crate::handlers::{WriteCommitObserver, WriteTarget};
+use bacnet_types::enums::EngineeringUnits;
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex};
 
@@ -86,7 +87,9 @@ fn indexed_absence_keeps_wpm_prefix_coordinate_and_skips_authorizer_observer_sou
     for malformed in [false, true] {
         let objects: Vec<(Box<dyn BACnetObject>, PropertyIdentifier)> = vec![
             (
-                Box::new(AnalogInputObject::new(1, "input", 62).unwrap()),
+                Box::new(
+                    AnalogInputObject::new(1, "input", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+                ),
                 VENDOR,
             ),
             (

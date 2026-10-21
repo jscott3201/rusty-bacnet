@@ -37,5 +37,9 @@ test('capture actual production reading and installation states', async ({ page 
       await page.goto(base + 'development/' + route + '/');
       await capture('development-' + route);
     }
+    for (const route of ['overview', 'writes']) {
+      await page.goto(base + 'tui/' + route + '/');
+      await capture('tui-' + route);
+    }
   }
 });

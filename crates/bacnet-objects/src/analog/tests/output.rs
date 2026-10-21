@@ -8,7 +8,7 @@ use bytes::BytesMut;
 
 #[test]
 fn ao_write_with_priority() {
-    let mut ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
+    let mut ao = AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
 
     // Write at priority 8
     ao.write_property_from(
@@ -40,7 +40,7 @@ fn ao_write_with_priority() {
 
 #[test]
 fn ao_priority_array_real_encodes_as_application_value() {
-    let mut ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
+    let mut ao = AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ao.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
@@ -61,7 +61,7 @@ fn ao_priority_array_real_encodes_as_application_value() {
 
 #[test]
 fn ao_relinquish_falls_to_default() {
-    let mut ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
+    let mut ao = AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
 
     // Write at priority 16 (lowest)
     ao.write_property_from(
@@ -98,7 +98,7 @@ fn ao_relinquish_falls_to_default() {
 
 #[test]
 fn ao_higher_priority_wins() {
-    let mut ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
+    let mut ao = AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
 
     ao.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
@@ -127,7 +127,7 @@ fn ao_higher_priority_wins() {
 
 #[test]
 fn ao_intrinsic_reporting_after_priority_write() {
-    let mut ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
+    let mut ao = AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ao.write_property(
         PropertyIdentifier::HIGH_LIMIT,
         None,
@@ -185,7 +185,7 @@ fn ao_intrinsic_reporting_after_priority_write() {
 
 #[test]
 fn ao_description_read_write() {
-    let mut ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
+    let mut ao = AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ao.write_property(
         PropertyIdentifier::DESCRIPTION,
         None,
@@ -202,7 +202,7 @@ fn ao_description_read_write() {
 
 #[test]
 fn ao_description_in_property_list() {
-    let ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
+    let ao = AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     assert!(ao
         .property_list()
         .contains(&PropertyIdentifier::DESCRIPTION));
@@ -210,7 +210,7 @@ fn ao_description_in_property_list() {
 
 #[test]
 fn ao_read_reliability_default() {
-    let ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
+    let ao = AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let val = ao
         .read_property(PropertyIdentifier::RELIABILITY, None)
         .unwrap();
@@ -219,7 +219,7 @@ fn ao_read_reliability_default() {
 
 #[test]
 fn ao_priority_array_index_zero_returns_size() {
-    let ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
+    let ao = AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let val = ao
         .read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(0))
         .unwrap();
@@ -228,7 +228,7 @@ fn ao_priority_array_index_zero_returns_size() {
 
 #[test]
 fn ao_priority_array_index_out_of_bounds() {
-    let ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
+    let ao = AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     // Index 17 is out of bounds (valid: 0-16)
     let result = ao.read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(17));
     assert!(result.is_err());
@@ -236,7 +236,7 @@ fn ao_priority_array_index_out_of_bounds() {
 
 #[test]
 fn ao_priority_array_index_far_out_of_bounds() {
-    let ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
+    let ao = AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     // Large index well beyond valid range
     let result = ao.read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(100));
     assert!(result.is_err());
@@ -244,14 +244,14 @@ fn ao_priority_array_index_far_out_of_bounds() {
 
 #[test]
 fn ao_priority_array_index_u32_max_out_of_bounds() {
-    let ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
+    let ao = AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let result = ao.read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(u32::MAX));
     assert!(result.is_err());
 }
 
 #[test]
 fn ao_write_with_priority_zero_rejected() {
-    let mut ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
+    let mut ao = AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     // Priority 0 is invalid (valid range is 1-16)
     let result = ao.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
@@ -265,7 +265,7 @@ fn ao_write_with_priority_zero_rejected() {
 
 #[test]
 fn ao_write_with_priority_17_rejected() {
-    let mut ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
+    let mut ao = AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     // Priority 17 is invalid (valid range is 1-16)
     let result = ao.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
@@ -279,7 +279,7 @@ fn ao_write_with_priority_17_rejected() {
 
 #[test]
 fn ao_write_with_priority_255_rejected() {
-    let mut ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
+    let mut ao = AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     // Priority 255 is invalid
     let result = ao.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
@@ -293,7 +293,7 @@ fn ao_write_with_priority_255_rejected() {
 
 #[test]
 fn ao_write_with_all_valid_priorities() {
-    let mut ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
+    let mut ao = AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     // All priorities 1 through 16 should succeed
     for prio in 1..=16u8 {
         ao.write_property_from(
@@ -314,7 +314,7 @@ fn ao_write_with_all_valid_priorities() {
 
 #[test]
 fn ao_priority_array_read_all_slots_none_by_default() {
-    let ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
+    let ao = AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     // Read entire array (no index)
     let val = ao
         .read_property(PropertyIdentifier::PRIORITY_ARRAY, None)
@@ -331,7 +331,7 @@ fn ao_priority_array_read_all_slots_none_by_default() {
 
 #[test]
 fn ao_present_value_priority_write_value() {
-    let mut ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
+    let mut ao = AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     // Command Present_Value at priority 5
     ao.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
@@ -357,7 +357,7 @@ fn ao_present_value_priority_write_value() {
 
 #[test]
 fn ao_present_value_priority_relinquish() {
-    let mut ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
+    let mut ao = AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     // Write a value at priority 5
     ao.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
@@ -395,7 +395,7 @@ fn ao_direct_priority_array_no_index_error() {
     // whole-array writes are unsupported here, so the object must surface a
     // mappable PROPERTY / WRITE_ACCESS_DENIED protocol error (Result(-),
     // Clause 15.9.1.3), not an opaque Error::Encoding.
-    let mut ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
+    let mut ao = AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     match ao
         .write_property(
             PropertyIdentifier::PRIORITY_ARRAY,
@@ -406,14 +406,8 @@ fn ao_direct_priority_array_no_index_error() {
         .unwrap_err()
     {
         Error::Protocol { class, code } => {
-            assert_eq!(
-                class,
-                bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
-            );
-            assert_eq!(
-                code,
-                bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32
-            );
+            assert_eq!(class, bacnet_types::enums::ErrorClass::PROPERTY);
+            assert_eq!(code, bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED);
         }
         other => panic!("expected PROPERTY/WRITE_ACCESS_DENIED, got {other:?}"),
     }
@@ -422,7 +416,7 @@ fn ao_direct_priority_array_no_index_error() {
 #[test]
 fn ao_direct_priority_array_index_zero_error() {
     // Element 0 is the read-only array count; all direct array writes are denied.
-    let mut ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
+    let mut ao = AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     match ao
         .write_property(
             PropertyIdentifier::PRIORITY_ARRAY,
@@ -433,14 +427,8 @@ fn ao_direct_priority_array_index_zero_error() {
         .unwrap_err()
     {
         Error::Protocol { class, code } => {
-            assert_eq!(
-                class,
-                bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
-            );
-            assert_eq!(
-                code,
-                bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32
-            );
+            assert_eq!(class, bacnet_types::enums::ErrorClass::PROPERTY);
+            assert_eq!(code, bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED);
         }
         other => panic!("expected PROPERTY/WRITE_ACCESS_DENIED, got {other:?}"),
     }
@@ -448,7 +436,7 @@ fn ao_direct_priority_array_index_zero_error() {
 
 #[test]
 fn ao_direct_priority_array_index_17_error() {
-    let mut ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
+    let mut ao = AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     match ao
         .write_property(
             PropertyIdentifier::PRIORITY_ARRAY,
@@ -459,14 +447,8 @@ fn ao_direct_priority_array_index_17_error() {
         .unwrap_err()
     {
         Error::Protocol { class, code } => {
-            assert_eq!(
-                class,
-                bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
-            );
-            assert_eq!(
-                code,
-                bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32
-            );
+            assert_eq!(class, bacnet_types::enums::ErrorClass::PROPERTY);
+            assert_eq!(code, bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED);
         }
         other => panic!("expected PROPERTY/WRITE_ACCESS_DENIED, got {other:?}"),
     }
@@ -475,14 +457,14 @@ fn ao_direct_priority_array_index_17_error() {
 #[test]
 fn ao_is_createable_matches_factory() {
     use crate::traits::BACnetObject;
-    let ao = AnalogOutputObject::new(1, "ao-1", 95).unwrap();
+    let ao = AnalogOutputObject::new(1, "ao-1", EngineeringUnits::NO_UNITS).unwrap();
     assert!(ao.is_createable(), "AnalogOutput is factory-constructable");
 }
 
 #[test]
 fn ao_is_writable_property_mirrors_write_property() {
     use crate::traits::BACnetObject;
-    let ao = AnalogOutputObject::new(1, "ao-1", 95).unwrap();
+    let ao = AnalogOutputObject::new(1, "ao-1", EngineeringUnits::NO_UNITS).unwrap();
     // Commandable.
     assert!(!ao.is_writable_property(PropertyIdentifier::PRIORITY_ARRAY));
     assert!(ao.is_writable_property(PropertyIdentifier::PRESENT_VALUE));
@@ -500,7 +482,7 @@ fn ao_is_writable_property_mirrors_write_property() {
 /// Present_Value immediately resolves to the written default.
 #[test]
 fn ao_relinquish_default_write_recaptures_present_value() {
-    let mut ao = AnalogOutputObject::new(1, "ao-1", 95).unwrap();
+    let mut ao = AnalogOutputObject::new(1, "ao-1", EngineeringUnits::NO_UNITS).unwrap();
     assert_eq!(
         ao.read_property(PropertyIdentifier::PRESENT_VALUE, None)
             .unwrap(),
@@ -566,16 +548,12 @@ fn ao_relinquish_default_write_recaptures_present_value() {
             .expect_err("{code}: invalid Relinquish_Default write must refuse")
         {
             Error::Protocol { class, code: c } => {
-                assert_eq!(
-                    class,
-                    bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
-                );
+                assert_eq!(class, bacnet_types::enums::ErrorClass::PROPERTY);
                 assert_eq!(
                     c,
                     match code {
-                        "VALUE_OUT_OF_RANGE" =>
-                            bacnet_types::enums::ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32,
-                        _ => bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
+                        "VALUE_OUT_OF_RANGE" => bacnet_types::enums::ErrorCode::VALUE_OUT_OF_RANGE,
+                        _ => bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE,
                     }
                 );
             }

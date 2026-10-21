@@ -77,7 +77,7 @@ fn add(log: &mut dyn BACnetObject) {
 }
 
 /// The class and code of a protocol error.
-fn code(error: Error) -> (u32, u32) {
+fn code(error: Error) -> (ErrorClass, ErrorCode) {
     match error {
         Error::Protocol { class, code } => (class, code),
         other => panic!("not a protocol error: {other:?}"),

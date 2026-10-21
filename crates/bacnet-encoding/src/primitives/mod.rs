@@ -2,16 +2,83 @@
 //!
 //! Provides both raw value codecs (no tag header) and application/context-tagged
 //! convenience functions for all BACnet primitive types.
+//!
+//! The bounded scalar encoders also have `_to_sink` entrypoints accepting
+//! [`crate::sink::EncodeSink`]. Each appends its complete value, including any
+//! tag header, in one atomic write and returns the appended byte count. Known
+//! capacity shortages never call the sink; a custom sink's error is unchanged.
+//! The scalar staging buffer is at most eleven bytes. These functions preserve
+//! the existing encoders' input semantics and do not add value validation.
+//!
+//! [`encode_timestamp_choice_to_sink`] and [`encode_timestamp_to_sink`] extend
+//! the same one-write contract to complete timestamps, with twelve-byte and
+//! sixteen-byte staging bounds respectively. These bounds describe encoded
+//! output, not the full call stack.
+//!
+//! The CharacterString, OCTET STRING and BIT STRING `_to_sink` encoders write
+//! a header and a caller's payload as one value with
+//! [`EncodeSink::write_parts`](crate::sink::EncodeSink::write_parts).
+//! [`CharacterStringRef`] and [`ApplicationValueRef`] read strings and
+//! application-tagged values without copying them. Those, the scalar
+//! decoders and the sink encoders need no allocator; the `BytesMut` encoders
+//! and the owned `PropertyValue` decoders need `alloc`.
 
-#[cfg(not(feature = "std"))]
+#[cfg(all(feature = "alloc", not(feature = "std")))]
 use alloc::{string::String, vec::Vec};
 
-use bacnet_types::error::{DecodingKind, Error};
-use bacnet_types::primitives::{BACnetTimeStamp, Date, ObjectIdentifier, PropertyValue, Time};
+use bacnet_types::error::{DecodeError, DecodingKind, Error};
+#[cfg(feature = "alloc")]
+use bacnet_types::primitives::PropertyValue;
+use bacnet_types::primitives::{BACnetTimeStamp, Date, Time};
+#[cfg(feature = "alloc")]
 use bytes::{BufMut, BytesMut};
 
-use crate::constructed::tagged::{misplaced_tag, unclosed_kind};
-use crate::tags::{self, app_tag, TagClass};
+#[cfg(feature = "alloc")]
+use crate::constructed::tagged::misplaced_tag;
+use crate::constructed::tagged::{misplaced_kind, unclosed_kind};
+#[cfg(feature = "alloc")]
+use crate::tags::TagClass;
+use crate::tags::{self, app_tag};
+
+mod scalar;
+mod strings;
+mod timestamp;
+mod view;
+
+pub use strings::{
+    encode_app_bit_string_to_sink, encode_app_character_string_to_sink,
+    encode_app_octet_string_to_sink, encode_bit_string_to_sink, encode_character_string_to_sink,
+    encode_ctx_bit_string_to_sink, encode_ctx_character_string_to_sink,
+    encode_ctx_octet_string_to_sink,
+};
+pub use timestamp::{encode_timestamp_choice_to_sink, encode_timestamp_to_sink};
+pub use view::{decode_application_value_ref, ApplicationValueRef, CharacterStringRef};
+
+#[cfg(feature = "alloc")]
+pub use scalar::{
+    encode_app_boolean, encode_app_date, encode_app_double, encode_app_enumerated, encode_app_null,
+    encode_app_object_id, encode_app_real, encode_app_signed, encode_app_time, encode_app_unsigned,
+    encode_ctx_boolean, encode_ctx_date, encode_ctx_double, encode_ctx_enumerated,
+    encode_ctx_object_id, encode_ctx_real, encode_ctx_signed, encode_ctx_unsigned, encode_double,
+    encode_real, encode_signed, encode_unsigned,
+};
+pub use scalar::{
+    encode_app_boolean_to_sink, encode_app_date_to_sink, encode_app_double_to_sink,
+    encode_app_enumerated_to_sink, encode_app_null_to_sink, encode_app_object_id_to_sink,
+    encode_app_real_to_sink, encode_app_signed_to_sink, encode_app_time_to_sink,
+    encode_app_unsigned_to_sink, encode_ctx_boolean_to_sink, encode_ctx_date_to_sink,
+    encode_ctx_double_to_sink, encode_ctx_enumerated_to_sink, encode_ctx_object_id_to_sink,
+    encode_ctx_real_to_sink, encode_ctx_signed_to_sink, encode_ctx_unsigned_to_sink,
+    encode_double_to_sink, encode_real_to_sink, encode_signed_to_sink, encode_unsigned_to_sink,
+    signed_len, unsigned_len,
+};
+
+/// A fault in contents decoded at offset 0 of the slice they were given,
+/// naming `value`.
+#[cold]
+fn contents_fault(kind: DecodingKind, label: &'static str, value: u64) -> Error {
+    DecodeError::new(kind, 0, label).with_value(value).into()
+}
 
 // ===========================================================================
 // Raw value codecs (no tag header)
@@ -19,59 +86,13 @@ use crate::tags::{self, app_tag, TagClass};
 
 // --- Unsigned Integer ---
 
-/// Encode an unsigned integer using the minimum number of big-endian octets.
-pub fn encode_unsigned(buf: &mut BytesMut, value: u64) {
-    if value <= 0xFF {
-        buf.put_u8(value as u8);
-    } else if value <= 0xFFFF {
-        buf.put_u16(value as u16);
-    } else if value <= 0xFF_FFFF {
-        buf.put_u8((value >> 16) as u8);
-        buf.put_u16(value as u16);
-    } else if value <= 0xFFFF_FFFF {
-        buf.put_u32(value as u32);
-    } else if value <= 0xFF_FFFF_FFFF {
-        buf.put_u8((value >> 32) as u8);
-        buf.put_u32(value as u32);
-    } else if value <= 0xFFFF_FFFF_FFFF {
-        buf.put_u16((value >> 32) as u16);
-        buf.put_u32(value as u32);
-    } else if value <= 0xFF_FFFF_FFFF_FFFF {
-        buf.put_u8((value >> 48) as u8);
-        buf.put_u16((value >> 32) as u16);
-        buf.put_u32(value as u32);
-    } else {
-        buf.put_u64(value);
-    }
-}
-
-/// Return the number of bytes needed to encode an unsigned value.
-pub fn unsigned_len(value: u64) -> u32 {
-    if value <= 0xFF {
-        1
-    } else if value <= 0xFFFF {
-        2
-    } else if value <= 0xFF_FFFF {
-        3
-    } else if value <= 0xFFFF_FFFF {
-        4
-    } else if value <= 0xFF_FFFF_FFFF {
-        5
-    } else if value <= 0xFFFF_FFFF_FFFF {
-        6
-    } else if value <= 0xFF_FFFF_FFFF_FFFF {
-        7
-    } else {
-        8
-    }
-}
-
 /// Decode an unsigned integer from big-endian bytes (1-8 bytes).
 pub fn decode_unsigned(data: &[u8]) -> Result<u64, Error> {
     if data.is_empty() || data.len() > 8 {
-        return Err(Error::decoding(
-            0,
-            format!("unsigned requires 1-8 bytes, got {}", data.len()),
+        return Err(contents_fault(
+            DecodingKind::InvalidEncoding,
+            "unsigned requires 1-8 bytes, got {}",
+            data.len() as u64,
         ));
     }
     let mut value: u64 = 0;
@@ -85,54 +106,50 @@ pub fn decode_unsigned(data: &[u8]) -> Result<u64, Error> {
 /// Leading zero bytes are accepted; values above `u8::MAX` are rejected.
 pub fn decode_unsigned_u8(data: &[u8]) -> Result<u8, Error> {
     let value = decode_unsigned(data)?;
-    u8::try_from(value)
-        .map_err(|_| Error::out_of_range(0, format!("unsigned value {value} exceeds u8")))
+    u8::try_from(value).map_err(|_| {
+        contents_fault(
+            DecodingKind::OutOfRange,
+            "unsigned value {} exceeds u8",
+            value,
+        )
+    })
 }
 
 /// Decode an unsigned integer that fits in a `u16` from 1-8 big-endian bytes.
 /// Leading zero bytes are accepted; values above `u16::MAX` are rejected.
 pub fn decode_unsigned_u16(data: &[u8]) -> Result<u16, Error> {
     let value = decode_unsigned(data)?;
-    u16::try_from(value)
-        .map_err(|_| Error::out_of_range(0, format!("unsigned value {value} exceeds u16")))
+    u16::try_from(value).map_err(|_| {
+        contents_fault(
+            DecodingKind::OutOfRange,
+            "unsigned value {} exceeds u16",
+            value,
+        )
+    })
 }
 
 /// Decode an unsigned integer that fits in a `u32` from 1-8 big-endian bytes.
 /// Leading zero bytes are accepted; values above `u32::MAX` are rejected.
 pub fn decode_unsigned_u32(data: &[u8]) -> Result<u32, Error> {
     let value = decode_unsigned(data)?;
-    u32::try_from(value)
-        .map_err(|_| Error::out_of_range(0, format!("unsigned value {value} exceeds u32")))
+    u32::try_from(value).map_err(|_| {
+        contents_fault(
+            DecodingKind::OutOfRange,
+            "unsigned value {} exceeds u32",
+            value,
+        )
+    })
 }
 
 // --- Signed Integer ---
 
-/// Encode a signed integer using minimum octets, two's complement, big-endian.
-pub fn encode_signed(buf: &mut BytesMut, value: i32) {
-    let n = signed_len(value);
-    let bytes = value.to_be_bytes();
-    buf.put_slice(&bytes[4 - n as usize..]);
-}
-
-/// Return the number of bytes needed to encode a signed value.
-pub fn signed_len(value: i32) -> u32 {
-    if (-128..=127).contains(&value) {
-        1
-    } else if (-32768..=32767).contains(&value) {
-        2
-    } else if (-8_388_608..=8_388_607).contains(&value) {
-        3
-    } else {
-        4
-    }
-}
-
 /// Decode a signed integer from two's-complement big-endian bytes (1-4 bytes).
 pub fn decode_signed(data: &[u8]) -> Result<i32, Error> {
     if data.is_empty() || data.len() > 4 {
-        return Err(Error::decoding(
-            0,
-            format!("signed requires 1-4 bytes, got {}", data.len()),
+        return Err(contents_fault(
+            DecodingKind::InvalidEncoding,
+            "signed requires 1-4 bytes, got {}",
+            data.len() as u64,
         ));
     }
     let sign_extend = if data[0] & 0x80 != 0 { 0xFF } else { 0x00 };
@@ -141,6 +158,7 @@ pub fn decode_signed(data: &[u8]) -> Result<i32, Error> {
     Ok(i32::from_be_bytes(bytes))
 }
 
+#[cfg(feature = "alloc")]
 pub(crate) fn decode_signed_canonical(data: &[u8]) -> Result<i32, Error> {
     if data.len() > 1
         && ((data[0] == 0 && data[1] & 0x80 == 0) || (data[0] == 0xFF && data[1] & 0x80 != 0))
@@ -152,17 +170,13 @@ pub(crate) fn decode_signed_canonical(data: &[u8]) -> Result<i32, Error> {
 
 // --- Real ---
 
-/// Encode an IEEE-754 single-precision float (big-endian, 4 bytes).
-pub fn encode_real(buf: &mut BytesMut, value: f32) {
-    buf.put_f32(value);
-}
-
 /// Decode an IEEE-754 single-precision float from 4 big-endian bytes.
 pub fn decode_real(data: &[u8]) -> Result<f32, Error> {
     if data.len() != 4 {
-        return Err(Error::decoding(
-            0,
-            format!("Real expects exactly 4 bytes, got {}", data.len()),
+        return Err(contents_fault(
+            DecodingKind::InvalidEncoding,
+            "Real expects exactly 4 bytes, got {}",
+            data.len() as u64,
         ));
     }
     Ok(f32::from_be_bytes([data[0], data[1], data[2], data[3]]))
@@ -170,17 +184,13 @@ pub fn decode_real(data: &[u8]) -> Result<f32, Error> {
 
 // --- Double ---
 
-/// Encode an IEEE-754 double-precision float (big-endian, 8 bytes).
-pub fn encode_double(buf: &mut BytesMut, value: f64) {
-    buf.put_f64(value);
-}
-
 /// Decode an IEEE-754 double-precision float from 8 big-endian bytes.
 pub fn decode_double(data: &[u8]) -> Result<f64, Error> {
     if data.len() != 8 {
-        return Err(Error::decoding(
-            0,
-            format!("Double expects exactly 8 bytes, got {}", data.len()),
+        return Err(contents_fault(
+            DecodingKind::InvalidEncoding,
+            "Double expects exactly 8 bytes, got {}",
+            data.len() as u64,
         ));
     }
     let bytes: [u8; 8] = [
@@ -207,18 +217,29 @@ pub mod charset {
     pub const ISO_8859_1: u8 = 5;
 }
 
-/// Encode a UTF-8 character string with leading charset byte.
+/// Encode a UTF-8 character string with leading charset byte. Delegates to
+/// [`encode_character_string_to_sink`].
+#[cfg(feature = "alloc")]
 pub fn encode_character_string(buf: &mut BytesMut, value: &str) {
-    buf.put_u8(charset::UTF8);
-    buf.put_slice(value.as_bytes());
+    encode_character_string_to_sink(buf, value).expect("the BytesMut sink cannot return SinkFull");
 }
 
-/// Return the encoded length of a character string (charset byte + UTF-8 bytes).
+/// Return the encoded length of a character string (charset byte + UTF-8
+/// bytes). Only with `alloc`: the sink encoders refuse an over-long string
+/// with [`SinkFull`](crate::sink::SinkFull) instead.
+#[cfg(feature = "alloc")]
 pub fn character_string_len(value: &str) -> Result<u32, Error> {
     u32::try_from(value.len())
         .ok()
         .and_then(|n| n.checked_add(1))
-        .ok_or_else(|| Error::Encoding("CharacterString too long for BACnet encoding".into()))
+        .ok_or_else(character_string_too_long)
+}
+
+/// A CharacterString whose contents a header's 32-bit length can't express.
+#[cfg(feature = "alloc")]
+#[cold]
+fn character_string_too_long() -> Error {
+    Error::encode("CharacterString too long for BACnet encoding")
 }
 
 /// Decode a character string from content bytes.
@@ -228,138 +249,130 @@ pub fn character_string_len(value: &str) -> Result<u32, Error> {
 /// - 4 (UCS-2, big-endian)
 /// - 5 (ISO-8859-1)
 ///
-/// Other charsets return an error.
+/// Other charsets return an error. Only with `alloc`;
+/// [`CharacterStringRef::decode`] reads the contents without converting
+/// them.
+#[cfg(feature = "alloc")]
 pub fn decode_character_string(data: &[u8]) -> Result<String, Error> {
-    if data.is_empty() {
-        return Err(Error::decoding(
-            0,
-            "CharacterString requires at least 1 byte for charset",
+    // Character sets the standard defines but this decoder doesn't convert.
+    if let Some(
+        &unsupported @ (charset::IBM_MICROSOFT_DBCS | charset::JIS_X_0208 | charset::UCS4),
+    ) = data.first()
+    {
+        return Err(contents_fault(
+            DecodingKind::Unsupported,
+            "unsupported charset: {}",
+            unsupported.into(),
         ));
     }
-    let charset_id = data[0];
+    // The structure is checked as the borrowed view checks it (#1778), so
+    // the conversions below can't fail.
+    view::check_character_string(data)?;
     let payload = &data[1..];
-    match charset_id {
-        charset::UTF8 => String::from_utf8(payload.to_vec())
-            .map_err(|e| Error::decoding(1, format!("invalid UTF-8: {e}"))),
-        charset::UCS2 => {
-            if !payload.len().is_multiple_of(2) {
-                return Err(Error::decoding(1, "UCS-2 data must have even length"));
-            }
-            let mut s = String::new();
-            for (i, chunk) in payload.as_chunks::<2>().0.iter().enumerate() {
-                let code_point = u16::from_be_bytes(*chunk);
-                if let Some(c) = char::from_u32(code_point as u32) {
-                    s.push(c);
-                } else {
-                    return Err(Error::decoding(1 + i * 2, "invalid UCS-2 code point"));
-                }
-            }
-            Ok(s)
-        }
-        charset::ISO_8859_1 => Ok(payload.iter().map(|&b| b as char).collect()),
-        // Character sets the standard defines but this decoder doesn't convert.
-        charset::IBM_MICROSOFT_DBCS | charset::JIS_X_0208 | charset::UCS4 => {
-            Err(Error::decoding_kind(
-                DecodingKind::Unsupported,
-                0,
-                format!("unsupported charset: {charset_id}"),
-            ))
-        }
-        other => Err(Error::decoding(0, format!("unknown charset: {other}"))),
-    }
+    Ok(match data[0] {
+        charset::UCS2 => payload
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .filter_map(|c| char::from_u32(u16::from_be_bytes(*c).into()))
+            .collect(),
+        charset::ISO_8859_1 => payload.iter().map(|&octet| char::from(octet)).collect(),
+        _ => core::str::from_utf8(payload).unwrap_or_default().into(),
+    })
+}
+
+/// UTF-8 contents that aren't valid, reported at the first contents octet
+/// after the character set, naming how many octets before the fault were
+/// valid.
+#[cold]
+fn invalid_utf8(error: core::str::Utf8Error) -> Error {
+    DecodeError::new(
+        DecodingKind::InvalidEncoding,
+        1,
+        "invalid UTF-8 after {} valid octets",
+    )
+    .with_value(error.valid_up_to() as u64)
+    .into()
+}
+
+/// A character set Clause 20.2.9 doesn't define.
+#[cold]
+fn unknown_charset(charset: u8) -> Error {
+    contents_fault(
+        DecodingKind::InvalidEncoding,
+        "unknown charset: {}",
+        charset.into(),
+    )
 }
 
 // --- Bit String ---
 
 /// Encode a bit string: leading unused-bits count followed by data bytes.
+/// Delegates to [`encode_bit_string_to_sink`].
+#[cfg(feature = "alloc")]
 pub fn encode_bit_string(buf: &mut BytesMut, unused_bits: u8, data: &[u8]) {
-    buf.put_u8(unused_bits);
-    buf.put_slice(data);
+    encode_bit_string_to_sink(buf, unused_bits, data)
+        .expect("the BytesMut sink cannot return SinkFull");
 }
 
 /// Decode a bit string from content bytes.
 ///
-/// Returns `(unused_bits, data)`.
+/// Returns `(unused_bits, data)`. Only with `alloc`; [`decode_bit_string_ref`]
+/// borrows the data instead.
+#[cfg(feature = "alloc")]
 pub fn decode_bit_string(data: &[u8]) -> Result<(u8, Vec<u8>), Error> {
-    if data.is_empty() {
+    let (unused, bits) = decode_bit_string_ref(data)?;
+    Ok((unused, bits.to_vec()))
+}
+
+/// Decode a bit string from content bytes without copying its data octets.
+///
+/// Returns `(unused_bits, data)`, `data` borrowed from the contents.
+pub fn decode_bit_string_ref(data: &[u8]) -> Result<(u8, &[u8]), Error> {
+    let Some((&unused, bits)) = data.split_first() else {
         return Err(Error::decoding(
             0,
             "BitString requires at least 1 byte for unused-bits count",
         ));
-    }
-    let unused = data[0];
+    };
     if unused > 7 {
-        return Err(Error::decoding(
-            0,
-            format!("BitString unused_bits must be 0-7, got {unused}"),
+        return Err(contents_fault(
+            DecodingKind::InvalidEncoding,
+            "BitString unused_bits must be 0-7, got {}",
+            unused.into(),
         ));
     }
-    Ok((unused, data[1..].to_vec()))
+    Ok((unused, bits))
 }
 
 // ===========================================================================
 // Application-tagged encode helpers
 // ===========================================================================
 
-/// Encode an application-tagged Null.
-pub fn encode_app_null(buf: &mut BytesMut) {
-    tags::encode_tag(buf, app_tag::NULL, TagClass::Application, 0);
-}
-
-/// Encode an application-tagged Boolean.
-///
-/// The value is encoded in the tag's L/V/T bits with no content octets.
-pub fn encode_app_boolean(buf: &mut BytesMut, value: bool) {
-    tags::encode_tag(
-        buf,
-        app_tag::BOOLEAN,
-        TagClass::Application,
-        if value { 1 } else { 0 },
-    );
-}
-
-/// Encode an application-tagged Unsigned.
-pub fn encode_app_unsigned(buf: &mut BytesMut, value: u64) {
-    let len = unsigned_len(value);
-    tags::encode_tag(buf, app_tag::UNSIGNED, TagClass::Application, len);
-    encode_unsigned(buf, value);
-}
-
-/// Encode an application-tagged Signed.
-pub fn encode_app_signed(buf: &mut BytesMut, value: i32) {
-    let len = signed_len(value);
-    tags::encode_tag(buf, app_tag::SIGNED, TagClass::Application, len);
-    encode_signed(buf, value);
-}
-
-/// Encode an application-tagged Real (f32).
-pub fn encode_app_real(buf: &mut BytesMut, value: f32) {
-    tags::encode_tag(buf, app_tag::REAL, TagClass::Application, 4);
-    encode_real(buf, value);
-}
-
-/// Encode an application-tagged Double (f64).
-pub fn encode_app_double(buf: &mut BytesMut, value: f64) {
-    tags::encode_tag(buf, app_tag::DOUBLE, TagClass::Application, 8);
-    encode_double(buf, value);
-}
-
-/// Encode an application-tagged OctetString.
+/// Encode an application-tagged OctetString. It keeps its own code rather
+/// than delegating to [`encode_app_octet_string_to_sink`]: past `u32::MAX`
+/// octets it saturates the length, where the sink encoder refuses.
+#[cfg(feature = "alloc")]
 pub fn encode_app_octet_string(buf: &mut BytesMut, data: &[u8]) {
     let data_len = u32::try_from(data.len()).unwrap_or(u32::MAX);
     tags::encode_tag(buf, app_tag::OCTET_STRING, TagClass::Application, data_len);
     buf.put_slice(data);
 }
 
-/// Encode an application-tagged CharacterString (UTF-8).
+/// Encode an application-tagged CharacterString (UTF-8). Delegates to
+/// [`encode_app_character_string_to_sink`]; a string too long for a header's
+/// 32-bit length is [`Error::Encode`], with nothing written.
+#[cfg(feature = "alloc")]
 pub fn encode_app_character_string(buf: &mut BytesMut, value: &str) -> Result<(), Error> {
-    let len = character_string_len(value)?;
-    tags::encode_tag(buf, app_tag::CHARACTER_STRING, TagClass::Application, len);
-    encode_character_string(buf, value);
+    // A BytesMut never refuses a write, so the only refusal is the length.
+    encode_app_character_string_to_sink(buf, value).map_err(|_| character_string_too_long())?;
     Ok(())
 }
 
-/// Encode an application-tagged BitString.
+/// Encode an application-tagged BitString. It keeps its own code rather than
+/// delegating to [`encode_app_bit_string_to_sink`]: past `u32::MAX` octets it
+/// saturates the length, where the sink encoder refuses.
+#[cfg(feature = "alloc")]
 pub fn encode_app_bit_string(buf: &mut BytesMut, unused_bits: u8, data: &[u8]) {
     let data_len = u32::try_from(data.len()).unwrap_or(u32::MAX);
     let len = data_len.saturating_add(1);
@@ -367,104 +380,35 @@ pub fn encode_app_bit_string(buf: &mut BytesMut, unused_bits: u8, data: &[u8]) {
     encode_bit_string(buf, unused_bits, data);
 }
 
-/// Encode an application-tagged Enumerated.
-pub fn encode_app_enumerated(buf: &mut BytesMut, value: u32) {
-    let len = unsigned_len(value as u64);
-    tags::encode_tag(buf, app_tag::ENUMERATED, TagClass::Application, len);
-    encode_unsigned(buf, value as u64);
-}
-
-/// Encode an application-tagged Date.
-pub fn encode_app_date(buf: &mut BytesMut, date: &Date) {
-    tags::encode_tag(buf, app_tag::DATE, TagClass::Application, 4);
-    buf.put_slice(&date.encode());
-}
-
-/// Encode an application-tagged Time.
-pub fn encode_app_time(buf: &mut BytesMut, time: &Time) {
-    tags::encode_tag(buf, app_tag::TIME, TagClass::Application, 4);
-    buf.put_slice(&time.encode());
-}
-
-/// Encode an application-tagged ObjectIdentifier.
-pub fn encode_app_object_id(buf: &mut BytesMut, oid: &ObjectIdentifier) {
-    tags::encode_tag(buf, app_tag::OBJECT_IDENTIFIER, TagClass::Application, 4);
-    buf.put_slice(&oid.encode());
-}
-
 // ===========================================================================
 // Context-tagged encode helpers
 // ===========================================================================
 
-/// Encode a context-tagged Unsigned.
-pub fn encode_ctx_unsigned(buf: &mut BytesMut, tag: u8, value: u64) {
-    let len = unsigned_len(value);
-    tags::encode_tag(buf, tag, TagClass::Context, len);
-    encode_unsigned(buf, value);
-}
-
-/// Encode a context-tagged Signed.
-pub fn encode_ctx_signed(buf: &mut BytesMut, tag: u8, value: i32) {
-    let len = signed_len(value);
-    tags::encode_tag(buf, tag, TagClass::Context, len);
-    encode_signed(buf, value);
-}
-
-/// Encode a context-tagged Real (f32).
-pub fn encode_ctx_real(buf: &mut BytesMut, tag: u8, value: f32) {
-    tags::encode_tag(buf, tag, TagClass::Context, 4);
-    encode_real(buf, value);
-}
-
-/// Encode a context-tagged Double (f64).
-pub fn encode_ctx_double(buf: &mut BytesMut, tag: u8, value: f64) {
-    tags::encode_tag(buf, tag, TagClass::Context, 8);
-    encode_double(buf, value);
-}
-
-/// Encode a context-tagged Enumerated.
-pub fn encode_ctx_enumerated(buf: &mut BytesMut, tag: u8, value: u32) {
-    let len = unsigned_len(value as u64);
-    tags::encode_tag(buf, tag, TagClass::Context, len);
-    encode_unsigned(buf, value as u64);
-}
-
-/// Encode a context-tagged Boolean.
-///
-/// Context-tagged booleans use a 1-byte content octet (unlike application-tagged).
-pub fn encode_ctx_boolean(buf: &mut BytesMut, tag: u8, value: bool) {
-    tags::encode_tag(buf, tag, TagClass::Context, 1);
-    buf.put_u8(if value { 1 } else { 0 });
-}
-
-/// Encode a context-tagged ObjectIdentifier.
-pub fn encode_ctx_object_id(buf: &mut BytesMut, tag: u8, oid: &ObjectIdentifier) {
-    tags::encode_tag(buf, tag, TagClass::Context, 4);
-    buf.put_slice(&oid.encode());
-}
-
-/// Encode a context-tagged OctetString.
+/// Encode a context-tagged OctetString. It keeps its own code rather than
+/// delegating to [`encode_ctx_octet_string_to_sink`]: past `u32::MAX` octets
+/// it saturates the length, where the sink encoder refuses.
+#[cfg(feature = "alloc")]
 pub fn encode_ctx_octet_string(buf: &mut BytesMut, tag: u8, data: &[u8]) {
     let data_len = u32::try_from(data.len()).unwrap_or(u32::MAX);
     tags::encode_tag(buf, tag, TagClass::Context, data_len);
     buf.put_slice(data);
 }
 
-/// Encode a context-tagged CharacterString (UTF-8).
+/// Encode a context-tagged CharacterString (UTF-8). Delegates to
+/// [`encode_ctx_character_string_to_sink`]; a string too long for a header's
+/// 32-bit length is [`Error::Encode`], with nothing written.
+#[cfg(feature = "alloc")]
 pub fn encode_ctx_character_string(buf: &mut BytesMut, tag: u8, value: &str) -> Result<(), Error> {
-    let len = character_string_len(value)?;
-    tags::encode_tag(buf, tag, TagClass::Context, len);
-    encode_character_string(buf, value);
+    // A BytesMut never refuses a write, so the only refusal is the length.
+    encode_ctx_character_string_to_sink(buf, tag, value)
+        .map_err(|_| character_string_too_long())?;
     Ok(())
 }
 
-/// Encode a context-tagged Date.
-pub fn encode_ctx_date(buf: &mut BytesMut, tag: u8, date: &Date) {
-    tags::encode_tag(buf, tag, TagClass::Context, 4);
-    buf.put_slice(&date.encode());
-}
-
-/// Encode a context-tagged BitString.
+/// Encode a context-tagged BitString. It keeps its own code rather than
+/// delegating to [`encode_ctx_bit_string_to_sink`]: past `u32::MAX` octets it
+/// saturates the length, where the sink encoder refuses.
+#[cfg(feature = "alloc")]
 pub fn encode_ctx_bit_string(buf: &mut BytesMut, tag: u8, unused_bits: u8, data: &[u8]) {
     let data_len = u32::try_from(data.len()).unwrap_or(u32::MAX);
     let len = data_len.saturating_add(1);
@@ -475,6 +419,22 @@ pub fn encode_ctx_bit_string(buf: &mut BytesMut, tag: u8, unused_bits: u8, data:
 // ===========================================================================
 // Application-tagged decode (dispatches by tag number)
 // ===========================================================================
+
+/// The label for an application tag of a fixed-size type whose header gives
+/// another length, or `None` for a tag of no fixed size.
+pub(crate) fn fixed_length_label(number: u8) -> Option<(&'static str, u32)> {
+    Some(match number {
+        app_tag::REAL => ("application REAL has {} contents octets, expected 4", 4),
+        app_tag::DOUBLE => ("application Double has {} contents octets, expected 8", 8),
+        app_tag::DATE => ("application Date has {} contents octets, expected 4", 4),
+        app_tag::TIME => ("application Time has {} contents octets, expected 4", 4),
+        app_tag::OBJECT_IDENTIFIER => (
+            "application BACnetObjectIdentifier has {} contents octets, expected 4",
+            4,
+        ),
+        _ => return None,
+    })
+}
 
 /// Decode a single application-tagged value from `data` at `offset`.
 ///
@@ -492,7 +452,10 @@ pub fn encode_ctx_bit_string(buf: &mut BytesMut, tag: u8, unused_bits: u8, data:
 /// length is [`Error::Decoding`], and contents that run past the end of
 /// `data` are [`Error::BufferTooShort`].
 ///
-/// Returns the decoded `PropertyValue` and the new offset past the consumed bytes.
+/// Returns the decoded `PropertyValue` and the new offset past the consumed
+/// bytes. Only with `alloc`; [`decode_application_value_ref`] reads an
+/// application-tagged value without copying it.
+#[cfg(feature = "alloc")]
 pub fn decode_application_value(
     data: &[u8],
     offset: usize,
@@ -520,97 +483,28 @@ pub fn decode_application_value(
             content_end,
         ));
     }
-    if tag.is_opening || tag.is_closing {
-        return Err(Error::invalid_tag(offset, "unexpected opening/closing tag"));
-    }
-
-    if tag.number == app_tag::NULL && tag.length != 0 {
-        return Err(Error::decoding(
-            offset,
-            "application NULL must have no contents",
-        ));
-    }
-    if tag.number == app_tag::BOOLEAN && tag.length > 1 {
-        return Err(Error::decoding(
-            offset,
-            "application BOOLEAN L/V/T must be 0 or 1",
-        ));
-    }
-
-    let content_start = new_offset;
-    let content_len = tag.length as usize;
-    let content_end = content_start
-        .checked_add(content_len)
-        .ok_or_else(|| Error::decoding(content_start, "length overflow"))?;
-
-    if tag.number == app_tag::BOOLEAN {
-        return Ok((PropertyValue::Boolean(tag.length != 0), content_start));
-    }
-
-    // A fixed-size value's length is judged before its contents are read, so
-    // a wrong length is reported as such even when the data also stops early.
-    let fixed = match tag.number {
-        app_tag::REAL => Some(("REAL", 4)),
-        app_tag::DOUBLE => Some(("Double", 8)),
-        app_tag::DATE => Some(("Date", 4)),
-        app_tag::TIME => Some(("Time", 4)),
-        app_tag::OBJECT_IDENTIFIER => Some(("BACnetObjectIdentifier", 4)),
-        _ => None,
+    let (value, end) = view::decode_application_primitive::<false>(data, offset, tag, new_offset)?;
+    let value = match value {
+        ApplicationValueRef::Null => PropertyValue::Null,
+        ApplicationValueRef::Boolean(value) => PropertyValue::Boolean(value),
+        ApplicationValueRef::Unsigned(value) => PropertyValue::Unsigned(value),
+        ApplicationValueRef::Signed(value) => PropertyValue::Signed(value),
+        ApplicationValueRef::Real(value) => PropertyValue::Real(value),
+        ApplicationValueRef::Double(value) => PropertyValue::Double(value),
+        ApplicationValueRef::OctetString(octets) => PropertyValue::OctetString(octets.to_vec()),
+        ApplicationValueRef::CharacterString(text) => {
+            PropertyValue::CharacterString(decode_character_string(text.contents())?)
+        }
+        ApplicationValueRef::BitString { unused_bits, data } => PropertyValue::BitString {
+            unused_bits,
+            data: data.to_vec(),
+        },
+        ApplicationValueRef::Enumerated(value) => PropertyValue::Enumerated(value),
+        ApplicationValueRef::Date(value) => PropertyValue::Date(value),
+        ApplicationValueRef::Time(value) => PropertyValue::Time(value),
+        ApplicationValueRef::ObjectIdentifier(value) => PropertyValue::ObjectIdentifier(value),
     };
-    if let Some((kind, octets)) = fixed {
-        if tag.length != octets {
-            return Err(Error::decoding(
-                offset,
-                format!(
-                    "application {kind} has {} contents octets, expected {octets}",
-                    tag.length
-                ),
-            ));
-        }
-    }
-
-    if data.len() < content_end {
-        return Err(Error::buffer_too_short(content_end, data.len()));
-    }
-
-    let content = &data[content_start..content_end];
-
-    let value = match tag.number {
-        app_tag::NULL => PropertyValue::Null,
-        app_tag::UNSIGNED => PropertyValue::Unsigned(decode_unsigned(content)?),
-        app_tag::SIGNED => PropertyValue::Signed(decode_signed(content)?),
-        app_tag::REAL => PropertyValue::Real(decode_real(content)?),
-        app_tag::DOUBLE => PropertyValue::Double(decode_double(content)?),
-        app_tag::OCTET_STRING => PropertyValue::OctetString(content.to_vec()),
-        app_tag::CHARACTER_STRING => {
-            PropertyValue::CharacterString(decode_character_string(content)?)
-        }
-        app_tag::BIT_STRING => {
-            let (unused, bits) = decode_bit_string(content)?;
-            PropertyValue::BitString {
-                unused_bits: unused,
-                data: bits,
-            }
-        }
-        app_tag::ENUMERATED => {
-            let value = u32::try_from(decode_unsigned(content)?)
-                .map_err(|_| Error::out_of_range(content_start, "ENUMERATED exceeds u32"))?;
-            PropertyValue::Enumerated(value)
-        }
-        app_tag::DATE => PropertyValue::Date(Date::decode(content)?),
-        app_tag::TIME => PropertyValue::Time(Time::decode(content)?),
-        app_tag::OBJECT_IDENTIFIER => {
-            PropertyValue::ObjectIdentifier(ObjectIdentifier::decode(content)?)
-        }
-        other => {
-            return Err(Error::invalid_tag(
-                offset,
-                format!("unknown application tag number {other}"),
-            ));
-        }
-    };
-
-    Ok((value, content_end))
+    Ok((value, end))
 }
 
 /// Check that an application-tagged value starts at `offset` and is structurally well formed,
@@ -619,7 +513,8 @@ pub fn decode_application_value(
 /// Unlike [`decode_application_value`] this accepts a CharacterString in any character set
 /// defined by Clause 20.2.9 (including DBCS and JIS X 0208, which [`decode_application_value`]
 /// rejects) and does not build a [`PropertyValue`]. Errors carry absolute offsets into
-/// `data`.
+/// `data`. Only with `alloc`.
+#[cfg(feature = "alloc")]
 pub fn validate_application_value(data: &[u8], offset: usize) -> Result<usize, Error> {
     let (tag, content_start) = tags::decode_tag(data, offset)?;
     if tag.class != TagClass::Application || tag.is_opening || tag.is_closing {
@@ -646,51 +541,13 @@ pub fn validate_application_value(data: &[u8], offset: usize) -> Result<usize, E
         decode_signed_canonical(content)?;
         return Ok(content_end);
     }
-    let Some((&charset_id, payload)) = content.split_first() else {
-        return Err(Error::decoding(
-            content_start,
-            "CharacterString requires a character-set octet",
-        ));
-    };
-    match charset_id {
-        charset::UTF8 | charset::UCS2 | charset::ISO_8859_1 => {
-            decode_character_string(content)?;
-        }
-        charset::IBM_MICROSOFT_DBCS if payload.len() < 2 => {
-            return Err(Error::decoding(
-                content_start + 1,
-                "DBCS CharacterString requires a two-octet code page",
-            ));
-        }
-        charset::IBM_MICROSOFT_DBCS | charset::JIS_X_0208 => {}
-        charset::UCS4 => {
-            if !payload.len().is_multiple_of(4) {
-                return Err(Error::decoding(
-                    content_start + 1,
-                    "UCS-4 CharacterString length must be a multiple of four",
-                ));
-            }
-            for (index, encoded) in payload.as_chunks::<4>().0.iter().enumerate() {
-                let code_point = u32::from_be_bytes(*encoded);
-                if char::from_u32(code_point).is_none() {
-                    return Err(Error::decoding(
-                        content_start + 1 + index * 4,
-                        "invalid UCS-4 code point",
-                    ));
-                }
-            }
-        }
-        _ => {
-            return Err(Error::decoding(
-                content_start,
-                format!("reserved character set: {charset_id}"),
-            ));
-        }
-    }
+    view::check_character_string(content).map_err(view::rebased(content_start))?;
     Ok(content_end)
 }
 
-/// Encode a `PropertyValue` as an application-tagged value.
+/// Encode a `PropertyValue` as an application-tagged value. Only with
+/// `alloc`.
+#[cfg(feature = "alloc")]
 pub fn encode_property_value(buf: &mut BytesMut, value: &PropertyValue) -> Result<(), Error> {
     match value {
         PropertyValue::Null => encode_app_null(buf),
@@ -735,7 +592,8 @@ pub fn encode_property_value(buf: &mut BytesMut, value: &PropertyValue) -> Resul
 pub const MAX_TIMESTAMP_SEQUENCE_NUMBER: u64 = 65535;
 
 /// Encode a `BACnetTimeStamp` as a bare CHOICE element (no enclosing field
-/// tag).
+/// tag). Delegates to [`encode_timestamp_choice_to_sink`] through the
+/// growable buffer; the existing result type is retained.
 ///
 /// Used where a production lists `BACnetTimeStamp` as a bare CHOICE item —
 /// e.g. the `eventTimeStamps [3] SEQUENCE OF BACnetTimeStamp` inside
@@ -750,22 +608,9 @@ pub const MAX_TIMESTAMP_SEQUENCE_NUMBER: u64 = 65535;
 /// constrained to `0..=65535` by the public variant's `u16` payload);
 /// `datetime [2]` tags the *constructed* `BACnetDateTime`, so it encodes as opening tag 2 /
 /// application-tagged `Date` / application-tagged `Time` / closing tag 2.
+#[cfg(feature = "alloc")]
 pub fn encode_timestamp_choice(buf: &mut BytesMut, ts: &BACnetTimeStamp) -> Result<(), Error> {
-    match ts {
-        BACnetTimeStamp::Time(t) => {
-            tags::encode_tag(buf, 0, TagClass::Context, 4);
-            buf.put_slice(&t.encode());
-        }
-        BACnetTimeStamp::SequenceNumber(n) => {
-            encode_ctx_unsigned(buf, 1, u64::from(*n));
-        }
-        BACnetTimeStamp::DateTime { date, time } => {
-            tags::encode_opening_tag(buf, 2);
-            encode_app_date(buf, date);
-            encode_app_time(buf, time);
-            tags::encode_closing_tag(buf, 2);
-        }
-    }
+    encode_timestamp_choice_to_sink(buf, ts).expect("the BytesMut sink cannot return SinkFull");
     Ok(())
 }
 
@@ -773,7 +618,7 @@ pub fn encode_timestamp_choice(buf: &mut BytesMut, ts: &BACnetTimeStamp) -> Resu
 ///
 /// Returns the decoded timestamp and the new offset past its encoding. Only
 /// the Clause 20.2.1.5-conformant tag forms described on
-/// [`encode_timestamp_choice`] are accepted; `sequence-number` contents
+/// `encode_timestamp_choice` are accepted; `sequence-number` contents
 /// beyond `0..=65535` are rejected. Errors follow the rule of
 /// [`constructed::tagged`](crate::constructed::tagged): a Time or Date with
 /// the wrong length is [`Error::Decoding`], contents that run past the end of
@@ -787,17 +632,20 @@ pub fn decode_timestamp_choice(
 
     let (inner_tag, inner_pos) = tags::decode_tag(data, offset)?;
     if inner_tag.is_context(0) {
-        let (octets, end) = tagged::decode_ctx_fixed(data, offset, 0, 4, "Time", WHAT)?;
+        let (octets, end) = tagged::decode_ctx_fixed(data, offset, 0, tagged::Fixed::TIME, WHAT)?;
         return Ok((BACnetTimeStamp::Time(Time::decode(octets)?), end));
     }
     if inner_tag.is_context(1) {
         let (octets, end) = tagged::decode_ctx_primitive(data, offset, 1, WHAT)?;
         let n = decode_unsigned(octets)?;
         if n > MAX_TIMESTAMP_SEQUENCE_NUMBER {
-            return Err(Error::out_of_range(
+            return Err(DecodeError::new(
+                DecodingKind::OutOfRange,
                 inner_pos,
-                format!("BACnetTimeStamp sequence-number {n} exceeds 65535"),
-            ));
+                "BACnetTimeStamp sequence-number {} exceeds 65535",
+            )
+            .with_value(n)
+            .into());
         }
         let n = u16::try_from(n).expect("BACnetTimeStamp sequence range checked above");
         return Ok((BACnetTimeStamp::SequenceNumber(n), end));
@@ -815,28 +663,30 @@ pub fn decode_timestamp_choice(
         };
         return Ok((date_time, end));
     }
-    Err(misplaced_tag(
-        data,
-        &inner_tag,
-        None,
+    Err(DecodeError::new(
+        misplaced_kind(data, offset, &inner_tag, None),
         offset,
         "BACnetTimeStamp: unexpected inner choice tag",
-    ))
+    )
+    .into())
 }
 
 /// Encode a BACnetTimeStamp wrapped in a context opening/closing tag pair.
 ///
+/// Delegates to [`encode_timestamp_to_sink`] through the growable buffer,
+/// retaining the existing result type.
+///
 /// The outer `tag_number` is the context tag of the enclosing field.
 /// Inside, the CHOICE variant uses its own context tag (0=Time,
 /// 1=SequenceNumber, 2=DateTime) via [`encode_timestamp_choice`].
+#[cfg(feature = "alloc")]
 pub fn encode_timestamp(
     buf: &mut BytesMut,
     tag_number: u8,
     ts: &BACnetTimeStamp,
 ) -> Result<(), Error> {
-    tags::encode_opening_tag(buf, tag_number);
-    encode_timestamp_choice(buf, ts)?;
-    tags::encode_closing_tag(buf, tag_number);
+    encode_timestamp_to_sink(buf, tag_number, ts)
+        .expect("the BytesMut sink cannot return SinkFull");
     Ok(())
 }
 
@@ -851,24 +701,26 @@ pub fn decode_timestamp(
 ) -> Result<(BACnetTimeStamp, usize), Error> {
     let (tag, pos) = tags::decode_tag(data, offset)?;
     if !tag.is_opening_tag(tag_number) {
-        return Err(misplaced_tag(
-            data,
-            &tag,
-            Some(tag_number),
+        return Err(DecodeError::new(
+            misplaced_kind(data, offset, &tag, Some(tag_number)),
             offset,
-            format!("expected opening tag {tag_number} for BACnetTimeStamp"),
-        ));
+            "expected opening tag {} for BACnetTimeStamp",
+        )
+        .with_value(tag_number.into())
+        .into());
     }
 
     let (ts, after_inner) = decode_timestamp_choice(data, pos)?;
 
     let (close, final_pos) = tags::decode_tag(data, after_inner)?;
     if !close.is_closing_tag(tag_number) {
-        return Err(Error::decoding_kind(
+        return Err(DecodeError::new(
             unclosed_kind(&close),
             after_inner,
-            format!("expected closing tag {tag_number} for BACnetTimeStamp"),
-        ));
+            "expected closing tag {} for BACnetTimeStamp",
+        )
+        .with_value(tag_number.into())
+        .into());
     }
 
     Ok((ts, final_pos))
@@ -878,8 +730,8 @@ pub fn decode_timestamp(
 // Tests
 // ===========================================================================
 
-#[cfg(test)]
+#[cfg(all(test, feature = "alloc"))]
 mod tests;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "alloc"))]
 mod length_first_tests;

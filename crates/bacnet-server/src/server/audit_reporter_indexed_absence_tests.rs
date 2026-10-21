@@ -64,13 +64,14 @@ async fn indexed_absence_served_wpm_audits_only_prefix_and_preserves_source_writ
     }
     let calls = Arc::new(StdMutex::new(Vec::new()));
     let seen = calls.clone();
-    fixture.server.config_mut().mutation_authorizer = Some(Arc::new(move |context| {
-        let MutationTarget::WritePropertyMultiple(attempt) = &context.target else {
-            panic!("expected WPM");
-        };
-        seen.lock().unwrap().push(attempt.clone());
-        true
-    }));
+    fixture.server.config_mut().policy =
+        Some(Arc::new(crate::FnPolicy::new().mutation(move |context| {
+            let MutationTarget::WritePropertyMultiple(attempt) = &context.target else {
+                panic!("expected WPM");
+            };
+            seen.lock().unwrap().push(attempt.clone());
+            true
+        })));
     let prefix = vec![0x75, 7, 0, b'p', b'r', b'e', b'f', b'i', b'x'];
     let mut bytes = BytesMut::new();
     WritePropertyMultipleRequest {
@@ -167,7 +168,7 @@ async fn indexed_absence_served_wpm_audits_only_prefix_and_preserves_source_writ
 
     // A served command still reaches the existing source-aware writer and
     // actual Audit delivery, using the same configured source binding.
-    fixture.server.config_mut().mutation_authorizer = None;
+    fixture.server.config_mut().policy = None;
     let controlled = oid(ObjectType::BINARY_VALUE, 1);
     assert!(matches!(
         dispatch(
@@ -221,8 +222,8 @@ async fn local_index_refusal_reaches_no_audit_record() {
     let error = write(Some(1)).await.unwrap_err();
     assert!(
         matches!(error, Error::Protocol { class, code }
-            if class == ErrorClass::PROPERTY.to_raw() as u32
-                && code == ErrorCode::PROPERTY_IS_NOT_AN_ARRAY.to_raw() as u32),
+            if class == ErrorClass::PROPERTY
+                && code == ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
         "{error:?}"
     );
     completed(&fixture).await;

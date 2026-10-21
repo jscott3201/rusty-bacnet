@@ -394,6 +394,7 @@ async fn dispatch_keeps_segment_and_complex_acks_out_of_notification_completion(
             source_mac.as_slice(),
             apdu,
             bacnet_network::layer::ReceivedApdu {
+                router_response: None,
                 direct_response: None,
                 apdu: Bytes::new(),
                 source_mac: source_mac.clone(),

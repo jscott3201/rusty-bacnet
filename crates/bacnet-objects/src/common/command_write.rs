@@ -29,11 +29,11 @@ pub(crate) fn decode_command_write<T>(
         Ok(_) => return Err(super::invalid_data_type_error()),
         Err(_) => return Err(super::invalid_data_encoding_error()),
     }
-    // The codecs report a field too wide for its type as a local OutOfRange
+    // The codecs report a field too wide for its type as a static range
     // error, and only once the octets are otherwise exactly one command; any
     // other failure is a broken encoding.
     decode(&bytes).map_err(|error| match error {
-        Error::OutOfRange(_) => super::value_out_of_range_error(),
+        Error::Range(_) => super::value_out_of_range_error(),
         _ => super::invalid_data_encoding_error(),
     })
 }

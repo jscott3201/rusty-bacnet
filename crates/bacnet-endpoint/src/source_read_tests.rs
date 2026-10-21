@@ -4,6 +4,7 @@ use bacnet_encoding::apdu::{
     decode_apdu, encode_apdu, AbortPdu, ComplexAck, ErrorPdu, RejectPdu, SimpleAck,
 };
 use bacnet_network::layer::NetworkLayer;
+use bacnet_npdu::NetworkPriority;
 use bacnet_objects::audit::AuditReporterObject;
 use bacnet_services::audit::AuditNotificationRequest;
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
@@ -13,7 +14,7 @@ use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
 use bacnet_types::constructed::{BACnetAuditNotification, BACnetObjectSelector, BACnetRecipient};
 use bacnet_types::enums::{
     AbortReason, AuditLevel, AuditOperation, ConfirmedServiceChoice, ErrorClass, ErrorCode,
-    NetworkPriority, RejectReason, Reliability, UnconfirmedServiceChoice,
+    RejectReason, Reliability, UnconfirmedServiceChoice,
 };
 use bacnet_types::primitives::BACnetTimeStamp;
 use bacnet_types::MacAddr;
@@ -50,7 +51,10 @@ fn database(confirmed: bool) -> ObjectDatabase {
     db.add(Box::new(reporter)).unwrap();
     db
 }
-async fn network() -> (NetworkLayer<BipTransport>, mpsc::Receiver<ReceivedApdu>) {
+async fn network() -> (
+    NetworkLayer<BipTransport>,
+    bacnet_network::layer::ApduReceiver,
+) {
     let mut network = NetworkLayer::new(BipTransport::new(
         Ipv4Addr::LOCALHOST,
         0,
@@ -88,14 +92,14 @@ fn session(
         session
     }
 }
-async fn receive(receiver: &mut mpsc::Receiver<ReceivedApdu>) -> ReceivedApdu {
+async fn receive(receiver: &mut bacnet_network::layer::ApduReceiver) -> ReceivedApdu {
     timeout(WAIT, receiver.recv()).await.unwrap().unwrap()
 }
 async fn send(network: &NetworkLayer<BipTransport>, mac: &[u8], pdu: Apdu) {
     let mut bytes = BytesMut::new();
     encode_apdu(&mut bytes, &pdu).unwrap();
     network
-        .send_apdu(&bytes, mac, false, NetworkPriority::NORMAL)
+        .send_apdu(&bytes, mac, false, NetworkPriority::Normal)
         .await
         .unwrap();
 }
@@ -521,6 +525,7 @@ mod rpm;
 async fn source_read_ignores_remote_and_same_oid_local_value_object_policy() {
     use bacnet_objects::{analog::AnalogValueObject, audit::ObjectAuditPolicy};
     use bacnet_server::server::{BACnetServer, ServerConfig};
+    use bacnet_types::enums::EngineeringUnits;
     let (mut sink, mut records) = network().await;
     let policy = ObjectAuditPolicy {
         level: Some(AuditLevel::NONE),
@@ -531,18 +536,23 @@ async fn source_read_ignores_remote_and_same_oid_local_value_object_policy() {
         .unwrap()
         .build_database()
         .unwrap();
-    let mut remote = AnalogValueObject::new(7, "remote", 62).unwrap();
+    let mut remote =
+        AnalogValueObject::new(7, "remote", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     remote.set_audit_policy(policy);
     remote_db.add(Box::new(remote)).unwrap();
     let mut remote_server = BACnetServer::start_clockless(
-        ServerConfig::default(),
+        ServerConfig {
+            device: bacnet_objects::DeviceIdentity::new(456, 42).unwrap(),
+            ..Default::default()
+        },
         remote_db,
         BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST),
     )
     .await
     .unwrap();
     let mut db = database(false);
-    let mut local = AnalogValueObject::new(7, "unrelated same OID", 62).unwrap();
+    let mut local =
+        AnalogValueObject::new(7, "unrelated same OID", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     local.set_audit_policy(policy);
     db.add(Box::new(local)).unwrap();
     let mut session = session(db, SessionRole::ClientOnly, &sink);
@@ -579,3 +589,6 @@ mod delay_rejection;
 
 #[path = "source_write_tests.rs"]
 mod write;
+
+#[path = "source_reinitialize_tests.rs"]
+mod reinitialize;

@@ -28,7 +28,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         segment_data: &Bytes,
         first_final_issue: bool,
         response_rx: &mut oneshot::Receiver<TsmResponse>,
-        progress_rx: &mut tokio::sync::watch::Receiver<TransactionProgress>,
+        progress_rx: &mut ProgressReceiver,
     ) -> Result<OutgoingSegmentSend, Error> {
         let is_last = seq == context.total_segments - 1;
         let pdu = Apdu::ConfirmedRequest(ConfirmedRequestPdu {
@@ -107,15 +107,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         .map(OutgoingSegmentSend::Terminal)
                         .map_err(|_| Error::Encoding("TSM response channel closed".into()));
                 }
-                changed = progress_rx.changed() => {
-                    if changed.is_err() {
-                        return response_rx
-                            .await
-                            .map(OutgoingSegmentSend::Terminal)
-                            .map_err(|_| Error::Encoding("TSM response channel closed".into()));
-                    }
+                // A transaction that left the TSM resolves the response arm
+                // above; progress stays silent.
+                () = progress_rx.changed() => {
                     if matches!(
-                        *progress_rx.borrow_and_update(),
+                        progress_rx.borrow_and_update(),
                         TransactionProgress::SegmentedResponse { .. }
                     ) {
                         return Ok(OutgoingSegmentSend::SegmentedResponse);

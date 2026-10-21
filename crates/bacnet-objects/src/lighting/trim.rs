@@ -243,7 +243,8 @@ impl LightingOutputObject {
     /// they stand to the new ones over Trim_Fade_Time.
     fn change_trims(&mut self, change: impl FnOnce(&mut Trims)) {
         let now = self.now();
-        self.advance_to(now);
+        // An egress that ran out before this change ends its command here.
+        self.advance_sourced(now);
         let from = self.trims.at(now);
         change(&mut self.trims);
         // The trims set CONFIGURATION_ERROR, and clear only what they set.

@@ -185,15 +185,18 @@ async fn npdu_encoding_failure_including_mstp_fallback_drops_owner_without_issua
     for reply_channel in [false, true] {
         let pending = owner(&f, &req, Some(&invalid_route));
         let (tx, rx) = oneshot::channel();
+        let route = bacnet_network::response_route::ResponseRoute::unverified();
         requests::confirmed_response::send_unsegmented_response(
             f.server.test_network(),
-            &Apdu::SimpleAck(SimpleAck {
+            &requests::confirmed_response::encoded_apdu(&Apdu::SimpleAck(SimpleAck {
                 invoke_id: 1,
                 service_choice: ConfirmedServiceChoice::WRITE_PROPERTY,
-            }),
-            &[1],
-            Some(&invalid_route),
-            &bacnet_network::response_route::ResponseRoute::unverified(),
+            })),
+            ResponseTarget {
+                source_mac: &[1],
+                source_network: Some(&invalid_route),
+                route: &route,
+            },
             reply_channel.then_some(tx),
             Some(pending),
         )
@@ -250,7 +253,7 @@ async fn reassemble(f: &mut Fixture, request: &Apdu) {
 async fn reassembled_exact_request_is_suppressed_only_before_original_issuance() {
     let mut f = Fixture::configured(
         ServerConfig {
-            segmentation_supported: Segmentation::BOTH,
+            device: bacnet_objects::DeviceIdentity::default().with_segmentation(Segmentation::BOTH),
             ..Default::default()
         },
         16,

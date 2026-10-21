@@ -265,14 +265,8 @@ fn scalar_value_relinquish_default_write_recaptures_present_value() {
             .expect_err("non-finite Relinquish_Default must refuse")
         {
             Error::Protocol { class, code } => {
-                assert_eq!(
-                    class,
-                    bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
-                );
-                assert_eq!(
-                    code,
-                    bacnet_types::enums::ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32
-                );
+                assert_eq!(class, bacnet_types::enums::ErrorClass::PROPERTY);
+                assert_eq!(code, bacnet_types::enums::ErrorCode::VALUE_OUT_OF_RANGE);
             }
             other => panic!("expected PROPERTY / VALUE_OUT_OF_RANGE, got {other:?}"),
         }

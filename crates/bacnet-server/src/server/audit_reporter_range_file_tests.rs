@@ -177,7 +177,10 @@ async fn audit_reporter_range_file_execution_errors_exact_result_and_silent_unkn
     type Case = (fn() -> Error, Option<(ErrorClass, ErrorCode)>);
     let cases: [Case; 5] = [
         (
-            || Error::Protocol { class: 5, code: 5 },
+            || Error::Protocol {
+                class: ErrorClass::SERVICES,
+                code: ErrorCode::FILE_ACCESS_DENIED,
+            },
             Some((ErrorClass::SERVICES, ErrorCode::FILE_ACCESS_DENIED)),
         ),
         (
@@ -187,13 +190,13 @@ async fn audit_reporter_range_file_execution_errors_exact_result_and_silent_unkn
         (|| Error::Timeout(Duration::from_secs(1)), None),
         (
             || Error::Reject {
-                reason: RejectReason::OTHER.to_raw(),
+                reason: RejectReason::OTHER,
             },
             None,
         ),
         (
             || Error::Abort {
-                reason: AbortReason::OTHER.to_raw(),
+                reason: AbortReason::OTHER,
             },
             None,
         ),

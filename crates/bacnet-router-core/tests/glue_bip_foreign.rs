@@ -8,15 +8,24 @@
 mod fixture;
 mod glue;
 
-use bacnet_bip_codec::{BvlcFunction, BvlcResultCode, Bvll};
-use bacnet_bip_core::node::{Cast, Node, Permissive};
-use bacnet_router_core::bip::{BipPort, HeldBroadcast, Ingress, PortCounters};
-use bacnet_router_core::message::MessageType;
-use bacnet_router_core::router::{Options, SendRefusal};
+use bacnet_bip_core::codec::{BvlcFunction, BvlcResultCode, Bvll};
+use bacnet_bip_core::node::{self, Cast, Node, Permissive};
+use bacnet_bip_core::port::{HeldBroadcast, Ingress, NodePort, PortCounters};
+use bacnet_router_core::bip::BipPort;
+use bacnet_router_core::npdu::NetworkMessageType;
+use bacnet_router_core::router::{Options, PortConfig, SendRefusal};
 use bacnet_router_core::Instant;
 
 use fixture::*;
 use glue::*;
+
+/// The router's B/IP port, 0.
+const BIP: BipPort = BipPort::new(BIP_PORT);
+
+/// The router's port configuration for `port`'s link, on network 1.
+fn config<const N: usize>(port: &NodePort<'_, 4, N>) -> PortConfig {
+    BipPort::config(port.node().link(), 1)
+}
 
 /// Each datagram the sink sent since the last call, with when.
 fn sent_at(out: &mut Wire, now: Instant, trace: &mut Vec<(Instant, Out)>) {
@@ -29,10 +38,10 @@ fn sent_at(out: &mut Wire, now: Instant, trace: &mut Vec<(Instant, Out)>) {
 fn started_foreign_port<'h>(
     held: &'h mut [HeldBroadcast],
     out: &mut Wire,
-) -> (BipPort<'h>, TestRouter) {
+) -> (NodePort<'h>, TestRouter) {
     let t0 = Instant::ZERO;
-    let mut bip = BipPort::new(BIP_PORT, node(foreign(2), t0), held).unwrap();
-    let mut router = router_with(&[bip.config(1), port_on(2, OWN_1)], Options::HOSTED);
+    let mut bip = NodePort::new(node(foreign(2), t0), held).unwrap();
+    let mut router = router_with(&[config(&bip), port_on(2, OWN_1)], Options::HOSTED);
     // The registration waits in the node's queue until the port starts,
     // with no deadline to wake it; once sent, its response timeout is one.
     assert_eq!(bip.next_deadline(), None);
@@ -40,7 +49,7 @@ fn started_foreign_port<'h>(
     assert_eq!(bip.next_deadline(), Some(Instant::from_secs(3)));
     router.start();
     let results = pump(&mut router, |send| match send.port {
-        BIP_PORT => bip.send(send, t0, out),
+        BIP_PORT => BIP.send(&mut bip, send, t0, out),
         _ => Ok(()),
     });
     assert_eq!(
@@ -55,7 +64,7 @@ fn started_foreign_port<'h>(
 fn trace_e(released: Instant) -> [(Instant, Out); 3] {
     let dbtn = BvlcFunction::DISTRIBUTE_BROADCAST_TO_NETWORK;
     let ttl = 60u16.to_be_bytes();
-    let number_is = message(MessageType::NETWORK_NUMBER_IS, &[0, 1, 1]);
+    let number_is = message(NetworkMessageType::NETWORK_NUMBER_IS, &[0, 1, 1]);
     [
         (
             Instant::ZERO,
@@ -103,7 +112,7 @@ fn foreign_port_announces_after_registration() {
     // From now on a broadcast goes at once.
     let mut host = Recorder::default();
     let _ = router.receive(frame(1, &[5], true, &GLOBAL_WHO_IS), t10, &mut host);
-    let results = pump(&mut router, |send| bip.send(send, t10, &mut out));
+    let results = pump(&mut router, |send| BIP.send(&mut bip, send, t10, &mut out));
     assert_eq!(results, [(0, Ok(()))]);
     assert_eq!(
         out.take()[0].function,
@@ -133,7 +142,7 @@ fn foreign_port_announces_after_the_response_timeout() {
 }
 
 /// The BBMD's success, received at `now`.
-fn success_at<const N: usize>(bip: &mut BipPort<'_, 4, N>, now: Instant, out: &mut Wire) {
+fn success_at<const N: usize>(bip: &mut NodePort<'_, 4, N>, now: Instant, out: &mut Wire) {
     let success = encode(&Bvll::BvlcResult(BvlcResultCode::SUCCESSFUL_COMPLETION));
     let ingress = bip.receive(
         &datagram(&success, BBMD, UNICAST),
@@ -155,12 +164,12 @@ fn slots_as_long_as_the_links_broadcasts_serve_trace_e() {
     let mut held = [HeldBroadcast::<500>::EMPTY; 2];
     let mut out = Wire::default();
     let node = Node::<4>::new(link, t0).unwrap();
-    let mut bip = BipPort::new(BIP_PORT, node, &mut held).unwrap();
-    let mut router = router_with(&[bip.config(1), port_on(2, OWN_1)], Options::HOSTED);
+    let mut bip = NodePort::new(node, &mut held).unwrap();
+    let mut router = router_with(&[config(&bip), port_on(2, OWN_1)], Options::HOSTED);
     bip.start(t0, &mut out);
     router.start();
     let results = pump(&mut router, |send| match send.port {
-        BIP_PORT => bip.send(send, t0, &mut out),
+        BIP_PORT => BIP.send(&mut bip, send, t0, &mut out),
         _ => Ok(()),
     });
     assert!(
@@ -189,7 +198,7 @@ fn held_broadcasts_leave_before_a_later_one() {
     let late = Instant::from_millis(3_500);
     let mut host = Recorder::default();
     let _ = router.receive(frame(1, &[5], true, &GLOBAL_WHO_IS), late, &mut host);
-    let results = pump(&mut router, |send| bip.send(send, late, &mut out));
+    let results = pump(&mut router, |send| BIP.send(&mut bip, send, late, &mut out));
     assert_eq!(results, [(0, Ok(()))]);
     let sent = out.take();
     let dbtn = BvlcFunction::DISTRIBUTE_BROADCAST_TO_NETWORK;
@@ -204,7 +213,7 @@ fn held_broadcasts_leave_before_a_later_one() {
     );
     assert_eq!(
         sent[0].npdu,
-        message(MessageType::NETWORK_NUMBER_IS, &[0, 1, 1])
+        message(NetworkMessageType::NETWORK_NUMBER_IS, &[0, 1, 1])
     );
     assert_eq!(sent[1].npdu, i_am(&[2]));
 }
@@ -238,7 +247,7 @@ fn a_refused_registration_discards_the_held_broadcasts() {
 
     let mut host = Recorder::default();
     let _ = router.receive(frame(1, &[5], true, &GLOBAL_WHO_IS), t10, &mut host);
-    let results = pump(&mut router, |send| bip.send(send, t10, &mut out));
+    let results = pump(&mut router, |send| BIP.send(&mut bip, send, t10, &mut out));
     assert_eq!(results, [(0, Ok(()))]);
     let sent = out.take();
     assert_eq!(sent.len(), 1);
@@ -252,9 +261,9 @@ fn a_refused_registration_discards_the_held_broadcasts() {
 fn a_registration_the_socket_refuses_ends_its_attempt() {
     let t0 = Instant::ZERO;
     let mut held: [HeldBroadcast; 2] = [HeldBroadcast::EMPTY, HeldBroadcast::EMPTY];
-    let mut bip = BipPort::new(BIP_PORT, node(foreign(2), t0), &mut held).unwrap();
+    let mut bip = NodePort::new(node(foreign(2), t0), &mut held).unwrap();
     let mut out = Wire {
-        refuse: Some(SendRefusal::Full),
+        refuse: Some(node::SendRefusal::SocketFull),
         ..Wire::default()
     };
     bip.start(t0, &mut out);
@@ -286,7 +295,7 @@ fn a_full_hold_refuses_the_next_broadcast() {
     let t1 = Instant::from_millis(1);
     let mut host = Recorder::default();
     let _ = router.receive(frame(1, &[5], true, &GLOBAL_WHO_IS), t1, &mut host);
-    let results = pump(&mut router, |send| bip.send(send, t1, &mut out));
+    let results = pump(&mut router, |send| BIP.send(&mut bip, send, t1, &mut out));
     assert_eq!(results, [(0, Err(SendRefusal::Full))]);
     assert_eq!(router.counters().refused, 1);
     let counters = bip.node_mut().take_counters();
@@ -304,7 +313,7 @@ fn refused_datagrams_of_a_foreign_port_are_counted() {
     let mut held = [HeldBroadcast::EMPTY, HeldBroadcast::EMPTY];
     let mut out = Wire::default();
     let (mut bip, _router) = started_foreign_port(&mut held, &mut out);
-    out.refuse = Some(SendRefusal::Full);
+    out.refuse = Some(node::SendRefusal::SocketFull);
     let t10 = Instant::from_millis(10);
     let read = encode(&Bvll::ReadBroadcastDistributionTable);
     bip.receive(

@@ -52,9 +52,9 @@ class SeedSignatureTests(unittest.TestCase):
     def test_add_trend_log_takes_a_keyword_only_seed(self) -> None:
         parameters = inspect.signature(BACnetServer.add_trend_log).parameters
         self.assertEqual(
-            list(parameters),
-            ["self", "instance", "name", "buffer_size", "total_record_count"],
+            list(parameters)[:4], ["self", "instance", "name", "buffer_size"]
         )
+        self.assertEqual(list(parameters)[-1], "total_record_count")
         seed = parameters["total_record_count"]
         self.assertEqual(seed.kind, inspect.Parameter.KEYWORD_ONLY)
         self.assertEqual(seed.default, 0)
@@ -64,7 +64,7 @@ class SeedSignatureTests(unittest.TestCase):
             ["self", "instance", "name", "buffer_size"],
         )
         self.assertEqual(
-            [argument.arg for argument in method.args.kwonlyargs], ["total_record_count"]
+            [argument.arg for argument in method.args.kwonlyargs][-1], "total_record_count"
         )
         docs = ast.get_docstring(method)
         assert docs is not None

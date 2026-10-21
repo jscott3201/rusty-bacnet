@@ -7,10 +7,11 @@
 //! versus hub-mediated-unknown through one verified-only gate.
 
 use super::endpoint_responder::EndpointResponder;
+#[cfg(feature = "sc-tls")]
+use super::mutation_tests::MutationAuthorizer;
 use super::mutation_tests::{apdu, assert_denied, cases, oid, route, Fixture, SOURCE};
 use super::*;
-#[cfg(feature = "sc-tls")]
-use crate::mutation::{MutationAuthorizationContext, MutationAuthorizer, MutationTrust};
+use crate::mutation::{MutationAuthorizationContext, MutationTrust};
 use crate::mutation::{MutationDecisionCounters, MutationPolicy};
 use crate::server::request_admission::{Class, RequestAdmissionPolicy};
 use crate::server::request_peer::canonical_requester;
@@ -63,14 +64,14 @@ async fn dispatch_admitted(
 ) -> Option<Bytes> {
     let (tx, rx) = oneshot::channel();
     BACnetServer::<TestTransport>::handle_admitted_confirmed_request(
-        &RequestServices {
+        &Arc::new(RequestServices {
             db: Arc::clone(&fixture.db),
             cov_table: Arc::clone(&fixture.table),
             comm_state: Arc::clone(&fixture.state),
             dcc_timer: Arc::new(Mutex::new(Default::default())),
             mutation_decisions: Arc::clone(decisions),
             ..RequestServices::for_test(Arc::clone(&fixture.network), fixture.config.clone())
-        },
+        }),
         &Arc::new(crate::server::request_tasks::RequestTasks::default()).spawner(),
         RequestOrigin {
             mac: SOURCE,
@@ -208,6 +209,7 @@ async fn overload_abort_precedes_mutation_with_zero_side_effect() {
         SOURCE,
         Apdu::ConfirmedRequest(confirmed(service, bytes, 18)),
         ReceivedApdu {
+            router_response: None,
             direct_response: None,
             apdu: Bytes::new(),
             source_mac: MacAddr::from_slice(SOURCE),
@@ -275,6 +277,7 @@ async fn shared_endpoint_rejects_every_mutation_choice() {
         .unwrap();
         assert!(responder
             .handle(ReceivedApdu {
+                router_response: None,
                 direct_response: None,
                 apdu: encoded.freeze(),
                 source_mac: MacAddr::from_slice(SOURCE),
@@ -304,6 +307,7 @@ async fn shared_endpoint_rejects_every_mutation_choice() {
     encode_apdu(&mut encoded, &Apdu::ConfirmedRequest(segmented)).unwrap();
     assert!(responder
         .handle(ReceivedApdu {
+            router_response: None,
             direct_response: None,
             apdu: encoded.freeze(),
             source_mac: MacAddr::from_slice(SOURCE),
@@ -490,6 +494,7 @@ async fn read_only_controls_unaffected_under_deny_all() {
                 service_request: Bytes::new(),
             },
             &ReceivedApdu {
+                router_response: None,
                 direct_response: None,
                 apdu: Bytes::new(),
                 source_mac: MacAddr::from_slice(SOURCE),

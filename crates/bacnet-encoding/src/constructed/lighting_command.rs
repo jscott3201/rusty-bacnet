@@ -10,7 +10,7 @@
 
 use bacnet_types::constructed::BACnetLightingCommand;
 use bacnet_types::enums::LightingOperation;
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RangeError};
 use bytes::BytesMut;
 
 use super::members::unsigned_field;
@@ -53,7 +53,7 @@ pub(super) fn decode_fields(data: &[u8], offset: usize) -> Result<Fields, Error>
         offset,
         0,
         WHAT,
-        "operation [0] exceeds 32 bits",
+        "lighting command operation [0] exceeds 32 bits",
         &mut oversized,
     )?;
     let (target_level, offset) = decode_optional_ctx(data, offset, 1, WHAT, decode_ctx_real)?;
@@ -65,7 +65,7 @@ pub(super) fn decode_fields(data: &[u8], offset: usize) -> Result<Fields, Error>
             at,
             tag,
             WHAT,
-            "fade-time [4] exceeds 32 bits",
+            "lighting command fade-time [4] exceeds 32 bits",
             &mut oversized,
         )
     })?;
@@ -75,7 +75,7 @@ pub(super) fn decode_fields(data: &[u8], offset: usize) -> Result<Fields, Error>
             at,
             tag,
             WHAT,
-            "priority [5] exceeds an Unsigned8",
+            "lighting command priority [5] exceeds an Unsigned8",
             &mut oversized,
         )
     })?;
@@ -90,9 +90,10 @@ pub(super) fn decode_fields(data: &[u8], offset: usize) -> Result<Fields, Error>
     Ok((command, offset, oversized))
 }
 
-/// The [`Error::OutOfRange`] for a field too wide for its type.
+/// The [`Error::Range`] for a field too wide for its type, named by its
+/// full label.
 fn too_wide(field: &'static str) -> Error {
-    Error::OutOfRange(format!("{WHAT} {field}"))
+    RangeError::new(field).into()
 }
 
 /// Decode one unframed `BACnetLightingCommand` SEQUENCE at `offset`.
@@ -113,7 +114,7 @@ fn too_wide(field: &'static str) -> Error {
 ///   long, an Unsigned with no contents octets, or one of more than four
 ///   that opens with a zero octet): [`Error::Decoding`];
 /// - a well-formed command whose operation or fade time needs more than 32
-///   bits, or whose priority needs more than 8: [`Error::OutOfRange`], naming
+///   bits, or whose priority needs more than 8: [`Error::Range`], naming
 ///   the first such field. A malformed field anywhere takes precedence.
 ///
 /// Up to four contents octets, an Unsigned or ENUMERATED may open with zero
@@ -134,7 +135,7 @@ pub fn decode_lighting_command(
 ///
 /// Fails as [`decode_lighting_command`] does, and with [`Error::Decoding`]
 /// when octets follow the last field. A field too wide for its type is
-/// [`Error::OutOfRange`] only when the rest of `data` is one well-formed
+/// [`Error::Range`] only when the rest of `data` is one well-formed
 /// command, so a broken input is always reported as broken.
 pub fn decode_lighting_command_value(data: &[u8]) -> Result<BACnetLightingCommand, Error> {
     let (command, end, oversized) = decode_fields(data, 0)?;

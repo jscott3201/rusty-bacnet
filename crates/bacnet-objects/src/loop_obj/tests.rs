@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn loop_read_defaults() {
-    let lo = LoopObject::new(1, "LOOP-1", 62).unwrap();
+    let lo = LoopObject::new(1, "LOOP-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     assert_eq!(
         lo.read_property(PropertyIdentifier::PRESENT_VALUE, None)
             .unwrap(),
@@ -22,7 +22,7 @@ fn loop_read_defaults() {
 
 #[test]
 fn loop_write_pid_constants() {
-    let mut lo = LoopObject::new(1, "LOOP-1", 62).unwrap();
+    let mut lo = LoopObject::new(1, "LOOP-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     lo.write_property(
         PropertyIdentifier::SETPOINT,
         None,
@@ -76,7 +76,7 @@ fn loop_write_pid_constants() {
 
 #[test]
 fn loop_set_present_value() {
-    let mut lo = LoopObject::new(1, "LOOP-1", 62).unwrap();
+    let mut lo = LoopObject::new(1, "LOOP-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     lo.set_present_value(55.0);
     assert_eq!(
         lo.read_property(PropertyIdentifier::PRESENT_VALUE, None)
@@ -87,7 +87,7 @@ fn loop_set_present_value() {
 
 #[test]
 fn loop_read_object_type() {
-    let lo = LoopObject::new(1, "LOOP-1", 62).unwrap();
+    let lo = LoopObject::new(1, "LOOP-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let val = lo
         .read_property(PropertyIdentifier::OBJECT_TYPE, None)
         .unwrap();
@@ -96,7 +96,7 @@ fn loop_read_object_type() {
 
 #[test]
 fn loop_write_wrong_type_rejected() {
-    let mut lo = LoopObject::new(1, "LOOP-1", 62).unwrap();
+    let mut lo = LoopObject::new(1, "LOOP-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let result = lo.write_property(
         PropertyIdentifier::SETPOINT,
         None,
@@ -111,7 +111,7 @@ fn loop_write_wrong_type_rejected() {
 fn assert_property_error(error: Error, expected: ErrorCode) {
     assert!(
         matches!(error, Error::Protocol { class, code }
-            if class == ErrorClass::PROPERTY.to_raw() as u32 && code == expected.to_raw() as u32),
+            if class == ErrorClass::PROPERTY && code == expected),
         "expected PROPERTY/{expected:?}, got {error:?}"
     );
 }
@@ -132,7 +132,7 @@ fn set_out_of_service(lo: &mut LoopObject, value: bool) {
 
 #[test]
 fn loop_cov_increment_is_writable_validated_and_drives_cov() {
-    let mut lo = LoopObject::new(1, "LOOP-1", 62).unwrap();
+    let mut lo = LoopObject::new(1, "LOOP-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     assert_eq!(
         read(&lo, PropertyIdentifier::COV_INCREMENT),
         PropertyValue::Real(0.0)
@@ -173,7 +173,7 @@ fn loop_cov_increment_is_writable_validated_and_drives_cov() {
 
 #[test]
 fn loop_present_value_is_writable_only_out_of_service() {
-    let mut lo = LoopObject::new(1, "LOOP-1", 62).unwrap();
+    let mut lo = LoopObject::new(1, "LOOP-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     lo.set_present_value(10.0);
     // Writable for PICS purposes; the state gate decides each request.
     assert!(lo.is_writable_property(PropertyIdentifier::PRESENT_VALUE));
@@ -234,7 +234,7 @@ fn loop_present_value_is_writable_only_out_of_service() {
 
 #[test]
 fn loop_application_present_value_is_refused_out_of_service() {
-    let mut lo = LoopObject::new(1, "LOOP-1", 62).unwrap();
+    let mut lo = LoopObject::new(1, "LOOP-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     lo.set_present_value_internal(PropertyValue::Real(12.0))
         .unwrap();
     assert_eq!(
@@ -277,7 +277,7 @@ fn loop_application_present_value_is_refused_out_of_service() {
 
 #[test]
 fn loop_controlled_variable_value_is_application_fed_and_read_only() {
-    let mut lo = LoopObject::new(1, "LOOP-1", 62).unwrap();
+    let mut lo = LoopObject::new(1, "LOOP-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     assert_eq!(
         read(&lo, PropertyIdentifier::CONTROLLED_VARIABLE_VALUE),
         PropertyValue::Real(0.0)
@@ -307,7 +307,7 @@ fn loop_controlled_variable_value_is_application_fed_and_read_only() {
 
 #[test]
 fn loop_controlled_variable_value_hook_takes_finite_reals_in_and_out_of_service() {
-    let mut lo = LoopObject::new(1, "LOOP-1", 62).unwrap();
+    let mut lo = LoopObject::new(1, "LOOP-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     for (out_of_service, measured) in [(false, 20.5), (true, 19.0), (false, -4.25)] {
         set_out_of_service(&mut lo, out_of_service);
         lo.set_controlled_variable_value_internal(PropertyValue::Real(measured))
@@ -341,14 +341,16 @@ fn loop_controlled_variable_value_hook_takes_finite_reals_in_and_out_of_service(
 
 #[test]
 fn controlled_variable_value_hook_is_refused_by_other_objects() {
-    let mut av = crate::analog::AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let mut av =
+        crate::analog::AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS)
+            .unwrap();
     let error = av
         .set_controlled_variable_value_internal(PropertyValue::Real(1.0))
         .unwrap_err();
     assert!(
         matches!(error, Error::Protocol { class, code }
-            if class == ErrorClass::OBJECT.to_raw() as u32
-                && code == ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32),
+            if class == ErrorClass::OBJECT
+                && code == ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED),
         "{error:?}"
     );
 }
@@ -356,7 +358,7 @@ fn controlled_variable_value_hook_is_refused_by_other_objects() {
 #[test]
 fn loop_cov_reports_setpoint_and_controlled_variable_value() {
     use crate::traits::CovReportedProperty::Value;
-    let lo = LoopObject::new(1, "LOOP-1", 62).unwrap();
+    let lo = LoopObject::new(1, "LOOP-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     assert_eq!(
         lo.cov_reported_properties(),
         [

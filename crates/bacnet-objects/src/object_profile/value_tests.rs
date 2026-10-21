@@ -8,7 +8,7 @@ use crate::multistate::MultiStateValueObject;
 use crate::present_value_access::PresentValueAccess as Access;
 use crate::property_metadata::{PropertyConformance, PropertyWriteCapability};
 use crate::traits::BACnetObject;
-use bacnet_types::enums::ObjectType;
+use bacnet_types::enums::{EngineeringUnits, ObjectType};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -58,7 +58,7 @@ fn object(
         };
     }
     match kind {
-        ObjectType::ANALOG_VALUE => build!(AnalogValueObject, 95),
+        ObjectType::ANALOG_VALUE => build!(AnalogValueObject, EngineeringUnits::NO_UNITS),
         ObjectType::BINARY_VALUE => build!(BinaryValueObject),
         ObjectType::MULTI_STATE_VALUE => build!(MultiStateValueObject, 3),
         _ => unreachable!(),

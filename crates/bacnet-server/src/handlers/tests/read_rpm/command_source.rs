@@ -5,12 +5,13 @@ use bacnet_objects::{
     multistate::{MultiStateOutputObject, MultiStateValueObject},
     traits::BACnetObject,
 };
+use bacnet_types::enums::EngineeringUnits;
 
 #[test]
 fn six_family_initial_command_source_wire_values_are_typed_and_paired() {
     let objects: Vec<Box<dyn BACnetObject>> = vec![
-        Box::new(AnalogOutputObject::new(1, "AO", 0).unwrap()),
-        Box::new(AnalogValueObject::new(1, "AV", 0).unwrap()),
+        Box::new(AnalogOutputObject::new(1, "AO", EngineeringUnits::SQUARE_METERS).unwrap()),
+        Box::new(AnalogValueObject::new(1, "AV", EngineeringUnits::SQUARE_METERS).unwrap()),
         Box::new(BinaryOutputObject::new(1, "BO").unwrap()),
         Box::new(BinaryValueObject::new(1, "BV").unwrap()),
         Box::new(MultiStateOutputObject::new(1, "MSO", 2).unwrap()),
@@ -53,7 +54,12 @@ fn six_family_initial_command_source_wire_values_are_typed_and_paired() {
 #[test]
 fn command_source_context_free_handlers_cannot_invent_a_writer() {
     let mut db = ObjectDatabase::new();
-    let value = AnalogValueObject::new(824, "standalone command target", 62).unwrap();
+    let value = AnalogValueObject::new(
+        824,
+        "standalone command target",
+        EngineeringUnits::DEGREES_CELSIUS,
+    )
+    .unwrap();
     let oid = value.object_identifier();
     db.add(Box::new(value)).unwrap();
     let mut bytes = BytesMut::new();
@@ -67,7 +73,7 @@ fn command_source_context_free_handlers_cannot_invent_a_writer() {
     .encode(&mut bytes)
     .unwrap();
     assert!(
-        matches!(handle_write_property(&mut db, &bytes), Err(Error::Protocol { code, .. }) if code == u32::from(ErrorCode::WRITE_ACCESS_DENIED.to_raw()))
+        matches!(handle_write_property(&mut db, &bytes), Err(Error::Protocol { code, .. }) if code == ErrorCode::WRITE_ACCESS_DENIED)
     );
     assert_eq!(
         db.get(&oid)

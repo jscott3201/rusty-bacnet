@@ -1,13 +1,18 @@
 use bacnet_mstp_codec::BROADCAST_MAC;
 use bacnet_mstp_core::{Duration as CoreDuration, QueueRefusal};
+use bacnet_time::HostClock;
 use bacnet_types::error::Error;
 use tokio::sync::{mpsc, Mutex};
 
 use super::adapter::Task;
 use super::diagnostics::increment;
-use super::queues::{CoreClock, EnqueueError, SharedQueues};
-use super::{DedicatedRuntime, Echo, MstpConfig, MstpDiagnostics, MstpExecutionMode, SerialPort};
+use super::queues::{EnqueueError, SharedQueues};
+use super::{
+    DedicatedRuntime, Echo, MstpConfig, MstpDiagnostics, MstpExecutionMode, MstpExecutionStatus,
+    SerialPort,
+};
 use crate::port::{ReceivedNpdu, TransportPort};
+use crate::runtime_clock::tokio_clock;
 
 // ---------------------------------------------------------------------------
 // MS/TP Transport
@@ -34,12 +39,14 @@ pub struct MstpTransport<S: SerialPort> {
     execution_mode: MstpExecutionMode,
     dedicated_runtime: Option<DedicatedRuntime>,
     diagnostics: MstpDiagnostics,
+    /// See [`Self::frame_tap`].
+    frame_tap: crate::tap::FrameTap,
 }
 
 /// What a send needs from a started transport.
 struct Link {
     queues: SharedQueues,
-    clock: CoreClock,
+    clock: HostClock,
     queue_max_age: CoreDuration,
 }
 
@@ -56,6 +63,7 @@ impl<S: SerialPort> MstpTransport<S> {
             execution_mode: MstpExecutionMode::default(),
             dedicated_runtime: None,
             diagnostics: MstpDiagnostics::new(),
+            frame_tap: crate::tap::FrameTap::new(),
         }
     }
 
@@ -64,7 +72,10 @@ impl<S: SerialPort> MstpTransport<S> {
     /// settings change, and an already-running loop is not migrated.
     ///
     /// Dedicated execution isolates MAC polling and backend blocking work from
-    /// the application pool, not from OS scheduling delays. Async serial resources
+    /// the application pool. On its own it does not shorten OS scheduling
+    /// delays; on Linux its [`MstpThreadConfig`](super::MstpThreadConfig)
+    /// can ask for `SCHED_FIFO` and CPU affinity, which `start` applies or
+    /// fails on, and [`Self::execution_status`] reports. Async serial resources
     /// opened on another reactor still require that reactor to remain running.
     /// `stop` waits for teardown; `abort`/drop request cancellation without waiting.
     /// Neither can interrupt an in-progress blocking syscall or undo queued bytes.
@@ -92,6 +103,27 @@ impl<S: SerialPort> MstpTransport<S> {
     /// ```
     pub fn diagnostics(&self) -> MstpDiagnostics {
         self.diagnostics.clone()
+    }
+
+    /// How the MAC loop runs, once [`start`](TransportPort::start) has
+    /// succeeded: whether on a thread of its own, and the real-time
+    /// priority and CPU affinity that thread reads back. `None` before
+    /// then. The [diagnostics handle](Self::diagnostics) reports the same,
+    /// after the transport has moved
+    /// ([`MstpDiagnostics::execution_status`]).
+    pub fn execution_status(&self) -> Option<MstpExecutionStatus> {
+        self.diagnostics.execution_status()
+    }
+
+    /// This transport's frame tap: every frame this station sends and
+    /// every frame it hears on the line, preamble to CRC, for whoever
+    /// subscribes: data frames and the control frames the master node
+    /// handles itself (the token, polls, postponed replies) alike. Like
+    /// [`Self::diagnostics`], the tap outlives a move of the transport:
+    /// clone it, or subscribe, before handing the transport over. See
+    /// [`crate::tap`].
+    pub fn frame_tap(&self) -> &crate::tap::FrameTap {
+        &self.frame_tap
     }
 
     /// The configuration the next `start` uses: what [`Self::new`] was
@@ -173,22 +205,28 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
         const NPDU_CHANNEL_CAPACITY: usize = 64;
 
         let config = self.config.core_config()?;
-        if let Some(serial) = &self.serial {
-            serial.echo().validate()?;
-        }
-        let serial = self
-            .serial
-            .take()
-            .ok_or_else(|| Error::Encoding("MS/TP transport already started".into()))?;
+        self.execution_mode.validate()?;
+        let not_started = || Error::Encoding("MS/TP transport already started".into());
+        self.serial
+            .as_ref()
+            .ok_or_else(not_started)?
+            .echo()
+            .validate()?;
 
-        let dedicated_runtime = match self.execution_mode {
-            MstpExecutionMode::Tokio => None,
-            MstpExecutionMode::DedicatedThread => Some(DedicatedRuntime::new().await?),
+        // The thread and its settings come first: if they fail, the serial
+        // port stays here for another try.
+        let (dedicated_runtime, status) = match &self.execution_mode {
+            MstpExecutionMode::Tokio => (None, MstpExecutionStatus::default()),
+            MstpExecutionMode::DedicatedThread(thread) => {
+                let (runtime, status) = DedicatedRuntime::new(thread.clone()).await?;
+                (Some(runtime), status)
+            }
         };
+        let serial = self.serial.take().ok_or_else(not_started)?;
 
         let (npdu_tx, npdu_rx) = mpsc::channel(NPDU_CHANNEL_CAPACITY);
         let queues = SharedQueues::new(self.config.extended_frames);
-        let clock = CoreClock::new();
+        let clock = tokio_clock();
         let task = Task {
             serial,
             config,
@@ -197,12 +235,14 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
             npdus: npdu_tx,
             counts: self.diagnostics.counters.clone(),
             transmit_pad: self.config.transmit_latency_pad,
+            tap: self.frame_tap.clone(),
         };
         let task = match &dedicated_runtime {
             Some(runtime) => runtime.handle.spawn(task.run()),
             None => tokio::spawn(task.run()),
         };
         self.dedicated_runtime = dedicated_runtime;
+        self.diagnostics.counters.publish_execution(status);
         self.task = Some(task);
         self.link = Some(Link {
             queues,
@@ -268,9 +308,9 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
 
     /// [`MstpConfig::max_npdu_length`] both ways: 1497 octets with extended
     /// frames, 501 without.
-    fn max_npdu(&self) -> crate::port::NpduLimits {
+    fn max_npdu(&self) -> bacnet_npdu::NpduLimits {
         let octets = u16::try_from(self.config.max_npdu_length()).unwrap_or(u16::MAX);
-        crate::port::NpduLimits::both(octets)
+        bacnet_npdu::NpduLimits::both(octets)
     }
 
     fn is_broadcast_mac(&self, mac: &[u8]) -> bool {

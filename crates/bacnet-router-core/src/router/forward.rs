@@ -5,9 +5,9 @@ use super::host::{Event, Host};
 use super::ingress::{Arrival, Discard, Received};
 use super::output::{Kind, Target};
 use super::Storage;
-use super::MIN_LIMIT;
-use crate::message::RejectReason;
+use super::MIN_PORT_LIMIT;
 use crate::npdu::{Address, Npdu};
+use crate::npdu::{NetworkMessageType, RejectMessageReason};
 use crate::table::Route;
 use crate::MAX_MAC_LEN;
 
@@ -22,14 +22,21 @@ fn source_of<'f>(at: &Arrival<'f>, npdu: &Npdu<'f>) -> Option<Address<'f>> {
 
 /// The longest reject that can arrive: both addresses at
 /// [`MAX_MAC_LEN`], the hop count, the type and three octets of data. A
-/// port carries at least [`MIN_LIMIT`], so a reject passing through is
-/// never too long for one, and the egress check never answers a reject
-/// with a reject.
+/// port carries at least [`MIN_PORT_LIMIT`], so its NPDU alone fits. Link data
+/// attributes are outside this bound; eligibility for a later rejection
+/// must also exclude the reject's message type.
 pub(super) const LONGEST_REJECT: usize = 2 + 2 * (3 + MAX_MAC_LEN) + 1 + 1 + 3;
-const _: () = assert!(LONGEST_REJECT < MIN_LIMIT as usize);
+const _: () = assert!(LONGEST_REJECT < MIN_PORT_LIMIT as usize);
 
-impl<const P: usize, const R: usize, const H: usize, const D: usize, const N: usize>
-    Storage<P, R, H, D, N>
+impl<
+        const P: usize,
+        const R: usize,
+        const H: usize,
+        const D: usize,
+        const N: usize,
+        G: super::GroupClassifier,
+        const B: usize,
+    > Storage<P, R, H, D, N, G, B>
 {
     /// Drop a relay whose hop count has run out, counting it and telling
     /// the host, which logs it as the hosted router does
@@ -55,7 +62,7 @@ impl<const P: usize, const R: usize, const H: usize, const D: usize, const N: us
     /// comes down before the router decides (Clauses 6.2.3, 6.3.2). One too
     /// long for the egress port, as rewritten for it, draws reject reason 4
     /// naming its DNET (Clauses 6.4.4, 6.6.3.5). A reject passing through
-    /// never draws one: it can't be that long ([`LONGEST_REJECT`]).
+    /// never draws one, including a later link-envelope length refusal.
     pub(super) fn forward<'f>(
         &mut self,
         at: &Arrival<'f>,
@@ -94,22 +101,36 @@ impl<const P: usize, const R: usize, const H: usize, const D: usize, const N: us
         };
         let limit = limits.get(to.is_empty());
         let octets = rewritten.encoded_len();
+        let eligible = npdu.message_type != Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK);
+        // A route is found by DNET, so retain that DNET before the rewrite.
+        let dnet = npdu
+            .destination
+            .map_or(0, |destination| destination.network);
         if octets > limit {
             bump(&mut self.counters.egress_too_long);
-            // A route is found by DNET, so there is one to name.
-            let dnet = npdu
-                .destination
-                .map_or(0, |destination| destination.network);
             host.observe(Event::TooLong {
                 port: route.port(),
                 octets,
                 limit,
-                rejected: Some(dnet),
+                rejected: eligible.then_some(dnet),
             });
-            self.reject(at, npdu.source, dnet, RejectReason::MESSAGE_TOO_LONG, host);
+            if eligible {
+                self.reject(
+                    at,
+                    npdu.source,
+                    dnet,
+                    RejectMessageReason::MESSAGE_TOO_LONG,
+                    host,
+                );
+            }
             return Received::Handled;
         }
         if self.write_now(&rewritten, Kind::Forward, Target::Toward(route.port(), to)) {
+            if eligible {
+                self.out.current.reject_origin = self
+                    .reject_origin(at, npdu.source, dnet)
+                    .unwrap_or(super::RejectOrigin::NONE);
+            }
             Received::Handled
         } else {
             Received::Discarded(Discard::Unwritable)

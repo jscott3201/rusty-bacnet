@@ -525,7 +525,7 @@ async fn segment_ack_during_reassembly_aborts_the_transaction() {
     // waiting for a reassembly that is over.
     match link.finish().await {
         Err(Error::Abort { reason }) => {
-            assert_eq!(reason, AbortReason::INVALID_APDU_IN_THIS_STATE.to_raw());
+            assert_eq!(reason, AbortReason::INVALID_APDU_IN_THIS_STATE);
         }
         other => panic!("expected the caller to be aborted, got {other:?}"),
     }
@@ -630,7 +630,7 @@ async fn segment_257_aborts_with_buffer_overflow() {
 
     match link.finish().await {
         Err(Error::Abort { reason }) => {
-            assert_eq!(reason, AbortReason::BUFFER_OVERFLOW.to_raw());
+            assert_eq!(reason, AbortReason::BUFFER_OVERFLOW);
         }
         other => panic!("expected a BUFFER_OVERFLOW abort, got {other:?}"),
     }

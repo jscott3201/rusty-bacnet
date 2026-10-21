@@ -17,7 +17,7 @@ use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::multistate::MultiStateValueObject;
 use bacnet_objects::schedule::ScheduleObject;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
-use bacnet_types::enums::Reliability;
+use bacnet_types::enums::{EngineeringUnits, Reliability};
 use bytes::BytesMut;
 
 use super::tests::SettableClock;
@@ -63,11 +63,18 @@ pub(super) fn database(
         DeviceObject::new(DeviceConfig::default()).unwrap(),
     ))
     .unwrap();
-    db.add(Box::new(AnalogInputObject::new(1, "AI-1", 62).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+    ))
+    .unwrap();
     for instance in [1, 2] {
         db.add(Box::new(
-            AnalogValueObject::new(instance, format!("AV-{instance}"), 62).unwrap(),
+            AnalogValueObject::new(
+                instance,
+                format!("AV-{instance}"),
+                EngineeringUnits::DEGREES_CELSIUS,
+            )
+            .unwrap(),
         ))
         .unwrap();
     }
@@ -227,7 +234,9 @@ async fn a_missing_object_created_later_takes_the_value_at_the_next_pass() {
     // though the Schedule's value is the one it has held all along.
     db.write()
         .await
-        .add(Box::new(AnalogValueObject::new(9, "AV-9", 62).unwrap()))
+        .add(Box::new(
+            AnalogValueObject::new(9, "AV-9", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+        ))
         .unwrap();
     tick_schedules(&db).await;
     assert_eq!(health(&db).await, HEALTHY);

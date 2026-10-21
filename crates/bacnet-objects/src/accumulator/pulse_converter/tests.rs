@@ -3,7 +3,7 @@ use crate::clock::ClockFrame;
 
 #[test]
 fn pulse_converter_create_and_read_defaults() {
-    let pc = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+    let pc = PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     assert_eq!(pc.object_name(), "PC-1");
     assert_eq!(
         pc.read_property(PropertyIdentifier::PRESENT_VALUE, None)
@@ -18,7 +18,7 @@ fn pulse_converter_create_and_read_defaults() {
 
 #[test]
 fn pulse_converter_read_write_present_value_while_out_of_service() {
-    let mut pc = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+    let mut pc = PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     pc.write_property(
         PropertyIdentifier::OUT_OF_SERVICE,
         None,
@@ -42,7 +42,7 @@ fn pulse_converter_read_write_present_value_while_out_of_service() {
 
 #[test]
 fn pulse_converter_read_scale_factor() {
-    let pc = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+    let pc = PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let val = pc
         .read_property(PropertyIdentifier::SCALE_FACTOR, None)
         .unwrap();
@@ -51,7 +51,7 @@ fn pulse_converter_read_scale_factor() {
 
 #[test]
 fn pulse_converter_write_scale_factor() {
-    let mut pc = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+    let mut pc = PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     pc.write_property(
         PropertyIdentifier::SCALE_FACTOR,
         None,
@@ -68,7 +68,7 @@ fn pulse_converter_write_scale_factor() {
 
 #[test]
 fn pulse_converter_cov_increment() {
-    let mut pc = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+    let mut pc = PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     assert_eq!(pc.cov_increment(), Some(0.0));
     pc.write_property(
         PropertyIdentifier::COV_INCREMENT,
@@ -87,7 +87,7 @@ fn pulse_converter_cov_increment() {
 
 #[test]
 fn pulse_converter_object_type() {
-    let pc = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+    let pc = PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let val = pc
         .read_property(PropertyIdentifier::OBJECT_TYPE, None)
         .unwrap();
@@ -99,7 +99,7 @@ fn pulse_converter_object_type() {
 
 #[test]
 fn pulse_converter_write_wrong_type_rejected() {
-    let mut pc = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+    let mut pc = PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let result = pc.write_property(
         PropertyIdentifier::PRESENT_VALUE,
         None,
@@ -117,7 +117,7 @@ fn unset() -> PropertyValue {
 
 #[test]
 fn pulse_converter_input_reference_defaults_unset() {
-    let pc = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+    let pc = PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     assert_eq!(
         pc.read_property(PropertyIdentifier::INPUT_REFERENCE, None)
             .unwrap(),
@@ -127,7 +127,7 @@ fn pulse_converter_input_reference_defaults_unset() {
 
 #[test]
 fn pulse_converter_set_input_reference() {
-    let mut pc = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+    let mut pc = PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let oid = ObjectIdentifier::new(ObjectType::ACCUMULATOR, 1).unwrap();
     let prop_raw = PropertyIdentifier::PRESENT_VALUE.to_raw();
     pc.set_input_reference(BACnetObjectPropertyReference::new(oid, prop_raw));
@@ -143,7 +143,7 @@ fn pulse_converter_set_input_reference() {
 
 #[test]
 fn pulse_converter_property_list() {
-    let pc = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+    let pc = PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let list = pc.property_list();
     assert!(list.contains(&PropertyIdentifier::PRESENT_VALUE));
     assert!(list.contains(&PropertyIdentifier::SCALE_FACTOR));
@@ -156,7 +156,7 @@ fn pulse_converter_property_list() {
 
 #[test]
 fn pulse_converter_write_framed_indexed_input_reference_lands() {
-    let mut pc = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+    let mut pc = PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let oid = ObjectIdentifier::new(ObjectType::ACCUMULATOR, 1).unwrap();
     let prop_raw = PropertyIdentifier::PRESENT_VALUE.to_raw();
     let r = BACnetObjectPropertyReference::new_indexed(oid, prop_raw, 4);
@@ -187,8 +187,8 @@ fn pulse_converter_write_framed_indexed_input_reference_lands() {
         .unwrap_err();
     assert!(
         matches!(refusal, Error::Protocol { class, code }
-            if class == bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
-                && code == bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE.to_raw() as u32),
+            if class == bacnet_types::enums::ErrorClass::PROPERTY
+                && code == bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE),
         "{refusal:?}"
     );
     assert_eq!(
@@ -208,7 +208,7 @@ fn pulse_converter_write_framed_indexed_input_reference_lands() {
 
 #[test]
 fn pulse_converter_write_malformed_framed_input_reference_rejected() {
-    let mut pc = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+    let mut pc = PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     // [0] object-identifier alone — property-identifier missing.
     let mut buf = bytes::BytesMut::new();
     bacnet_encoding::primitives::encode_ctx_object_id(
@@ -226,14 +226,8 @@ fn pulse_converter_write_malformed_framed_input_reference_rejected() {
         .unwrap_err()
     {
         Error::Protocol { class, code } => {
-            assert_eq!(
-                class,
-                bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
-            );
-            assert_eq!(
-                code,
-                bacnet_types::enums::ErrorCode::INVALID_DATA_ENCODING.to_raw() as u32
-            );
+            assert_eq!(class, bacnet_types::enums::ErrorClass::PROPERTY);
+            assert_eq!(code, bacnet_types::enums::ErrorCode::INVALID_DATA_ENCODING);
         }
         other => panic!("expected PROPERTY/INVALID_DATA_ENCODING, got {other:?}"),
     }
@@ -246,7 +240,7 @@ fn pulse_converter_write_malformed_framed_input_reference_rejected() {
 
 #[test]
 fn pulse_converter_flat_input_reference_write_is_refused_and_changes_nothing() {
-    let mut pc = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+    let mut pc = PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let oid = ObjectIdentifier::new(ObjectType::ACCUMULATOR, 1).unwrap();
     let prop_raw = PropertyIdentifier::PRESENT_VALUE.to_raw();
     pc.set_input_reference(BACnetObjectPropertyReference::new(oid, prop_raw));
@@ -270,14 +264,8 @@ fn pulse_converter_flat_input_reference_write_is_refused_and_changes_nothing() {
             .unwrap_err()
         {
             Error::Protocol { class, code } => {
-                assert_eq!(
-                    class,
-                    bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
-                );
-                assert_eq!(
-                    code,
-                    bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE.to_raw() as u32
-                );
+                assert_eq!(class, bacnet_types::enums::ErrorClass::PROPERTY);
+                assert_eq!(code, bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE);
             }
             other => panic!("expected PROPERTY/INVALID_DATA_TYPE, got {other:?}"),
         }
@@ -348,14 +336,8 @@ fn write(
 fn assert_value_out_of_range(result: Result<(), Error>) {
     match result {
         Err(Error::Protocol { class, code }) => {
-            assert_eq!(
-                class,
-                bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
-            );
-            assert_eq!(
-                code,
-                bacnet_types::enums::ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32
-            );
+            assert_eq!(class, bacnet_types::enums::ErrorClass::PROPERTY);
+            assert_eq!(code, bacnet_types::enums::ErrorCode::VALUE_OUT_OF_RANGE);
         }
         other => panic!("expected PROPERTY/VALUE_OUT_OF_RANGE, got {other:?}"),
     }
@@ -374,7 +356,7 @@ fn count_state(pc: &PulseConverterObject) -> [PropertyValue; 5] {
 
 #[test]
 fn pulse_converter_count_rows_start_at_zero_and_unspecified() {
-    let pc = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+    let pc = PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     assert_eq!(
         read(&pc, PropertyIdentifier::COUNT),
         PropertyValue::Unsigned(0)
@@ -396,7 +378,7 @@ fn pulse_converter_count_rows_start_at_zero_and_unspecified() {
 
 #[test]
 fn pulse_converter_present_value_is_count_times_scale_factor() {
-    let mut pc = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+    let mut pc = PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     pc.bind_clock_internal(Some(Arc::new(FixedClock(frame(9)))));
     pc.add_pulses(55).unwrap();
     assert_eq!(pc.count(), 55);
@@ -448,7 +430,7 @@ fn pulse_converter_present_value_is_count_times_scale_factor() {
 
 #[test]
 fn pulse_converter_adjust_value_takes_the_truncated_quotient_off_count() {
-    let mut pc = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+    let mut pc = PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     pc.add_pulses(55).unwrap();
     write(
         &mut pc,
@@ -511,7 +493,7 @@ fn pulse_converter_adjust_value_takes_the_truncated_quotient_off_count() {
 
 #[test]
 fn pulse_converter_adjust_value_out_of_range_changes_nothing() {
-    let mut pc = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+    let mut pc = PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     pc.bind_clock_internal(Some(Arc::new(FixedClock(frame(8)))));
     pc.add_pulses(3).unwrap();
     write(
@@ -559,7 +541,7 @@ fn pulse_converter_adjust_value_out_of_range_changes_nothing() {
 
 #[test]
 fn pulse_converter_refuses_a_count_or_scale_past_the_largest_real() {
-    let mut pc = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+    let mut pc = PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     pc.add_pulses(u64::MAX).unwrap();
     let update_time = read(&pc, PropertyIdentifier::UPDATE_TIME);
     assert_value_out_of_range(pc.add_pulses(1));
@@ -575,7 +557,7 @@ fn pulse_converter_refuses_a_count_or_scale_past_the_largest_real() {
         read(&pc, PropertyIdentifier::SCALE_FACTOR),
         PropertyValue::Real(1.0)
     );
-    let mut pc = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+    let mut pc = PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     write(
         &mut pc,
         PropertyIdentifier::SCALE_FACTOR,
@@ -589,7 +571,7 @@ fn pulse_converter_refuses_a_count_or_scale_past_the_largest_real() {
 
 #[test]
 fn pulse_converter_out_of_service_decouples_present_value_from_count() {
-    let mut pc = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+    let mut pc = PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     pc.add_pulses(10).unwrap();
     write(
         &mut pc,
@@ -652,7 +634,7 @@ fn pulse_converter_out_of_service_decouples_present_value_from_count() {
 
 #[test]
 fn pulse_converter_count_rows_are_read_only_over_the_network() {
-    let mut pc = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+    let mut pc = PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     pc.add_pulses(4).unwrap();
     for (property, value) in [
         (PropertyIdentifier::COUNT, PropertyValue::Unsigned(9)),
@@ -667,14 +649,8 @@ fn pulse_converter_count_rows_are_read_only_over_the_network() {
         assert!(!pc.is_writable_property(property), "{property:?}");
         match write(&mut pc, property, value) {
             Err(Error::Protocol { class, code }) => {
-                assert_eq!(
-                    class,
-                    bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
-                );
-                assert_eq!(
-                    code,
-                    bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32
-                );
+                assert_eq!(class, bacnet_types::enums::ErrorClass::PROPERTY);
+                assert_eq!(code, bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED);
             }
             other => panic!("{property:?}: expected WRITE_ACCESS_DENIED, got {other:?}"),
         }
@@ -689,7 +665,7 @@ fn pulse_converter_count_rows_are_read_only_over_the_network() {
 #[test]
 fn pulse_converter_cov_reports_update_time() {
     use crate::traits::CovReportedProperty::Value;
-    let pc = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+    let pc = PulseConverterObject::new(1, "PC-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     // Table 13-1 lists Update_Time after Present_Value and Status_Flags; a
     // change of it alone sends no notification.
     assert_eq!(

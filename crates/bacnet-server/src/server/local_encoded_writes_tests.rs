@@ -12,6 +12,7 @@ use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::schedule::ScheduleObject;
 use bacnet_objects::staging::{StagingConfig, StagingObject};
 use bacnet_types::constructed::{BACnetDeviceObjectReference, BACnetStageLimitValue};
+use bacnet_types::enums::EngineeringUnits;
 
 fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(object_type, instance).unwrap()
@@ -21,15 +22,18 @@ async fn server() -> BACnetServer<TestTransport> {
     let mut db = clocked_test_database();
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
-            instance: 1296,
-            name: "Encoded writes".into(),
+            identity: bacnet_objects::DeviceIdentity::new(1296, 0)
+                .expect("valid Device identity")
+                .with_name("Encoded writes"),
             ..DeviceConfig::default()
         })
         .unwrap(),
     ))
     .unwrap();
-    db.add(Box::new(AnalogValueObject::new(1, "AV-1", 62).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+    ))
+    .unwrap();
     db.add(Box::new(BinaryOutputObject::new(1, "BO-1").unwrap()))
         .unwrap();
     db.add(Box::new(BinaryValueObject::new(1, "BV-1").unwrap()))
@@ -54,7 +58,7 @@ async fn server() -> BACnetServer<TestTransport> {
             StagingConfig {
                 present_value: 5.0,
                 min_present_value: 0.0,
-                units: 62,
+                units: EngineeringUnits::DEGREES_CELSIUS,
                 priority_for_writing: 8,
                 stages: vec![
                     stage(10.0, vec![false, true]),
@@ -71,6 +75,7 @@ async fn server() -> BACnetServer<TestTransport> {
     ))
     .unwrap();
     BACnetServer::generic_builder()
+        .device(bacnet_objects::DeviceIdentity::new(1296, 0).unwrap())
         .transport(TestTransport::new())
         .database(db)
         .enable_event_enrollment(false)
@@ -170,7 +175,7 @@ async fn an_encoded_local_write_is_refused_as_a_network_write_is() {
             .unwrap_err();
         assert!(
             matches!(error, Error::Protocol { class: c, code: e }
-                if c == class.to_raw() as u32 && e == code.to_raw() as u32),
+                if c == class && e == code),
             "{property} {index:?}: {error:?}"
         );
     }
@@ -234,8 +239,8 @@ async fn an_encoded_local_null_is_judged_as_a_network_null_is() {
             .unwrap_err();
         assert!(
             matches!(error, Error::Protocol { class, code }
-                if class == ErrorClass::PROPERTY.to_raw() as u32
-                    && code == ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32),
+                if class == ErrorClass::PROPERTY
+                    && code == ErrorCode::WRITE_ACCESS_DENIED),
             "{property} {index:?}: {error:?}"
         );
     }

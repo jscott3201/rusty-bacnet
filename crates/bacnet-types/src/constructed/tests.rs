@@ -191,8 +191,8 @@ fn log_datum_variants_clone_eq() {
     assert_eq!(bits.clone(), bits);
 
     let fail = LogDatum::Failure {
-        error_class: 2,
-        error_code: 31,
+        error_class: crate::enums::ErrorClass::PROPERTY,
+        error_code: crate::enums::ErrorCode::UNKNOWN_OBJECT,
     };
     assert_eq!(fail.clone(), fail);
 

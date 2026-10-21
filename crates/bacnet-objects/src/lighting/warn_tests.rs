@@ -265,11 +265,12 @@ fn present_value_warn_values_stay_out_of_the_priority_array_and_lighting_command
     f.blink_warn(10);
     for value in [-1.0, -2.0, -3.0] {
         // No priority: 16, as for any Present_Value write.
-        f.lo.write_property(
+        f.lo.write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(value),
             None,
+            &crate::command_source::test_origin(),
         )
         .unwrap();
         for priority in 1..=16 {

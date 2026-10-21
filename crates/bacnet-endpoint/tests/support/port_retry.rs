@@ -43,3 +43,23 @@ pub async fn rerun_on_lost_port(mut run: impl AsyncFnMut() -> io::Result<()>) {
         }
     }
 }
+
+/// Binds with `bind` until it succeeds or `within` passes, for an owner whose
+/// release finishes in the background, such as a dropped node's aborted
+/// tasks (#1419). On timeout it returns the last bind error, so a port lost
+/// to another socket reruns the test under [`rerun_on_lost_port`] while one
+/// the owner kept fails on the last run.
+#[allow(dead_code)] // Not every test binary that includes this file polls.
+pub async fn bind_eventually<T>(
+    within: std::time::Duration,
+    mut bind: impl FnMut() -> io::Result<T>,
+) -> io::Result<T> {
+    let deadline = tokio::time::Instant::now() + within;
+    loop {
+        match bind() {
+            Ok(bound) => return Ok(bound),
+            Err(err) if tokio::time::Instant::now() >= deadline => return Err(err),
+            Err(_) => tokio::time::sleep(std::time::Duration::from_millis(1)).await,
+        }
+    }
+}

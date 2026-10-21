@@ -12,7 +12,7 @@ use bacnet_objects::traits::BACnetObject;
 use bacnet_services::cov::COVNotificationRequest;
 use bacnet_services::cov_multiple::COVNotificationMultipleRequest;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
-use bacnet_types::enums::ObjectType;
+use bacnet_types::enums::{EngineeringUnits, ObjectType};
 use bacnet_types::primitives::Time;
 
 const IN_ALARM: u8 = 0x80;
@@ -140,7 +140,8 @@ async fn fault_detection_reaches_property_and_timestamped_subscribers_without_an
     };
     let mut h = Harness::start_with(config, |db| {
         db.remove(&av1()).unwrap();
-        let mut object = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+        let mut object =
+            AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
         object.configure_fault_out_of_range(0.0, 100.0).unwrap();
         // Keep the intrinsic task out: only fault detection may change flags.
         object

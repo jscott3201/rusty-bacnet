@@ -37,9 +37,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
     /// Read one local property through the server's ReadProperty evaluator.
     ///
-    /// With multiple Device objects, the lowest instance is selected for Device
-    /// wildcard reads and the live COV lists, independent of insertion order.
-    /// Other Device objects receive empty COV lists. Every served Device uses
+    /// Device wildcard reads target the configured identity; removal returns
+    /// UNKNOWN_OBJECT even if another Device is present. The database's lowest
+    /// Device instance still owns the live COV lists, independent of insertion
+    /// order; other Device objects receive empty lists. Every served Device uses
     /// the executor's services, COV presence and property definitions, even after
     /// public profile mutation, replacement or custom object installation.
     ///
@@ -74,23 +75,28 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
         let db = self.db.read().await;
-        let lookup_oid =
-            handlers::resolve_read_target(&db, oid, self.config.registered_network_port);
         let view = crate::device_view::DeviceReadContext::new(
             &db,
             crate::device_view::DeviceExecution::FullServer,
         )
+        .with_identity(Some(&self.config.device))
         .with_work_limit(
             self.config
                 .read_property_multiple_budget
                 .max_result_elements,
+        );
+        let lookup_oid = handlers::resolve_read_target(
+            &db,
+            oid,
+            self.config.registered_network_port,
+            view.device_oid(),
         );
         let plan =
             handlers::plan_read_property(&db, Some(&view), lookup_oid, property, array_index)
                 .map_err(|failure| match failure {
                     handlers::ReadFailure::Service(error) => error,
                     handlers::ReadFailure::Work | handlers::ReadFailure::Bytes => Error::Abort {
-                        reason: AbortReason::OUT_OF_RESOURCES.to_raw(),
+                        reason: AbortReason::OUT_OF_RESOURCES,
                     },
                 })?;
         use super::requests::confirmed_response::{active_cov_snapshot, address_bindings};
@@ -144,9 +150,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         self.active_network()?;
         let value = {
             let db = self.db.read().await;
-            let object = db.get(oid).ok_or_else(|| Error::Protocol {
-                class: ErrorClass::OBJECT.to_raw() as u32,
-                code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
+            let object = db.get(oid).ok_or(Error::Protocol {
+                class: ErrorClass::OBJECT,
+                code: ErrorCode::UNKNOWN_OBJECT,
             })?;
             handlers::gate_and_decode_write(object, property, array_index, value)?
         };

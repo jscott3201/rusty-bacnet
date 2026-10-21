@@ -164,7 +164,7 @@ fn rpm_calendar_indexed_reads_and_date_list_wire_bytes() {
                     assert!(result.property_value.is_none());
                     assert_eq!(result.error, Some((ErrorClass::PROPERTY, expected)));
                     assert!(matches!(rp, Err(Error::Protocol { class, code })
-                        if class == ErrorClass::PROPERTY.to_raw() as u32 && code == expected.to_raw() as u32));
+                        if class == ErrorClass::PROPERTY && code == expected));
                     assert!(response.is_empty());
                 }
             }

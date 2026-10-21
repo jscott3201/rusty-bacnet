@@ -51,20 +51,19 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
     /// Once a transmit's start is confirmed, octets are taken for the
     /// station's own echo and ignored until it completes. Before that they
     /// are line activity like any other (see [`Self::on_transmit_started`]).
-    pub fn on_octet(&mut self, byte: u8, now: Instant) -> Result<(), CoreError> {
+    pub fn on_octet(&mut self, byte: u8, now: Instant) {
         let now = self.observe_time(now);
         if self.transmitting() {
-            return Ok(());
+            return;
         }
         let timed_out_candidate = self.abort_partial_if_late(now);
-        self.note_bus_activity(now, 1)?;
+        self.note_bus_activity(now, 1);
         if timed_out_candidate {
-            self.invalid_frame_event(now)?;
+            self.invalid_frame_event(now);
         }
         self.last_octet = Some(now);
-        let result = self.decode_octet(byte, now);
+        self.decode_octet(byte, now);
         self.parser_partial = self.decoder.phase() != StreamPhase::Sync;
-        result
     }
 
     /// Feed a frame already validated by a host-side chunk-tolerant assembler.
@@ -73,9 +72,10 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
     /// octet arrived: a reply to the frame is timed from it, and a late
     /// estimate leaves the requester less time than the core assumes.
     ///
-    /// A frame the codec would not have decoded is refused with
-    /// [`CoreError::Frame`] and changes nothing, not even the core's clock:
-    /// more data than its type carries, source 255, or, without
+    /// A frame the codec would not have decoded is an assembler bug: it is
+    /// ignored, counted in [`MstpCounters::adapter_errors`], and changes
+    /// nothing else, not even the core's clock: more data than its type
+    /// carries, source 255, or, without
     /// [`MstpCoreConfig::extended_frames`], a COBS-encoded type. A standard
     /// type carries up to 501 octets. With extended frames on, Types 32 and
     /// 33 carry up to 1497 and are taken as Types 5 and 6 are, and a
@@ -96,7 +96,7 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
     ///   in [`MstpCounters::own_address_frames`] as evidence of a duplicate
     ///   and handles it like any other frame. An adapter must therefore never
     ///   feed back its own echo once the transmission has completed.
-    pub fn on_validated_frame(&mut self, frame: Frame<'_>, now: Instant) -> Result<(), CoreError> {
+    pub fn on_validated_frame(&mut self, frame: Frame<'_>, now: Instant) {
         let header = frame.header;
         let extended = self.config.extended_frames && header.frame_type.is_cobs();
         let maximum = match header.frame_type {
@@ -105,25 +105,18 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
             // A reserved type's data is never used.
             _ => usize::MAX,
         };
-        if frame.data.len() > maximum {
-            return Err(CoreError::Frame(FrameError::Oversize {
-                length: frame.data.len(),
-                maximum,
-            }));
-        }
-        if header.source == BROADCAST_MAC {
-            return Err(CoreError::Frame(FrameError::BroadcastSource));
-        }
-        if header.frame_type.is_cobs() && !extended {
-            return Err(CoreError::Frame(FrameError::UnsupportedCobsFrame {
-                raw_type: header.frame_type.to_raw(),
-            }));
+        let undecodable = frame.data.len() > maximum
+            || header.source == BROADCAST_MAC
+            || (header.frame_type.is_cobs() && !extended);
+        if undecodable {
+            self.counters.record_adapter_error();
+            return;
         }
         let now = self.observe_time(now);
         if self.transmitting() {
-            return Ok(());
+            return;
         }
-        self.note_bus_activity(now, 1)?;
+        self.note_bus_activity(now, 1);
         self.process_frame(frame, now)
     }
 
@@ -149,12 +142,12 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
     /// frame, which waits for a quiet line again, as for any octet. It is
     /// ignored as echo between a confirmed transmit start and its
     /// completion.
-    pub fn on_invalid_frame(&mut self, now: Instant) -> Result<(), CoreError> {
+    pub fn on_invalid_frame(&mut self, now: Instant) {
         let now = self.observe_time(now);
         if self.transmitting() {
-            return Ok(());
+            return;
         }
-        self.note_bus_activity(now, 1)?;
+        self.note_bus_activity(now, 1);
         self.counters.record_parser_error();
         self.invalid_frame_event(now)
     }
@@ -168,10 +161,10 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
     ///
     /// Like [`Self::on_octet`], it is ignored as echo only once a transmit's
     /// start is confirmed.
-    pub fn on_host_activity(&mut self, octets: usize, now: Instant) -> Result<(), CoreError> {
+    pub fn on_host_activity(&mut self, octets: usize, now: Instant) {
         let now = self.observe_time(now);
         if self.transmitting() || octets == 0 {
-            return Ok(());
+            return;
         }
         self.note_bus_activity(now, u32::try_from(octets).unwrap_or(u32::MAX))
     }
@@ -186,13 +179,13 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
     /// [`Self::on_octet`] would be: once a transmit's start is confirmed.
     /// Otherwise it counts under its kind, in
     /// [`MstpCounters::framing_errors`] and the three beside it.
-    pub fn on_receive_error(&mut self, error: ReceiveError, now: Instant) -> Result<(), CoreError> {
+    pub fn on_receive_error(&mut self, error: ReceiveError, now: Instant) {
         let now = self.observe_time(now);
         if self.transmitting() {
-            return Ok(());
+            return;
         }
         self.counters.record_receive_error(error);
-        self.note_bus_activity(now, 1)?;
+        self.note_bus_activity(now, 1);
         let invalid_candidate = matches!(
             self.decoder.phase(),
             StreamPhase::Header | StreamPhase::Data
@@ -201,20 +194,18 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
         self.parser_partial = false;
         if invalid_candidate {
             self.counters.record_parser_error();
-            self.invalid_frame_event(now)?;
+            self.invalid_frame_event(now);
         }
-        Ok(())
     }
 
     /// Apply exact wire silence; a partial frame aborts only when silence is
     /// strictly greater than T_frame_abort. An aborted header or data,
     /// including a dropped frame being skipped by count, counts as an invalid
     /// frame whatever its destination (Clause 9.5.4).
-    pub fn on_silence(&mut self, now: Instant) -> Result<(), CoreError> {
+    pub fn on_silence(&mut self, now: Instant) {
         let now = self.observe_time(now);
         if self.abort_partial_if_late(now) {
-            self.invalid_frame_event(now)?;
+            self.invalid_frame_event(now);
         }
-        Ok(())
     }
 }

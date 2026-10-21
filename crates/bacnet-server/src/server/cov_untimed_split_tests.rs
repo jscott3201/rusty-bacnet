@@ -15,7 +15,7 @@ use super::cov_wire_test_support::*;
 use super::*;
 use bacnet_objects::analog::AnalogValueObject;
 use bacnet_services::cov_multiple::COVNotificationMultipleRequest;
-use bacnet_types::enums::EnableDisable;
+use bacnet_types::enums::{EnableDisable, EngineeringUnits};
 use tokio::time::Instant as TokioInstant;
 
 const SMALL_APDU: u16 = 206;
@@ -93,7 +93,7 @@ fn add_objects(db: &mut ObjectDatabase) {
     for instance in 2..=OBJECTS {
         let name = format!("AV-{instance}");
         db.add(Box::new(
-            AnalogValueObject::new(instance, &name, 62).unwrap(),
+            AnalogValueObject::new(instance, &name, EngineeringUnits::DEGREES_CELSIUS).unwrap(),
         ))
         .unwrap();
     }

@@ -30,13 +30,14 @@ use bacnet_endpoint::identity::{build_database_with_extra, DeviceIdentity};
 use bacnet_endpoint::sc::ScEndpointBuilder;
 use bacnet_endpoint::session::SessionRole;
 use bacnet_network::layer::NetworkLayer;
+use bacnet_npdu::NetworkPriority;
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_transport::sc::{ScReconnectConfig, ScTransport};
 use bacnet_transport::sc_hub::{ScHub, ScHubTlsConfig};
 use bacnet_transport::sc_tls::{ScNodeTlsConfig, TlsWebSocket};
 use bacnet_types::enums::{
-    ConfirmedServiceChoice, NetworkPriority, ObjectType, PropertyIdentifier, Segmentation,
+    ConfirmedServiceChoice, EngineeringUnits, ObjectType, PropertyIdentifier, Segmentation,
     ServiceSupported, UnconfirmedServiceChoice,
 };
 use bacnet_types::primitives::ObjectIdentifier;
@@ -110,7 +111,12 @@ fn db_with_analog(
     instance: u32,
     value: f32,
 ) -> bacnet_objects::database::ObjectDatabase {
-    let mut o = AnalogInputObject::new(instance, format!("sc-ai-{instance}"), 0).unwrap();
+    let mut o = AnalogInputObject::new(
+        instance,
+        format!("sc-ai-{instance}"),
+        EngineeringUnits::SQUARE_METERS,
+    )
+    .unwrap();
     o.set_present_value(value);
     build_database_with_extra(id, vec![Box::new(o)]).unwrap()
 }
@@ -126,7 +132,7 @@ async fn dial_node(hub_port: u16, node_tls: ScNodeTlsConfig) -> TlsWebSocket {
 /// Controlled SC peer (real hub relay) exposing provenance + source MAC.
 struct ControlledPeer {
     net: NetworkLayer<ScTransport<TlsWebSocket>>,
-    rx: tokio::sync::mpsc::Receiver<bacnet_network::layer::ReceivedApdu>,
+    rx: bacnet_network::layer::ApduReceiver,
     vmac: [u8; 6],
 }
 
@@ -189,7 +195,7 @@ impl ControlledPeer {
         let mut enc = BytesMut::new();
         encode_apdu(&mut enc, &resp).unwrap();
         self.net
-            .send_apdu(&enc, &src, false, NetworkPriority::NORMAL)
+            .send_apdu(&enc, &src, false, NetworkPriority::Normal)
             .await
             .unwrap();
         (iid, src, verified)
@@ -215,7 +221,7 @@ async fn sc_one_node_bidirectional_with_provenance_and_admin() {
     let mut endpoint = ScEndpointBuilder::new(node_vmac, node_uuid)
         .role(SessionRole::Both)
         .database(db)
-        .identity(id.clone())
+        .device(id.clone())
         .build_hub_session(ws)
         .expect("hub session must build");
     endpoint.start().await.unwrap();
@@ -281,7 +287,7 @@ async fn sc_one_node_bidirectional_with_provenance_and_admin() {
     let mut enc = BytesMut::new();
     encode_apdu(&mut enc, &req).unwrap();
     peer.net
-        .send_apdu(&enc, &src, true, NetworkPriority::NORMAL)
+        .send_apdu(&enc, &src, true, NetworkPriority::Normal)
         .await
         .unwrap();
     let reply = tokio::time::timeout(WAIT, peer.rx.recv())
@@ -371,7 +377,7 @@ async fn sc_kill_reconnect_preserves_vmac_uuid_vs_transient() {
     let mut s1 = ScEndpointBuilder::new(vmac, uuid)
         .role(SessionRole::Both)
         .database(db_with_analog(&id, 1, 1.0))
-        .identity(id.clone())
+        .device(id.clone())
         .build_hub_session(ws1)
         .unwrap();
     s1.start().await.unwrap();
@@ -403,7 +409,7 @@ async fn sc_kill_reconnect_preserves_vmac_uuid_vs_transient() {
     let mut s2 = ScEndpointBuilder::new(vmac, uuid)
         .role(SessionRole::Both)
         .database(db_with_analog(&id, 1, 2.0))
-        .identity(id.clone())
+        .device(id.clone())
         .reconnect(ScReconnectConfig {
             initial_delay_ms: 100,
             max_delay_ms: 1_000,
@@ -443,7 +449,7 @@ async fn sc_kill_reconnect_preserves_vmac_uuid_vs_transient() {
     let mut s3 = ScEndpointBuilder::new(transient_vmac, transient_uuid)
         .role(SessionRole::ClientOnly)
         .database(db_with_analog(&transient_id, 1, 3.0))
-        .identity(transient_id)
+        .device(transient_id)
         .build_hub_session(ws3)
         .unwrap();
     s3.start().await.unwrap();
@@ -477,7 +483,7 @@ async fn sc_kill_reconnect_preserves_vmac_uuid_vs_transient() {
         .with_device_uuid([0x99; 16]);
     let ws_bad = dial_node(hub_port, ca.node_tls.clone()).await;
     assert!(ScEndpointBuilder::new([0x07; 6], [0x77; 16])
-        .identity(bad_id)
+        .device(bad_id)
         .build_hub_session(ws_bad)
         .is_err());
 

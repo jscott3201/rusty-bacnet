@@ -9,6 +9,7 @@ use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetEventParameter, ChangeOfValueCriteria,
 };
+use bacnet_types::enums::EngineeringUnits;
 use bacnet_types::primitives::{BACnetTimeStamp, Date, Time};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -156,7 +157,8 @@ fn acked_transitions(
 #[test]
 fn same_state_transition_still_commits_ack_and_history() {
     let mut db = ObjectDatabase::new();
-    let mut monitored = AnalogInputObject::new(31, "AI-COV", 62).unwrap();
+    let mut monitored =
+        AnalogInputObject::new(31, "AI-COV", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     monitored.set_present_value(10.0);
     let monitored_oid = monitored.object_identifier();
     db.add(Box::new(monitored)).unwrap();
@@ -231,7 +233,8 @@ fn setup_counted_delayed_enrollment() -> (
     std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) {
     let mut db = ObjectDatabase::new();
-    let mut monitored = AnalogValueObject::new(41, "AV-counted", 62).unwrap();
+    let mut monitored =
+        AnalogValueObject::new(41, "AV-counted", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     for index in [1, 2] {
         monitored
             .write_property_from(
@@ -370,7 +373,8 @@ fn source_and_state_rejection_never_claims_cancellation_committed() {
 #[test]
 fn private_state_failure_is_reported_and_suppresses_transition() {
     let mut db = ObjectDatabase::new();
-    let mut monitored = AnalogValueObject::new(42, "AV-state-failure", 62).unwrap();
+    let mut monitored =
+        AnalogValueObject::new(42, "AV-state-failure", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     monitored
         .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
@@ -402,7 +406,9 @@ fn private_state_failure_is_reported_and_suppresses_transition() {
 #[test]
 fn unsupported_atomic_hook_fails_closed_without_consuming_sequence() {
     let mut db = ObjectDatabase::new();
-    let mut monitored = AnalogValueObject::new(43, "AV-unsupported-hook", 62).unwrap();
+    let mut monitored =
+        AnalogValueObject::new(43, "AV-unsupported-hook", EngineeringUnits::DEGREES_CELSIUS)
+            .unwrap();
     monitored
         .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,

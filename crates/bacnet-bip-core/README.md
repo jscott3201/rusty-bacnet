@@ -4,8 +4,9 @@ Portable BACnet/IP behaviour from Annex J of ASHRAE 135, for
 [rusty-bacnet](https://github.com/jscott3201/rusty-bacnet). It sits above
 `bacnet-bip-codec`, which has the wire format, and below a socket.
 
-- `#![no_std]`, no allocator, no dependencies besides `bacnet-bip-codec`
-  and `bacnet-time`. The codec is re-exported as `bacnet_bip_core::codec`,
+- `#![no_std]`, no allocator, no dependencies besides `bacnet-bip-codec`,
+  `bacnet-npdu` (for `MAX_NPDU`, the longest NPDU B/IP carries) and
+  `bacnet-time`. The codec is re-exported as `bacnet_bip_core::codec`,
   since the API speaks its types.
 - Tables live in arrays whose size you pick with a const generic.
 - Time is an `Instant` you pass to each call; the crate reads no clock. It
@@ -34,6 +35,9 @@ mode:
   a lease that never counts on the BBMD's grace period; broadcasts held
   until the first registration resolves; and the timers. You poll its
   actions after every call.
+- A node can be a B/IP-M member (Annex J.8): `LocalSubnet::member` puts its
+  broadcasts on a multicast group in place of the subnet's broadcast
+  address, and it takes broadcast functions from that group.
 
 The `bbmd` module holds a BBMD's broadcast distribution table and foreign
 device table, and decides where each broadcast goes:
@@ -51,6 +55,27 @@ Forwarded-NPDU to send them. Foreign-device registration applies
 time-to-live limits, a per-address quota and reserved capacity, and asks
 your own admission check (an access list, a rate limit) in between.
 Registrations expire on your clock, with the 30-second grace period.
+`Tables::serve` answers the management requests a BBMD serves from its
+tables (Register-Foreign-Device, the two table reads and
+Delete-Foreign-Device-Table-Entry), with the result codes Annex J gives
+them, under your own rules.
+A BBMD can also be the one for a B/IP-M group (Annex J.8.3), and one behind a NAT router
+(Annex J.7.5) takes its public address with `Tables::set_nat`: the BDT must
+then name that global address as its own row, every row two-hop, and the
+Forwarded-NPDUs it builds name the global address as their origin.
+
+The `port` module is the driver that joins a node to a socket and does
+what it asks, so firmware doesn't write that loop:
+
+- `NodePort` runs a node in normal or foreign-device mode: it sends the
+  NAKs and the registrations, and holds a foreign device's broadcasts, in
+  slots you lend, until its first registration resolves.
+- `BbmdPort` runs a BBMD's link over tables you lend: it forwards each
+  broadcast where the tables say and answers each management request
+  itself.
+
+Datagrams leave through a sink you implement, which encodes each straight
+into your socket's buffer.
 
 The Tokio B/IP transport in `bacnet-transport` runs its node and its BBMD on
 this crate.

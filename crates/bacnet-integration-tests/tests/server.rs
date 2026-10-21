@@ -1,8 +1,10 @@
 //! End-to-end integration tests: real BACnetClient ↔ real BACnetServer over loopback UDP.
+#![forbid(unsafe_code)]
 
 use bacnet_client::client::BACnetClient;
 use bacnet_encoding::apdu::{encode_apdu, Apdu, ConfirmedRequest as ConfirmedRequestPdu};
 use bacnet_network::layer::NetworkLayer;
+use bacnet_npdu::NetworkPriority;
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::binary::BinaryValueObject;
 use bacnet_objects::database::ObjectDatabase;
@@ -11,7 +13,7 @@ use bacnet_objects::traits::BACnetObject;
 use bacnet_server::server::BACnetServer;
 use bacnet_transport::bip::BipTransport;
 use bacnet_types::enums::{
-    AbortReason, ConfirmedServiceChoice, NetworkPriority, ObjectType, PropertyIdentifier,
+    AbortReason, ConfirmedServiceChoice, EngineeringUnits, ObjectType, PropertyIdentifier,
     Segmentation,
 };
 use bacnet_types::primitives::ObjectIdentifier;
@@ -33,17 +35,17 @@ async fn make_server_with_dcc_policy(
 
     // Device object (instance 1234)
     let mut device = DeviceObject::new(DeviceConfig {
-        instance: 1234,
-        name: "Integration Test Device".into(),
+        identity: bacnet_objects::DeviceIdentity::new(1234, 555)
+            .expect("valid Device identity")
+            .with_name("Integration Test Device")
+            .with_segmentation(Segmentation::BOTH),
         vendor_name: "Rusty BACnet".into(),
-        vendor_id: 555,
-        segmentation_supported: Segmentation::BOTH,
         ..DeviceConfig::default()
     })
     .unwrap();
 
     // AnalogInput (instance 1, present-value = 72.5)
-    let mut ai = AnalogInputObject::new(1, "Zone Temp", 62).unwrap();
+    let mut ai = AnalogInputObject::new(1, "Zone Temp", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ai.set_present_value(72.5);
 
     // BinaryValue (instance 1, default = inactive)
@@ -71,7 +73,7 @@ async fn make_server_with_dcc_policy(
         // this shared fixture advertises both. The other suites are
         // indifferent to it beyond the I-Am/Device property now saying
         // SEGMENTED_BOTH.
-        .segmentation_supported(Segmentation::BOTH)
+        .device(bacnet_objects::DeviceIdentity::new(1234, 555).unwrap().with_segmentation(Segmentation::BOTH))
         .database(db)
         .build()
         .await

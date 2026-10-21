@@ -16,8 +16,8 @@ use super::*;
 fn assert_property_error(result: Result<PropertyValue, Error>, code: ErrorCode) {
     assert!(
         matches!(result, Err(Error::Protocol { class, code: actual })
-            if class == ErrorClass::PROPERTY.to_raw() as u32
-                && actual == code.to_raw() as u32),
+            if class == ErrorClass::PROPERTY
+                && actual == code),
         "expected PROPERTY / {code:?}, got {result:?}"
     );
 }
@@ -146,7 +146,7 @@ fn credential_data_input_set_supported_formats_refuses_ill_formed_formats() {
         ]);
         assert!(
             matches!(result, Err(Error::Protocol { code, .. })
-                if code == ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32),
+                if code == ErrorCode::VALUE_OUT_OF_RANGE),
             "{format:?}: {result:?}"
         );
         assert_array(&reader, P::SUPPORTED_FORMATS, &[data(&[0x09, 0x14])]);
@@ -212,7 +212,7 @@ fn access_point_access_doors_read_as_an_array() {
     ]);
     assert!(
         matches!(result, Err(Error::Protocol { code, .. })
-            if code == ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32),
+            if code == ErrorCode::VALUE_OUT_OF_RANGE),
         "{result:?}"
     );
     assert_array(&point, P::ACCESS_DOORS, &doors);

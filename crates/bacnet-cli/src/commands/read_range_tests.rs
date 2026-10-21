@@ -6,7 +6,7 @@ use bacnet_types::constructed::{
     AuditPropertyReference, BACnetAuditLogRecord, BACnetEventLogRecord, BACnetLogMultipleRecord,
     BACnetLogRecord, LogValue,
 };
-use bacnet_types::enums::{AuditOperation, EventState, EventType};
+use bacnet_types::enums::{AuditOperation, ErrorClass, ErrorCode, EventState, EventType};
 use bacnet_types::primitives::BACnetTimeStamp;
 use bytes::BytesMut;
 
@@ -89,8 +89,8 @@ fn trend_log_records_show_datum_and_status_flags() {
         (
             10,
             LogDatum::Failure {
-                error_class: ErrorClass::PROPERTY.to_raw().into(),
-                error_code: ErrorCode::VALUE_TOO_LONG.to_raw().into(),
+                error_class: ErrorClass::PROPERTY,
+                error_code: ErrorCode::VALUE_TOO_LONG,
             },
             None,
         ),

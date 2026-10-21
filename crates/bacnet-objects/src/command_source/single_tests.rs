@@ -10,7 +10,7 @@ use crate::present_value_access::PresentValueAccess;
 use crate::property_metadata::{PropertyPresenceCondition, PropertyWriteCapability};
 use crate::traits::BACnetObject;
 use bacnet_types::constructed::BACnetAddress;
-use bacnet_types::enums::{ErrorCode, ObjectType, PropertyIdentifier as P};
+use bacnet_types::enums::{EngineeringUnits, ErrorCode, ObjectType, PropertyIdentifier as P};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use bacnet_types::MacAddr;
@@ -58,7 +58,9 @@ fn values(
     access: PresentValueAccess,
     tracked: bool,
 ) -> Vec<(Box<dyn BACnetObject>, PropertyValue)> {
-    let mut av = AnalogValueObject::with_access(1, "AV-1", 62, access).unwrap();
+    let mut av =
+        AnalogValueObject::with_access(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS, access)
+            .unwrap();
     let mut bv = BinaryValueObject::with_access(1, "BV-1", access).unwrap();
     let mut msv = MultiStateValueObject::with_access(1, "MSV-1", 3, access).unwrap();
     av.set_value_source_tracking(tracked);
@@ -74,7 +76,7 @@ fn values(
 fn assert_code(result: Result<impl std::fmt::Debug, Error>, expected: ErrorCode) {
     match result {
         Err(Error::Protocol { code, .. }) => {
-            assert_eq!(code, expected.to_raw() as u32, "expected {expected:?}")
+            assert_eq!(code, expected, "expected {expected:?}")
         }
         other => panic!("expected {expected:?}, got {other:?}"),
     }
@@ -373,7 +375,7 @@ fn application_updates_name_the_device_or_nobody() {
 
 #[test]
 fn tracking_is_for_noncommandable_values_only_and_can_be_turned_off() {
-    let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let mut av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let commandable = av.property_metadata().into_owned();
     av.set_value_source_tracking(true);
     assert_eq!(av.property_metadata().as_ref(), commandable);
@@ -382,8 +384,13 @@ fn tracking_is_for_noncommandable_values_only_and_can_be_turned_off() {
         ErrorCode::WRITE_ACCESS_DENIED,
     );
 
-    let mut av =
-        AnalogValueObject::with_access(2, "AV-2", 62, PresentValueAccess::Writable).unwrap();
+    let mut av = AnalogValueObject::with_access(
+        2,
+        "AV-2",
+        EngineeringUnits::DEGREES_CELSIUS,
+        PresentValueAccess::Writable,
+    )
+    .unwrap();
     let untracked = av.property_metadata().into_owned();
     av.set_value_source_tracking(true);
     av.set_value_source_tracking(false);

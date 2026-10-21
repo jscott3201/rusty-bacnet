@@ -242,7 +242,8 @@ async fn target_reporter_overlap_follows_actual_subject_membership_and_protects_
         .await
         .add(Box::new(
             DeviceObject::new(DeviceConfig {
-                instance: 11,
+                identity: bacnet_objects::DeviceIdentity::new(11, 0)
+                    .expect("valid Device identity"),
                 ..Default::default()
             })
             .unwrap()

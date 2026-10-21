@@ -13,8 +13,8 @@ use bacnet_types::enums::{ErrorClass, ErrorCode};
 fn assert_error<T: std::fmt::Debug>(result: Result<T, Error>, expected: ErrorCode) {
     match result {
         Err(Error::Protocol { class, code }) => {
-            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
-            assert_eq!(code, expected.to_raw() as u32, "expected {expected:?}");
+            assert_eq!(class, ErrorClass::PROPERTY);
+            assert_eq!(code, expected, "expected {expected:?}");
         }
         other => panic!("expected PROPERTY/{expected:?}, got {other:?}"),
     }

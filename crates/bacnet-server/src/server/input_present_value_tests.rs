@@ -8,7 +8,7 @@ use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::multistate::MultiStateInputObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::cov::COVNotificationRequest;
-use bacnet_types::enums::{EventState, Reliability};
+use bacnet_types::enums::{EngineeringUnits, EventState, Reliability};
 struct Fixture {
     server: BACnetServer<TestTransport>,
     sent: SendLog,
@@ -20,7 +20,7 @@ struct Fixture {
 
 async fn fixture() -> Fixture {
     let (transport, sent) = recording_transport();
-    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     for (property, value) in [
         (PropertyIdentifier::HIGH_LIMIT, PropertyValue::Real(80.0)),
         (PropertyIdentifier::LOW_LIMIT, PropertyValue::Real(20.0)),
@@ -45,7 +45,7 @@ async fn fixture() -> Fixture {
 
     let bi = BinaryInputObject::new(1, "BI-1").unwrap();
     let msi = MultiStateInputObject::new(1, "MSI-1", 3).unwrap();
-    let av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let ids = (
         ai.object_identifier(),
         bi.object_identifier(),
@@ -53,8 +53,9 @@ async fn fixture() -> Fixture {
         av.object_identifier(),
     );
     let device = DeviceObject::new(DeviceConfig {
-        instance: 100,
-        name: "Input-local-write-test-device".into(),
+        identity: bacnet_objects::DeviceIdentity::new(100, 0)
+            .expect("valid Device identity")
+            .with_name("Input-local-write-test-device"),
         ..DeviceConfig::default()
     })
     .unwrap();
@@ -66,6 +67,7 @@ async fn fixture() -> Fixture {
     db.add(Box::new(msi)).unwrap();
     db.add(Box::new(av)).unwrap();
     let server = BACnetServer::generic_builder()
+        .device(bacnet_objects::DeviceIdentity::new(100, 0).unwrap())
         .transport(transport)
         .database(db)
         .enable_event_enrollment(false)
@@ -104,8 +106,8 @@ fn assert_protocol_error(error: Error, class: ErrorClass, code: ErrorCode) {
             class: actual_class,
             code: actual_code,
         } => {
-            assert_eq!(actual_class, class.to_raw() as u32);
-            assert_eq!(actual_code, code.to_raw() as u32);
+            assert_eq!(actual_class, class);
+            assert_eq!(actual_code, code);
         }
         other => panic!("expected {class:?} / {code:?}, got {other:?}"),
     }
@@ -482,7 +484,7 @@ async fn noncommandable_value_write_local_without_resolved_origin_runs_cov() {
     let value = AnalogValueObject::with_access(
         2,
         "Writable-AV",
-        62,
+        EngineeringUnits::DEGREES_CELSIUS,
         bacnet_objects::present_value_access::PresentValueAccess::Writable,
     )
     .unwrap();
@@ -537,7 +539,7 @@ async fn application_value_path_preserves_out_of_service_simulation() {
     let value = AnalogValueObject::with_access(
         2,
         "Read-only-AV",
-        62,
+        EngineeringUnits::DEGREES_CELSIUS,
         bacnet_objects::present_value_access::PresentValueAccess::ReadOnly,
     )
     .unwrap();

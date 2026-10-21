@@ -37,24 +37,18 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
     /// its storage while the core changes state. Nothing that a frame or a
     /// dropped candidate leads to touches the decoder, and it is back in
     /// place before this returns, whatever the outcome.
-    pub(super) fn decode_octet(&mut self, byte: u8, now: Instant) -> Result<(), CoreError> {
+    pub(super) fn decode_octet(&mut self, byte: u8, now: Instant) {
         let mut decoder = core::mem::replace(&mut self.decoder, StreamDecoder::new(&mut []));
-        let result = self.drain_decoder(&mut decoder, byte, now);
+        self.drain_decoder(&mut decoder, byte, now);
         self.decoder = decoder;
-        result
     }
 
-    fn drain_decoder(
-        &mut self,
-        decoder: &mut StreamDecoder<'rx>,
-        byte: u8,
-        now: Instant,
-    ) -> Result<(), CoreError> {
+    fn drain_decoder(&mut self, decoder: &mut StreamDecoder<'rx>, byte: u8, now: Instant) {
         let octet = [byte];
         let mut input: &[u8] = &octet;
         loop {
             let dropped = match decoder.push_slice(input) {
-                DecodeEvent::NeedMore => return Ok(()),
+                DecodeEvent::NeedMore => return,
                 DecodeEvent::Invalid { .. } => None,
                 // A node without COBS support has no extended frames: one
                 // that the storage was large enough to decode is dropped as
@@ -71,7 +65,7 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
                     ))
                 }
                 DecodeEvent::Frame { frame, .. } => {
-                    self.process_frame(frame, now)?;
+                    self.process_frame(frame, now);
                     None
                 }
                 DecodeEvent::Malformed {
@@ -84,7 +78,7 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
             if let Some((error, destination)) = dropped {
                 if self.dropped_candidate_is_invalid(error, destination) {
                     self.counters.record_parser_error();
-                    self.invalid_frame_event(now)?;
+                    self.invalid_frame_event(now);
                 }
             }
         }
@@ -126,29 +120,24 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
         }
     }
 
-    pub(super) fn invalid_frame_event(&mut self, now: Instant) -> Result<(), CoreError> {
+    pub(super) fn invalid_frame_event(&mut self, now: Instant) {
         // While a frame of this station's waits, its octets were only
         // activity for that frame (see the `pending` module). While one is
         // on the wire, nothing received can be judged: the start dropped any
         // partial frame, so this guard is only a second line.
         if self.pending_send.is_some() || self.active_transmit.is_some() {
-            return Ok(());
+            return;
         }
         if self.state == MasterState::WaitForReply {
             self.set_state(MasterState::DoneWithToken);
-            self.drive_token(now)?;
+            self.drive_token(now);
         } else if self.state == MasterState::PollForMaster {
-            self.poll_timeout(now)?;
+            self.poll_timeout(now);
         }
-        Ok(())
     }
 
     /// Act on a valid frame, from the core's own decoder or a host assembler.
-    pub(super) fn process_frame(
-        &mut self,
-        frame: Frame<'_>,
-        now: Instant,
-    ) -> Result<(), CoreError> {
+    pub(super) fn process_frame(&mut self, frame: Frame<'_>, now: Instant) {
         self.counters.record_frame_received();
         // Never this station's own echo, which is ignored before it gets
         // here: another station uses this address. Clause 9 has no rule for
@@ -156,12 +145,12 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
         if frame.header.source == self.config.station {
             self.counters.record_own_address_frame();
         }
-        if self.frame_while_pending(frame, now)? {
-            return Ok(());
+        if self.frame_while_pending(frame, now) {
+            return;
         }
         if self.pending_request.is_some() || self.state == MasterState::AnswerDataRequest {
             self.frame_while_busy(frame, true);
-            return Ok(());
+            return;
         }
         // A complete valid frame proves that another station began using the
         // token. The octet ingress reaches this transition through
@@ -183,7 +172,7 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
             }
             self.set_state(MasterState::Idle);
             self.protocol_deadline = Some(now + T_NO_TOKEN);
-            return Ok(());
+            return;
         }
         let for_us = frame.header.destination == self.config.station;
         let broadcast = frame.header.destination == BROADCAST_MAC;
@@ -205,11 +194,9 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
             // request (Clause 9.5.6.2).
             frame_type if is_data_not_expecting_reply(frame_type) && (for_us || broadcast) => {
                 self.deliver(frame, None);
-                Ok(())
             }
             frame_type if is_data_expecting_reply(frame_type) && broadcast => {
                 self.deliver(frame, None);
-                Ok(())
             }
             // ReceivedDataNeedingReply.
             frame_type if is_data_expecting_reply(frame_type) && for_us => {
@@ -228,12 +215,11 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
             }
             _ if self.goes_up_whole(frame) => {
                 self.deliver(frame, None);
-                Ok(())
             }
             // ReceivedUnwantedFrame: for another station, or a type this
             // node doesn't know, a reserved COBS type with a good CRC-32K
             // included (Clause 9.5.4.9).
-            _ => Ok(()),
+            _ => {}
         }
     }
 
@@ -255,7 +241,7 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
 
     /// A station answered this station's Poll For Master: it becomes the
     /// successor and gets the token (ReceivedReplyToPFM, Clause 9.5.6.8).
-    pub(super) fn take_successor(&mut self, source: u8, now: Instant) -> Result<(), CoreError> {
+    pub(super) fn take_successor(&mut self, source: u8, now: Instant) {
         self.next_station = source;
         self.poll_station = self.config.station;
         self.token_count = 0;
@@ -265,7 +251,7 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
     }
 
     /// Take up a Token addressed to this station (Clause 9.5.6.2).
-    pub(super) fn use_received_token(&mut self, now: Instant) -> Result<(), CoreError> {
+    pub(super) fn use_received_token(&mut self, now: Instant) {
         self.sole_master = false;
         self.frame_count = 0;
         self.retry_token_count = 0;
@@ -337,7 +323,7 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
     /// (ReceivedUnexpectedFrame). So is a reserved COBS type with a good
     /// CRC-32K, a valid frame of a type this node doesn't know (Clause
     /// 9.5.4.9).
-    fn process_wait_for_reply(&mut self, frame: Frame<'_>, now: Instant) -> Result<(), CoreError> {
+    fn process_wait_for_reply(&mut self, frame: Frame<'_>, now: Instant) {
         let frame_type = frame.header.frame_type;
         let is_reply = frame.header.destination == self.config.station
             && (is_data_not_expecting_reply(frame_type)
@@ -348,7 +334,7 @@ impl<'rx, Q: QueueStorage, const NPDU: usize> MasterCore<'rx, Q, NPDU> {
         if !is_reply {
             self.set_state(MasterState::Idle);
             self.protocol_deadline = Some(now + T_NO_TOKEN);
-            return Ok(());
+            return;
         }
         if frame_type != FrameType::REPLY_POSTPONED {
             self.deliver(frame, None);

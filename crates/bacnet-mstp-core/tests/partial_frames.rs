@@ -27,21 +27,20 @@ fn a_partial_frame_dies_when_a_poll_starts() {
     let last = feed(&mut core, &PARTIAL, ms(11));
     let due = last + turnaround(&core);
     assert_eq!(core.next_deadline(), Some(due));
-    core.on_deadline(due).unwrap();
+    core.on_deadline(due);
     let (id, header) = handed_over(&mut core);
     assert!(is(header, FrameType::POLL_FOR_MASTER, PEER));
     core.on_transmit_started(id, due).unwrap();
 
     // Where the partial frame's abort would have fallen, mid-poll.
-    core.on_deadline(last + core.config().t_frame_abort + us(1))
-        .unwrap();
+    core.on_deadline(last + core.config().t_frame_abort + us(1));
     assert_eq!(core.snapshot().poll_station, PEER);
     assert_eq!(core.counters().frame_aborts, 1);
     assert_eq!(core.counters().parser_errors, 0);
     let watchdog = due + core.config().transmit_watchdog;
     assert_eq!(core.next_deadline(), Some(watchdog));
     let end = due + Duration::from_millis(9);
-    core.on_transmit_complete(id, end).unwrap();
+    core.on_transmit_complete(id, end);
     assert_eq!(core.state(), MasterState::PollForMaster);
     assert_eq!(core.next_deadline(), Some(end + Duration::from_millis(20)));
     assert_eq!(core.counters().parser_errors, 0);
@@ -57,7 +56,8 @@ fn a_partial_frame_does_not_end_the_wait_for_a_reply() {
     config.t_frame_abort = Duration::from_millis(20);
     let mut rx = [0; 64];
     let mut actions = Actions::new();
-    let mut core = Core::new(config, Queues::new(), &mut rx, &mut actions, Instant::ZERO).unwrap();
+    let mut core =
+        Core::from_parts(config, Queues::new(), &mut rx, &mut actions, Instant::ZERO).unwrap();
     enqueue(&mut core, true, ms(1));
     validated(&mut core, FrameType::TOKEN, STATION, PEER, &[], ms(10));
     let last = feed(&mut core, &PARTIAL, ms(11));
@@ -68,13 +68,12 @@ fn a_partial_frame_does_not_end_the_wait_for_a_reply() {
     let complete = start + Duration::from_millis(1);
     let timeout = complete + core.config().t_reply_timeout;
 
-    core.on_deadline(last + Duration::from_millis(20) + us(1))
-        .unwrap();
+    core.on_deadline(last + Duration::from_millis(20) + us(1));
     assert_eq!(core.state(), MasterState::WaitForReply);
     assert_eq!(core.next_deadline(), Some(timeout));
     assert_eq!(core.counters().frame_aborts, 1);
     assert_eq!(core.counters().parser_errors, 0);
-    core.on_deadline(timeout).unwrap();
+    core.on_deadline(timeout);
     assert_ne!(core.state(), MasterState::WaitForReply);
 }
 
@@ -90,12 +89,12 @@ fn an_overdue_abort_counts_alike_at_the_start() {
         poll_waiting(&mut core);
         let last = feed(&mut core, &PARTIAL, ms(11));
         let due = last + turnaround(&core);
-        core.on_deadline(due).unwrap();
+        core.on_deadline(due);
         let (id, _) = handed_over(&mut core);
         let abort = last + core.config().t_frame_abort + us(1);
         if serviced {
             assert_eq!(core.next_deadline(), Some(abort));
-            core.on_deadline(abort).unwrap();
+            core.on_deadline(abort);
         }
         core.on_transmit_started(id, abort + us(10)).unwrap();
         let counters = core.counters();

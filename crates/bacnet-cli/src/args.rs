@@ -22,7 +22,29 @@ pub(crate) enum FileReadAccess {
 #[derive(Debug, Parser)]
 #[command(name = "bacnet", about = "BACnet command-line tool", version)]
 pub(crate) struct Cli {
-    /// Network interface IP address to bind (omit to select interactively in shell mode).
+    /// Argument IDs explicitly supplied by the caller, captured before extraction.
+    #[arg(skip)]
+    pub(crate) explicit_args: Vec<String>,
+
+    /// The subcommand's canonical name, captured before extraction, for the
+    /// write guard's classification (`core::class`).
+    #[arg(skip)]
+    pub(crate) command_name: Option<String>,
+
+    /// Let commands that change a device run: writes, object and file
+    /// changes, alarm acknowledgment, time sync and unregister, and (with
+    /// --yes or a typed confirmation) communication control and reinitialize.
+    /// The TUI ignores it: its writes need an armed write session.
+    #[arg(long, global = true)]
+    pub(crate) allow_write: bool,
+
+    /// Confirm communication control and reinitialize without typing the
+    /// target; they need it when stdin is not a terminal.
+    #[arg(long, global = true)]
+    pub(crate) yes: bool,
+
+    /// Network interface IP address to bind (omit to bind all of them; the
+    /// TUI asks which).
     #[arg(short, long, global = true)]
     pub(crate) interface: Option<Ipv4Addr>,
 
@@ -66,8 +88,36 @@ pub(crate) struct Cli {
     /// Seconds between --foreign-bbmd registrations, less than --ttl
     /// (default: half the TTL). Behind NAT, renew often so the mapping the
     /// BBMD's replies use stays open.
-    #[arg(long, global = true, value_name = "SECS", requires = "foreign_bbmd")]
+    #[arg(long, global = true, value_name = "SECS")]
     pub(crate) renewal: Option<u64>,
+
+    /// Join this IPv4 multicast group (class D) as a B/IP-M node (Annex
+    /// J.8): broadcasts such as discover go to the group, and only the
+    /// group's broadcasts are taken. Needs --interface. BACnet/IP only.
+    #[arg(long, global = true, value_name = "GROUP", value_parser = crate::multicast::parse_group_arg)]
+    pub(crate) bip_multicast: Option<std::net::Ipv4Addr>,
+
+    /// Multicast TTL for --bip-multicast, 1 to 255 (default 1, the local
+    /// network only); raise it for a group that spans IP routers.
+    #[arg(
+        long,
+        global = true,
+        value_name = "TTL",
+        default_value_t = 1,
+        value_parser = clap::value_parser!(u8).range(1..)
+    )]
+    pub(crate) bip_multicast_ttl: u8,
+
+    /// UDP port of the --bip-multicast group (default: --port). Several
+    /// stacks on one host at one address each need their own --port, and
+    /// share this one.
+    #[arg(
+        long,
+        global = true,
+        value_name = "PORT",
+        value_parser = clap::value_parser!(u16).range(1..)
+    )]
+    pub(crate) bip_multicast_port: Option<u16>,
 
     /// Use BACnet/IPv6 transport.
     #[arg(long, global = true)]
@@ -91,6 +141,22 @@ pub(crate) struct Cli {
     #[arg(long, global = true)]
     pub(crate) sc_url: Option<String>,
 
+    /// SC failover hub WebSocket URL, used when the primary hub can't be
+    /// reached or its reconnects run out. Turns on --sc-reconnect.
+    #[arg(long, global = true, value_name = "URL")]
+    pub(crate) sc_failover_url: Option<String>,
+
+    /// Redial a lost SC hub connection with backoff (10 s doubling to 10 min,
+    /// 10 attempts). A TUI profile does this unless it sets reconnect = false.
+    #[arg(long, global = true)]
+    pub(crate) sc_reconnect: bool,
+
+    /// SC connect timeout in milliseconds, for each hub dial and handshake
+    /// (1 to 600000; default 10000).
+    #[arg(long, global = true, value_name = "MS",
+          value_parser = crate::transport::parse_sc_connect_timeout_arg)]
+    pub(crate) sc_connect_timeout: Option<u64>,
+
     /// SC trusted site CA PEM file (required for SC; no system-root fallback).
     // Validate emptiness only when constructing an SC client, not for discovery
     // or a feature-disabled build. Preserve native OS path bytes.
@@ -113,6 +179,46 @@ pub(crate) struct Cli {
     #[arg(long, global = true, value_parser = crate::transport::parse_sc_device_uuid_arg)]
     pub(crate) sc_device_uuid: Option<[u8; 16]>,
 
+    /// Join an MS/TP trunk as a master station on this serial port (see
+    /// `bacnet mstp-ports`); needs --mstp-mac and the `serial` feature.
+    /// B/IP, B/IPv6 and SC flags are refused with it.
+    #[arg(long, global = true, value_name = "PORT")]
+    pub(crate) mstp: Option<String>,
+
+    /// MS/TP baud rate: 9600, 19200, 38400, 57600, 76800 or 115200.
+    #[arg(long, global = true, value_name = "BAUD",
+          default_value_t = crate::mstp::DEFAULT_BAUD, value_parser = crate::mstp::parse_baud)]
+    pub(crate) mstp_baud: u32,
+
+    /// This station's MS/TP MAC, 0 to 127; no other device on the trunk
+    /// may have it. Required with --mstp.
+    #[arg(long, global = true, value_name = "MAC",
+          value_parser = crate::mstp::parse_master_mac)]
+    pub(crate) mstp_mac: Option<u8>,
+
+    /// Highest master MAC on the trunk (Max_Master), 0 to 127.
+    #[arg(long, global = true, value_name = "MAC",
+          default_value_t = crate::mstp::MAX_MASTER_MAC, value_parser = crate::mstp::parse_max_master)]
+    pub(crate) mstp_max_master: u8,
+
+    /// Frames this station sends per token (Max_Info_Frames), 1 to 255.
+    #[arg(long, global = true, value_name = "N",
+          default_value_t = 1, value_parser = crate::mstp::parse_max_info_frames)]
+    pub(crate) mstp_max_info_frames: u8,
+
+    /// Run this station's MS/TP token handling under SCHED_FIFO at this
+    /// priority, 1 to 99 (Linux only). Needs CAP_SYS_NICE or an
+    /// RLIMIT_RTPRIO of at least N; joining fails if it can't be applied.
+    #[arg(long, global = true, value_name = "N",
+          value_parser = crate::mstp_thread::parse_rt_priority)]
+    pub(crate) mstp_rt_priority: Option<u8>,
+
+    /// Pin this station's MS/TP token handling to these CPUs, such as 2 or
+    /// 2,3 (Linux only); joining fails if the process may not use them.
+    #[arg(long, global = true, value_name = "CPUS", value_delimiter = ',',
+          value_parser = crate::mstp_thread::parse_cpu)]
+    pub(crate) mstp_cpus: Vec<usize>,
+
     /// Output format (table, json).
     #[arg(long, global = true)]
     pub(crate) format: Option<String>,
@@ -125,27 +231,94 @@ pub(crate) struct Cli {
     #[arg(short, long, action = clap::ArgAction::Count, global = true)]
     pub(crate) verbose: u8,
 
+    /// With no command, print the usage instead of opening the terminal UI
+    /// (as does BACNET_NO_TUI set to anything but "" or "0").
+    #[arg(long)]
+    pub(crate) no_tui: bool,
+
     #[command(subcommand)]
     pub(crate) command: Option<Command>,
 }
 
+impl Cli {
+    /// What `--allow-write` and `--yes` allow.
+    pub(crate) fn policy(&self) -> crate::core::guard::Policy {
+        crate::core::guard::Policy {
+            allow_write: self.allow_write,
+            yes: self.yes,
+        }
+    }
+}
+
 #[derive(Debug, Subcommand)]
 pub(crate) enum Command {
-    /// Launch interactive shell.
-    Shell,
-
-    /// Open the full-screen terminal UI (read-only).
+    /// Inspect local SC credential files offline; no hub or transport identity is needed.
     ///
-    /// Uses the transport chosen by the global flags (BACnet/IP by default,
-    /// --ipv6 or --sc). Needs an interactive terminal: stdin and stdout must be
+    /// Requires --sc-cert; --sc-ca and --sc-key are optional. This advisory
+    /// inventory does not establish TLS acceptance or change connection policy.
+    ScCheck {
+        /// Inspect at this signed Unix second instead of sampling the clock.
+        #[arg(long, value_name = "SECONDS", allow_hyphen_values = true)]
+        at_unix: Option<i64>,
+    },
+
+    /// Open the full-screen terminal UI (read-only until W arms writes).
+    ///
+    /// Plain `bacnet` on a terminal opens it too, with these defaults.
+    /// Opens the profile manager by default (B/IP, BACnet/SC and MS/TP
+    /// profiles). Explicit transport flags without --profile make a
+    /// nonpersistent B/IP, B/IPv6, SC or MS/TP connection.
+    /// Writes need a profile, whose workspace holds the ledger and audit log.
+    /// Needs an interactive terminal: stdin and stdout must be
     /// a TTY and TERM must not be "dumb".
     Tui {
+        /// Named B/IP, BACnet/SC or MS/TP profile to preview before
+        /// connecting.
+        #[arg(long, value_name = "NAME", conflicts_with = "no_profile")]
+        profile: Option<String>,
+        /// Transmit nothing: no client is built, so no discovery, reads,
+        /// subscriptions, registrations or writes.
+        #[arg(long)]
+        passive: bool,
+        /// Listen to an MS/TP trunk on this serial port without transmitting:
+        /// stations, token ring and errors on the MS/TP screen, where J finds
+        /// a free MAC to join with. Takes --mstp-baud and
+        /// --mstp-max-info-frames; not --mstp or a profile.
+        #[arg(long, value_name = "PORT", conflicts_with = "profile")]
+        mstp_monitor: Option<String>,
+        /// Use global transport flags without reading or writing profiles.
+        #[arg(long)]
+        no_profile: bool,
         /// Frames per second for redraws (1-60).
         #[arg(long, default_value_t = 20, value_parser = clap::value_parser!(u16).range(1..=60))]
         fps: u16,
         /// Also write log lines to this file (the in-app log pane is `L`).
         #[arg(long, value_name = "FILE")]
         log_file: Option<PathBuf>,
+        /// Most confirmed requests a second the device browser and the watch
+        /// list send together, across all devices (0 for no cap). Each
+        /// device has at most one outstanding at a time either way.
+        #[arg(long, value_name = "N", default_value_t = 20)]
+        max_rate: u32,
+        /// Lifetime of the watch list's COV subscriptions, in seconds. They
+        /// are renewed before it runs out and cancelled on exit.
+        #[arg(long, value_name = "SECS", default_value_t = 300,
+              value_parser = clap::value_parser!(u32).range(10..=28_800))]
+        cov_lifetime: u32,
+        /// Least time between two polls of a watched point a device won't
+        /// report by COV, in seconds.
+        #[arg(long, value_name = "SECS", default_value_t = 10,
+              value_parser = clap::value_parser!(u64).range(1..=3_600))]
+        poll_interval: u64,
+        /// Frames the Capture screen keeps; past that the oldest go.
+        #[arg(long, value_name = "N", default_value_t = 50_000,
+              value_parser = clap::value_parser!(u32).range(1..=1_000_000))]
+        capture_ring: u32,
+        /// Also capture B/IP traffic on the -p port from this network device
+        /// with libpcap, for the Capture screen (needs the pcap feature and
+        /// capture rights).
+        #[arg(long, value_name = "DEVICE")]
+        capture_device: Option<String>,
     },
 
     /// Discover BACnet devices (WhoIs).
@@ -172,9 +345,17 @@ pub(crate) enum Command {
     /// Find objects by name (WhoHas).
     #[command(alias = "whohas")]
     Find {
-        /// Object name to find.
-        #[arg(long)]
+        /// Object name to find (quote a name with spaces). `--name NAME`
+        /// says the same; give one or the other.
+        #[arg(
+            value_name = "NAME",
+            required_unless_present = "name_flag",
+            conflicts_with = "name_flag"
+        )]
         name: Option<String>,
+        /// Object name to find, as a flag: the same as the positional NAME.
+        #[arg(long = "name", id = "name_flag", value_name = "NAME")]
+        name_flag: Option<String>,
         /// Seconds to wait for responses.
         #[arg(long, default_value_t = 3)]
         wait: u64,
@@ -216,6 +397,17 @@ pub(crate) enum Command {
         priority: Option<u8>,
     },
 
+    /// Write multiple properties (WritePropertyMultiple).
+    #[command(alias = "wpm")]
+    Writem {
+        /// Target device.
+        target: String,
+        /// Each object, then its comma-separated writes, each with an
+        /// optional @priority: "av:1 pv=72.5@8,on=Zone ao:1 pv=10".
+        #[arg(required = true, num_args = 2..)]
+        specs: Vec<String>,
+    },
+
     /// Subscribe to COV notifications.
     #[command(alias = "cov")]
     Subscribe {
@@ -223,9 +415,12 @@ pub(crate) enum Command {
         target: String,
         /// Object specifier.
         object: String,
-        /// Subscription lifetime in seconds.
-        #[arg(long)]
-        lifetime: Option<u32>,
+        /// Subscription lifetime in seconds. The subscription is renewed
+        /// while the command watches and cancelled when it stops (Ctrl+C,
+        /// or SIGTERM on Unix). 0 asks for one that never expires and stays
+        /// after the CLI exits, which needs --allow-write.
+        #[arg(long, default_value_t = crate::commands::subscribe::DEFAULT_LIFETIME)]
+        lifetime: u32,
         /// Use confirmed notifications.
         #[arg(long)]
         confirmed: bool,
@@ -296,8 +491,9 @@ pub(crate) enum Command {
         input: String,
     },
 
-    /// List cached discovered devices.
-    Devices,
+    /// List the serial ports to pass to --mstp (a JSON array of names,
+    /// possibly empty). Opens no port.
+    MstpPorts,
 
     /// Read BBMD broadcast distribution table.
     Bdt {
@@ -323,8 +519,16 @@ pub(crate) enum Command {
         target: String,
     },
 
-    /// Send Who-Is-Router-To-Network.
-    WhoisRouter,
+    /// List the routers on the local network and the networks they reach
+    /// (Who-Is-Router-To-Network).
+    WhoisRouter {
+        /// Ask only for the router to this network number.
+        #[arg(long)]
+        dnet: Option<u16>,
+        /// Seconds to wait for responses.
+        #[arg(long, default_value_t = 3)]
+        wait: u64,
+    },
 
     /// Acknowledge an alarm.
     #[command(alias = "ack")]
@@ -404,7 +608,8 @@ pub(crate) enum Command {
         /// Network interface name for live capture (e.g., en0, eth0).
         #[arg(long)]
         device: Option<String>,
-        /// Additional BPF filter expression (appended to "udp port 47808").
+        /// Additional BPF filter expression, joined with `and` to "ip and udp
+        /// port PORT", PORT being -p (47808 by default).
         #[arg(long)]
         filter: Option<String>,
         /// Stop after capturing N packets.
@@ -416,6 +621,33 @@ pub(crate) enum Command {
     },
 }
 
+/// Capture global argument provenance and validate cross-command requirements.
+pub(crate) fn capture_sources(matches: &clap::ArgMatches) -> Result<Vec<String>, clap::Error> {
+    let explicit: Vec<String> = matches
+        .ids()
+        .filter(|id| {
+            matches.value_source(id.as_str()) == Some(clap::parser::ValueSource::CommandLine)
+        })
+        .map(ToString::to_string)
+        .collect();
+    let named_profile = matches
+        .subcommand_matches("tui")
+        .is_some_and(|tui| tui.get_one::<String>("profile").is_some());
+    if matches.get_one::<u64>("renewal").is_some()
+        && matches
+            .get_one::<std::net::SocketAddrV4>("foreign_bbmd")
+            .is_none()
+        && !named_profile
+    {
+        return Err(clap::Error::raw(
+            clap::error::ErrorKind::MissingRequiredArgument,
+            "--renewal requires --foreign-bbmd (or a named TUI profile containing a BBMD)",
+        ));
+    }
+    crate::mstp::check_matches(matches)?;
+    Ok(explicit)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -425,7 +657,16 @@ mod tests {
     // The derived parser's debug-build frames nearly fill a 1 MiB test thread,
     // so parse where `main` does: on a thread with a larger stack (#953).
     fn parse<const N: usize>(args: [&'static str; N]) -> Result<Cli, clap::Error> {
-        crate::parse_on_large_stack(move || Cli::try_parse_from(args))
+        crate::parse_on_large_stack(move || {
+            use clap::{CommandFactory, FromArgMatches};
+            let mut matches = Cli::command().try_get_matches_from(args)?;
+            let explicit_args = capture_sources(&matches)?;
+            let command_name = matches.subcommand_name().map(str::to_owned);
+            let mut cli = Cli::from_arg_matches_mut(&mut matches)?;
+            cli.explicit_args = explicit_args;
+            cli.command_name = command_name;
+            Ok(cli)
+        })
     }
 
     /// `--foreign-bbmd`, `--ttl` and `--renewal` reach the transport's
@@ -439,7 +680,7 @@ mod tests {
             "192.0.2.10",
             "--renewal",
             "20",
-            "devices",
+            "discover",
             "--ttl",
             "60",
         ])
@@ -473,6 +714,109 @@ mod tests {
         assert_eq!(cli.ttl, 45);
     }
 
+    /// The SC reconnect flags (#1831): `--sc-failover-url` brings the
+    /// default reconnect policy, as `--sc-reconnect` does alone; neither
+    /// leaves reconnect off; the connect timeout is checked at parse time.
+    #[test]
+    fn the_sc_reconnect_flags_reach_the_transport() {
+        let args = |cli: &Cli| {
+            crate::transport::TransportArgs::from_cli(
+                cli,
+                Ipv4Addr::UNSPECIFIED,
+                Ipv4Addr::BROADCAST,
+            )
+        };
+        let cli = parse([
+            "bacnet",
+            "--sc",
+            "--sc-url",
+            "wss://hub.example",
+            "--sc-failover-url",
+            "wss://hub2.example",
+            "--sc-connect-timeout",
+            "2500",
+            "discover",
+        ])
+        .unwrap();
+        let sc = args(&cli).unwrap();
+        assert_eq!(sc.sc_failover_url.as_deref(), Some("wss://hub2.example"));
+        assert_eq!(
+            sc.sc_reconnect.map(|p| p.max_retries),
+            Some(bacnet_transport::sc::ScReconnectConfig::default().max_retries)
+        );
+        assert_eq!(sc.sc_connect_timeout_ms, Some(2500));
+        let cli = parse(["bacnet", "--sc", "--sc-reconnect", "discover"]).unwrap();
+        assert!(args(&cli).unwrap().sc_reconnect.is_some());
+        let cli = parse(["bacnet", "--sc", "discover"]).unwrap();
+        let plain = args(&cli).unwrap();
+        assert!(plain.sc_reconnect.is_none() && plain.sc_connect_timeout_ms.is_none());
+        let same = parse([
+            "bacnet",
+            "--sc-url",
+            "wss://hub.example",
+            "--sc-failover-url",
+            "WSS://Hub.Example/",
+            "discover",
+        ])
+        .unwrap();
+        assert!(args(&same).err().unwrap().contains("differ"), "normalized");
+        for bad in ["0", "600001", "soon"] {
+            let error = parse(["bacnet", "--sc-connect-timeout", bad, "discover"]).unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::ValueValidation, "{bad}");
+        }
+    }
+
+    /// `find` takes the name as a word or with `--name`, never both and
+    /// never neither, each a usage error (#1872).
+    #[test]
+    fn find_takes_its_name_as_a_word_or_a_flag() {
+        let name = |cli: Cli| match cli.command {
+            Some(Command::Find {
+                name, name_flag, ..
+            }) => name.or(name_flag),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(
+            name(parse(["bacnet", "find", "AHU-1"]).unwrap()).as_deref(),
+            Some("AHU-1")
+        );
+        assert_eq!(
+            name(parse(["bacnet", "find", "--name", "AHU-1"]).unwrap()).as_deref(),
+            Some("AHU-1")
+        );
+        assert_eq!(
+            name(parse(["bacnet", "whohas", "Zone Temp", "--wait", "5"]).unwrap()).as_deref(),
+            Some("Zone Temp")
+        );
+        let both = parse(["bacnet", "find", "AHU-1", "--name", "AHU-2"]).unwrap_err();
+        assert_eq!(both.kind(), ErrorKind::ArgumentConflict);
+        assert_eq!(both.exit_code(), 2);
+        let neither = parse(["bacnet", "find"]).unwrap_err();
+        assert_eq!(neither.kind(), ErrorKind::MissingRequiredArgument);
+        assert_eq!(neither.exit_code(), 2);
+    }
+
+    /// The guard classifies by canonical name, so an alias resolves to it;
+    /// the guard flags go on either side of the subcommand (#972).
+    #[test]
+    fn aliases_give_the_canonical_name_and_guard_flags_are_global() {
+        let cli = parse(["bacnet", "wp", "10.0.0.1", "av:1", "pv", "1"]).unwrap();
+        assert_eq!(cli.command_name.as_deref(), Some("write"));
+        assert_eq!(cli.policy(), crate::core::guard::Policy::default());
+        let cli = parse([
+            "bacnet",
+            "--allow-write",
+            "dcc",
+            "10.0.0.1",
+            "enable",
+            "--yes",
+        ])
+        .unwrap();
+        assert_eq!(cli.command_name.as_deref(), Some("control"));
+        assert!(cli.allow_write && cli.yes);
+        assert_eq!(parse(["bacnet"]).unwrap().command_name, None);
+    }
+
     #[test]
     fn tui_takes_fps_and_log_file_and_global_flags() {
         let cli = parse([
@@ -487,13 +831,14 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(cli.interface, Some(Ipv4Addr::new(10, 0, 0, 5)));
-        let Some(Command::Tui { fps, log_file }) = cli.command else {
+        let Some(Command::Tui { fps, log_file, .. }) = cli.command else {
             panic!("expected Tui");
         };
         assert_eq!(fps, 5);
         assert_eq!(log_file, Some(PathBuf::from("tui.log")));
 
-        let Some(Command::Tui { fps, log_file }) = parse(["bacnet", "tui"]).unwrap().command else {
+        let Some(Command::Tui { fps, log_file, .. }) = parse(["bacnet", "tui"]).unwrap().command
+        else {
             panic!("expected Tui");
         };
         assert_eq!((fps, log_file), (20, None));

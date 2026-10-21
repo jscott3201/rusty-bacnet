@@ -2,7 +2,7 @@
 
 use bacnet_encoding::constructed::encode_object_property_reference;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
-use bacnet_types::enums::{ObjectType, PropertyIdentifier as P, Reliability};
+use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier as P, Reliability};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use bytes::BytesMut;
 
@@ -58,10 +58,14 @@ fn the_inhibit_follows_a_binary_pv_or_a_boolean() {
     let ai = oid(ObjectType::ANALOG_INPUT, 1);
     let switch = oid(ObjectType::BINARY_VALUE, 1);
     let other = oid(ObjectType::ANALOG_INPUT, 2);
-    db.add(Box::new(AnalogInputObject::new(1, "AI-1", 62).unwrap()))
-        .unwrap();
-    db.add(Box::new(AnalogInputObject::new(2, "AI-2", 62).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+    ))
+    .unwrap();
+    db.add(Box::new(
+        AnalogInputObject::new(2, "AI-2", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+    ))
+    .unwrap();
     db.add(Box::new(BinaryValueObject::new(1, "BV-1").unwrap()))
         .unwrap();
 
@@ -92,8 +96,10 @@ fn a_missing_or_unusable_property_reads_as_false() {
     let mut db = ObjectDatabase::new();
     let ai = oid(ObjectType::ANALOG_INPUT, 1);
     let switch = oid(ObjectType::BINARY_VALUE, 1);
-    db.add(Box::new(AnalogInputObject::new(1, "AI-1", 62).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+    ))
+    .unwrap();
     db.add(Box::new(BinaryValueObject::new(1, "BV-1").unwrap()))
         .unwrap();
     for (target, property) in [
@@ -126,10 +132,14 @@ fn an_enumerated_one_inhibits_only_as_a_binary_pv_active() {
     let faulted = oid(ObjectType::ANALOG_INPUT, 2);
     let switch = oid(ObjectType::BINARY_VALUE, 1);
     let output = oid(ObjectType::BINARY_OUTPUT, 1);
-    db.add(Box::new(AnalogInputObject::new(1, "AI-1", 62).unwrap()))
-        .unwrap();
-    db.add(Box::new(AnalogInputObject::new(2, "AI-2", 62).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+    ))
+    .unwrap();
+    db.add(Box::new(
+        AnalogInputObject::new(2, "AI-2", EngineeringUnits::DEGREES_CELSIUS).unwrap(),
+    ))
+    .unwrap();
     db.add(Box::new(BinaryValueObject::new(1, "BV-1").unwrap()))
         .unwrap();
     db.add(Box::new(BinaryOutputObject::new(1, "BO-1").unwrap()))

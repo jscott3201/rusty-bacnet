@@ -11,6 +11,24 @@ const DEVICE_MAX_AGE: Duration = Duration::from_secs(600);
 #[cfg(test)]
 const DEVICE_MAX_AGE: Duration = Duration::ZERO;
 
+impl ClientConfig {
+    pub(super) fn validate_request_settings(&self) -> Result<(), Error> {
+        validate_max_apdu_length(self.max_apdu_length)?;
+        validate_max_segments(self.max_segments)?;
+        pacing::validate_interval_ms(self.min_request_interval_ms)
+    }
+
+    pub(super) fn validate_window(&self) -> Result<(), Error> {
+        if !(1..=127).contains(&self.proposed_window_size) {
+            return Err(Error::Encoding(format!(
+                "invalid proposed-window-size {}; expected 1..=127",
+                self.proposed_window_size
+            )));
+        }
+        Ok(())
+    }
+}
+
 impl<T: TransportPort> BACnetClient<T> {
     fn abort_owned_tasks(&self) {
         for task in [&self.dispatch_task, &self.network_number_task]
@@ -42,17 +60,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         transport: T,
         options: ClientOptions,
     ) -> Result<Self, Error> {
-        validate_max_apdu_length(config.max_apdu_length)?;
-        validate_max_segments(config.max_segments)?;
-        pacing::validate_interval_ms(config.min_request_interval_ms)?;
+        config.validate_request_settings()?;
         config.max_apdu_length =
             cap_max_apdu_to_transport(config.max_apdu_length, transport.egress_apdu_limit())?;
-        if !(1..=127).contains(&config.proposed_window_size) {
-            return Err(Error::Encoding(format!(
-                "invalid proposed-window-size {}; expected 1..=127",
-                config.proposed_window_size
-            )));
-        }
+        config.validate_window()?;
         options.validate()?;
 
         let mut network = NetworkLayer::new(transport);
@@ -93,6 +104,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let (device_collision_tx, _) =
             broadcast::channel::<DeviceCollisionEvent>(DEVICE_EVENT_CHANNEL_CAPACITY);
         let device_collision_tx_dispatch = device_collision_tx.clone();
+        let (i_have_tx, _) = broadcast::channel::<ReceivedIHave>(I_HAVE_CHANNEL_CAPACITY);
+        let i_have_tx_dispatch = i_have_tx.clone();
+        let (network_report_tx, _) = broadcast::channel(NETWORK_REPORT_CHANNEL_CAPACITY);
+        let network_report_tx_dispatch = network_report_tx.clone();
         let seg_ack_senders: Arc<Mutex<HashMap<SegAckKey, SegmentAckRoute>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let seg_ack_senders_dispatch = Arc::clone(&seg_ack_senders);
@@ -108,6 +123,15 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let routed_path_limits_dispatch = Arc::clone(&routed_path_limits);
         let group_source_request_drops = Arc::new(AtomicU64::new(0));
         let group_source_drops_dispatch = Arc::clone(&group_source_request_drops);
+        // One of each per client: a peer's flood of undecodable APDUs, or of
+        // responses refused, warns once per interval, the rest at debug
+        // (#1950).
+        let decode_warning = Arc::new(WarnThrottle::default());
+        let response_warning = Arc::new(WarnThrottle::default());
+        #[cfg(test)]
+        let decode_warning_hook = Arc::clone(&decode_warning);
+        #[cfg(test)]
+        let response_warning_hook = Arc::clone(&response_warning);
 
         let dispatch_task = tokio::spawn(async move {
             let mut seg_state: HashMap<SegKey, SegmentedReceiveState> = HashMap::new();
@@ -122,9 +146,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     control = network_control_rx.recv(), if network_control_open => {
                         match control {
                             Some(control) => {
-                                if let Some((tx, parsed)) = number_tx
-                                    .as_ref()
-                                    .zip(bacnet_network::network_number::NumberControl::parse(&control))
+                                // Read once; subscribers first, and a broadcast
+                                // send never waits.
+                                let number = bacnet_network::network_number::NumberControl::parse(&control);
+                                network_reports::publish(&network_report_tx_dispatch, &control, number);
+                                if let Some((tx, parsed)) = number_tx.as_ref().zip(number)
                                 {
                                     if tx.try_send(parsed).is_err() {
                                         debug!("client Number control queue full or closed; dropping control");
@@ -224,14 +250,17 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                         confirmed_cov_ack_policy: &confirmed_cov_ack_policy,
                                         device_tx: &device_tx_dispatch,
                                         device_collision_tx: &device_collision_tx_dispatch,
+                                        i_have_tx: &i_have_tx_dispatch,
                                         seg_ack_senders: &seg_ack_senders_dispatch,
+                                        decode_warning: &decode_warning,
+                                        response_warning: &response_warning,
                                     },
                                     &mut seg_state,
                                     InboundApdu {
                                         source_mac: &received.source_mac,
                                         source_network: &received.source_network,
                                         provenance: received.provenance,
-                                        direct_response: received.direct_response,
+                                        response_route: received.response_route(),
                                         is_group: received.is_group,
                                         reply_tx: received.reply_tx,
                                     },
@@ -241,7 +270,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                 .await;
                             }
                             Err(e) => {
-                                warn!(error = %e, "Failed to decode received APDU");
+                                warn_throttled!(
+                                    decode_warning,
+                                    error = %e,
+                                    "Failed to decode received APDU"
+                                );
                             }
                         }
                     }
@@ -262,6 +295,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             event_tx,
             device_tx,
             device_collision_tx,
+            i_have_tx,
+            network_report_tx,
             dispatch_task: Some(dispatch_task),
             network_number_task,
             seg_ack_senders,
@@ -270,6 +305,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             segmented_post_wait_cleanup: Arc::new(SegmentedPostWaitCleanupHook::default()),
             #[cfg(test)]
             segmented_cleanup,
+            #[cfg(test)]
+            decode_warning: decode_warning_hook,
+            #[cfg(test)]
+            response_warning: response_warning_hook,
             local_mac,
             routed_path_limits,
             group_source_request_drops,

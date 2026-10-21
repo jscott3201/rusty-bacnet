@@ -1,14 +1,34 @@
 //! Who-Is and I-Am services per ASHRAE 135-2020 Clause 16.10.
+//!
+//! Both encode to a sink and decode from borrowed octets without an
+//! allocator (#1614). The `BytesMut` encoders need `alloc`, and write the
+//! same octets through the sink encoders.
 
 use bacnet_encoding::constructed::tagged::{
     decode_app_enumerated, decode_app_object_id, decode_app_unsigned, decode_ctx_unsigned,
     decode_optional_ctx, expect_end,
 };
 use bacnet_encoding::primitives;
+use bacnet_encoding::sink::{EncodeSink, SinkFull};
 use bacnet_types::enums::Segmentation;
-use bacnet_types::error::Error;
+use bacnet_types::error::{DecodeError, DecodingKind, Error, RangeError};
 use bacnet_types::primitives::ObjectIdentifier;
+#[cfg(feature = "alloc")]
 use bytes::BytesMut;
+
+/// Encode into `staging` with `encode`, then append what it wrote to `sink`
+/// in one write; returns the octets appended. `staging` must hold the
+/// largest value `encode` writes.
+pub(crate) fn staged<S: EncodeSink + ?Sized>(
+    sink: &mut S,
+    staging: &mut [u8],
+    encode: impl FnOnce(&mut &mut [u8]) -> Result<usize, SinkFull>,
+) -> Result<usize, SinkFull> {
+    let mut tail = &mut *staging;
+    let written = encode(&mut tail).expect("the staging buffer holds the largest value");
+    sink.write(&staging[..written])?;
+    Ok(written)
+}
 
 // ---------------------------------------------------------------------------
 // DeviceInstanceRange
@@ -35,15 +55,16 @@ pub struct DeviceInstanceRange {
 
 impl DeviceInstanceRange {
     /// The instances from `low` to `high`, both included. Fails with
-    /// [`Error::OutOfRange`] when `low` is above `high`, or `high` is above
+    /// [`Error::Range`] when `low` is above `high`, or `high` is above
     /// [`ObjectIdentifier::MAX_INSTANCE`].
     pub fn new(low: u32, high: u32) -> Result<Self, Error> {
         let range = Self::decoded(low, high)?;
         if high > ObjectIdentifier::MAX_INSTANCE {
-            return Err(Error::OutOfRange(format!(
-                "device instance range high limit {high} is above the highest instance, {}",
-                ObjectIdentifier::MAX_INSTANCE
-            )));
+            return Err(RangeError::new(
+                "device instance range high limit {} is above the highest instance, 4194303",
+            )
+            .with_value(high.into())
+            .into());
         }
         Ok(range)
     }
@@ -52,10 +73,12 @@ impl DeviceInstanceRange {
     /// either past the highest instance taken as written.
     fn decoded(low: u32, high: u32) -> Result<Self, Error> {
         if low > high {
-            return Err(Error::OutOfRange(format!(
-                "device instance range low limit {low} is above its high limit {high}, \
-                 so it would match no device"
-            )));
+            return Err(RangeError::new(
+                "device instance range low limit {} is above its high limit {}, \
+                 so it would match no device",
+            )
+            .with_values(low.into(), high.into())
+            .into());
         }
         Ok(Self { low, high })
     }
@@ -77,20 +100,23 @@ impl DeviceInstanceRange {
 
     /// The range two separately held limits give: none for neither, a range
     /// for both, as the Python bindings take them. One limit alone fails with
-    /// [`Error::OutOfRange`] naming it, rather than becoming a request for
-    /// every device, and so does any range [`Self::new`] refuses.
+    /// [`Error::Range`] naming it, rather than becoming a request for every
+    /// device, and so does any range [`Self::new`] refuses.
     pub fn from_limits(low: Option<u32>, high: Option<u32>) -> Result<Option<Self>, Error> {
+        let alone = |label, limit: u32| Err(RangeError::new(label).with_value(limit.into()).into());
         match (low, high) {
             (None, None) => Ok(None),
             (Some(low), Some(high)) => Self::new(low, high).map(Some),
-            (Some(low), None) => Err(Error::OutOfRange(format!(
+            (Some(low), None) => alone(
                 "a device instance range needs both limits or neither: \
-                 low limit {low} was given without a high limit"
-            ))),
-            (None, Some(high)) => Err(Error::OutOfRange(format!(
+                 low limit {} was given without a high limit",
+                low,
+            ),
+            (None, Some(high)) => alone(
                 "a device instance range needs both limits or neither: \
-                 high limit {high} was given without a low limit"
-            ))),
+                 high limit {} was given without a low limit",
+                high,
+            ),
         }
     }
 
@@ -109,38 +135,64 @@ impl DeviceInstanceRange {
         self.low <= instance && instance <= self.high
     }
 
+    /// Write the range as the `[0]` low and `[1]` high limits: at most ten
+    /// octets, in one write.
+    pub(crate) fn encode_to_sink<S: EncodeSink + ?Sized>(
+        self,
+        sink: &mut S,
+    ) -> Result<usize, SinkFull> {
+        staged(sink, &mut [0; 10], |tail| {
+            Ok(
+                primitives::encode_ctx_unsigned_to_sink(tail, 0, self.low.into())?
+                    + primitives::encode_ctx_unsigned_to_sink(tail, 1, self.high.into())?,
+            )
+        })
+    }
+
     /// Write the range as the `[0]` low and `[1]` high limits.
+    #[cfg(feature = "alloc")]
     pub(crate) fn encode(self, buf: &mut BytesMut) {
-        primitives::encode_ctx_unsigned(buf, 0, self.low as u64);
-        primitives::encode_ctx_unsigned(buf, 1, self.high as u64);
+        self.encode_to_sink(buf)
+            .expect("the BytesMut sink cannot return SinkFull");
     }
 }
 
-/// What a Who-Is or Who-Has calls itself and its limits in errors. The
-/// limits' labels are written out whole, so a request that decodes builds
-/// none (#1645).
+/// What a Who-Is or Who-Has calls its limits in errors, and how it words a
+/// limit missing its partner or a low limit above the high one. The labels
+/// are written out whole, so a request that decodes builds none (#1645), and
+/// a refusal builds its text only when displayed (#1646).
 pub(crate) struct LimitLabels {
-    /// The service, which names the pairing errors.
-    service: &'static str,
     /// The `[0]` low limit.
     low: &'static str,
     /// The `[1]` high limit.
     high: &'static str,
+    /// A low limit above the high one.
+    inverted: &'static str,
+    /// A low limit without the high one.
+    low_alone: &'static str,
+    /// A high limit without the low one.
+    high_alone: &'static str,
+}
+
+/// [`LimitLabels`] for `$service`.
+macro_rules! limit_labels {
+    ($service:literal) => {
+        LimitLabels {
+            low: concat!($service, " low limit"),
+            high: concat!($service, " high limit"),
+            inverted: concat!($service, " low limit exceeds high limit"),
+            low_alone: concat!($service, " low limit needs the high limit [1] with it"),
+            high_alone: concat!($service, " high limit needs the low limit [0] before it"),
+        }
+    };
 }
 
 impl LimitLabels {
     /// A Who-Is's.
-    pub(crate) const WHO_IS: Self = Self {
-        service: "WhoIs",
-        low: "WhoIs low limit",
-        high: "WhoIs high limit",
-    };
+    pub(crate) const WHO_IS: Self = limit_labels!("WhoIs");
     /// A Who-Has's.
-    pub(crate) const WHO_HAS: Self = Self {
-        service: "WhoHas",
-        low: "WhoHas low limit",
-        high: "WhoHas high limit",
-    };
+    #[cfg(feature = "alloc")]
+    pub(crate) const WHO_HAS: Self = limit_labels!("WhoHas");
 }
 
 /// A Who-Is or Who-Has request's optional `[0]` low and `[1]` high limits,
@@ -178,24 +230,21 @@ impl WireLimits {
     /// request for every device, which would make every device answer one
     /// that probably meant a range. So is a low limit above the high one.
     pub(crate) fn range(&self) -> Result<Option<DeviceInstanceRange>, Error> {
-        let service = self.labels.service;
+        let labels = self.labels;
         match (self.low, self.high) {
             (None, None) => Ok(None),
-            (Some(low), Some(high)) => {
-                DeviceInstanceRange::decoded(low, high)
-                    .map(Some)
-                    .map_err(|_| {
-                        Error::out_of_range(0, format!("{service} low limit exceeds high limit"))
-                    })
+            (Some(low), Some(high)) => DeviceInstanceRange::decoded(low, high)
+                .map(Some)
+                .map_err(|_| DecodeError::new(DecodingKind::OutOfRange, 0, labels.inverted).into()),
+            (Some(_), None) => {
+                Err(
+                    DecodeError::new(DecodingKind::Missing, self.after_low, labels.low_alone)
+                        .into(),
+                )
             }
-            (Some(_), None) => Err(Error::missing(
-                self.after_low,
-                format!("{service} low limit needs the high limit [1] with it"),
-            )),
-            (None, Some(_)) => Err(Error::missing(
-                0,
-                format!("{service} high limit needs the low limit [0] before it"),
-            )),
+            (None, Some(_)) => {
+                Err(DecodeError::new(DecodingKind::Missing, 0, labels.high_alone).into())
+            }
         }
     }
 }
@@ -217,12 +266,22 @@ impl WhoIsRequest {
         Self { range: None }
     }
 
-    /// Encode the request into `buf`: both limits for a range, nothing for an
-    /// unbounded request.
-    pub fn encode(&self, buf: &mut BytesMut) {
-        if let Some(range) = self.range {
-            range.encode(buf);
+    /// Append the request to `sink`: both limits for a range, nothing for an
+    /// unbounded request. Returns the octets appended, at most ten, in one
+    /// write.
+    pub fn encode_to_sink<S: EncodeSink + ?Sized>(&self, sink: &mut S) -> Result<usize, SinkFull> {
+        match self.range {
+            Some(range) => range.encode_to_sink(sink),
+            None => Ok(0),
         }
+    }
+
+    /// Encode the request into `buf`: both limits for a range, nothing for an
+    /// unbounded request. Only with `alloc`.
+    #[cfg(feature = "alloc")]
+    pub fn encode(&self, buf: &mut BytesMut) {
+        self.encode_to_sink(buf)
+            .expect("the BytesMut sink cannot return SinkFull");
     }
 
     /// Decode the request from service-request octets; fails on malformed or truncated input,
@@ -258,12 +317,27 @@ pub struct IAmRequest {
 }
 
 impl IAmRequest {
-    /// Encode the request parameters into `buf`.
+    /// Append the request parameters to `sink`. Returns the octets appended,
+    /// at most fifteen, in one write.
+    pub fn encode_to_sink<S: EncodeSink + ?Sized>(&self, sink: &mut S) -> Result<usize, SinkFull> {
+        staged(sink, &mut [0; 15], |tail| {
+            Ok(
+                primitives::encode_app_object_id_to_sink(tail, &self.object_identifier)?
+                    + primitives::encode_app_unsigned_to_sink(tail, self.max_apdu_length.into())?
+                    + primitives::encode_app_enumerated_to_sink(
+                        tail,
+                        self.segmentation_supported.to_raw().into(),
+                    )?
+                    + primitives::encode_app_unsigned_to_sink(tail, self.vendor_id.into())?,
+            )
+        })
+    }
+
+    /// Encode the request parameters into `buf`. Only with `alloc`.
+    #[cfg(feature = "alloc")]
     pub fn encode(&self, buf: &mut BytesMut) {
-        primitives::encode_app_object_id(buf, &self.object_identifier);
-        primitives::encode_app_unsigned(buf, self.max_apdu_length as u64);
-        primitives::encode_app_enumerated(buf, self.segmentation_supported.to_raw() as u32);
-        primitives::encode_app_unsigned(buf, self.vendor_id as u64);
+        self.encode_to_sink(buf)
+            .expect("the BytesMut sink cannot return SinkFull");
     }
 
     /// Decode the request from service-request octets; fails on malformed or truncated input
@@ -287,6 +361,11 @@ impl IAmRequest {
 }
 
 #[cfg(test)]
+#[path = "who_is_sink_tests.rs"]
+mod sink_tests;
+
+// The tests build requests with the BytesMut encoders, which need alloc.
+#[cfg(all(test, feature = "alloc"))]
 mod tests {
     use super::*;
     use bacnet_encoding::tags;
@@ -366,7 +445,7 @@ mod tests {
         // [0] low limit 1 alone, then [1] high limit 10 alone (#1447).
         for data in [&[0x09, 0x01][..], &[0x19, 0x0A]] {
             let error = WhoIsRequest::decode(data).unwrap_err();
-            assert!(matches!(error, Error::Decoding { .. }), "{error:?}");
+            assert!(matches!(error, Error::Decoding(_)), "{error:?}");
         }
     }
 
@@ -374,7 +453,7 @@ mod tests {
     fn test_decode_who_is_invalid_tag() {
         // A tag that is neither limit is left over, not read as no limits.
         let error = WhoIsRequest::decode(&[0x29, 0]).unwrap_err();
-        assert!(matches!(error, Error::Decoding { .. }), "{error:?}");
+        assert!(matches!(error, Error::Decoding(_)), "{error:?}");
     }
 
     #[test]
@@ -617,6 +696,6 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "alloc"))]
 #[path = "device_range_tests.rs"]
 mod device_range_tests;

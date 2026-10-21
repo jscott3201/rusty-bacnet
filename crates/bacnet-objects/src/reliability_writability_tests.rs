@@ -6,7 +6,9 @@ use crate::loop_obj::LoopObject;
 use crate::multistate::{MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject};
 use crate::schedule::ScheduleObject;
 use crate::traits::BACnetObject;
-use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier, Reliability};
+use bacnet_types::enums::{
+    EngineeringUnits, ErrorClass, ErrorCode, PropertyIdentifier, Reliability,
+};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
 
@@ -26,8 +28,8 @@ fn assert_reliability_gate(object: &mut dyn BACnetObject) {
         .expect_err("in-service Reliability write must be refused");
     match denied {
         Error::Protocol { class, code } => {
-            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
-            assert_eq!(code, ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32);
+            assert_eq!(class, ErrorClass::PROPERTY);
+            assert_eq!(code, ErrorCode::WRITE_ACCESS_DENIED);
         }
         other => panic!("expected PROPERTY / WRITE_ACCESS_DENIED, got {other:?}"),
     }
@@ -52,8 +54,8 @@ fn assert_reliability_gate(object: &mut dyn BACnetObject) {
             .expect_err("reserved or out-of-range Reliability must be refused");
         match invalid_value {
             Error::Protocol { class, code } => {
-                assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
-                assert_eq!(code, ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32);
+                assert_eq!(class, ErrorClass::PROPERTY);
+                assert_eq!(code, ErrorCode::VALUE_OUT_OF_RANGE);
             }
             other => panic!("expected PROPERTY / VALUE_OUT_OF_RANGE, got {other:?}"),
         }
@@ -89,8 +91,8 @@ fn assert_reliability_gate(object: &mut dyn BACnetObject) {
         .expect_err("internal Reliability write must not overwrite client simulation");
     match internal_denied {
         Error::Protocol { class, code } => {
-            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
-            assert_eq!(code, ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32);
+            assert_eq!(class, ErrorClass::PROPERTY);
+            assert_eq!(code, ErrorCode::WRITE_ACCESS_DENIED);
         }
         other => panic!("expected PROPERTY / WRITE_ACCESS_DENIED, got {other:?}"),
     }
@@ -116,8 +118,8 @@ fn assert_reliability_gate(object: &mut dyn BACnetObject) {
         .expect_err("internal route must enforce the Reliability datatype");
     match invalid_internal {
         Error::Protocol { class, code } => {
-            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
-            assert_eq!(code, ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32);
+            assert_eq!(class, ErrorClass::PROPERTY);
+            assert_eq!(code, ErrorCode::VALUE_OUT_OF_RANGE);
         }
         other => panic!("expected PROPERTY / VALUE_OUT_OF_RANGE, got {other:?}"),
     }
@@ -325,15 +327,15 @@ reliability_gate_test!(
 );
 reliability_gate_test!(
     analog_input_reliability_requires_out_of_service,
-    AnalogInputObject::new(1, "AI-1", 62).unwrap()
+    AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap()
 );
 reliability_gate_test!(
     analog_output_reliability_requires_out_of_service,
-    AnalogOutputObject::new(1, "AO-1", 62).unwrap()
+    AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap()
 );
 reliability_gate_test!(
     analog_value_reliability_requires_out_of_service,
-    AnalogValueObject::new(1, "AV-1", 62).unwrap()
+    AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap()
 );
 reliability_gate_test!(
     binary_input_reliability_requires_out_of_service,
@@ -363,7 +365,7 @@ reliability_gate_test!(
 // writability when Out_Of_Service is TRUE.
 reliability_gate_test!(
     loop_reliability_requires_out_of_service,
-    LoopObject::new(1, "LOOP-1", 62).unwrap()
+    LoopObject::new(1, "LOOP-1", EngineeringUnits::DEGREES_CELSIUS).unwrap()
 );
 // Clause 12.24: the Reliability_Evaluation_Inhibit text anticipates an
 // out-of-service client write by allowing a replacement Reliability value
@@ -389,8 +391,8 @@ fn assert_protocol_error(error: Error, class: ErrorClass, code: ErrorCode) {
             class: actual_class,
             code: actual_code,
         } => {
-            assert_eq!(actual_class, class.to_raw() as u32);
-            assert_eq!(actual_code, code.to_raw() as u32);
+            assert_eq!(actual_class, class);
+            assert_eq!(actual_code, code);
         }
         other => panic!("expected {class:?} / {code:?}, got {other:?}"),
     }
@@ -471,7 +473,7 @@ fn assert_present_value_ownership(
 
 #[test]
 fn analog_input_present_value_is_application_supplied() {
-    let mut object = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let mut object = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     assert_present_value_ownership(
         &mut object,
         PropertyValue::Real(21.5),
@@ -504,7 +506,7 @@ fn multistate_input_present_value_is_application_supplied() {
 
 #[test]
 fn commandable_present_value_fails_closed_by_default() {
-    let mut object = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let mut object = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
 
     let error = object
         .set_present_value_internal(PropertyValue::Real(21.5))
@@ -540,7 +542,7 @@ fn assert_internal_rejection_is_atomic(
 
 #[test]
 fn application_present_value_writes_are_still_validated() {
-    let mut analog = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let mut analog = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     analog
         .set_present_value_internal(PropertyValue::Real(21.5))
         .unwrap();

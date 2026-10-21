@@ -69,6 +69,9 @@ fn timed_endpoint(
         timing.transmit_latency_pad_ms,
         timing.usage_timeout_ms,
         timing.reply_timeout_ms,
+        None,
+        None,
+        None,
     )
 }
 

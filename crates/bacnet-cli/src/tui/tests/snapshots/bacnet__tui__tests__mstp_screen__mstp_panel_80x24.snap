@@ -1,0 +1,28 @@
+---
+source: crates/bacnet-cli/src/tui/tests/mstp_screen.rs
+expression: text
+---
+" 1 2 3 4 [6 MS/TP] 7 | MSTP mstp:3 | up | READ-ONLY | COV 0 | drop 0     ? help "
+"┌ This station ───────────────┐┌ Counters (since joining, live) ──┐             "
+"│ Port         /dev/ttyUSB0   ││ Frames received             1200 │             "
+"│ Station      mstp:3         ││ Frames sent                  300 │             "
+"│ Baud         38400          ││ NPDUs delivered               40 │             "
+"│ Max master   127            ││ Tokens passed                250 │             "
+"│ Info frames  1              ││ Token retries                  1 │             "
+"│ Thread       FIFO 40, CPU 3 ││ Tokens regenerated             0 │             "
+"│                             ││ Invalid frames                 2 │             "
+"│ Token        HELD           ││ Frame aborts                   0 │             "
+"│ State        USE_TOKEN      ││ Reply timeouts                 1 │             "
+"│ Next station mstp:7         ││ Replies postponed              3 │             "
+"│ Polling      mstp:8         ││ Late replies                   0 │             "
+"│ Sole master  no             ││ Own-MAC frames                 0 │             "
+"│                             ││ TX queue full                  0 │             "
+"│                             ││ Serial read errors             0 │             "
+"│                             ││ Serial write errors            0 │             "
+"│                             ││ Late timers (≥5 ms)            1 │             "
+"│                             ││ Timer lateness max        6.4 ms │             "
+"│                             ││                                  │             "
+"│                             ││                                  │             "
+"│                             ││                                  │             "
+"└─────────────────────────────┘└──────────────────────────────────┘             "
+" z clear counters  Space pause/follow  x disconnect  Esc back  ? help  q quit   "

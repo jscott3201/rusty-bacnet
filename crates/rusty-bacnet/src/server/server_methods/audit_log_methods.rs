@@ -35,4 +35,20 @@ impl BACnetServer {
         };
         crate::py_async::future_into_py(py, crate::unit_result(future))
     }
+
+    /// Record a reset the application makes for its own reasons: a
+    /// DEVICE_RESET Audit record from this device, with no invoke ID
+    /// (#1564). A peer's accepted restart is recorded already. RuntimeError
+    /// when the server is not running.
+    fn report_device_reset_local<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        let future = async move {
+            let guard = inner.lock().await;
+            let srv = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
+            srv.report_device_reset_local().await.map_err(to_py_err)
+        };
+        crate::py_async::future_into_py(py, crate::unit_result(future))
+    }
 }

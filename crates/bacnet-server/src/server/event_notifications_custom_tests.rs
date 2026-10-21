@@ -86,8 +86,8 @@ impl BACnetObject for CustomProposal {
             {
                 let Some(index @ 1..=3) = index else {
                     return Err(Error::Protocol {
-                        class: ErrorClass::PROPERTY.to_raw().into(),
-                        code: ErrorCode::INVALID_ARRAY_INDEX.to_raw().into(),
+                        class: ErrorClass::PROPERTY,
+                        code: ErrorCode::INVALID_ARRAY_INDEX,
                     });
                 };
                 let index = index as usize - 1;
@@ -105,8 +105,8 @@ impl BACnetObject for CustomProposal {
             }
             _ => {
                 return Err(Error::Protocol {
-                    class: ErrorClass::PROPERTY.to_raw().into(),
-                    code: ErrorCode::UNKNOWN_PROPERTY.to_raw().into(),
+                    class: ErrorClass::PROPERTY,
+                    code: ErrorCode::UNKNOWN_PROPERTY,
                 })
             }
         };
@@ -120,8 +120,8 @@ impl BACnetObject for CustomProposal {
         _: Option<u8>,
     ) -> Result<(), Error> {
         Err(Error::Protocol {
-            class: ErrorClass::PROPERTY.to_raw().into(),
-            code: ErrorCode::WRITE_ACCESS_DENIED.to_raw().into(),
+            class: ErrorClass::PROPERTY,
+            code: ErrorCode::WRITE_ACCESS_DENIED,
         })
     }
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
@@ -238,8 +238,7 @@ fn database(
     .unwrap();
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
-            instance: 1,
-            name: "Custom Device".into(),
+            identity: bacnet_objects::DeviceIdentity::default().with_name("Custom Device"),
             ..DeviceConfig::default()
         })
         .unwrap(),

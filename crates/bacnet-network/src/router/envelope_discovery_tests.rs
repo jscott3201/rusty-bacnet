@@ -8,7 +8,7 @@
 //! Shares [`super::envelope_harness`] with the control-envelope module.
 
 use bacnet_encoding::npdu::{decode_npdu, Npdu, NpduAddress};
-use bacnet_types::enums::{NetworkMessageType, RejectMessageReason};
+use bacnet_npdu::{NetworkMessageType, RejectMessageReason};
 use bacnet_types::MacAddr;
 use bytes::Bytes;
 
@@ -43,7 +43,7 @@ async fn who_is_local_origin_adds_ingress_source_and_attributes_on_forward() {
     assert_eq!(relayed.payload, npdu.payload);
     assert_eq!(
         relayed.message_type,
-        Some(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK.to_raw())
+        Some(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK)
     );
     // Next hop stays separate: the relay is a link broadcast, not addressed.
     assert_eq!(h.table().len(), 2);
@@ -92,13 +92,14 @@ async fn who_is_scoped_known_network_answered_locally_not_forwarded() {
         SendRequest::Broadcast {
             npdu,
             data_attributes,
+            ..
         } => (npdu, data_attributes),
         SendRequest::Unicast { .. } => panic!("expected broadcast I-Am reply"),
     };
     let decoded = decode_npdu(data).unwrap();
     assert_eq!(
         decoded.message_type,
-        Some(NetworkMessageType::I_AM_ROUTER_TO_NETWORK.to_raw())
+        Some(NetworkMessageType::I_AM_ROUTER_TO_NETWORK)
     );
     assert_eq!(decoded.payload.as_ref(), &[0x07, 0xd0]);
     assert_eq!(attrs, attributes());
@@ -188,7 +189,7 @@ async fn init_update_query_and_garbage_envelopes() {
             let decoded = decode_npdu(npdu).unwrap();
             assert_eq!(
                 decoded.message_type,
-                Some(NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK.to_raw())
+                Some(NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK)
             );
             assert!(decoded.payload.is_empty());
         }
@@ -251,8 +252,7 @@ async fn initialize_routing_table_ack() {
     // RB-03: a table query is Number of Ports == 0 (one octet), not a
     // missing field. An empty payload is a truncated envelope: no ACK.
     let npdu = Npdu {
-        is_network_message: true,
-        message_type: Some(NetworkMessageType::INITIALIZE_ROUTING_TABLE.to_raw()),
+        message_type: Some(NetworkMessageType::INITIALIZE_ROUTING_TABLE),
         payload: Bytes::from_static(&[0]),
         ..Npdu::default()
     };
@@ -265,10 +265,10 @@ async fn initialize_routing_table_ack() {
         } => {
             assert_eq!(mac.as_slice(), &[0x0A]);
             let decoded = decode_npdu(data.clone()).unwrap();
-            assert!(decoded.is_network_message);
+            assert!(decoded.is_network_message());
             assert_eq!(
                 decoded.message_type,
-                Some(NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK.to_raw())
+                Some(NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK)
             );
             assert_eq!(decoded.payload.len(), 9);
             assert_eq!(decoded.payload[0], 2);
@@ -291,8 +291,7 @@ async fn initialize_routing_table_empty_payload_sends_no_ack() {
     let mut h = Harness::with_table(table);
 
     let npdu = Npdu {
-        is_network_message: true,
-        message_type: Some(NetworkMessageType::INITIALIZE_ROUTING_TABLE.to_raw()),
+        message_type: Some(NetworkMessageType::INITIALIZE_ROUTING_TABLE),
         payload: Bytes::new(),
         ..Npdu::default()
     };
@@ -331,12 +330,13 @@ async fn directed_control_routed_not_consumed() {
             npdu,
             mac,
             data_attributes,
+            ..
         } => {
             assert_eq!(mac.as_slice(), &[5]);
             let decoded = decode_npdu(npdu).unwrap();
             assert_eq!(
                 decoded.message_type,
-                Some(NetworkMessageType::I_AM_ROUTER_TO_NETWORK.to_raw())
+                Some(NetworkMessageType::I_AM_ROUTER_TO_NETWORK)
             );
             assert_eq!(
                 decoded.destination,
@@ -398,7 +398,7 @@ async fn directed_control_to_unknown_network_rejected() {
     let who_is = decode_npdu(solicited[0].clone()).unwrap();
     assert_eq!(
         who_is.message_type,
-        Some(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK.to_raw())
+        Some(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK)
     );
     assert_eq!(who_is.payload.as_ref(), &[0x27, 0x0f]);
     let mut rejects = h.drain(0);
@@ -409,7 +409,7 @@ async fn directed_control_to_unknown_network_rejected() {
             let decoded = decode_npdu(npdu).unwrap();
             assert_eq!(
                 decoded.message_type,
-                Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK.to_raw())
+                Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK)
             );
             assert_eq!(
                 decoded.payload.as_ref(),

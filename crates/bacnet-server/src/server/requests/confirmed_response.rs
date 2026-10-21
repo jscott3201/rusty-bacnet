@@ -13,16 +13,20 @@ pub(super) async fn read_property_response(
     reinitialize: bool,
     registered_port: Option<ObjectIdentifier>,
     work_limit: usize,
+    identity: Option<&bacnet_objects::DeviceIdentity>,
 ) -> Apdu {
     read_property_response_observed(
         db,
         None,
-        DeviceExecution::Endpoint {
-            writes,
-            reinitialize,
+        ReadProfile {
+            execution: DeviceExecution::Endpoint {
+                writes,
+                reinitialize,
+            },
+            registered_port,
+            work_limit,
+            identity,
         },
-        registered_port,
-        work_limit,
         request,
         |_, _, _, _| {},
     )
@@ -88,8 +92,7 @@ pub(super) async fn read_property_multiple_observed(
     tables: LiveTables<'_>,
     service_request: &[u8],
     service_ack: &mut BytesMut,
-    budget: crate::server::ReadPropertyMultipleBudget,
-    registered_port: Option<ObjectIdentifier>,
+    config: &ServerConfig,
     mut completed: impl FnMut(
         &ObjectDatabase,
         ObjectIdentifier,
@@ -101,8 +104,10 @@ pub(super) async fn read_property_multiple_observed(
     let db = db.read().await;
     let request = bacnet_services::rpm::ReadPropertyMultipleRequest::decode(service_request)
         .map_err(|error| handlers::ReadFailure::Service(error.into_request_reject()))?;
+    let budget = config.read_property_multiple_budget;
     let view = DeviceReadContext::new(&db, DeviceExecution::FullServer)
-        .with_registered_port(registered_port);
+        .with_identity(Some(&config.device))
+        .with_registered_port(config.registered_network_port);
     let plan = handlers::RpmPlan::new(&db, &request, budget.max_result_elements, Some(&view))?;
     let live = match plan.live_cov(&db) {
         Some(selection) => Some(active_cov_snapshot(&db, tables, selection).await),
@@ -118,6 +123,14 @@ pub(super) async fn read_property_multiple_observed(
     )
 }
 
+/// Runtime declarations and work limits for one Device property read.
+pub(super) struct ReadProfile<'a> {
+    pub(super) execution: DeviceExecution,
+    pub(super) registered_port: Option<ObjectIdentifier>,
+    pub(super) work_limit: usize,
+    pub(super) identity: Option<&'a bacnet_objects::DeviceIdentity>,
+}
+
 /// ReadProperty under one database read guard, planned before any table is
 /// sampled (#1213). A Group's Present_Value counts against `work_limit` as
 /// a ReadPropertyMultiple naming only it would, and a read past it is aborted
@@ -125,9 +138,7 @@ pub(super) async fn read_property_multiple_observed(
 pub(super) async fn read_property_response_observed(
     db: &RwLock<ObjectDatabase>,
     tables: Option<LiveTables<'_>>,
-    execution: DeviceExecution,
-    registered_port: Option<ObjectIdentifier>,
-    work_limit: usize,
+    profile: ReadProfile<'_>,
     request: &ConfirmedRequestPdu,
     mut completed: impl FnMut(
         &ObjectDatabase,
@@ -142,11 +153,16 @@ pub(super) async fn read_property_response_observed(
         .map_err(Error::into_request_reject)
     {
         Ok(decoded) => {
-            let lookup_oid =
-                handlers::resolve_read_target(&db, &decoded.object_identifier, registered_port);
-            let view = DeviceReadContext::new(&db, execution)
-                .with_registered_port(registered_port)
-                .with_work_limit(work_limit);
+            let view = DeviceReadContext::new(&db, profile.execution)
+                .with_identity(profile.identity)
+                .with_registered_port(profile.registered_port)
+                .with_work_limit(profile.work_limit);
+            let lookup_oid = handlers::resolve_read_target(
+                &db,
+                &decoded.object_identifier,
+                profile.registered_port,
+                view.device_oid(),
+            );
             match handlers::plan_read_property(
                 &db,
                 Some(&view),
@@ -156,8 +172,11 @@ pub(super) async fn read_property_response_observed(
             ) {
                 Ok(plan) => {
                     let live = match (tables, plan.live_cov(&db)) {
+                        // Boxed: only a read of the Device's COV subscription
+                        // list samples them, and the inline future would
+                        // more than double every ReadProperty's (#1713).
                         (Some(tables), Some(selection)) => {
-                            Some(active_cov_snapshot(&db, tables, selection).await)
+                            Some(Box::pin(active_cov_snapshot(&db, tables, selection)).await)
                         }
                         _ => None,
                     };
@@ -219,7 +238,7 @@ pub(in crate::server) fn error_apdu_from_error(
     if let Error::Reject { reason } = error {
         return Apdu::Reject(RejectPdu {
             invoke_id,
-            reject_reason: RejectReason::from_raw(*reason),
+            reject_reason: *reason,
         });
     }
     let (error_class, error_code) = error_fields(error);
@@ -285,38 +304,37 @@ pub(in crate::server) fn error_apdu_from_error(
 
 pub(in crate::server) fn error_fields(error: &Error) -> (ErrorClass, ErrorCode) {
     match error {
-        Error::Protocol { class, code } | Error::Structured { class, code, .. } => (
-            ErrorClass::from_raw(*class as u16),
-            ErrorCode::from_raw(*code as u16),
-        ),
+        Error::Protocol { class, code } | Error::Structured { class, code, .. } => (*class, *code),
         _ => (ErrorClass::SERVICES, ErrorCode::OTHER),
     }
 }
 
-/// Send one non-segmented confirmed-service response through its existing
-/// transport or reply-channel path.
-pub(in crate::server) async fn send_unsegmented_response<T: TransportPort + 'static>(
-    network: &NetworkLayer<T>,
-    response: &Apdu,
-    source_mac: &[u8],
-    source_network: Option<&NpduAddress>,
-    route: &bacnet_network::response_route::ResponseRoute,
+/// Send an encoded unsegmented response APDU, handing it off on an MS/TP
+/// reply channel when one waits for it. Returns whether the response was
+/// handed off: taken by the reply channel, or accepted by the transport.
+///
+/// Not an `async fn`, so its future is `send_response`'s, without a second
+/// copy of the arguments around it (#1713).
+pub(in crate::server) fn send_unsegmented_response<'a, T: TransportPort + 'static>(
+    network: &'a NetworkLayer<T>,
+    apdu: &'a [u8],
+    target: ResponseTarget<'a>,
     reply_tx: Option<tokio::sync::oneshot::Sender<Bytes>>,
     pending: Option<PendingConfirmedRequest>,
-) {
-    send_response(
-        network,
-        response,
-        ResponseTarget {
-            source_mac,
-            source_network,
-            route,
-        },
-        reply_tx,
-        true,
-        pending,
-    )
-    .await;
+) -> impl std::future::Future<Output = bool> + Send + 'a {
+    send_response(network, apdu, target, reply_tx, true, pending)
+}
+
+/// `response` encoded, in a buffer sized for it.
+pub(in crate::server) fn encoded_apdu(response: &Apdu) -> BytesMut {
+    // Five octets cover every APDU header; a ComplexAck adds its service ACK.
+    let body = match response {
+        Apdu::ComplexAck(ack) => ack.service_ack.len(),
+        _ => 0,
+    };
+    let mut buf = BytesMut::with_capacity(8 + body);
+    encode_apdu(&mut buf, response).expect("valid APDU encoding");
+    buf
 }
 
 /// Overload work shares the identical wire path without per-rejection error
@@ -329,9 +347,10 @@ pub(in crate::server) async fn send_overload_response<T: TransportPort + 'static
     route: &bacnet_network::response_route::ResponseRoute,
     reply_tx: Option<tokio::sync::oneshot::Sender<Bytes>>,
 ) {
+    let apdu = encoded_apdu(response);
     send_response(
         network,
-        response,
+        &apdu,
         ResponseTarget {
             source_mac,
             source_network,
@@ -377,25 +396,23 @@ async fn send_raw_response<T: TransportPort + 'static>(
     route: &bacnet_network::response_route::ResponseRoute,
     reply_tx: Option<tokio::sync::oneshot::Sender<Bytes>>,
 ) {
-    let reply_tx = if route.provenance().is_direct_peer() {
+    let reply_tx = if route.requires_direct_response() {
         None
     } else {
         reply_tx
     };
     if let Some(tx) = reply_tx {
-        use bacnet_encoding::npdu::{encode_npdu, Npdu};
-        let npdu = Npdu {
-            is_network_message: false,
-            expecting_reply: false,
-            priority: NetworkPriority::NORMAL,
-            destination: source_network.cloned(),
-            source: None,
-            payload: apdu_bytes.clone(),
-            ..Npdu::default()
-        };
-        let mut npdu_buf = BytesMut::with_capacity(2 + apdu_bytes.len());
-        match encode_npdu(&mut npdu_buf, &npdu) {
-            Ok(()) => {
+        match network.encode_response_for_handoff(
+            bacnet_network::layer::IssuedApdu {
+                apdu: apdu_bytes,
+                next_hop: source_mac,
+                destination: source_network,
+                expecting_reply: false,
+                priority: NetworkPriority::Normal,
+            },
+            route,
+        ) {
+            Ok(npdu_buf) => {
                 let _ = tx.send(npdu_buf.freeze());
             }
             Err(error) => {
@@ -435,83 +452,93 @@ pub(in crate::server) struct ResponseTarget<'a> {
     pub(in crate::server) route: &'a bacnet_network::response_route::ResponseRoute,
 }
 
-async fn send_response<T: TransportPort + 'static>(
+/// Send `apdu`: on the MS/TP reply channel when one waits for it and the
+/// route allows, otherwise as a terminal response. Returns whether it was
+/// handed off.
+///
+/// The reply-channel handoff is synchronous, in [`hand_off_reply`]; this
+/// future holds only what the transport send needs (#1713). It is not an
+/// `async fn`, which would hold each argument twice.
+#[allow(
+    clippy::manual_async_fn,
+    reason = "an async fn would hold its moved arguments twice (#1713)"
+)]
+fn send_response<'a, T: TransportPort + 'static>(
+    network: &'a NetworkLayer<T>,
+    apdu: &'a [u8],
+    target: ResponseTarget<'a>,
+    reply_tx: Option<tokio::sync::oneshot::Sender<Bytes>>,
+    log_errors: bool,
+    pending: Option<PendingConfirmedRequest>,
+) -> impl std::future::Future<Output = bool> + Send + 'a {
+    async move {
+        let sent = match hand_off_reply(network, apdu, target, reply_tx, log_errors, pending) {
+            Ok(handed_off) => return handed_off,
+            Err(pending) => BACnetServer::<T>::issue_terminal_response(
+                network,
+                apdu,
+                target.source_mac,
+                target.source_network,
+                target.route,
+                pending,
+            ),
+        }
+        .await;
+        if let Err(error) = &sent {
+            if log_errors {
+                warn!(%error, "Failed to send response");
+            }
+        }
+        sent.is_ok()
+    }
+}
+
+/// Hand `apdu` to the MS/TP reply channel `reply_tx`, unless the route needs
+/// its direct response. `Ok` says whether the channel took it; `Err` gives
+/// `pending` back for a terminal send, when there is no channel or the NPDU
+/// failed to encode.
+fn hand_off_reply<T: TransportPort + 'static>(
     network: &NetworkLayer<T>,
-    response: &Apdu,
+    apdu: &[u8],
     target: ResponseTarget<'_>,
     reply_tx: Option<tokio::sync::oneshot::Sender<Bytes>>,
     log_errors: bool,
     pending: Option<PendingConfirmedRequest>,
-) {
+) -> Result<bool, Option<PendingConfirmedRequest>> {
     let ResponseTarget {
         source_mac,
         source_network,
         route,
     } = target;
-    let mut buf = BytesMut::new();
-    encode_apdu(&mut buf, response).expect("valid APDU encoding");
-
-    let reply_tx = if route.provenance().is_direct_peer() {
-        None
-    } else {
-        reply_tx
+    let Some(tx) = reply_tx.filter(|_| !route.requires_direct_response()) else {
+        return Err(pending);
     };
-    if let Some(tx) = reply_tx {
-        use bacnet_encoding::npdu::{encode_npdu, Npdu};
-        let apdu_bytes = buf.freeze();
-        let npdu = Npdu {
-            is_network_message: false,
+    match network.encode_response_for_handoff(
+        bacnet_network::layer::IssuedApdu {
+            apdu,
+            next_hop: source_mac,
+            destination: source_network,
             expecting_reply: false,
-            priority: NetworkPriority::NORMAL,
-            destination: source_network.cloned(),
-            source: None,
-            payload: apdu_bytes.clone(),
-            ..Npdu::default()
-        };
-        let mut npdu_buf = BytesMut::with_capacity(2 + apdu_bytes.len());
-        match encode_npdu(&mut npdu_buf, &npdu) {
-            Ok(()) => {
-                let handed_off = tx.send(npdu_buf.freeze()).is_ok();
-                // Synchronous reply-channel handoff, not the serial worker's
-                // later turnaround. A failed handoff releases too, but is not
-                // reported as a successful reply.
-                drop(pending);
-                if !handed_off && log_errors {
-                    warn!("MS/TP reply receiver closed before response handoff");
-                }
-            }
-            Err(error) => {
-                if log_errors {
-                    warn!(%error, "Failed to encode NPDU for MS/TP reply");
-                }
-                if let Err(error) = BACnetServer::<T>::issue_terminal_response(
-                    network,
-                    &apdu_bytes,
-                    source_mac,
-                    source_network,
-                    route,
-                    pending,
-                )
-                .await
-                {
-                    if log_errors {
-                        warn!(%error, "Failed to send response");
-                    }
-                }
-            }
-        }
-    } else if let Err(error) = BACnetServer::<T>::issue_terminal_response(
-        network,
-        &buf,
-        source_mac,
-        source_network,
+            priority: NetworkPriority::Normal,
+        },
         route,
-        pending,
-    )
-    .await
-    {
-        if log_errors {
-            warn!(%error, "Failed to send response");
+    ) {
+        Ok(npdu_buf) => {
+            let handed_off = tx.send(npdu_buf.freeze()).is_ok();
+            // Synchronous reply-channel handoff, not the serial worker's
+            // later turnaround. A failed handoff releases too, but is not
+            // reported as a successful reply.
+            drop(pending);
+            if !handed_off && log_errors {
+                warn!("MS/TP reply receiver closed before response handoff");
+            }
+            Ok(handed_off)
+        }
+        Err(error) => {
+            if log_errors {
+                warn!(%error, "Failed to encode NPDU for MS/TP reply");
+            }
+            Err(pending)
         }
     }
 }
@@ -530,3 +557,54 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 #[cfg(test)]
 #[path = "../alarm_summary_tests.rs"]
 mod alarm_summary_tests;
+
+#[cfg(test)]
+#[path = "typed_error_reply_tests.rs"]
+mod typed_error_reply_tests;
+
+#[cfg(test)]
+mod encoded_apdu_tests {
+    use super::*;
+
+    /// The one encoding a response now gets (#1713) is the encoder's own.
+    #[test]
+    fn encoded_apdu_is_the_encoder_output_for_every_reply_kind() {
+        let replies = [
+            Apdu::SimpleAck(SimpleAck {
+                invoke_id: 7,
+                service_choice: ConfirmedServiceChoice::WRITE_PROPERTY,
+            }),
+            Apdu::ComplexAck(ComplexAck {
+                segmented: false,
+                more_follows: false,
+                invoke_id: 7,
+                sequence_number: None,
+                proposed_window_size: None,
+                service_choice: ConfirmedServiceChoice::READ_PROPERTY,
+                service_ack: Bytes::from(vec![0x5a; 1400]),
+            }),
+            error_apdu_from_error(
+                7,
+                ConfirmedServiceChoice::READ_PROPERTY,
+                &Error::Protocol {
+                    class: ErrorClass::OBJECT,
+                    code: ErrorCode::UNKNOWN_OBJECT,
+                },
+            ),
+            Apdu::Reject(RejectPdu {
+                invoke_id: 7,
+                reject_reason: RejectReason::UNRECOGNIZED_SERVICE,
+            }),
+            Apdu::Abort(AbortPdu {
+                sent_by_server: true,
+                invoke_id: 7,
+                abort_reason: AbortReason::OUT_OF_RESOURCES,
+            }),
+        ];
+        for reply in &replies {
+            let mut expected = BytesMut::new();
+            encode_apdu(&mut expected, reply).unwrap();
+            assert_eq!(encoded_apdu(reply), expected, "{reply:?}");
+        }
+    }
+}

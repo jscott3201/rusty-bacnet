@@ -272,8 +272,8 @@ impl AuditLogObject {
             .and_then(|clock| clock.read_clock())
             .filter(|frame| frame.is_valid_actual_datetime())
             .ok_or(Error::Protocol {
-                class: ErrorClass::DEVICE.to_raw() as u32,
-                code: ErrorCode::OPERATIONAL_PROBLEM.to_raw() as u32,
+                class: ErrorClass::DEVICE,
+                code: ErrorCode::OPERATIONAL_PROBLEM,
             })?;
         Ok((frame.local_date, frame.local_time))
     }
@@ -560,8 +560,8 @@ impl BACnetObject for AuditLogObject {
                 Err(crate::log_buffer::log_buffer_read_denied())
             }
             _ => Err(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+                class: ErrorClass::PROPERTY,
+                code: ErrorCode::UNKNOWN_PROPERTY,
             }),
         }
     }
@@ -581,8 +581,8 @@ impl BACnetObject for AuditLogObject {
                 return self.commit_change(staging::StagedChange::LogEnable(v));
             }
             return Err(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
+                class: ErrorClass::PROPERTY,
+                code: ErrorCode::INVALID_DATA_TYPE,
             });
         }
         if property == PropertyIdentifier::BUFFER_SIZE {
@@ -592,8 +592,8 @@ impl BACnetObject for AuditLogObject {
         // peer can purge the log; the application uses `purge`.
         if property == PropertyIdentifier::RECORD_COUNT {
             return Err(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
+                class: ErrorClass::PROPERTY,
+                code: ErrorCode::WRITE_ACCESS_DENIED,
             });
         }
         if property == PropertyIdentifier::DESCRIPTION {
@@ -602,8 +602,8 @@ impl BACnetObject for AuditLogObject {
                 return Ok(());
             }
             return Err(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
+                class: ErrorClass::PROPERTY,
+                code: ErrorCode::INVALID_DATA_TYPE,
             });
         }
         Err(crate::common::unhandled_write_error(

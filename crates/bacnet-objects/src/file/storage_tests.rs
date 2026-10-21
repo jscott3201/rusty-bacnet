@@ -5,39 +5,27 @@
 use super::*;
 use bacnet_types::enums::ErrorCode;
 
-fn protocol_pair(err: Error) -> (u32, u32) {
+fn protocol_pair(err: Error) -> (ErrorClass, ErrorCode) {
     match err {
         Error::Protocol { class, code } => (class, code),
         other => panic!("expected protocol error, got {other:?}"),
     }
 }
 
-fn file_full_pair() -> (u32, u32) {
-    (
-        ErrorClass::OBJECT.to_raw() as u32,
-        ErrorCode::FILE_FULL.to_raw() as u32,
-    )
+fn file_full_pair() -> (ErrorClass, ErrorCode) {
+    (ErrorClass::OBJECT, ErrorCode::FILE_FULL)
 }
 
-fn invalid_method_pair() -> (u32, u32) {
-    (
-        ErrorClass::SERVICES.to_raw() as u32,
-        ErrorCode::INVALID_FILE_ACCESS_METHOD.to_raw() as u32,
-    )
+fn invalid_method_pair() -> (ErrorClass, ErrorCode) {
+    (ErrorClass::SERVICES, ErrorCode::INVALID_FILE_ACCESS_METHOD)
 }
 
-fn invalid_start_pair() -> (u32, u32) {
-    (
-        ErrorClass::SERVICES.to_raw() as u32,
-        ErrorCode::INVALID_FILE_START_POSITION.to_raw() as u32,
-    )
+fn invalid_start_pair() -> (ErrorClass, ErrorCode) {
+    (ErrorClass::SERVICES, ErrorCode::INVALID_FILE_START_POSITION)
 }
 
-fn access_denied_pair() -> (u32, u32) {
-    (
-        ErrorClass::SERVICES.to_raw() as u32,
-        ErrorCode::FILE_ACCESS_DENIED.to_raw() as u32,
-    )
+fn access_denied_pair() -> (ErrorClass, ErrorCode) {
+    (ErrorClass::SERVICES, ErrorCode::FILE_ACCESS_DENIED)
 }
 
 fn stream_file() -> FileObject {

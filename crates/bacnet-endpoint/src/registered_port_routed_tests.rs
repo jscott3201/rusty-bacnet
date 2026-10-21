@@ -61,9 +61,11 @@ async fn registered_port_reassembled_routed_read_and_endpoint_segmentation_bound
     for full in [true, false] {
         let mut owner = if full {
             let id = identity().with_segmentation(bacnet_types::enums::Segmentation::BOTH);
-            let mut config = id.server_config();
+            let mut config = crate::identity::server_config(&id);
             config.registered_network_port = Some(port());
-            config.segmentation_supported = bacnet_types::enums::Segmentation::BOTH;
+            config.device = config
+                .device
+                .with_segmentation(bacnet_types::enums::Segmentation::BOTH);
             Owner::Server(Box::new(
                 bacnet_server::server::BACnetServer::start(
                     config,

@@ -67,7 +67,7 @@ impl DeviceCommunicationControlRequest {
             decode_optional_ctx(data, offset, 2, "DCC password", decode_ctx_character_string)?;
         expect_end(data, end, end, "DCC")?;
         if password.as_ref().is_some_and(|s| s.len() > 20) {
-            return Err(Error::Encoding("DCC password exceeds 20 characters".into()));
+            return Err(Error::encode("DCC password exceeds 20 characters"));
         }
 
         Ok(Self {

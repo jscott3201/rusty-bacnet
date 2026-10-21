@@ -77,7 +77,9 @@ fn database(storage: Arc<HeldStorage>) -> Arc<RwLock<ObjectDatabase>> {
 fn config(sink: ObjectIdentifier) -> ServerConfig {
     ServerConfig {
         audit_notification_sink: Some(sink),
-        audit_notification_authorizer: Some(Arc::new(|_| true)),
+        policy: Some(Arc::new(
+            crate::FnPolicy::new().audit_notification(|_| true),
+        )),
         ..ServerConfig::default()
     }
 }

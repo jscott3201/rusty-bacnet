@@ -4,7 +4,7 @@
 //! throttled. A copy that waits for its Device destination's I-Am keeps to
 //! the cap and the loop rules once it goes (#1368).
 
-use super::event_forwarding::{Reception, WarnThrottle, CAP_WARNING_INTERVAL};
+use super::event_forwarding::Reception;
 use super::event_forwarding_bounds_tests::peer;
 use super::event_forwarding_tests::{
     copies, database, destination, notification, unconfirmed, Forwarding, To, LOCAL_DEVICE,
@@ -20,12 +20,11 @@ fn remote(index: usize) -> [u8; 2] {
     [0x0E, index as u8]
 }
 
-#[tokio::test]
-async fn the_cap_counts_only_copies_the_loop_rules_let_through() {
-    // The notification arrives by broadcast. Forwarder 1 names 30 nodes on
-    // this network, which the loop rules refuse; forwarders 2 to 4 name 70
-    // nodes on network 5 (indices 30 to 99).
-    let forwarders = (0..4u32)
+/// Forwarder 1 names 30 nodes on this network, which the loop rules refuse
+/// for a notification received by broadcast; forwarders 2 to 4 name 70
+/// nodes on network 5 (indices 30 to 99).
+fn capped_forwarders() -> Vec<NotificationForwarderObject> {
+    (0..4u32)
         .map(|n| {
             let mut nf = NotificationForwarderObject::new(n + 1, format!("NF-{n}")).unwrap();
             let count = if n == 3 { 10 } else { 30 };
@@ -41,8 +40,12 @@ async fn the_cap_counts_only_copies_the_loop_rules_let_through() {
             }
             nf
         })
-        .collect();
-    let forwarding = Forwarding::new(database(forwarders));
+        .collect()
+}
+
+#[tokio::test]
+async fn the_cap_counts_only_copies_the_loop_rules_let_through() {
+    let forwarding = Forwarding::new(database(capped_forwarders()));
     let broadcast = Reception {
         group: true,
         global: false,
@@ -203,12 +206,30 @@ async fn a_copy_that_waited_for_its_device_draws_on_the_cap_as_it_goes() {
     );
 }
 
-#[test]
-fn the_cap_warning_goes_out_at_most_once_an_interval() {
-    let throttle = WarnThrottle::new();
-    let start = std::time::Instant::now();
-    assert!(throttle.due(start));
-    assert!(!throttle.due(start + CAP_WARNING_INTERVAL - Duration::from_millis(1)));
-    assert!(throttle.due(start + CAP_WARNING_INTERVAL));
-    assert!(!throttle.due(start + CAP_WARNING_INTERVAL + Duration::from_secs(1)));
+/// A run of capped notifications warns once per interval through the
+/// server's own throttle (#1950); the rest log at debug and are counted for
+/// the next warning.
+#[tokio::test(start_paused = true)]
+async fn the_cap_warning_goes_out_at_most_once_an_interval() {
+    use bacnet_transport::warn_throttle::WARNING_INTERVAL;
+    let forwarding = Forwarding::new(database(capped_forwarders()));
+    for _ in 0..3 {
+        let broadcast = Reception {
+            group: true,
+            global: false,
+        };
+        forwarding.receive(&notification(5), broadcast).await;
+    }
+    let throttle = forwarding.cap_warning();
+    assert_eq!(
+        throttle.note(),
+        None,
+        "the first capped notification warned"
+    );
+    tokio::time::advance(WARNING_INTERVAL).await;
+    assert_eq!(
+        throttle.note(),
+        Some(4),
+        "two held back, the check above, and this one"
+    );
 }

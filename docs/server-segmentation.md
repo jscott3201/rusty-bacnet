@@ -1,14 +1,14 @@
 # Full-server segmentation timing
 
-`ServerConfig::apdu_segment_timeout_ms` supplies one segment timeout (Tseg) in
-milliseconds. Its default is 5000. The generic, B/IP and SC builders expose
-`apdu_segment_timeout_ms(...)`. A full server uses Tseg when waiting for a
+`DeviceIdentity::with_apdu_segment_timeout_ms(...)` supplies one segment timeout
+(Tseg) in milliseconds. Its default is 5000. The generic, B/IP and SC builders
+accept that identity through `.device(...)`. A full server uses Tseg when waiting for a
 response SegmentACK and uses `4 * Tseg` for incoming request inactivity.
 `APDU_Timeout` and retry counts keep their separate meanings.
 
 A selected Device must declare the same `Segmentation_Supported` as the server.
-For `TRANSMIT`, `RECEIVE` or `BOTH`, its `DeviceConfig::apdu_segment_timeout`
-(default 5000) must also match the server. The Device exposes the configured
+For `TRANSMIT`, `RECEIVE` or `BOTH`, its `DeviceConfig.identity` segment timeout
+must also match the resolved server identity. The Device exposes the configured
 value as read-only `APDU_Segment_Timeout`; its property list, metadata and PICS
 include the property only when segmentation is supported. `NONE` omits it.
 Unknown server modes, active zero timeouts, mismatches, multiplication overflow
@@ -45,8 +45,8 @@ segment received after removal still gets the normal invalid-state Abort;
 segment zero can start a fresh transfer. The existing 128 global / 16 per-peer
 slots, 4 MiB saved-payload budget and 256-segment limit remain in force.
 
-`DeviceIdentity` derives a matching full-server config and Device declaration
-with a 6000 ms segment timeout. `with_apdu_segment_timeout_ms(...)` changes both.
+`DeviceIdentity` is shared by full servers and endpoints, with a 5000 ms
+segment timeout. `with_apdu_segment_timeout_ms(...)` changes both.
 The narrow `EndpointSession` roles require `NONE` in both an explicit identity
 and the selected Device database, and reject unsupported declarations before
 ingress. Client timers remain caller-owned; this does not change their coupling

@@ -358,7 +358,7 @@ fn recipient_list_attempt() -> BACnetPropertyValue {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_write_property_multiple_under_an_authorizer_stages_its_save() {
+async fn a_write_property_multiple_under_a_policy_stages_its_save() {
     // The server asks the authorizer about the attempt before staging it
     // (#1321), so the save runs with the guard dropped.
     let storage = Arc::new(HeldStorage::default());

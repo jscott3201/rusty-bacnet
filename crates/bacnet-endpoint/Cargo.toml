@@ -8,8 +8,17 @@ repository.workspace = true
 description = "BACnet endpoint that owns one transport and runs client and server roles through it"
 keywords = ["bacnet", "building-automation", "client", "server", "async"]
 categories = ["network-programming"]
+readme = "README.md"
+
+[package.metadata.docs.rs]
+no-default-features = true
+features = ["sc-tls"]
+default-target = "x86_64-unknown-linux-gnu"
+targets = []
+rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
+bacnet-npdu = { workspace = true }
 bacnet-types = { workspace = true, features = ["std"] }
 bacnet-encoding = { workspace = true, features = ["std"] }
 bacnet-services = { workspace = true, features = ["std"] }

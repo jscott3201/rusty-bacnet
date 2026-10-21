@@ -208,7 +208,7 @@ bacnet-types = "=${release}"
 bacnet-encoding = "=${release}"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }`} />
 
-The release publishes these crates to crates.io, all at the same version: `bacnet-types`, `bacnet-time`, `bacnet-encoding`, `bacnet-services`, `bacnet-mstp-codec`, `bacnet-mstp-core`, `bacnet-bip-codec`, `bacnet-bip-core`, `bacnet-router-core`, `bacnet-transport`, `bacnet-network`, `bacnet-endpoint-core`, `bacnet-endpoint`, `bacnet-client`, `bacnet-objects`, `bacnet-server`, and `bacnet-cli`. Keep related BACnet crate versions aligned. Add transport features only when the application needs them. The [Rust quickstart](/rusty-bacnet/start/rust/) supplies a directed-read example and explains the address format.
+The release publishes these crates to crates.io, all at the same version: `bacnet-npdu`, `bacnet-types`, `bacnet-encoding`, `bacnet-services`, `bacnet-mstp-codec`, `bacnet-mstp-core`, `bacnet-bip-codec`, `bacnet-bip-core`, `bacnet-router-core`, `bacnet-transport`, `bacnet-network`, `bacnet-endpoint-core`, `bacnet-endpoint`, `bacnet-client`, `bacnet-objects`, `bacnet-server`, and `bacnet-cli`. Keep related BACnet crate versions aligned. `bacnet-time` versions on its own: it gets a new version only when its own API changes, so its number can differ from the release's, and the other crates name the version they need. Add transport features only when the application needs them. The [Rust quickstart](/rusty-bacnet/start/rust/) supplies a directed-read example and explains the address format.
 
 <NextStep href="/rusty-bacnet/start/rust/" label="Embed the Rust client" description="Build a small client, then choose the transport your application needs." />
 
@@ -226,7 +226,7 @@ The <a href={`${repository}/blob/v${release}/.github/workflows/release.yml`}>rel
   - `THIRD-PARTY-NOTICES`, the license texts of Rusty BACnet and of the third-party code built into the executables and wheels;
   - `SHA256SUMS`, the SHA-256 of each of those files.
 - **PyPI**: the same wheels and source distribution, as the [rusty-bacnet](https://pypi.org/project/rusty-bacnet/) package.
-- **crates.io**: the seventeen crates listed under Rust, all at version {release}.
+- **crates.io**: the seventeen crates listed under Rust at version {release}, and `bacnet-time` at its own version when that version is new.
 
 To check a wheel or the source distribution downloaded from the GitHub release, use your system's command from the CLI tabs with that file's name.
 

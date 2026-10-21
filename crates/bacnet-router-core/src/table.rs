@@ -299,8 +299,11 @@ const VACANT: Slot = Slot {
     pending: None,
 };
 
-/// Whether `network` names no single network (0, or the global 0xFFFF).
-const fn is_reserved(network: u16) -> bool {
+/// Whether `network` names no single network (0, or the global 0xFFFF), so
+/// no route can lead to it. A router never learns one, and a non-routing
+/// node reading a route announcement drops it the same way.
+#[must_use]
+pub const fn is_reserved(network: u16) -> bool {
     network == 0 || network == 0xFFFF
 }
 

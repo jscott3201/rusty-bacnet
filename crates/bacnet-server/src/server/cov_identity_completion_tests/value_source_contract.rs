@@ -2,6 +2,7 @@ use super::value_source::{decoded, FIELDS};
 use super::*;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::cov_multiple::COVNotificationMultipleRequest;
+use bacnet_types::enums::EngineeringUnits;
 use std::borrow::Cow;
 
 #[derive(Default)]
@@ -61,7 +62,7 @@ async fn fixture(
 ) -> (Fixture, Arc<StdMutex<State>>, CovSubscriptionSnapshot) {
     let f = Fixture::new(false);
     let state = Arc::new(StdMutex::new(State::default()));
-    let mut av = AnalogValueObject::new(3, "probe", 95).unwrap();
+    let mut av = AnalogValueObject::new(3, "probe", EngineeringUnits::NO_UNITS).unwrap();
     av.set_relinquish_default(10.0).unwrap();
     let mut db = clocked_test_database();
     db.add(Box::new(Probe {

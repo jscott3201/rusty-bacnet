@@ -11,7 +11,11 @@ name: Native tests
 # ci.yml's CI OK, it is one of the two checks a PR needs to merge.
 #
 # It runs on every PR to dev or main, on pushes to them (merges), whose runs
-# save the caches PRs restore, and by hand. Tag pushes don't run it.
+# save the caches PRs restore, and by hand. Tag pushes don't run it. On a
+# push to dev, Plan skips both jobs when the merge could have been a
+# fast-forward to its PR head, whose own run of this workflow (testing that
+# same tree) passed Native OK, and no cache-key input changed; Native OK
+# still passes then (#1466; scripts/ci/plan-skip.sh).
 
 on:
   pull_request:
@@ -49,8 +53,39 @@ env:
     | (package(bacnet-transport) & (test(/^(sc_hub|sc_tls|sc)::/) | binary_id(/^bacnet-transport::sc_hub/)))
 
 jobs:
+  # Whether this push to dev can skip the native jobs (#1466): see
+  # scripts/ci/plan-skip.sh for the conditions. Any other event skips this
+  # job, so its output is empty and everything runs; so does any error.
+  plan:
+    name: Plan
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/dev' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    # Workflow runs, check runs and the compare API, read only.
+    permissions:
+      actions: read
+      checks: read
+      contents: read
+    outputs:
+      skip: ${{ steps.plan.outputs.skip }}
+    steps:
+      # Depth 2 fetches both parents of the merge.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Skip if the PR's run already tested this tree
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/plan-skip.sh "Native OK" .github/workflows/native-tests.yml
+
   tests:
     name: Tests (${{ matrix.name }})
+    # Both native jobs run unless plan skips them; !cancelled() runs them
+    # when plan itself was skipped (every other event) or failed.
+    needs: plan
+    if: ${{ !cancelled() && needs.plan.outputs.skip != 'true' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
@@ -121,7 +156,7 @@ jobs:
         with:
           persist-credentials: false
       # The macOS feature list from scripts/ci/local-macos.sh: every optional
-      # feature except the Linux-only serial and ethernet. Windows also leaves
+      # feature except the Linux-only serial-gpio and ethernet. Windows also leaves
       # out bacnet-cli/pcap, which needs the Npcap SDK.
       - &feature-set
         name: Feature set
@@ -204,6 +239,8 @@ jobs:
 
   lint:
     name: Lint and Python (${{ matrix.name }})
+    needs: plan
+    if: ${{ !cancelled() && needs.plan.outputs.skip != 'true' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
@@ -243,6 +280,11 @@ jobs:
       - name: Clippy (PyO3 bindings)
         if: ${{ !cancelled() }}
         run: cargo clippy -p rusty-bacnet --all-targets --locked -- -D warnings
+      # The lean bacnet-cli without its default `tui` (#974), whose platform
+      # code differs here; ci.yml also runs its tests on Linux.
+      - name: Clippy (bacnet-cli, no default features)
+        if: ${{ !cancelled() }}
+        run: cargo clippy -p bacnet-cli --no-default-features --all-targets --locked -- -D warnings
       # Private items too, as in ci.yml (#1164).
       - name: Rustdoc (every native feature, private items)
         if: ${{ !cancelled() }}
@@ -293,20 +335,28 @@ jobs:
 
   # The merge gate's native check: green only when every job above succeeded on
   # every platform. It runs even when one failed or was cancelled, so it always
-  # reports, the same pattern as ci.yml's CI OK.
+  # reports, the same pattern as ci.yml's CI OK. A skipped job fails it, unless
+  # plan succeeded and said skip (#1466): then it still runs and passes, so a
+  # skipped merge's commit shows Native OK green like any other, as its tree
+  # is the one the PR's run tested. Plan's own result counts for
+  # nothing else: if it failed, the native jobs ran.
   native-ok:
     name: Native OK
     if: ${{ always() }}
-    needs: [tests, lint]
+    needs: [plan, tests, lint]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Every native job succeeded
+      - name: Every native job succeeded or was skipped by plan
         env:
           NEEDS: ${{ toJSON(needs) }}
         run: |
           echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
-          echo "$NEEDS" | jq -e 'all(.[]; .result == "success")' >/dev/null
+          echo "$NEEDS" | jq -r 'if .plan.result == "success" and .plan.outputs.skip == "true"
+            then "plan: skipped the native jobs; the PR run tested this tree" else empty end'
+          echo "$NEEDS" | jq -e '(.plan.result == "success" and .plan.outputs.skip == "true") as $planned
+            | all(to_entries[] | select(.key != "plan");
+              .value.result == "success" or (.value.result == "skipped" and $planned))' >/dev/null
 
   # After a green run on dev, delete the cache entries no run will restore
   # again (#1471), as ci.yml does after its own; see the script. The status

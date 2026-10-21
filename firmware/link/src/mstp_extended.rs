@@ -4,9 +4,9 @@
 //! [`MstpCoreConfig::extended_frames`] on, as a routing node needs it: the
 //! frame types 32 and 33, which carry NPDUs of 502 to 1497 octets
 //! COBS-encoded. Every buffer the core borrows is sized for them, as the
-//! flag requires: 1516 octets of receive storage, [`ExtendedActionBuffers`]
-//! and queues whose slots hold 1497 octets. It returns a [`Summary`] of
-//! what it saw.
+//! flag requires, in one [`ExtendedStorage`]: 1516 octets of receive
+//! storage, the action buffers and queues whose slots hold 1497 octets. It
+//! returns a [`Summary`] of what it saw.
 //!
 //! The scenario is one extended exchange with the peer, driven the way a
 //! UART adapter would drive it, on injected `bacnet-time` instants:
@@ -39,12 +39,11 @@ mod expected;
 
 pub use expected::EXPECTED;
 
-use bacnet_mstp_codec::{
-    decode_frame_in_place, Frame, FrameType, MAX_EXTENDED_FRAME_LENGTH, MAX_EXTENDED_MPDU_DATA,
-};
+use bacnet_mstp_codec::{decode_frame_in_place, Frame, FrameType, MAX_EXTENDED_MPDU_DATA};
+use bacnet_mstp_core::npdu::NetworkPriority;
 use bacnet_mstp_core::{
-    Action, Duration, ExtendedActionBuffers, HeaplessQueues, Instant, MasterCore, MasterState,
-    MstpCoreConfig, NetworkPriority, TransmitId,
+    Action, Duration, ExtendedStorage, FixedQueues, Instant, MasterCore, MasterState,
+    MstpCoreConfig, TransmitId,
 };
 
 /// Unicast slots in the transmit queue: one, so the image fits a 16 KiB
@@ -56,15 +55,15 @@ pub const BROADCAST_SLOTS: usize = 1;
 /// scenario polls every action after each call into the core.
 pub const DELIVERY_SLOTS: usize = 1;
 
-/// The core's transmit queues: heapless, with slots for extended frames.
-pub type Queues = HeaplessQueues<UNICAST_SLOTS, BROADCAST_SLOTS, MAX_EXTENDED_MPDU_DATA>;
+/// The core's transmit queues: fixed arrays, with slots for extended frames.
+pub type Queues = FixedQueues<UNICAST_SLOTS, BROADCAST_SLOTS, MAX_EXTENDED_MPDU_DATA>;
 
-/// The core's action buffers, sized for extended frames.
-pub type Actions = ExtendedActionBuffers<DELIVERY_SLOTS>;
+/// The storage the core borrows: its receive buffer, queues and action
+/// buffers, all sized for extended frames.
+pub type Storage = ExtendedStorage<UNICAST_SLOTS, BROADCAST_SLOTS, DELIVERY_SLOTS>;
 
-/// The master core as the image configures it: it borrows its queues, as it
-/// does its receive storage and action buffers, so all three can live in a
-/// static and the core itself is small.
+/// The master core as the image configures it: it borrows its [`Storage`],
+/// so that can live in a static and the core itself is small.
 pub type Core<'m> = MasterCore<'m, &'m mut Queues, MAX_EXTENDED_MPDU_DATA>;
 
 /// The request this station sends, in octets: more than a standard frame's
@@ -73,28 +72,20 @@ pub const REQUEST_LENGTH: usize = 512;
 /// The peer's reply, in octets.
 pub const REPLY_LENGTH: usize = 600;
 
-/// The storage the core borrows: its receive buffer, queues and action
-/// buffers, and nothing else.
+/// The storage the core borrows, and nothing else.
 ///
 /// [`Memory::new`] is all zero bits, so the image keeps it in a static that
 /// the linker places in `.bss`, costing no flash for an initial image.
 pub struct Memory {
-    /// The core's receive storage, which its stream decoder borrows: room
-    /// for the longest extended frame that carries an NPDU.
-    rx: [u8; MAX_EXTENDED_FRAME_LENGTH],
-    /// The core's transmit queues.
-    queues: Queues,
-    /// The core's action buffers.
-    actions: Actions,
+    /// The core's [`Storage`].
+    core: Storage,
 }
 
 impl Memory {
     /// Zeroed storage.
     pub const fn new() -> Self {
         Self {
-            rx: [0; MAX_EXTENDED_FRAME_LENGTH],
-            queues: Queues::new(),
-            actions: Actions::new(),
+            core: Storage::new(),
         }
     }
 }
@@ -258,11 +249,6 @@ const MAX_ACTIONS: usize = 16;
 /// [`Summary::errors`] and carries on, or returns early when it cannot
 /// continue.
 pub fn run(memory: &mut Memory) -> Summary {
-    let Memory {
-        rx,
-        queues,
-        actions,
-    } = memory;
     let mut summary = Summary::new();
     summary.max_npdu = CONFIG.max_npdu();
     let mut line = Line {
@@ -270,7 +256,7 @@ pub fn run(memory: &mut Memory) -> Summary {
         octet: CONFIG.octet_time(),
         summary: &mut summary,
     };
-    let Ok(mut core) = MasterCore::new(CONFIG, queues, rx, actions, line.now) else {
+    let Ok(mut core) = MasterCore::new(CONFIG, &mut memory.core, line.now) else {
         line.summary.error();
         return summary;
     };
@@ -287,6 +273,13 @@ fn record_counters(core: &mut Core<'_>, summary: &mut Summary) {
     summary.frames_transmitted = counters.frames_transmitted;
     summary.token_rotations = counters.token_rotations;
     summary.parser_errors = counters.parser_errors;
+    // Inputs the core ignored as broken: none in a good run.
+    let broken = counters
+        .adapter_errors
+        .saturating_add(counters.internal_errors);
+    summary.errors = summary
+        .errors
+        .saturating_add(u8::try_from(broken).unwrap_or(u8::MAX));
 }
 
 /// The line between this station and the peer: injected time, advanced by
@@ -302,7 +295,7 @@ struct Line<'m> {
 /// borrow of the core has ended.
 enum Then {
     Nothing,
-    Send { id: TransmitId, octets: usize },
+    Send { id: TransmitId },
 }
 
 impl Line<'_> {
@@ -369,9 +362,7 @@ impl Line<'_> {
         };
         for &octet in wire.iter().take(length) {
             self.now += self.octet;
-            if core.on_octet(octet, self.now).is_err() {
-                self.summary.error();
-            }
+            core.on_octet(octet, self.now);
         }
         self.drain(core);
     }
@@ -384,9 +375,7 @@ impl Line<'_> {
             return;
         };
         self.now = self.now.max(deadline);
-        if core.on_deadline(self.now).is_err() {
-            self.summary.error();
-        }
+        core.on_deadline(self.now);
         self.drain(core);
     }
 
@@ -400,13 +389,7 @@ impl Line<'_> {
                     self.summary.direction_changes += 1;
                     Then::Nothing
                 }
-                Action::Transmit { id, frame } => {
-                    self.record_sent(frame);
-                    Then::Send {
-                        id,
-                        octets: frame.len(),
-                    }
-                }
+                Action::Transmit { id, .. } => Then::Send { id },
                 Action::DeliverNpdu {
                     source,
                     destination,
@@ -426,15 +409,22 @@ impl Line<'_> {
                     Then::Nothing
                 }
             };
-            if let Then::Send { id, octets } = then {
-                if core.on_transmit_started(id, self.now).is_err() {
-                    self.summary.error();
-                }
+            if let Then::Send { id } = then {
+                // The octets come with the confirmed start: send them from
+                // the core's frame buffer.
+                let octets = match core.on_transmit_started(id, self.now) {
+                    Ok(frame) => {
+                        self.record_sent(frame);
+                        frame.len()
+                    }
+                    Err(_) => {
+                        self.summary.error();
+                        0
+                    }
+                };
                 let octets = u32::try_from(octets).unwrap_or(u32::MAX);
                 self.now += self.octet.saturating_mul(octets);
-                if core.on_transmit_complete(id, self.now).is_err() {
-                    self.summary.error();
-                }
+                core.on_transmit_complete(id, self.now);
             }
         }
         self.summary.error();

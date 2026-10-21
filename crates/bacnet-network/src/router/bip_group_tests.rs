@@ -11,9 +11,10 @@ use std::net::Ipv4Addr;
 use std::sync::{Arc, Mutex};
 
 use bacnet_encoding::npdu::decode_npdu;
+use bacnet_npdu::NpduLimits;
 use bacnet_transport::bip::BipTransport;
 use bacnet_transport::mstp::{LoopbackSerial, MstpConfig, MstpTransport};
-use bacnet_transport::port::{GroupDestinations, NpduLimits, ReceivedNpdu, TransportPort};
+use bacnet_transport::port::{GroupDestinations, ReceivedNpdu, TransportPort};
 use bacnet_types::error::Error;
 use tokio::sync::mpsc;
 use tokio::time::{timeout, Duration};

@@ -111,8 +111,8 @@ fn wp_calendar_properties_outside_table_12_11_are_unknown() {
         let result = handle_write_property(&mut db, &request);
         assert!(
             matches!(result, Err(Error::Protocol { class, code })
-                if class == ErrorClass::PROPERTY.to_raw() as u32
-                    && code == ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32),
+                if class == ErrorClass::PROPERTY
+                    && code == ErrorCode::UNKNOWN_PROPERTY),
             "{property:?} write must be UNKNOWN_PROPERTY, got {result:?}"
         );
     }
@@ -138,8 +138,8 @@ fn rpm_calendar_metadata_does_not_enable_create_object() {
         let mut response = BytesMut::new();
         let result = handle_create_object(&mut db, &request, &mut response);
         assert!(matches!(result, Err(Error::Protocol { class, code })
-            if class == ErrorClass::OBJECT.to_raw() as u32
-                && code == ErrorCode::UNSUPPORTED_OBJECT_TYPE.to_raw() as u32));
+            if class == ErrorClass::OBJECT
+                && code == ErrorCode::UNSUPPORTED_OBJECT_TYPE));
         assert!(response.is_empty());
         assert!(db.is_empty());
     }

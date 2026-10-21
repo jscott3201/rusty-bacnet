@@ -31,14 +31,10 @@ fn oos_escalator() -> EscalatorObject {
 fn assert_value_out_of_range(result: Result<(), Error>, context: &str) {
     match result.expect_err(&format!("{context}: write must be refused")) {
         Error::Protocol { class, code } => {
-            assert_eq!(
-                class,
-                ErrorClass::PROPERTY.to_raw() as u32,
-                "{context}: wrong error class"
-            );
+            assert_eq!(class, ErrorClass::PROPERTY, "{context}: wrong error class");
             assert_eq!(
                 code,
-                ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32,
+                ErrorCode::VALUE_OUT_OF_RANGE,
                 "{context}: wrong error code"
             );
         }
@@ -49,14 +45,10 @@ fn assert_value_out_of_range(result: Result<(), Error>, context: &str) {
 fn assert_invalid_data_type(result: Result<(), Error>, context: &str) {
     match result.expect_err(&format!("{context}: write must be refused")) {
         Error::Protocol { class, code } => {
-            assert_eq!(
-                class,
-                ErrorClass::PROPERTY.to_raw() as u32,
-                "{context}: wrong error class"
-            );
+            assert_eq!(class, ErrorClass::PROPERTY, "{context}: wrong error class");
             assert_eq!(
                 code,
-                ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
+                ErrorCode::INVALID_DATA_TYPE,
                 "{context}: wrong error code"
             );
         }
@@ -67,8 +59,8 @@ fn assert_invalid_data_type(result: Result<(), Error>, context: &str) {
 fn assert_property_error(result: Result<(), Error>, expected: ErrorCode, context: &str) {
     match result {
         Err(Error::Protocol { class, code }) => {
-            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32, "{context}");
-            assert_eq!(code, expected.to_raw() as u32, "{context}: {expected:?}");
+            assert_eq!(class, ErrorClass::PROPERTY, "{context}");
+            assert_eq!(code, expected, "{context}: {expected:?}");
         }
         other => panic!("{context}: expected PROPERTY/{expected:?}, got {other:?}"),
     }

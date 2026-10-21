@@ -35,8 +35,8 @@ fn assert_unknown_property<T>(result: Result<T, Error>) {
     assert!(matches!(
         result,
         Err(Error::Protocol { class, code })
-            if class == ErrorClass::PROPERTY.to_raw() as u32
-                && code == ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32
+            if class == ErrorClass::PROPERTY
+                && code == ErrorCode::UNKNOWN_PROPERTY
     ));
 }
 
@@ -44,8 +44,8 @@ fn assert_write_denied(result: Result<(), Error>) {
     assert!(matches!(
         result,
         Err(Error::Protocol { class, code })
-            if class == ErrorClass::PROPERTY.to_raw() as u32
-                && code == ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32
+            if class == ErrorClass::PROPERTY
+                && code == ErrorCode::WRITE_ACCESS_DENIED
     ));
 }
 
@@ -137,8 +137,12 @@ macro_rules! assert_property_surface {
 
 #[test]
 fn ai_and_av_fault_limit_properties_are_atomic_optional_and_read_only() {
-    assert_property_surface!(AnalogInputObject::new(1, "AI-1", 62).unwrap());
-    assert_property_surface!(AnalogValueObject::new(1, "AV-1", 62).unwrap());
+    assert_property_surface!(
+        AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap()
+    );
+    assert_property_surface!(
+        AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap()
+    );
 }
 
 macro_rules! assert_invalid_configuration_is_atomic {
@@ -205,13 +209,23 @@ macro_rules! assert_invalid_configuration_is_atomic {
 
 #[test]
 fn invalid_ai_and_av_configuration_changes_no_public_or_private_state() {
-    assert_invalid_configuration_is_atomic!(AnalogInputObject::new(1, "AI-1", 62).unwrap());
-    assert_invalid_configuration_is_atomic!(AnalogValueObject::new(1, "AV-1", 62).unwrap());
+    assert_invalid_configuration_is_atomic!(AnalogInputObject::new(
+        1,
+        "AI-1",
+        EngineeringUnits::DEGREES_CELSIUS
+    )
+    .unwrap());
+    assert_invalid_configuration_is_atomic!(AnalogValueObject::new(
+        1,
+        "AV-1",
+        EngineeringUnits::DEGREES_CELSIUS
+    )
+    .unwrap());
 }
 
 #[test]
 fn configured_ai_evaluator_enters_under_range_from_no_fault() {
-    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ai.configure_fault_out_of_range(10.0, 20.0).unwrap();
     ai.set_present_value(9.0);
 
@@ -304,8 +318,18 @@ macro_rules! assert_strict_range_transitions {
 
 #[test]
 fn ai_and_av_use_strict_entry_inclusive_recovery_and_no_deadband() {
-    assert_strict_range_transitions!(AnalogInputObject::new(1, "AI-1", 62).unwrap());
-    assert_strict_range_transitions!(AnalogValueObject::new(1, "AV-1", 62).unwrap());
+    assert_strict_range_transitions!(AnalogInputObject::new(
+        1,
+        "AI-1",
+        EngineeringUnits::DEGREES_CELSIUS
+    )
+    .unwrap());
+    assert_strict_range_transitions!(AnalogValueObject::new(
+        1,
+        "AV-1",
+        EngineeringUnits::DEGREES_CELSIUS
+    )
+    .unwrap());
 }
 
 macro_rules! assert_first_stage_precedence {
@@ -385,13 +409,23 @@ macro_rules! assert_first_stage_precedence {
 
 #[test]
 fn ai_and_av_preserve_first_stage_values_and_clear_only_owned_faults() {
-    assert_first_stage_precedence!(AnalogInputObject::new(1, "AI-1", 62).unwrap());
-    assert_first_stage_precedence!(AnalogValueObject::new(1, "AV-1", 62).unwrap());
+    assert_first_stage_precedence!(AnalogInputObject::new(
+        1,
+        "AI-1",
+        EngineeringUnits::DEGREES_CELSIUS
+    )
+    .unwrap());
+    assert_first_stage_precedence!(AnalogValueObject::new(
+        1,
+        "AV-1",
+        EngineeringUnits::DEGREES_CELSIUS
+    )
+    .unwrap());
 }
 
 #[test]
 fn ai_out_of_service_simulation_preserves_range_fault_ownership() {
-    let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+    let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ai.configure_fault_out_of_range(10.0, 20.0).unwrap();
     ai.set_present_value(21.0);
     assert_changed(
@@ -448,7 +482,7 @@ fn ai_out_of_service_simulation_preserves_range_fault_ownership() {
 
 #[test]
 fn av_evaluates_resolved_priority_value_without_mutating_priority_array() {
-    let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let mut av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     av.configure_fault_out_of_range(10.0, 20.0).unwrap();
     av.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
@@ -521,7 +555,7 @@ fn av_evaluates_resolved_priority_value_without_mutating_priority_array() {
 
 #[test]
 fn analog_output_has_no_fault_out_of_range_surface_or_evaluator() {
-    let mut ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
+    let mut ao = AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     for property in [
         PropertyIdentifier::FAULT_LOW_LIMIT,
         PropertyIdentifier::FAULT_HIGH_LIMIT,

@@ -22,7 +22,7 @@ use bacnet_endpoint::{ClientRoleHandle as TopClient, DeviceIdentity as TopIdenti
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::mstp::LoopbackSerial;
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier};
 
 const WAIT: Duration = Duration::from_secs(5);
 
@@ -70,7 +70,7 @@ fn object_id(instance: u32) -> bacnet_types::primitives::ObjectIdentifier {
 async fn owner_shutdown_with_live_handles_fails_closed() {
     let (ta, tb) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
     let mut db = bacnet_objects::database::ObjectDatabase::new();
-    let mut ai = AnalogInputObject::new(1, "rb18", 0).unwrap();
+    let mut ai = AnalogInputObject::new(1, "rb18", EngineeringUnits::SQUARE_METERS).unwrap();
     ai.set_present_value(1.0);
     db.add(Box::new(ai)).unwrap();
     let mut a = EndpointSession::new(ta, SessionRole::Both, session_config())
@@ -138,7 +138,8 @@ async fn role_teardown_while_other_session_remains() {
     // still drives its own stop.
     let (tc, ts) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
     let mut db = bacnet_objects::database::ObjectDatabase::new();
-    let mut ai = AnalogInputObject::new(9, "rb18-teardown", 0).unwrap();
+    let mut ai =
+        AnalogInputObject::new(9, "rb18-teardown", EngineeringUnits::SQUARE_METERS).unwrap();
     ai.set_present_value(9.0);
     db.add(Box::new(ai)).unwrap();
     let mut client = EndpointSession::new(tc, SessionRole::ClientOnly, session_config()).unwrap();
@@ -222,7 +223,7 @@ fn migration_adapters_build_unstarted() {
     let server = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
         .role(SessionRole::ServerOnly)
         .database(db)
-        .identity(id)
+        .device(id)
         .build_session()
         .unwrap();
     assert_eq!(server.active_leases(), 0);
@@ -236,4 +237,44 @@ fn migration_adapters_build_unstarted() {
     let (serial, _peer) = LoopbackSerial::pair();
     let mstp = MstpEndpointBuilder::new(serial, 5).build_session().unwrap();
     assert_eq!(mstp.active_leases(), 0);
+}
+
+/// #958: a session the MS/TP builder made hands out its transport's
+/// counters, which keep counting while it runs and stay readable after
+/// stop; a session on another link has none.
+#[tokio::test(start_paused = true)]
+async fn mstp_session_exposes_its_transport_counters() {
+    use bacnet_transport::mstp::codec::{Frame, FrameType};
+    use bacnet_transport::mstp::SerialPort;
+
+    let (serial, peer) = LoopbackSerial::pair();
+    let mut session = MstpEndpointBuilder::new(serial, 5).build_session().unwrap();
+    let diagnostics = session
+        .mstp_diagnostics()
+        .expect("the MS/TP builder keeps the counters");
+    assert_eq!(diagnostics.snapshot().mac.frames_received, 0);
+    session.start().await.unwrap();
+
+    // A token passed between two other stations.
+    let mut wire = [0u8; 8];
+    Frame::new(FrameType::TOKEN, 2, 1, &[])
+        .encode_into(&mut wire)
+        .unwrap();
+    peer.write(&wire).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while diagnostics.snapshot().mac.frames_received == 0 {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("the session's transport counted the frame");
+    session.stop().await.unwrap();
+    let after = session.mstp_diagnostics().unwrap().snapshot();
+    assert!(after.mac.frames_received >= 1);
+
+    let bip = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
+        .role(SessionRole::ClientOnly)
+        .build_session()
+        .unwrap();
+    assert!(bip.mstp_diagnostics().is_none());
 }

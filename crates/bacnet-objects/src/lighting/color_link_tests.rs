@@ -43,8 +43,8 @@ fn assert_error(result: Result<impl std::fmt::Debug, Error>, expected: ErrorCode
     let error = result.unwrap_err();
     assert!(
         matches!(error, Error::Protocol { class, code }
-            if class == ErrorClass::PROPERTY.to_raw() as u32
-                && code == expected.to_raw() as u32),
+            if class == ErrorClass::PROPERTY
+                && code == expected),
         "expected {expected:?}, got {error:?}"
     );
 }
@@ -275,6 +275,38 @@ fn lighting_color_follows_the_reference_in_use_and_the_override_leaves_a_fade_ru
             .unwrap();
         assert_eq!(db.lighting_color(&output), Some(xy(0.5, 0.35)));
     }
+}
+
+/// An undriven colour object, In_Progress NOT_CONTROLLED, gives no colour
+/// until a write or the device start drives it (#1526).
+#[test]
+fn lighting_color_is_none_while_the_companion_is_undriven() {
+    let mut db = ObjectDatabase::new();
+    for object in outputs(Some(overridable())) {
+        db.add(object).unwrap();
+    }
+    db.add(Box::new(ColorObject::new(1, "CLR-1").unwrap()))
+        .unwrap();
+    let mut ct = ColorTemperatureObject::new(2, "CT-2").unwrap();
+    ct.set_default_color_temperature(0).unwrap();
+    db.add(Box::new(ct)).unwrap();
+    let lo = oid(ObjectType::LIGHTING_OUTPUT, 1);
+    assert_eq!(db.lighting_color(&lo), None);
+    // The start drives COLOR 1 to its D65 default; CT 2's zero default with
+    // nothing to keep leaves it undriven, so the override shows nothing.
+    db.for_each_object_mut(|_, object| object.start_output_internal());
+    assert_eq!(
+        db.lighting_color(&lo),
+        Some(LightingColor {
+            source: color(1),
+            color: OutputColor::Xy(BACnetXyColor::new(0.3127, 0.3290)),
+        })
+    );
+    db.get_mut(&lo)
+        .unwrap()
+        .write_property(OVERRIDE, None, PropertyValue::Boolean(true), None)
+        .unwrap();
+    assert_eq!(db.lighting_color(&lo), None);
 }
 
 #[test]

@@ -158,8 +158,8 @@ fn at(hour: u8, count: i32) -> Option<RangeSpec> {
 fn assert_property_error(error: Error, expected: ErrorCode) {
     assert!(
         matches!(error, Error::Protocol { class, code }
-            if class == ErrorClass::PROPERTY.to_raw() as u32
-                && code == expected.to_raw() as u32),
+            if class == ErrorClass::PROPERTY
+                && code == expected),
         "expected {expected:?}, got {error:?}"
     );
 }

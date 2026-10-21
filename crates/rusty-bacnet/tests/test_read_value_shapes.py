@@ -225,9 +225,9 @@ class ClientReadShapeTests(unittest.IsolatedAsyncioTestCase):
         values = {item["property_id"]: item["value"] for item in notification.values}
         self.assertEqual(values[P.START_TIME], await self.server.read_property(LC_1, P.START_TIME))
         self.assertEqual(len(values[P.START_TIME].value), 2)
-        # Requested_Shed_Level is a context-tagged CHOICE.
+        # Requested_Shed_Level is a context-tagged CHOICE, read typed (#1499).
         shed = await self.server.read_property(LC_1, P.REQUESTED_SHED_LEVEL)
-        self.assertEqual(shed.tag, "application_data")
+        self.assertEqual(shed.tag, "shed_level")
         self.assertEqual(values[P.REQUESTED_SHED_LEVEL], shed)
 
 

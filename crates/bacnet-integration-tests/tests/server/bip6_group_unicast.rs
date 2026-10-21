@@ -28,15 +28,10 @@ const CLIENT_VMAC: Bip6Vmac = Bip6Vmac::new([0x0A, 0x0B, 0x0C]);
 const EVIDENCE_OS: bool = cfg!(target_os = "macos");
 
 /// The loopback interface's index, looked up by its usual names.
-#[allow(unsafe_code)]
 fn loopback_index() -> Option<u32> {
-    ["lo0", "lo"].into_iter().find_map(|name| {
-        let name = std::ffi::CString::new(name).unwrap();
-        // SAFETY: `name` is a NUL-terminated string that outlives the call,
-        // which only reads it.
-        let index = unsafe { libc::if_nametoindex(name.as_ptr()) };
-        (index != 0).then_some(index)
-    })
+    ["lo0", "lo"]
+        .into_iter()
+        .find_map(|name| nix::net::if_::if_nametoindex(name).ok())
 }
 
 /// An IPv6 UDP socket bound to `address` that sends multicast out the
@@ -119,6 +114,7 @@ async fn an_original_unicast_sent_to_the_multicast_group_is_not_answered() {
         return;
     };
     let mut server = BACnetServer::generic_builder()
+        .device(bacnet_objects::DeviceIdentity::new(DEVICE, 0).unwrap())
         .database(database())
         .transport(Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, Some(DEVICE)))
         .build()

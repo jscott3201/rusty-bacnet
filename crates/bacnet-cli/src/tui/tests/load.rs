@@ -166,3 +166,64 @@ fn drawing_a_full_device_table_at_120x40_fits_the_frame_budget() {
         "{per_frame:?} per frame, budget {budget:?}"
     );
 }
+
+/// A full watch list with full sparklines, after a flood of samples, draws
+/// within the same budget.
+#[test]
+fn drawing_a_full_watch_list_at_120x40_fits_the_frame_budget() {
+    use crate::tui::app::watch::{Screen, HISTORY};
+    use crate::tui::watched::{Sample, WatchEvent};
+    use crate::tui::worker::watch::MAX_ROWS;
+    use ratatui::crossterm::event::KeyCode;
+
+    let mut app = connected_app();
+    let mut commands = Vec::new();
+    for instance in 1..=MAX_ROWS {
+        press(&mut app, KeyCode::Char(':'));
+        type_text(&mut app, &format!("watch 100 av:{instance}"));
+        commands.extend(press(&mut app, KeyCode::Enter));
+    }
+    assert_eq!(commands.len(), MAX_ROWS);
+    assert_eq!(app.watch.rows().len(), MAX_ROWS);
+    let ids: Vec<_> = app.watch.rows().iter().map(|row| row.id).collect();
+    // Ten sparklines' worth of samples for every row, a tick's batch each.
+    for round in 0..HISTORY * 10 {
+        let value = (round % 17) as f64;
+        let samples = ids
+            .iter()
+            .map(|id| {
+                let sample = Sample {
+                    value: Ok(value.to_string()),
+                    number: Some(value),
+                    flags: None,
+                    at: t0(),
+                };
+                (*id, sample)
+            })
+            .collect();
+        worker(&mut app, WorkerEvent::Watch(WatchEvent::Samples(samples)));
+    }
+    assert!(app
+        .watch
+        .rows()
+        .iter()
+        .all(|row| row.history.len() == HISTORY));
+    app.screen = Screen::Watch;
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    const FRAMES: u32 = 50;
+    let start = Instant::now();
+    for _ in 0..FRAMES {
+        terminal.draw(|f| crate::tui::view::draw(f, &app)).unwrap();
+    }
+    let per_frame = start.elapsed() / FRAMES;
+    println!("watch list at 120x40 with {MAX_ROWS} rows: {per_frame:?} per frame");
+    let budget = if cfg!(debug_assertions) {
+        Duration::from_millis(250)
+    } else {
+        Duration::from_millis(5)
+    };
+    assert!(
+        per_frame < budget,
+        "{per_frame:?} per frame, budget {budget:?}"
+    );
+}

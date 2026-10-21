@@ -16,8 +16,11 @@ const readRepo = path => readFile(new URL(path, repo), 'utf8');
 const series = release.split('.').slice(0, 2).join('.');
 // The release project/upgrading.md moves from. The upgrade guide and the lab's
 // recorded evidence may name it; nothing else may.
-const previous = '0.12.0';
+const previous = '0.13.0';
 const history = new Set(['project/upgrading.md', 'start/local-lab.mdx']);
+// Other versions the upgrade guide names: bacnet-time's, which moves on its own
+// (#1768), and the minimum Rustls for BACnet/SC (#1737).
+const upgradeOnly = ['0.13.1', '0.23.46'];
 // A 0.x.y version, alone or as v0.x.y, but not part of an address such as 0.0.0.0.
 const versions = text => [...new Set([...text.matchAll(/(?<![\w.])v?(0\.\d+\.\d+)(?!\.?\d)/g)].map(match => match[1]))];
 // A v0.x series such as "v0.12", not followed by a patch number.
@@ -31,7 +34,8 @@ test('every copy of the release version matches site.mjs', async () => {
   assert.ok(pages.length > 20);
   for (const name of pages) {
     const text = await read(`src/content/docs/${name}`);
-    const allowed = history.has(name) ? [release, previous] : [release];
+    const allowed = name === 'project/upgrading.md' ? [release, previous, ...upgradeOnly]
+      : history.has(name) ? [release, previous] : [release];
     // MDX takes the release from site.mjs ({release}), so it names none itself.
     const found = versions(text).filter(version => name.endsWith('.mdx') ? version !== previous || !history.has(name) : !allowed.includes(version));
     expect(`${name} names ${found.join(', ')}${name.endsWith('.mdx') ? '; use {release}' : ''}`, found.length === 0);
@@ -113,13 +117,25 @@ test('the installation page lists exactly the assets release.yml publishes', asy
   // The crates: every workspace member that crates.io may take (publish_crates.sh's `publish != []`).
   const manifest = await readRepo('Cargo.toml');
   const members = [...manifest.match(/^members = \[([\s\S]*?)^\]/m)[1].matchAll(/^\s*"([^"]+)"/gm)].map(match => match[1]);
+  // A crate whose manifest sets its own version, not `version.workspace = true`,
+  // versions on its own (#1768); release_version.py's INDEPENDENT names the same ones.
   const crates = [];
+  const independent = [];
   for (const member of members) {
     const toml = await readRepo(`${member}/Cargo.toml`);
-    if (!/^publish = false$/m.test(toml)) crates.push(toml.match(/^name = "([^"]+)"$/m)[1]);
+    if (/^publish = false$/m.test(toml)) continue;
+    const name = toml.match(/^name = "([^"]+)"$/m)[1];
+    crates.push(name);
+    if (!/^version\.workspace = true$/m.test(toml)) independent.push(name);
   }
+  const script = await readRepo('scripts/release/release_version.py');
+  const exempt = script.match(/^INDEPENDENT = \(([^)]*)\)$/m)?.[1];
+  assert.ok(exempt !== undefined, 'release_version.py names its independently versioned crates');
+  assert.deepEqual([...exempt.matchAll(/"([^"]+)"/g)].map(match => match[1]).sort(), [...independent].sort());
   const listed = page.match(/^The release publishes these crates to crates\.io, all at the same version: (.*?)\. /m)?.[1];
   assert.ok(listed, `${install} lists the crates`);
-  assert.deepEqual([...listed.matchAll(/`([^`]+)`/g)].map(match => match[1]).sort(), crates.sort());
-  assert.ok(page.includes(`the ${word(crates.length)} crates listed under Rust`));
+  assert.deepEqual([...listed.matchAll(/`([^`]+)`/g)].map(match => match[1]).sort(), crates.filter(name => !independent.includes(name)).sort());
+  for (const name of independent) assert.ok(page.includes(`\`${name}\` versions on its own`), `${install} says ${name} versions on its own`);
+  assert.ok(page.includes(`the ${word(crates.length - independent.length)} crates listed under Rust at version {release}`));
+  for (const name of independent) assert.ok(page.includes(`\`${name}\` at its own version`), `${install} publishes ${name} at its own version`);
 });

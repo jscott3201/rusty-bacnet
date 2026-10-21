@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/bacnet-time",
+    "crates/bacnet-npdu",
     "crates/bacnet-types",
     "crates/bacnet-encoding",
     "crates/bacnet-services",
@@ -40,12 +41,13 @@ members = [
     "examples/rust/samples/whois-scan",
 ]
 # rusty-bacnet's tests link libpython, so they need a Python with its shared library.
-# bacnet-cli has heavy deps (rustyline, clap) — excluded from default builds.
+# bacnet-cli has heavy deps (clap, ratatui) — excluded from default builds.
 # Use `cargo nextest run -p rusty-bacnet`. The samples, the firmware link test
 # and the no_std harness are left out too: `--workspace` runs build them, and
 # `-p` picks one.
 default-members = [
     "crates/bacnet-time",
+    "crates/bacnet-npdu",
     "crates/bacnet-types",
     "crates/bacnet-encoding",
     "crates/bacnet-services",
@@ -67,7 +69,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.13.0"
+version = "0.14.0"
 edition = "2021"
 rust-version = "1.93"
 license = "MIT"
@@ -84,27 +86,30 @@ categories = ["network-programming", "embedded"]
 # edge, so only the entry can. Hosted crates turn std back on with
 # `features = ["std"]` on each edge. tracing keeps its defaults: only
 # bacnet-encoding's `std` feature brings it into a no_std crate.
-bacnet-time = { version = "0.13.0", path = "crates/bacnet-time" }
-bacnet-types = { version = "0.13.0", path = "crates/bacnet-types", default-features = false }
-bacnet-encoding = { version = "0.13.0", path = "crates/bacnet-encoding", default-features = false }
-bacnet-services = { version = "0.13.0", path = "crates/bacnet-services", default-features = false }
-bacnet-mstp-codec = { version = "0.13.0", path = "crates/bacnet-mstp-codec", default-features = false }
-bacnet-mstp-core = { version = "0.13.0", path = "crates/bacnet-mstp-core", default-features = false }
-bacnet-bip-codec = { version = "0.13.0", path = "crates/bacnet-bip-codec", default-features = false }
-bacnet-bip-core = { version = "0.13.0", path = "crates/bacnet-bip-core" }
-bacnet-router-core = { version = "0.13.0", path = "crates/bacnet-router-core" }
-bacnet-transport = { version = "0.13.0", path = "crates/bacnet-transport" }
-bacnet-network = { version = "0.13.0", path = "crates/bacnet-network" }
-bacnet-endpoint-core = { version = "0.13.0", path = "crates/bacnet-endpoint-core" }
-bacnet-client = { version = "0.13.0", path = "crates/bacnet-client" }
-bacnet-objects = { version = "0.13.0", path = "crates/bacnet-objects" }
-bacnet-server = { version = "0.13.0", path = "crates/bacnet-server" }
-bacnet-endpoint = { version = "0.13.0", path = "crates/bacnet-endpoint" }
+# bacnet-time versions on its own (#1768): this is its version, which moves
+# only when its API changes, not the workspace version below it.
+bacnet-time = { version = "0.13.1", path = "crates/bacnet-time" }
+bacnet-npdu = { version = "0.14.0", path = "crates/bacnet-npdu" }
+bacnet-types = { version = "0.14.0", path = "crates/bacnet-types", default-features = false }
+bacnet-encoding = { version = "0.14.0", path = "crates/bacnet-encoding", default-features = false }
+bacnet-services = { version = "0.14.0", path = "crates/bacnet-services", default-features = false }
+bacnet-mstp-codec = { version = "0.14.0", path = "crates/bacnet-mstp-codec", default-features = false }
+bacnet-mstp-core = { version = "0.14.0", path = "crates/bacnet-mstp-core", default-features = false }
+bacnet-bip-codec = { version = "0.14.0", path = "crates/bacnet-bip-codec", default-features = false }
+bacnet-bip-core = { version = "0.14.0", path = "crates/bacnet-bip-core" }
+bacnet-router-core = { version = "0.14.0", path = "crates/bacnet-router-core" }
+bacnet-transport = { version = "0.14.0", path = "crates/bacnet-transport" }
+bacnet-network = { version = "0.14.0", path = "crates/bacnet-network" }
+bacnet-endpoint-core = { version = "0.14.0", path = "crates/bacnet-endpoint-core" }
+bacnet-client = { version = "0.14.0", path = "crates/bacnet-client" }
+bacnet-objects = { version = "0.14.0", path = "crates/bacnet-objects" }
+bacnet-server = { version = "0.14.0", path = "crates/bacnet-server" }
+bacnet-endpoint = { version = "0.14.0", path = "crates/bacnet-endpoint" }
 thiserror = { version = "2", default-features = false }
 bitflags = "2"
 bytes = { version = "1", default-features = false }
 tracing = "0.1"
-tokio = "1"
+tokio = "1.47"
 socket2 = "0.6"
 # maturin turns on extension-module for wheel builds (crates/rusty-bacnet/pyproject.toml);
 # without it, cargo links libpython so the crate's own tests can run (#919).
@@ -115,7 +120,7 @@ pyo3 = { version = "0.29", features = ["multiple-pymethods"] }
 # framework on macOS and so stops the zig cross-build of the release (#944).
 tokio-tungstenite = "0.29"
 tokio-rustls = "0.26"
-rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "logging", "std"] }
+rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs", "logging", "std"] }
 futures-util = "0.3"
 rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem"] }
 smallvec = "1"
@@ -124,6 +129,10 @@ serde_json = "1"
 criterion = { version = "0.8", features = ["async_tokio"] }
 sysinfo = "0.39"
 libc = "0.2"
+# Safe Unix calls: bacnet-transport's UDP packet info, receive stamps and
+# B/IPv6 send (#1882), and the tests' pseudo-terminals, rlimits, interface
+# indexes and packet-info oracle (#1881). Each crate names its features.
+nix = { version = "0.31", default-features = false }
 getrandom = "0.3"
 # 0.9.0 was yanked.
 heapless = "0.9.1"
@@ -155,10 +164,21 @@ linked_list_allocator = "0.10.6"
 semihosting = { version = "0.1.25", features = ["stdio"] }
 
 [workspace.lints.rust]
-# Workspace floor. `bacnet-transport` overrides nothing: each FFI site
-# carries `#[allow(unsafe_code)]` and a `// SAFETY:` comment, so this
-# stays `deny` everywhere.
+# Unsafe policy (#1880, #1923). `deny` is the floor for every target. Each
+# library and binary root with no unsafe raises it to `#![forbid(unsafe_code)]`;
+# the rest keeps `deny`. bacnet-transport fences all its OS FFI into one
+# module, `bacnet_transport::sys`, whose inner `#![allow(unsafe_code)]` is the
+# only module-wide allow; its test `unsafe_stays_in_sys` fails on unsafe code
+# or an unsafe-code allow anywhere else in the crate. The firmware runtime
+# hooks, and under tests/ the global allocators, keep a narrow
+# `#[allow(unsafe_code)]` on each item that needs it.
+# Clippy's `undocumented_unsafe_blocks` requires a `// SAFETY:` comment on
+# every unsafe block and impl, `missing_safety_doc` (private fns too, through
+# `check-private-items` in clippy.toml) a `# Safety` section on every unsafe
+# fn, and `unsafe_op_in_unsafe_fn` an unsafe block, so a SAFETY comment, for
+# each unsafe operation inside an unsafe fn.
 unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "deny"
 # Every public item is documented (#902); bacnet-benchmarks (publish = false)
 # opts out in its lib.rs.
 missing_docs = "deny"
@@ -170,6 +190,8 @@ todo = "deny"
 dbg_macro = "deny"
 print_stderr = "deny"
 print_stdout = "deny"
+undocumented_unsafe_blocks = "deny"
+missing_safety_doc = "deny"
 
 # The firmware link test's images (#1626, #1635), which
 # scripts/ci/check-firmware-link.sh builds for bare-metal targets with
@@ -187,3 +209,17 @@ panic = "abort"
 # where the link test reads the images it measures.
 [profile.emulate]
 inherits = "firmware"
+
+# The published CLIs and wheels (#973), which scripts/release/build_*.sh build
+# with `--profile dist`. Whole-program LTO with one codegen unit cuts the
+# macOS arm64 CLI from 18.9 to 12.4 MB and the wheel from 10.4 to 7.4 MB, at
+# about twice the build time; docs/ci.md, "Release profile", has the
+# measurements. Symbols stay, so a user's RUST_BACKTRACE=1 report names its
+# functions: stripping them saves another 1.8 MB but leaves the backtrace
+# empty. `release` (and `bench`, which inherits it) stays as it was, so
+# developer builds and the numbers in Benchmarks.md don't move.
+[profile.dist]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+strip = "debuginfo"
