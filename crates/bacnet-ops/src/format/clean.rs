@@ -8,74 +8,10 @@
 //! of the row. [`clean_text`] turns the first into spaces and drops the
 //! second, for the one-shot CLI's table and text output; [`clean_name`]
 //! does the same with a length cap, for names and state texts in the CLI
-//! and the TUI. The MCP server's untrusted envelopes drop the same
-//! [`HIDDEN`] set.
+//! and the TUI. The rules come from [`bacnet_types::text`], which the MCP
+//! server's untrusted envelopes and the PICS share.
 
-/// The characters dropped from device text: every format character
-/// (general category Cf, Unicode 16: the bidirectional embeddings,
-/// overrides, isolates and marks, the zero-width ones, the tag characters
-/// and the rest), the variation selectors, the Hangul fillers, and a few
-/// others that show as nothing. Inclusive ranges.
-pub const HIDDEN: &[(char, char)] = &[
-    // Format characters (Cf).
-    ('\u{00AD}', '\u{00AD}'),
-    ('\u{0600}', '\u{0605}'),
-    ('\u{061C}', '\u{061C}'),
-    ('\u{06DD}', '\u{06DD}'),
-    ('\u{070F}', '\u{070F}'),
-    ('\u{0890}', '\u{0891}'),
-    ('\u{08E2}', '\u{08E2}'),
-    ('\u{180E}', '\u{180E}'),
-    ('\u{200B}', '\u{200F}'),
-    ('\u{202A}', '\u{202E}'),
-    ('\u{2060}', '\u{2064}'),
-    ('\u{2066}', '\u{206F}'),
-    ('\u{FEFF}', '\u{FEFF}'),
-    ('\u{FFF9}', '\u{FFFB}'),
-    ('\u{110BD}', '\u{110BD}'),
-    ('\u{110CD}', '\u{110CD}'),
-    ('\u{13430}', '\u{1343F}'),
-    ('\u{1BCA0}', '\u{1BCA3}'),
-    ('\u{1D173}', '\u{1D17A}'),
-    // The tag block, Cf and unassigned alike.
-    ('\u{E0000}', '\u{E007F}'),
-    // Variation selectors, Mongolian ones included.
-    ('\u{180B}', '\u{180D}'),
-    ('\u{180F}', '\u{180F}'),
-    ('\u{FE00}', '\u{FE0F}'),
-    ('\u{E0100}', '\u{E01EF}'),
-    // Hangul fillers.
-    ('\u{115F}', '\u{1160}'),
-    ('\u{3164}', '\u{3164}'),
-    ('\u{FFA0}', '\u{FFA0}'),
-    // Others that show as nothing: the combining grapheme joiner, the
-    // Khmer inherent vowels, the blank Braille pattern, and the
-    // unassigned code points before the interlinear annotations.
-    ('\u{034F}', '\u{034F}'),
-    ('\u{17B4}', '\u{17B5}'),
-    ('\u{2800}', '\u{2800}'),
-    ('\u{FFF0}', '\u{FFF8}'),
-];
-
-/// Whether `ch` is in [`HIDDEN`].
-pub fn is_hidden(ch: char) -> bool {
-    HIDDEN.iter().any(|&(low, high)| (low..=high).contains(&ch))
-}
-
-/// Whether a screen drops `ch`: a [`HIDDEN`] character other than the zero
-/// width joiner (U+200D). The joiner only fuses an emoji sequence (a
-/// family, a flag) into one picture, and can't reorder or hide the text
-/// around it, so the CLI and the TUI keep it; the MCP envelopes, read by a
-/// model rather than a person, drop it with the rest.
-pub fn is_hidden_on_screen(ch: char) -> bool {
-    ch != '\u{200D}' && is_hidden(ch)
-}
-
-/// Whether `ch` breaks a line or moves the cursor: a control (C0, DEL and
-/// C1) or a line or paragraph separator.
-fn breaks(ch: char) -> bool {
-    ch.is_control() || matches!(ch, '\u{2028}' | '\u{2029}')
-}
+use bacnet_types::text::{breaks_line, is_hidden_on_screen};
 
 /// Longest name kept, in characters; a device's longer name is cut.
 pub const MAX_NAME_CHARS: usize = 128;
@@ -88,7 +24,7 @@ pub fn clean_name(text: &str) -> String {
 
 /// Device text for display, whole: each control character and line or
 /// paragraph separator as a space, so it can't move the cursor or break a
-/// row, and each character [`is_hidden_on_screen`] dropped, so it can't
+/// row, and each character [`is_hidden_on_screen`] matches dropped, so it can't
 /// reorder or hide what follows. The one-shot CLI's table and text output
 /// shows every device string this way (#2144); nothing marks a changed one.
 pub fn clean_text(text: &str) -> String {
@@ -99,12 +35,13 @@ pub fn clean_text(text: &str) -> String {
 fn shown(text: &str) -> impl Iterator<Item = char> + '_ {
     text.chars()
         .filter(|ch| !is_hidden_on_screen(*ch))
-        .map(|ch| if breaks(ch) { ' ' } else { ch })
+        .map(|ch| if breaks_line(ch) { ' ' } else { ch })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bacnet_types::text::HIDDEN;
 
     /// Controls become spaces; bidirectional overrides and isolates
     /// (U+202E, U+2066 to U+2069) and the zero-width ones are dropped, so

@@ -170,6 +170,7 @@ fn the_check_finds_violations() {
 #[tokio::test(start_paused = true)]
 async fn results_fit_their_output_schemas() {
     let mut lab = Lab::start_site(Policy::default(), std::time::Duration::ZERO).await;
+    lab.add_logs().await;
     lab.agent.initialize().await;
     let tools = lab.agent.request("tools/list", json!({})).await;
     let schemas: Vec<(String, Value)> = tools["result"]["tools"]
@@ -263,6 +264,23 @@ async fn results_fit_their_output_schemas() {
             "bacnet_read_trend",
             json!({ "device": 1201, "object": "trend-log:9" }),
         ),
+        // Event and audit records, device text enveloped (#2103).
+        (
+            "bacnet_read_log_records",
+            json!({ "device": 1201, "object": "event-log:1", "max_records": 12 }),
+        ),
+        (
+            "bacnet_read_log_records",
+            json!({ "device": 1201, "object": "audit-log:1", "max_records": 12 }),
+        ),
+        (
+            "bacnet_read_log_records",
+            json!({ "device": 1201, "object": "audit-log:1", "summary": true }),
+        ),
+        (
+            "bacnet_read_log_records",
+            json!({ "device": 1201, "object": "trend-log:1" }),
+        ),
         (
             "bacnet_alarms",
             json!({ "device": 1201, "summaries": true }),
@@ -301,7 +319,7 @@ async fn results_fit_their_output_schemas() {
         violations(schema, &result["structuredContent"], "$", &mut out);
         assert!(out.is_empty(), "{tool} {args}: {out:?}");
     }
-    assert_eq!(checked.len(), 10, "every tool: {checked:?}");
+    assert_eq!(checked.len(), 11, "every tool: {checked:?}");
     for (tool, (successes, errors)) in &checked {
         assert!(
             *successes > 0 && *errors > 0,

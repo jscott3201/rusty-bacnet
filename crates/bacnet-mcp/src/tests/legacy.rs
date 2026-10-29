@@ -15,7 +15,7 @@ use tokio::io::AsyncWriteExt;
 
 use super::{Agent, Lab, Recording};
 use crate::Policy;
-use crate::listen::Follow;
+use crate::follow::Follow;
 use crate::policy::Caps;
 use crate::resources::uri::{self, Uri};
 
@@ -438,5 +438,42 @@ async fn device_list_pages_count_against_the_uri_bound() {
     // Subscribing again to a page held is still one subscription.
     assert_eq!(lab.agent.subscribe(&pages[0]).await, Ok(json!({})));
     assert_eq!(watches(&mut lab).await, (json!(0), json!(4)));
+    lab.stop().await;
+}
+
+/// Per-device alarm URIs on listen streams share the session's URI bound
+/// (twice the point cap) with legacy subscriptions (#2150): a stream asking
+/// for more gets exactly the room left, the alarm poll reads only those
+/// devices, and the room comes back when the stream goes.
+#[tokio::test(start_paused = true)]
+async fn listen_alarm_uris_share_the_session_uri_bound() {
+    let policy = Policy {
+        caps: Caps {
+            watches: 2,
+            ..Caps::default()
+        },
+        ..Policy::default()
+    };
+    let mut lab = Lab::start_site(policy, Duration::ZERO).await;
+    lab.agent.initialize_legacy().await;
+    lab.known().await;
+    assert_eq!(lab.agent.subscribe("bacnet://session").await, Ok(json!({})));
+    let asked: Vec<String> = (1201..1206)
+        .map(|device| format!("bacnet://device/{device}/alarms"))
+        .collect();
+    let asked: Vec<&str> = asked.iter().map(String::as_str).collect();
+    let (stream, accepted) = lab.agent.listen(&asked).await;
+    assert_eq!(accepted, asked[..3], "the bound of 4 less the legacy URI");
+    assert_eq!(lab.mcp.alarm_state(), (4, vec![]));
+    let error = lab.agent.subscribe("bacnet://ledger").await.unwrap_err();
+    assert_eq!(error["data"]["reason"], json!("principal-cap"), "{error}");
+    // The alarm poll reads the accepted devices and no other.
+    tokio::time::sleep(Duration::from_secs(61)).await;
+    assert_eq!(lab.mcp.alarm_state(), (4, vec![1201, 1202, 1203]));
+
+    lab.agent.cancel(stream).await;
+    settle().await;
+    assert_eq!(lab.mcp.alarm_state().0, 1);
+    assert_eq!(lab.agent.subscribe("bacnet://ledger").await, Ok(json!({})));
     lab.stop().await;
 }

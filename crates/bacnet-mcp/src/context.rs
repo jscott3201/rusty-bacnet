@@ -399,10 +399,18 @@ impl<T: TransportPort + 'static> Ctx<T> {
         }
     }
 
-    /// Count a listen stream until the guard drops.
-    pub(crate) fn listening(&self) -> Listening<'_> {
-        self.listening.send_modify(|n| *n += 1);
-        Listening(&self.listening)
+    /// Count a listen stream until the guard drops, unless `max` run
+    /// already.
+    pub(crate) fn listening(&self, max: usize) -> Option<Listening<'_>> {
+        let mut taken = false;
+        self.listening.send_if_modified(|n| {
+            taken = *n < max;
+            if taken {
+                *n += 1;
+            }
+            taken
+        });
+        taken.then(|| Listening(&self.listening))
     }
 
     /// Refuse a network the policy leaves out.

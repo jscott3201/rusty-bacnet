@@ -28,13 +28,15 @@ use rmcp::{ErrorData, RoleServer};
 
 use crate::context::Ctx;
 use crate::errors::ToolError;
-use crate::listen::{Follow, SHUTTING_DOWN, Wake};
+use crate::follow::{Follow, Wake};
+use crate::listen::SHUTTING_DOWN;
 use crate::resources::uri::{self, Uri};
 
 /// The most URIs one session subscribes to: twice the principal's point
 /// cap, so a full set of points leaves room for the other resources and a
-/// second spelling of a point, and no more.
-fn max_uris<T: TransportPort + 'static>(ctx: &Ctx<T>) -> usize {
+/// second spelling of a point, and no more. The listen streams' per-device
+/// alarm URIs count against it too ([`crate::listen::Subs::uris`]).
+pub(crate) fn max_uris<T: TransportPort + 'static>(ctx: &Ctx<T>) -> usize {
     ctx.policy.caps.watches.saturating_mul(2)
 }
 
@@ -68,7 +70,7 @@ pub(crate) fn subscribe<T: TransportPort + 'static>(
     }
     // Before the hold, which may start a watch: a refusal sends nothing.
     // `legacy_add` checks again under its lock.
-    if ctx.subs.legacy_count() >= max_uris(ctx) {
+    if ctx.subs.uris() >= max_uris(ctx) {
         return Err(refusal(&too_many(ctx)));
     }
     let hold = match parsed {
@@ -105,7 +107,8 @@ fn too_many<T: TransportPort + 'static>(ctx: &Ctx<T>) -> ToolError {
     ToolError::refused(
         "principal-cap",
         format!(
-            "this session subscribes to {} resources, as many as it may; unsubscribe from some first",
+            "this session subscribes to {} resources, its listen streams' device alarms \
+             included, as many as it may; unsubscribe from some first",
             max_uris(ctx)
         ),
     )

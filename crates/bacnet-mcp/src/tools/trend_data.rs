@@ -229,7 +229,7 @@ fn status_flags(flags: StatusFlags) -> Datum {
 }
 
 /// A log status as named bits.
-fn log_status(status: LogStatus) -> Datum {
+pub(super) fn log_status(status: LogStatus) -> Datum {
     let names: Vec<String> = [
         (LogStatus::LOG_DISABLED, "log-disabled"),
         (LogStatus::BUFFER_PURGED, "buffer-purged"),
@@ -272,7 +272,7 @@ fn sample_json(sample: &Sample, column: Option<LoggedProperty>, source: &str, ca
 }
 
 /// A number JSON can hold, or null.
-fn finite(value: f64) -> Value {
+pub(super) fn finite(value: f64) -> Value {
     if value.is_finite() {
         json!(value)
     } else {
