@@ -35,10 +35,11 @@ Each row first subscribes for COV with a finite lifetime, a routed device's rows
 
 A row is polled instead when:
 
-- the device refuses the subscription;
-- a renewal fails.
+- the first read or the subscription gets no answer (a timeout or a transport failure);
+- a renewal fails;
+- the device refuses the subscription.
 
-Either way the row tries to subscribe again later: after 30 seconds, then after a wait that doubles each time it fails, up to 5 minutes.
+In the first two cases the row tries to subscribe again later: after 30 seconds, then after a wait that doubles each time it fails, up to 5 minutes. A row the device refused stays polled.
 
 Polling reads up to 16 rows of one device with one ReadPropertyMultiple. A point is polled at most every `--poll-interval` seconds, 10 by default, counted from the end of its last poll, and within the shared `--max-rate`. A device that stops answering is polled again after a wait that doubles up to a minute.
 
