@@ -67,6 +67,7 @@ bacnet mcp serve --stdio --profile plant-a --passive
 | `bacnet_find_object` | Finds objects across the discovered devices by name, description, object or type, and says which devices it couldn't search fully |
 | `bacnet_network_map` | Shows the networks the profile reaches, the routers to each and the devices on them; asking the routers again is a broad request |
 | `bacnet_read_trend` | Reads a trend log's records, by count or time window, and summarises them: count, first and last time, minimum, maximum and mean, and counts of states |
+| `bacnet_read_log_records` | Reads an Event Log's or Audit Log's records the same way, with event and audit notifications decoded, and counts them by event state, event type or audited operation |
 | `bacnet_alarms` | Lists a device's objects in alarm or fault or waiting for acknowledgment, with states, times and priorities named, and optionally its alarm and enrollment summaries |
 | `bacnet_decode` | Decodes a frame, NPDU or APDU given as hex into its layers and fields, without sending anything (also in passive mode) |
 | `bacnet_watch` | Follows up to 32 points and, called again with its cursor, says which changed since the last call, for hosts without resource subscriptions |

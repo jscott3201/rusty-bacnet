@@ -24,6 +24,7 @@ mod constructed;
 mod data;
 mod event_parameter;
 mod fields;
+pub mod log_records;
 mod logged;
 pub mod notification;
 mod primitive;
