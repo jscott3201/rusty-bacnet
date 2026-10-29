@@ -75,9 +75,13 @@ impl Writes {
     }
 
     /// The plan grant, while it is in force: not expired, budget left.
+    /// Checked on every write: a clock set back past the plan's start
+    /// can't stretch it beyond its 8 hours either.
     pub(crate) fn plan<'a>(&self, policy: &'a WritePolicy) -> Option<&'a PlanGrant> {
+        let now = unix_now();
         policy.plan.as_ref().filter(|plan| {
-            unix_now() < plan.expires_unix
+            now < plan.expires_unix
+                && plan.expires_unix <= now.saturating_add(crate::policy::MAX_PLAN_SECS)
                 && self.plan_used.load(Ordering::Relaxed) < plan.max_writes
         })
     }

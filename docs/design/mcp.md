@@ -539,8 +539,11 @@ As built (#2068), and where it differs from the steps above:
   third read. A confirmed retry, a planned write and a revert each run on
   a task of its own, so a cancelled call doesn't leave a write half
   recorded; past its budget the call answers `pending` with the ledger ids
-  so far, never "nothing was sent". A task that panics has its `sending`
-  entries settled as `unknown`.
+  so far, never "nothing was sent". A shutdown waits for these tasks, at
+  most one call's budget plus its grace. Whoever holds the workspace's
+  lock settles every `sending` entry as `unknown`, its own run's included,
+  since a writer in flight holds the lock until it settles; a task that
+  panics is settled so at once.
 - Over MCP, writes to Priority_Array are refused (the slots are commanded
   through Present_Value) and a write to Relinquish_Default is T3.
 - Arming: with `mcp_arm = "elicit"`, confirming a write while unarmed also

@@ -355,22 +355,16 @@ impl Ledger {
         entries
     }
 
-    /// Entries an earlier run left mid-request (`sending`): its session
-    /// ended before the answer, so they become `unknown`. Returns them.
-    pub(crate) fn settle_abandoned(&mut self, run: &str) -> Vec<Entry> {
-        self.settle_where(|entry| entry.run != run)
-    }
-
-    /// Entries `run` itself left mid-request, because the task that sent
-    /// them failed before it settled them: their outcome is unknown.
-    pub(crate) fn settle_interrupted(&mut self, run: &str) -> Vec<Entry> {
-        self.settle_where(|entry| entry.run == run)
-    }
-
-    fn settle_where(&mut self, pick: impl Fn(&Entry) -> bool) -> Vec<Entry> {
+    /// Entries left mid-request (`sending`), whatever run wrote them: they
+    /// become `unknown`. Only the holder of the workspace's lock calls
+    /// this, and a writer in flight in any process holds that lock until
+    /// it has settled (the TUI for its whole session, MCP for each write),
+    /// so an entry still `sending` here has no writer left: its session
+    /// ended, or its task failed, before the answer. Returns them.
+    pub(crate) fn settle_abandoned(&mut self) -> Vec<Entry> {
         let mut settled = Vec::new();
         for entry in &mut self.entries {
-            if entry.state == State::Sending && pick(entry) {
+            if entry.state == State::Sending {
                 entry.state = State::Unknown;
                 settled.push(entry.clone());
             }
@@ -585,11 +579,9 @@ mod tests {
         ledger.begin(&planned(stored(3.0), None), "run-a", "t");
         let order: Vec<u64> = ledger.newest_first().iter().map(|e| e.id).collect();
         assert_eq!(order, [first, second]);
-        assert!(
-            ledger.settle_abandoned("run-a").is_empty(),
-            "this run's own"
-        );
-        let settled = ledger.settle_abandoned("run-b");
+        // Whoever holds the lock settles every send left without a writer,
+        // its own run's included (#2068).
+        let settled = ledger.settle_abandoned();
         assert_eq!(settled.len(), 2);
         assert!(ledger.entries().iter().all(|e| e.state == State::Unknown));
     }

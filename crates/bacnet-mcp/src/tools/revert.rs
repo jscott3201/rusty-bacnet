@@ -163,6 +163,7 @@ pub(crate) async fn run<T: TransportPort + 'static>(
     let work = {
         let ctx = Arc::clone(ctx);
         let workspace = workspace.clone();
+        let fields = fields.clone();
         async move {
             let engine = ctx.engine()?;
             let caller = McpCaller::new(&ctx.writes, &ctx.policy.writes, None, fields);
@@ -183,7 +184,7 @@ pub(crate) async fn run<T: TransportPort + 'static>(
         }
     };
     Ok(Step::Sending(hand_off(
-        ctx, workspace, account, sending, work,
+        ctx, workspace, account, sending, fields, work,
     )))
 }
 

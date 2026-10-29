@@ -155,8 +155,15 @@ impl<T: TransportPort + 'static> McpServer<T> {
                 described: Mutex::new(HashMap::new()),
                 alarms: Mutex::new(HashMap::new()),
                 writes: crate::writes::Writes::new(),
+                handoffs: tokio_util::task::TaskTracker::new(),
             }),
         })
+    }
+
+    /// The server's shared state, for tests that hand it to a task.
+    #[cfg(test)]
+    pub(crate) fn shared_ctx(&self) -> &Arc<Ctx<T>> {
+        &self.ctx
     }
 
     /// The names of the tools this server lists.
@@ -270,6 +277,18 @@ impl<T: TransportPort + 'static> McpServer<T> {
             }
         };
         ctx.closing.cancel();
+        // Writes handed to their tasks finish and reach the ledger and the
+        // audit log first, within one call's budget plus its grace.
+        ctx.handoffs.close();
+        let wait = ctx.policy.caps.budget + tools::GRACE;
+        if tokio::time::timeout(wait, ctx.handoffs.wait())
+            .await
+            .is_err()
+        {
+            tracing::warn!(
+                "shutting down with a write still running; the ledger keeps it as sending"
+            );
+        }
         if let Some(notifier) = session.notifier.take() {
             notifier.abort();
             if let Err(e) = notifier.await

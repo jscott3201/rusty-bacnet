@@ -119,6 +119,9 @@ fn output() -> Value {
             },
         },
         "applied": { "type": "string" },
+        "sent": { "type": "boolean" },
+        "ledger_ids": { "type": "array", "items": { "type": "integer" } },
+        "ledger": { "type": "string" },
         "revert": { "type": "string" },
         "reason": { "type": "string" },
         "message": { "type": "string" },
@@ -310,9 +313,17 @@ pub(crate) async fn run<T: TransportPort + 'static>(
             ToolError::refused("write-not-granted", "no workspace for the ledger")
         })?;
     let device = ctx.device(call, &args.device).await?;
-    let specs = specs(device.instance, &args)?;
     let fields = fields(&ctx.principal, peer, raw);
     let refusing = McpCaller::new(&ctx.writes, &ctx.policy.writes, None, fields.clone());
+    let specs = match specs(device.instance, &args) {
+        Ok(specs) => specs,
+        Err(error @ ToolError::Refused { .. }) => {
+            // A policy refusal (Priority_Array), recorded like the others.
+            audit_refusal(&workspace, &refusing, "write", &error, json!({})).await;
+            return Err(error);
+        }
+        Err(error) => return Err(error),
+    };
     let account = Arc::clone(&call.account);
     match retry.state {
         None if ctx.writes.plan(&ctx.policy.writes).is_some() => {
@@ -322,11 +333,11 @@ pub(crate) async fn run<T: TransportPort + 'static>(
                 workspace.clone(),
                 specs,
                 args,
-                fields,
+                fields.clone(),
                 Arc::clone(&sending),
             );
             Ok(Step::Sending(hand_off(
-                ctx, workspace, account, sending, work,
+                ctx, workspace, account, sending, fields, work,
             )))
         }
         None => preview(ctx, &workspace, &refusing, &specs, &args, raw, peer).await,
@@ -363,11 +374,11 @@ pub(crate) async fn run<T: TransportPort + 'static>(
                 specs,
                 args,
                 state,
-                fields,
+                fields.clone(),
                 Arc::clone(&sending),
             );
             Ok(Step::Sending(hand_off(
-                ctx, workspace, account, sending, work,
+                ctx, workspace, account, sending, fields, work,
             )))
         }
     }

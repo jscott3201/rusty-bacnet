@@ -3,6 +3,7 @@
 
 mod bbmd;
 mod discovery;
+mod handoff;
 mod legacy;
 mod limits;
 mod listen;
@@ -480,6 +481,11 @@ impl Agent {
             backlog: VecDeque::new(),
         };
         (agent, serving, shutdown)
+    }
+
+    /// Close the server's input, as an agent host closing stdin does.
+    pub(crate) async fn close(&mut self) {
+        self.write.shutdown().await.unwrap();
     }
 
     /// Send one message.

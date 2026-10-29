@@ -318,10 +318,17 @@ Writes go through `bacnet_ops::safety`: the TUI's planner, tiers, ledger
   leaves the entry `unknown`. The lock is released after. A planned write
   and a revert run on such a task too. Once a write is handed to its task
   the call never answers that nothing was sent: a cancel only stops the
-  waiting, and a call past its budget answers `error: "pending"`,
-  `applied: "unknown"`, with the `ledger_ids` recorded so far and
-  `bacnet://ledger` to follow, and no retry hint. A task that panics has
-  its `sending` entries settled as `unknown`, audited.
+  waiting, and a call past its budget answers `error: "pending"` with the
+  `ledger_ids` recorded so far, `bacnet://ledger` to follow and no retry
+  hint: `applied: "unknown"` once an entry is recorded, `sent: false`
+  before. The tasks are tracked: a shutdown waits for them, at most one
+  call's budget plus its 15 s grace (45 s by default), so their outcomes
+  reach the ledger and the audit log. Whoever takes the workspace's lock
+  settles every entry left `sending` as `unknown` (audited), whatever run
+  wrote it: a writer in flight, in any process, holds that lock until it
+  has settled (the TUI for its whole session, MCP for each write), so such
+  an entry has no writer left. A task that panics is settled that way at
+  once.
 - **`bacnet_revert`**: `entries` (ledger ids) or `all`, this principal's
   MCP entries only (`not-yours` for another's), on devices the policy
   reaches; no prompt and no armed session, as in the TUI. Latest write

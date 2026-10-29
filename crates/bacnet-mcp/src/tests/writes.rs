@@ -477,7 +477,7 @@ async fn unarmed_unsupported_and_locked_writes_are_refused() {
 /// Relinquish_Default is T3, so the client can't confirm it.
 #[tokio::test(start_paused = true)]
 async fn priority_array_and_relinquish_default_are_out_of_the_clients_reach() {
-    let (mut lab, _dir) = start(ArmMode::Elicit).await;
+    let (mut lab, dir) = start(ArmMode::Elicit).await;
     let before = sends(&lab);
     let slot_write = json!({ "device": LAB, "writes": [{ "object": "ao:1",
         "property": "priority-array[12]", "value": 5 }] });
@@ -488,6 +488,25 @@ async fn priority_array_and_relinquish_default_are_out_of_the_clients_reach() {
         "{reply}"
     );
     assert_eq!(sends(&lab), before, "nothing sent, not even a read");
+    // By number too, and in a batch with a write that would be allowed:
+    // the whole batch is refused, and each refusal recorded.
+    for property in ["87[12]", "priority-array[3]"] {
+        let mixed = json!({ "device": LAB, "batch": true, "writes": [
+            { "object": "ao:1", "value": 5, "priority": 12 },
+            { "object": "ao:1", "property": property, "value": 5 }] });
+        let reply = call(&mut lab, "bacnet_write", mixed, json!({})).await;
+        assert_eq!(
+            reply["structuredContent"]["reason"],
+            json!("read-only-property"),
+            "{property}: {reply}"
+        );
+    }
+    assert_eq!(sends(&lab), before);
+    let refused = audit(dir.path())
+        .into_iter()
+        .filter(|r| r["outcome"]["why"]["reason"] == "read-only-property")
+        .count();
+    assert_eq!(refused, 3, "each refusal recorded");
     let fallback = json!({ "device": LAB, "writes": [{ "object": "ao:1",
         "property": "relinquish-default", "value": 5 }] });
     let reply = call(&mut lab, "bacnet_write", fallback, json!({})).await;

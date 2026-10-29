@@ -119,7 +119,7 @@ async fn a_held_workspace_records_but_changes_nothing() {
 }
 
 /// A write whose task failed after recording it as `sending` is settled
-/// as unknown by its own run; an earlier run's sweep leaves it alone.
+/// as unknown by the next holder of the lock, its own run included.
 #[tokio::test]
 async fn an_interrupted_write_settles_as_unknown() {
     let dir = tempfile::tempdir().unwrap();
@@ -130,9 +130,7 @@ async fn an_interrupted_write_settles_as_unknown() {
     }
     let mut desk = Desk::open(Some(dir.path()), context(), Origin::default());
     desk.settle_abandoned(&ARMED).await;
-    assert_eq!(desk.entries()[0].state, State::Sending, "this run's own");
-    desk.settle_interrupted(&ARMED).await;
-    assert_eq!(desk.entries()[0].state, State::Unknown);
+    assert_eq!(desk.entries()[0].state, State::Unknown, "this run's own");
     drop(desk);
     assert_eq!(
         Ledger::open(dir.path()).unwrap().entries()[0].state,
@@ -140,7 +138,7 @@ async fn an_interrupted_write_settles_as_unknown() {
         "saved"
     );
     let text = std::fs::read_to_string(dir.path().join(crate::safety::audit::FILE)).unwrap();
-    assert!(text.contains("the write task failed"), "{text}");
+    assert!(text.contains("\"result\":\"unknown\""), "{text}");
     // Keep flags the entries and saves them.
     let mut desk = Desk::open(Some(dir.path()), context(), Origin::default());
     assert!(desk.keep_all());
@@ -148,7 +146,7 @@ async fn an_interrupted_write_settles_as_unknown() {
 }
 
 /// An entry a later release wrote, with a front end this one doesn't
-/// know, doesn't stop the ledger loading.
+/// know, doesn't stop the ledger loading, and is saved back as it was.
 #[test]
 fn an_unknown_front_end_still_loads() {
     let dir = tempfile::tempdir().unwrap();
@@ -162,5 +160,11 @@ fn an_unknown_front_end_still_loads() {
     let text = text.replace("\"seq\"", "\"front_end\": \"daemon\",\n      \"seq\"");
     std::fs::write(&path, text).unwrap();
     let ledger = Ledger::open(dir.path()).unwrap();
-    assert_eq!(ledger.entries()[0].origin.front_end, FrontEnd::Unknown);
+    assert_eq!(
+        ledger.entries()[0].origin.front_end,
+        FrontEnd::Other("daemon".into())
+    );
+    ledger.save().unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("\"front_end\": \"daemon\""), "{text}");
 }

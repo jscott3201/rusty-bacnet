@@ -9,7 +9,6 @@ use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::PropertyValue;
 use serde_json::{Value, json};
 
-use super::schema::check_output;
 use super::writes::{audit, call, meta, one, slot, writes};
 use super::{LAB, Lab};
 use crate::policy::{ArmMode, PlanGrant};
@@ -154,30 +153,24 @@ async fn a_cancelled_planned_write_still_settles() {
     lab.stop().await;
 }
 
-/// A planned write that waits past the call's budget (here at the
-/// device's gate, which the test holds) is answered as pending, never as
-/// refused with nothing sent; once the gate frees it is sent and settles.
+/// A plan naming Relinquish_Default approves a write to it, which a
+/// client's confirmation can't (T3 over MCP).
 #[tokio::test(start_paused = true)]
-async fn a_write_past_its_budget_is_pending_not_refused() {
+async fn a_plan_may_approve_relinquish_default() {
     let dir = tempfile::tempdir().unwrap();
     let mut policy = writes(dir.path(), ArmMode::Never);
-    policy.writes.plan = Some(plan(10));
-    policy.caps.budget = Duration::from_secs(1);
+    policy.writes.plan = Some(PlanGrant {
+        properties: vec![PropertyIdentifier::RELINQUISH_DEFAULT],
+        ..plan(10)
+    });
     let mut lab = Lab::start(policy).await;
-    lab.agent.initialize().await;
-    let gate = lab.limits.turn(LAB).await;
-    let reply = call(&mut lab, "bacnet_write", one(json!(4), 13), json!({})).await;
-    let body = &reply["structuredContent"];
-    assert_eq!(reply["isError"], json!(true), "{reply}");
-    assert_eq!(body["error"], json!("pending"), "{body}");
-    assert_eq!(body["applied"], json!("unknown"), "{body}");
-    assert!(body.get("retry_after_s").is_none(), "{body}");
-    assert_eq!(body["ledger"], json!("bacnet://ledger"), "{body}");
-    check_output(&mut lab.agent, "bacnet_write", body).await;
-    drop(gate);
-    tokio::time::sleep(Duration::from_secs(3)).await;
-    assert_eq!(slot(&lab, 13).await, PropertyValue::Real(4.0));
-    let ledger = Ledger::open(dir.path()).unwrap();
-    assert_eq!(ledger.entries()[0].state, State::Applied);
+    let args = json!({ "device": LAB, "writes": [{ "object": "ao:1",
+        "property": "relinquish-default", "value": 5 }] });
+    let reply = call(&mut lab, "bacnet_write", args, json!({})).await;
+    assert_eq!(reply["isError"], json!(false), "{reply}");
+    assert_eq!(
+        reply["structuredContent"]["approval"]["confirmed_via"],
+        json!("plan")
+    );
     lab.stop().await;
 }

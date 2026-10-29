@@ -46,33 +46,52 @@ pub const MAX_MINUTES: u32 = 480;
 /// Which front end made a change or a record: written into the ledger and
 /// the audit log, so one front end's view lists another's changes as
 /// theirs.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+///
+/// It is written as its name, a string; a name this release doesn't know
+/// (a later release's front end) loads as [`FrontEnd::Other`] and is
+/// written back as it was, so the entry survives a save unchanged.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum FrontEnd {
     /// The terminal UI; what a ledger written before #2068 holds.
     #[default]
     Tui,
     /// The MCP server.
     Mcp,
-    /// A front end this release doesn't know, from a later one: its
-    /// entries still load, and revert like any other.
-    #[serde(other)]
-    Unknown,
+    /// A front end this release doesn't know, by the name it was written
+    /// with: its entries still load, and revert like any other.
+    Other(String),
 }
 
 impl FrontEnd {
-    /// Its name: `tui`, `mcp`, or `unknown`.
-    pub fn name(self) -> &'static str {
+    /// Its name: `tui`, `mcp`, or the name another release wrote.
+    pub fn name(&self) -> &str {
         match self {
             Self::Tui => "tui",
             Self::Mcp => "mcp",
-            Self::Unknown => "unknown",
+            Self::Other(name) => name,
         }
     }
 
     /// True for the TUI, the default a ledger entry leaves out.
     pub fn is_tui(&self) -> bool {
         *self == Self::Tui
+    }
+}
+
+impl Serialize for FrontEnd {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.name())
+    }
+}
+
+impl<'de> Deserialize<'de> for FrontEnd {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let name = String::deserialize(deserializer)?;
+        Ok(match name.as_str() {
+            "tui" => Self::Tui,
+            "mcp" => Self::Mcp,
+            _ => Self::Other(name),
+        })
     }
 }
 

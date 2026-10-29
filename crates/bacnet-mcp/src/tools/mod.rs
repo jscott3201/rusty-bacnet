@@ -25,7 +25,7 @@ mod trend;
 mod trend_data;
 mod watch;
 pub(crate) mod write;
-mod write_task;
+pub(crate) mod write_task;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -181,7 +181,7 @@ fn request(name: &str, args: &Map<String, Value>) -> Result<Request, ErrorData> 
 
 /// How long past its budget a call may run while a request it already
 /// sent finishes.
-const GRACE: Duration = Duration::from_secs(15);
+pub(crate) const GRACE: Duration = Duration::from_secs(15);
 
 /// Run one tool call under its own account and budget.
 pub(crate) async fn call<T: TransportPort + 'static>(
@@ -317,7 +317,10 @@ pub(crate) async fn call_write<T: TransportPort + 'static>(
         }
     };
     let work = tokio::time::timeout(budget + GRACE, charged(account, run));
+    // Biased: a write already handed off wins over a cancel arriving at
+    // the same time, so the reply never loses that the write goes on.
     let finished = tokio::select! {
+        biased;
         finished = work => finished,
         () = cancel.cancelled() => {
             ctx.log_read(name, &call, "cancelled");
@@ -334,6 +337,7 @@ pub(crate) async fn call_write<T: TransportPort + 'static>(
         Ok(Ok(write::Step::Sending(mut handoff))) => {
             let deadline = call.started + budget + GRACE;
             tokio::select! {
+                biased;
                 done = &mut handoff.task => done.unwrap_or_else(|e| {
                     Err(ToolError::Failed(format!("the write task failed: {e}")))
                 }),

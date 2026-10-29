@@ -126,7 +126,8 @@ impl Desk {
         };
         match Audit::open(dir, context) {
             Ok(audit) => {
-                desk.audit = Some(audit.written_by(origin.front_end, origin.principal.clone()));
+                desk.audit =
+                    Some(audit.written_by(origin.front_end.clone(), origin.principal.clone()));
             }
             Err(error) => {
                 tracing::error!("{error}");
@@ -134,8 +135,8 @@ impl Desk {
                 return desk;
             }
         }
-        let front_end = origin.front_end.name();
-        match lock(dir, front_end).and_then(|held| Ok((held, Ledger::open(dir)?))) {
+        let front_end = origin.front_end.name().to_string();
+        match lock(dir, &front_end).and_then(|held| Ok((held, Ledger::open(dir)?))) {
             Ok((held, ledger)) => {
                 desk._lock = Some(held);
                 desk.ledger = Some(ledger.written_by(origin));
@@ -206,27 +207,15 @@ impl Desk {
         saved.is_ok()
     }
 
-    /// Entries an earlier run left mid-request: their outcome is unknown.
+    /// Entries left mid-request with no writer: their outcome is unknown.
+    /// A writer in flight holds the workspace's lock, which this desk
+    /// holds, so every `sending` entry is one whose session ended or whose
+    /// task failed before the answer, in this run or an earlier one.
     pub async fn settle_abandoned(&mut self, caller: &dyn Caller) {
         let Some(ledger) = &mut self.ledger else {
             return;
         };
-        let settled = ledger.settle_abandoned(run_id());
-        self.settle(caller, settled, "session ended").await;
-    }
-
-    /// Entries this run left `sending` because the task sending them
-    /// failed (a panic) before it settled them: their outcome is unknown,
-    /// and the audit log says why.
-    pub async fn settle_interrupted(&mut self, caller: &dyn Caller) {
-        let Some(ledger) = &mut self.ledger else {
-            return;
-        };
-        let settled = ledger.settle_interrupted(run_id());
-        self.settle(caller, settled, "the write task failed").await;
-    }
-
-    async fn settle(&mut self, caller: &dyn Caller, settled: Vec<Entry>, why: &str) {
+        let settled = ledger.settle_abandoned();
         if settled.is_empty() {
             return;
         }
@@ -235,7 +224,7 @@ impl Desk {
             let fields = json!({
                 "target": entry.label(),
                 "priority": entry.priority,
-                "outcome": { "result": "unknown", "why": why },
+                "outcome": { "result": "unknown", "why": "session ended" },
             });
             self.record(caller, "unknown", fields).await;
         }

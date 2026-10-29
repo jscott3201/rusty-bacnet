@@ -1,9 +1,12 @@
 //! The part of a write that runs on a task of its own (#2068, design
-//! §7.4): a confirmed retry or a planned write, from the workspace's lock
-//! to the settled ledger. Once handed off it is never cancelled: a call
-//! cancelled or out of time stops waiting, and the task goes on to send,
-//! settle and record. A task that panics has its `sending` entries settled
-//! as unknown.
+//! §7.4): a confirmed retry, a planned write or a revert, from the
+//! workspace's lock to the settled ledger. A call cancelled or out of time
+//! only stops waiting: the task goes on to send, settle and record. The
+//! tasks are tracked on the server, and a shutdown waits for them, at most
+//! one call's budget plus its grace (45 s by default), before it stops; a
+//! task still running then is dropped with the runtime, and the next
+//! holder of the workspace's lock settles its `sending` entries as
+//! unknown. A task that panics has them settled at once.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -38,6 +41,18 @@ impl Handoff {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
+        if ids.is_empty() {
+            // Not in the ledger yet, so not sent yet; it may still go.
+            return ToolError::Write(json!({
+                "error": "pending",
+                "sent": false,
+                "ledger_ids": ids,
+                "ledger": "bacnet://ledger",
+                "message": "the write was handed to its own task and nothing has been sent yet; \
+                            it may still be sent, and bacnet://ledger will show it (do not retry \
+                            it)",
+            }));
+        }
         ToolError::Write(json!({
             "error": "pending",
             "applied": "unknown",
@@ -50,13 +65,15 @@ impl Handoff {
     }
 }
 
-/// Run `work` on a task of its own, charged to `account`. If it panics,
-/// this run's `sending` entries are settled as unknown.
+/// Run `work` on a task of its own, tracked by the server, charged to
+/// `account`. If it panics, the workspace's `sending` entries are settled
+/// as unknown, audited with the call's `fields`.
 pub(crate) fn hand_off<T, F>(
     ctx: &Arc<Ctx<T>>,
     workspace: Workspace,
     account: Arc<Account>,
     sending: Sending,
+    fields: Map<String, Value>,
     work: F,
 ) -> Handoff
 where
@@ -64,15 +81,19 @@ where
     F: Future<Output = Result<Value, ToolError>> + Send + 'static,
 {
     let ctx = Arc::clone(ctx);
-    let task = tokio::spawn(async move {
+    let tracker = ctx.handoffs.clone();
+    let task = tracker.spawn(async move {
         match tokio::spawn(charged(account, work)).await {
             Ok(result) => result,
             Err(failed) => {
                 tracing::error!("a write task failed: {failed}");
-                let caller = McpCaller::new(&ctx.writes, &ctx.policy.writes, None, Map::new());
-                if let Ok(mut desk) = open(&ctx, &workspace, &caller).await {
-                    desk.settle_interrupted(&caller).await;
-                }
+                // Its desk, and the lock, went with it. Whoever takes the
+                // lock next settles what it left `sending`: this, unless
+                // another front end got there first and did it already.
+                let caller = McpCaller::new(&ctx.writes, &ctx.policy.writes, None, fields);
+                let origin = Origin::mcp(ctx.principal.clone());
+                let mut desk = Desk::open(Some(&workspace.dir), context(&workspace), origin);
+                desk.settle_abandoned(&caller).await;
                 Err(ToolError::Failed(format!(
                     "the write task failed: {failed}"
                 )))
