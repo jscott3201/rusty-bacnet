@@ -251,7 +251,7 @@ for the narrower endpoint responder scope above.
 | `BACnetServer::bip_builder()...build().await` | `BipEndpointBuilder::new(iface, port, bcast).role(ServerOnly).database(db).device(id).build_session()?` then `start()` |
 | Client + server on one device | `BipEndpointBuilder::...role(Both).database(db).device(id).build_session()?` (or the SC / MS/TP builder) |
 | `BACnetClient::sc_builder()...build().await` | `ScEndpointBuilder::new(vmac, uuid)...build_hub_session(ws)?` (`sc-tls`; dial first, then compose) |
-| `BACnetServer::sc_builder()...build().await` | Same `ScEndpointBuilder` with `ServerOnly` + `database` + `identity` |
+| `BACnetServer::sc_builder()...build().await` | Same `ScEndpointBuilder` with `ServerOnly` + `database` + `device` |
 | `generic_builder().transport(mstp)...` | `MstpEndpointBuilder::new(serial, station)...build_session()?` (one serial owner, simulator evidence) |
 
 Standalone BBMD helpers (`read_bdt` / `write_bdt` / `read_fdt` / foreign
@@ -269,9 +269,10 @@ See `docs/rust-api.md` for the same table with service-scope notes.
   [`SessionRole`], [`SessionConfig`],
   [`PolicyCountersSnapshot`],
   [`SessionExit`].
-- [`roles`] — [`ClientRoleHandle`] (`read_property`
-  and `read_property_with_destination`, addressed by
-  [`EndpointApduDestination`]) +
+- [`roles`] — [`ClientRoleHandle`] (`read_property`,
+  `read_property_multiple` and `read_range`, each with a `_with_destination`
+  form addressed by [`EndpointApduDestination`], plus `read_log_page` and
+  `write_property`) +
   [`ServerRoleHandle`] (inbound / liveness / suspend /
   notification admit-complete).
 - [`identity`] — [`DeviceIdentity`],

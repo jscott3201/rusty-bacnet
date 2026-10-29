@@ -41,8 +41,10 @@ Verbosity flags are accepted without initializing logging.
 
 Explicit transport options are usage errors, even when their value equals the
 default: `--interface`, `--port`, `--broadcast`, `--timeout`, `--min-interval-ms`,
-`--foreign-bbmd`, `--ttl`, `--renewal`, `--ipv6`, `--ipv6-interface`,
-`--device-instance`, `--sc`, `--sc-url`, `--sc-vmac`, and `--sc-device-uuid`.
+`--foreign-bbmd`, `--bip-multicast`, `--bip-multicast-ttl`, `--bip-multicast-port`,
+`--ttl`, `--renewal`, `--ipv6`, `--ipv6-interface`, `--device-instance`, `--sc`,
+`--sc-url`, `--sc-failover-url`, `--sc-reconnect`, `--sc-connect-timeout`,
+`--sc-vmac`, and `--sc-device-uuid`.
 Help remains available in builds without `sc-tls`; execution then returns 3 with
 rebuild advice before opening any input.
 

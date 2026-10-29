@@ -225,7 +225,7 @@ All enums have class-level named constants, plus `from_raw(int)` and `to_raw()` 
 
 ### ObjectType
 
-BACnet object types (u32). Constants include `ANALOG_INPUT`, `ANALOG_OUTPUT`, `ANALOG_VALUE`, `BINARY_INPUT`, `BINARY_OUTPUT`, `BINARY_VALUE`, `CALENDAR`, `DEVICE`, `LOOP`, `MULTI_STATE_INPUT`, `MULTI_STATE_OUTPUT`, `MULTI_STATE_VALUE`, `NOTIFICATION_CLASS`, `SCHEDULE`, `TREND_LOG`, `FILE`, `AUDIT_LOG`, `AUDIT_REPORTER`, `COMMAND`, `TIMER`, `LOAD_CONTROL`, `PROGRAM`, `LIGHTING_OUTPUT`, `BINARY_LIGHTING_OUTPUT`, `LIFE_SAFETY_POINT`, `LIFE_SAFETY_ZONE`, `GROUP`, `GLOBAL_GROUP`, `STRUCTURED_VIEW`, `NOTIFICATION_FORWARDER`, `ALERT_ENROLLMENT`, `ACCESS_DOOR`, `ACCESS_CREDENTIAL`, `ACCESS_POINT`, `ACCESS_RIGHTS`, `ACCESS_USER`, `ACCESS_ZONE`, `CREDENTIAL_DATA_INPUT`, `ELEVATOR_GROUP`, `ESCALATOR`, `LIFT`, `STAGING`, `ACCUMULATOR`, `PULSE_CONVERTER`, `EVENT_ENROLLMENT`, `CHANNEL`, `EVENT_LOG`, `TREND_LOG_MULTIPLE`, `NETWORK_PORT`, `INTEGER_VALUE`, `POSITIVE_INTEGER_VALUE`, `LARGE_ANALOG_VALUE`, `CHARACTER_STRING_VALUE`, `OCTET_STRING_VALUE`, `BIT_STRING_VALUE`, `DATE_VALUE`, `TIME_VALUE`, `DATE_TIME_VALUE`, `DATE_PATTERN_VALUE`, `TIME_PATTERN_VALUE`, `DATE_TIME_PATTERN_VALUE`, `AVERAGING`, etc.
+BACnet object types (u32). Constants include `ANALOG_INPUT`, `ANALOG_OUTPUT`, `ANALOG_VALUE`, `BINARY_INPUT`, `BINARY_OUTPUT`, `BINARY_VALUE`, `CALENDAR`, `DEVICE`, `LOOP`, `MULTI_STATE_INPUT`, `MULTI_STATE_OUTPUT`, `MULTI_STATE_VALUE`, `NOTIFICATION_CLASS`, `SCHEDULE`, `TREND_LOG`, `FILE`, `AUDIT_LOG`, `AUDIT_REPORTER`, `COMMAND`, `TIMER`, `LOAD_CONTROL`, `PROGRAM`, `LIGHTING_OUTPUT`, `BINARY_LIGHTING_OUTPUT`, `LIFE_SAFETY_POINT`, `LIFE_SAFETY_ZONE`, `GROUP`, `GLOBAL_GROUP`, `STRUCTURED_VIEW`, `NOTIFICATION_FORWARDER`, `ALERT_ENROLLMENT`, `ACCESS_DOOR`, `ACCESS_CREDENTIAL`, `ACCESS_POINT`, `ACCESS_RIGHTS`, `ACCESS_USER`, `ACCESS_ZONE`, `CREDENTIAL_DATA_INPUT`, `ELEVATOR_GROUP`, `ESCALATOR`, `LIFT`, `STAGING`, `ACCUMULATOR`, `PULSE_CONVERTER`, `EVENT_ENROLLMENT`, `CHANNEL`, `EVENT_LOG`, `TREND_LOG_MULTIPLE`, `NETWORK_PORT`, `INTEGER_VALUE`, `POSITIVE_INTEGER_VALUE`, `LARGE_ANALOG_VALUE`, `CHARACTERSTRING_VALUE`, `OCTETSTRING_VALUE`, `BITSTRING_VALUE`, `DATE_VALUE`, `TIME_VALUE`, `DATETIME_VALUE`, `DATEPATTERN_VALUE`, `TIMEPATTERN_VALUE`, `DATETIMEPATTERN_VALUE`, `AVERAGING`, etc.
 
 ```python
 ot = ObjectType.ANALOG_INPUT
@@ -308,7 +308,7 @@ es = EventState.NORMAL
 
 ### EventType
 
-BACnet event types. Constants: `CHANGE_OF_BITSTRING`, `CHANGE_OF_STATE`, `CHANGE_OF_VALUE`, `COMMAND_FAILURE`, `FLOATING_LIMIT`, `OUT_OF_RANGE`, `COMPLEX_EVENT_TYPE`, etc.
+BACnet event types. Constants: `CHANGE_OF_BITSTRING`, `CHANGE_OF_STATE`, `CHANGE_OF_VALUE`, `COMMAND_FAILURE`, `FLOATING_LIMIT`, `OUT_OF_RANGE`, `EXTENDED`, etc.
 
 ```python
 et = EventType.CHANGE_OF_VALUE
@@ -515,8 +515,8 @@ is an error.
   octet, falls through to the rules below.
 - **Other context-tagged content** comes back as `application_data` whose
   `.value` holds the octets as served. Constructed values with no typed form,
-  such as a Load Control's Requested_Shed_Level or an Event Enrollment's
-  Event_Parameters, take this form, as local reads of them always have. Element
+  any not in [the table below](#typed-constructed-values), take this form, as
+  local reads of them always have. Element
   boundaries of a constructed list aren't marked in the octets, so the
   binding doesn't split one: decode the octets with the datatype's layout,
   or read single array elements with `array_index`. Writing the value back
@@ -754,6 +754,10 @@ Read-only incoming COV notification (frozen).
 | `.initiating_device_identifier` | `ObjectIdentifier` | Source device |
 | `.monitored_object_identifier` | `ObjectIdentifier` | Changed object |
 | `.time_remaining` | `int` | Subscription seconds remaining |
+| `.delivery` | `str` | `"confirmed"` or `"unconfirmed"`: the service the notification came by |
+| `.source_mac` | `bytes` | The MAC the notification came from (the router's, if routed) |
+| `.source_network` | `int \| None` | Remote network number (if routed) |
+| `.source_address` | `bytes \| None` | Remote MAC address (if routed) |
 | `.values` | `list[dict]` | Changed properties (see below) |
 
 Each item in `.values` is a dict:
@@ -803,10 +807,13 @@ client = BACnetClient(
     port=47808,                  # UDP port
     broadcast_address="255.255.255.255",
     apdu_timeout_ms=6000,
-    transport="bip",             # "bip", "ipv6", "sc" or "mstp"
+    transport="bip",             # "bip", "ipv6", "sc", "mstp" or "router"
     share_port_by_address=False, # Keyword-only; B/IP, see "Sharing a port by address"
     bbmd=None,                   # Keyword-only; B/IP, a Bbmd: see "BBMD and foreign-device modes"
     foreign_device=None,         # Keyword-only; B/IP or B/IPv6, a ForeignDevice; not with bbmd
+    multicast=None,              # Keyword-only; B/IP, a Multicast: see "B/IP multicast"
+    router=None,                 # Keyword-only; a BACnetRouter, with transport="router"
+    # MS/TP options (serial_port, mstp_*): see "MS/TP serial ports"
     # IPv6 options:
     ipv6_interface=None,         # IPv6 selected local address; None means ::
     ipv6_device_instance=None,   # Keyword-only; 0..=4194303 for the VMAC of that instance, None for random
@@ -823,6 +830,8 @@ client = BACnetClient(
     reconnect=None,              # Keyword-only; SC only, a ScReconnect configuration
     sc_npdu_per_origin_limit=None, # Keyword-only; SC only, None uses native quota 32
     sc_control_rate_limit=None,  # Keyword-only; SC only, (burst, per_second); None is (256, 32)
+    sc_failover_hub=None,        # Keyword-only; SC only, see "SC failover hub"
+    sc_connect_timeout_ms=None,  # Keyword-only; SC only, see "SC failover hub"
 )
 ```
 
@@ -1162,6 +1171,9 @@ Entry holds exclusive lifecycle ownership while building and publishing the
 client. Entering an already running or closing client raises `RuntimeError`.
 Cancelling pending entry drops its unfinished connection setup. A concurrent
 `stop()` waits for entry to complete or be cancelled, then closes the client.
+A call or a second entry queued behind that pending entry fails with
+`RuntimeError` ("client closing") as soon as `stop()` is called, without
+waiting for the entry to finish (#2030).
 
 `stop()` and context exit refuse new operations, let existing native operations
 finish or be cancelled, and join transport teardown. Operations remain concurrent
@@ -1980,6 +1992,11 @@ await client.delete_object(
 
 ### Device Management
 
+`device_communication_control` and `reinitialize_device` take an optional
+`password` of 1 to 20 characters. An empty one, or one over 20 characters,
+raises `ValueError` before anything is sent; pass `None` to send no password
+(#2085, #2094).
+
 #### `device_communication_control(address, enable_disable, time_duration=None, password=None)`
 
 ```python
@@ -2083,8 +2100,8 @@ array index zero and omitted or zero counts for a selected range raise
 `ValueError` before address parsing or I/O. A count outside INTEGER16
 (-32768 to 32767) raises `OverflowError` before address parsing or I/O (#1360). Omitted reference values default
 to zero; zero position/sequence references are valid and may return no matches.
-The typed `ReadRangeResult` dictionary preserves raw item bytes, the three-boolean
-flags tuple and optional first sequence number. Endpoint responses must be
+The typed `ReadRangeResult` dictionary preserves raw item bytes, the result
+flags as a `BitString` and optional first sequence number. Endpoint responses must be
 unsegmented; the standalone client's existing segmentation support is unchanged.
 
 `range_type="time"` (#1533) reads the `count` items logged after
@@ -2840,10 +2857,15 @@ server = BACnetServer(
     interface="0.0.0.0",
     port=47808,
     broadcast_address="255.255.255.255",
-    transport="bip",             # "bip", "ipv6", "sc" or "mstp"
+    transport="bip",             # "bip", "ipv6", "sc", "mstp" or "router"
     share_port_by_address=False, # keyword-only; B/IP, see "Sharing a port by address"
     bbmd=None,                   # keyword-only; B/IP, see "BBMD and foreign-device modes"
     foreign_device=None,         # keyword-only; B/IP or B/IPv6; not with bbmd
+    multicast=None,              # keyword-only; B/IP, see "B/IP multicast"
+    router=None,                 # keyword-only; a BACnetRouter, with transport="router"
+    registered_network_port=None, # keyword-only; see "Registered B/IP Network Port"
+    # MS/TP options same as BACnetClient (see "MS/TP serial ports");
+    # request admission limits: see "Request admission limits"
     segmentation_supported=Segmentation.NONE, # keyword-only; full-server capabilities
     apdu_segment_timeout_ms=5000, # keyword-only; shared Device/runtime segment timeout
     # SC options same as BACnetClient
@@ -5084,6 +5106,15 @@ counters = await server.forwarder_save_counters()
 counters[1]["failed_saves"]  # refused saves of forwarder 1's lists
 ```
 
+#### `dcc_outcome_counters() -> DccOutcomeCounters`
+
+Sample the server's lifetime DeviceCommunicationControl outcome totals: a dict
+with `accepted_total`, `policy_denied_total`, `password_failure_total`,
+`deprecated_denied_total` and `malformed_total`, typed as the
+`DccOutcomeCounters` TypedDict in the stub. Each field saturates and is read on
+its own. Like `cov_counters()`, it raises `RuntimeError` before start and after
+stop. See [DCC policy](dcc-policy.md) for what each total counts.
+
 #### `local_address() -> str`
 
 Get the server's bound address after start: `"ip:port"` on B/IP, the station
@@ -5130,7 +5161,7 @@ import rusty_bacnet
 
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("rusty_bacnet.bacnet_transport").setLevel(logging.DEBUG)
-# A client, server, hub or endpoint started from here on reads these levels.
+# A client, server, hub, endpoint or router started from here on reads these levels.
 ```
 
 If you configure logging with `logging.config.dictConfig`, pass
@@ -5142,7 +5173,7 @@ from import on, so the default (`True`) would disable it.
 The bridge decides which events to forward from a copy of the logging
 levels, so an event your configuration doesn't want costs the stack one
 atomic load and never takes the GIL. It reads the levels at import and
-whenever a client, server, hub or endpoint starts (`start()` or `async
+whenever a client, server, hub, endpoint or router starts (`start()` or `async
 with`), so the usual order (import, configure logging, start) just works.
 If you lower a level later (to see more), call
 `rusty_bacnet.refresh_logging()`; until then, the events it newly allows are
@@ -5193,6 +5224,7 @@ All BACnet errors are raised as Python exceptions:
 | `BacnetBvlcNakError` | A BBMD refused a management request (`read_bdt` and its siblings) with a BVLC-Result NAK; `result_code` holds its code |
 | `BacnetBvlcUnexpectedResponseError` | A management request was answered by a BVLC message it doesn't take; `expected` and `got` hold the function codes |
 | `BacnetTransportError` | A socket or I/O failure: a bind or listen that fails (B/IP, B/IPv6, `ScHub.start`), a failed SC dial. Also an `OSError` |
+| `BacnetRouterCloseError` | A `BACnetRouter`'s cleanup failed; `failures` holds a tuple of `RouterCleanupFailure` records (see [B/IP router](#bip-router)) |
 
 ```python
 from rusty_bacnet import (
@@ -5225,7 +5257,7 @@ except BacnetError as e:
 | `error_parameters` | ConfirmedPrivateTransfer-Error | Encoded vendor-defined error parameters (`bytes`), when present |
 | `vt_session_identifiers` | VT-Close error that lists them | Local identifiers of the sessions that could not be closed |
 
-`BacnetRejectError` and `BacnetAbortError` have a `reason` integer attribute.
+`BacnetRejectError` and `BacnetAbortError` have a `reason` attribute, a `RejectReason` or `AbortReason` member (an `int`).
 
 `BacnetTransportError` derives from both `BacnetError` and `OSError`, so either `except` clause catches it. Its `errno` is the operating system's code when it reported one, otherwise the code for the failure's kind where one exists (`None` if not), and `strerror` is the message:
 
@@ -5241,7 +5273,7 @@ except OSError as e:
         raise
 ```
 
-`errno` is the operating system's own code, so platforms differ: Windows can refuse a bind to a UDP port another socket holds with `errno.WSAEACCES` rather than `errno.EADDRINUSE`, so check both there. It is not narrowed to the `OSError` subclasses (`ConnectionRefusedError` and the like), so compare `errno` rather than the class. `list_serial_ports()` raises a plain `OSError` instead.
+`errno` is the operating system's own code, so platforms differ: Windows can refuse a bind to a UDP port another socket holds with `errno.WSAEACCES` rather than `errno.EADDRINUSE`, so check both there. It is not narrowed to the `OSError` subclasses (`ConnectionRefusedError` and the like), so compare `errno` rather than the class. `list_serial_ports()` raises an `OSError` (or the subclass for the failure's kind) instead, not a `BacnetTransportError`.
 
 ---
 
@@ -5343,7 +5375,10 @@ async with endpoint:
 `foreign_device=`, and reports a registration with `foreign_registration()`
 (see [BBMD and foreign-device modes](#bbmd-and-foreign-device-modes)). `local_address()` is `"ip:port"`
 (BIP), VMAC hex (SC), or station string (MS/TP). Roles expose no callbacks;
-the client initiates `read_property`, `read_range` and `read_property_multiple`; concurrent use is
+the client initiates `read_property`, `read_property_multiple`, `read_range`,
+`read_log_page` and `write_property` (see
+[Endpoint direct WriteProperty](#endpoint-direct-writeproperty)), and the owner
+broadcasts one I-Am for its identity with `await endpoint.broadcast_i_am()`; concurrent use is
 `asyncio.gather` over these reads plus
 `is_session_alive()` polling. The Rust-calls-Python paths are the owner's
 optional `on_reinitialize` / `after_reinitialize` pair and its optional
@@ -5985,8 +6020,8 @@ same stored bytes into every fresh hub/client/server object; do not call `uuid4(
 otherwise generate a new ID during startup. The library does not choose a path,
 store UUIDs, or detect a changed UUID without application-owned history. It cannot
 guarantee lifetime identity. Python nodes retain their existing lifecycle support:
-stop/start or recreate them with the persisted UUID; no automatic Python reconnect
-support is added or claimed.
+stop/start or recreate them with the persisted UUID. A client's opt-in
+[`reconnect=ScReconnect(...)`](#sc-reconnect) redials with the same retained UUID.
 
 For illustration only, three independently provisioned **test** identities might be:
 
@@ -6117,8 +6152,9 @@ ms and require `sc_heartbeat_timeout_ms` to be greater than the interval.
 Native code retains a verified direct leaf fingerprint
 and connection incarnation through queued server work, duplicate/replay admission,
 and partial request reassembly. Python does not expose a principal authorizer or
-the direct listener through this API; its mutation policy remains the existing
-static `permissive`/`deny_all` choice. The Rust identity APIs are new in
+the direct listener through this API; its `mutation_policy` is `permissive`,
+`deny_all` or a callable whose `MutationContext.principal` is always `None` (see
+[Runtime Object Access](#runtime-object-access)). The Rust identity APIs are new in
 0.12.0. Hub admission's scope-only channel assertion and Hub-relayed application
 traffic never become downstream direct leaf identities. See the
 [Rust identity contract](rust-api.md#accepted-direct-tls-identity). Native

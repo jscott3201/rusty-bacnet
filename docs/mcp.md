@@ -16,7 +16,7 @@ page. Experimental in 0.15.
 | Engine extensions | `bacnet-ops` | `RequestLimits::with_network_rates`, `turn_on` and `slot`; per-caller `Account` and `TokenBucket` through `limits::charged`; `Engine::who_is`, `discover_routers`, `devices`, `device`, `address_style`; `read_trend` charged per request; `alarm_summary` and `enrollment_summary` |
 | Decoder | `bacnet-ops::decode` | The capture screen's frame summary and field tree, moved from the CLI for `bacnet_decode`: any tapped link (B/IP, B/IPv6, BACnet/SC, MS/TP), or a bare NPDU or APDU; a field quoting a character string is marked as device text |
 | Watch hub | `bacnet-ops::watch` | `Hub`: one managed COV subscription or poller per point, shared by every listener, holding the latest values (phase 2); `Engine::device_events` |
-| `bacnet mcp` | `crates/bacnet-cli/src/mcp.rs` | `serve --stdio [--profile NAME] [--passive]` and `authorize --profile NAME`, behind the CLI feature `mcp` (which brings `tui`, for the profiles). Classified `Read` in `bacnet_ops::class`. |
+| `bacnet mcp` | `crates/bacnet-cli/src/mcp.rs` | `serve --stdio [--profile NAME] [--passive]` and `authorize --profile NAME`, behind the CLI feature `mcp` (which brings `tui`, for the profiles; the release binaries include it from 0.15.0, and a source build enables it with `--features mcp`). Classified `Read` in `bacnet_ops::class`. |
 | `[mcp]` profile table | `crates/bacnet-cli/src/tui/profile/mcp.rs` | networks, devices, slow and fast networks, broad discovery, rates and caps; `mcp_writes`, `mcp_arm` and `[mcp.plan]` (#2068) |
 | Write safety core | `bacnet-ops::safety` | The TUI's plan, ledger, audit log and workspace lock, and the engine half of a write (`desk`: pre-image reads, the stale check, the ledger and audit around each send, revert), shared by the TUI and MCP (#2068) |
 | Writes | `crates/bacnet-mcp/src/writes/`, `tools/write.rs`, `tools/revert.rs` | The write session, the approvers (`ClientElicitation`, `PlanApprover`, `Deny`), the sealed confirmation state, and the two write tools |
@@ -270,7 +270,8 @@ Writes go through `bacnet_ops::safety`: the TUI's planner, tiers, ledger
 (entries marked `front_end: mcp` with the principal) and audit log.
 
 - **`bacnet_write`**: `device`, `writes` (1 to 20: `object`, `property`
-  with an optional `[index]`, `value`, `priority`), `batch`
+  with an optional `[index]` (`present-value` when left out), `value`,
+  `priority`), `batch`
   (WritePropertyMultiple; several writes need it) and `reason`. Targets are
   numeric (`ao:1`, never a name); a value is a number, a boolean, `null`
   (relinquish), a typed `{"value": n}` or the CLI value grammar, checked
@@ -334,17 +335,19 @@ Writes go through `bacnet_ops::safety`: the TUI's planner, tiers, ledger
   reaches; no prompt and no armed session, as in the TUI. Latest write
   first, through the desk; the result names each entry's outcome and how
   many are `left`.
-- **Plan grants** (`[mcp.plan]`: `devices`, `properties`, `priority_min`
-  and `priority_max` (8 and 16 by default), `max_writes`, `hours` (1 to
-  8), `reason`) run from `bacnet mcp authorize` (never from a later time
-  than now, so a hand-edited time can't lengthen one; the server refuses a
-  plan running more than 8 hours from start), which spells out what the
-  plan lets through without a prompt and warns when its range includes
-  priorities 1, 2 or 5; the budget counts per process. `bacnet mcp serve`
-  warns when writes are offered with `mcp_arm = "never"` and no plan, since
-  every write is then refused.
-  Offering writes, letting the client arm, or any change to a plan clears
-  the authorization.
+- **Plan grants** (`[mcp.plan]`: `devices`, `properties` (`present-value`
+  by default), `priority_min` and `priority_max` (8 and 16 by default),
+  `max_writes` (1 to 10,000), `hours` (1 to 8), `reason`) run from
+  `bacnet mcp authorize` (never from a later time than now, so a
+  hand-edited time can't lengthen one; the server refuses a plan running
+  more than 8 hours from start), which spells out what the plan lets
+  through without a prompt and warns when its range includes priorities
+  1, 2 or 5; the budget counts per process, and a plan that ends between
+  a call's check and its write is refused (`plan-spent`). `bacnet mcp
+  serve` warns when writes are offered with `mcp_arm = "never"` and no
+  plan, since every write is then refused (`not-armed`).
+  Offering writes, letting the client arm, or adding or changing a plan
+  clears the authorization (dropping a plan doesn't).
 - **Audit.** Every MCP record has `front_end: "mcp"`, `principal`,
   `client` (`claimed_name`, a claim), `tool`, `args_digest` and
   `request_id`, and a write `confirmed_via` (`elicitation` or `plan`) and

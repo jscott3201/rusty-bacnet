@@ -98,6 +98,7 @@ property and service documentation for its supported behavior.
 ## Documentation profile
 
 This README is included as the crate landing page and the program runs as a
-doctest. The docs.rs profile explicitly selects no features, disables defaults
-and targets `x86_64-unknown-linux-gnu`. Those metadata settings do not make this
-crate `no_std`, and a local render does not establish a docs.rs deployment.
+doctest. The docs.rs profile disables defaults, explicitly selects `std` and
+targets `x86_64-unknown-linux-gnu`, so it shows the hosted API, the file
+persistence backends included; it does not render the `alloc`-only build, and a
+local render does not establish a docs.rs deployment.

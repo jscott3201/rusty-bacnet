@@ -8,6 +8,8 @@ published 0.14.0 crates, which the site's tutorials also target; see
 [installation guidance](../README.md#install). Changes merged after the release
 wait in [`changelog.d/`](../changelog.d/); to use them, follow
 [Build from source](https://jscott3201.github.io/rusty-bacnet/development/overview/#build-a-source-checkout).
+The `dev` workspace uses Rust edition 2024 and needs Rust 1.95 or newer
+(#1011); consumers keep their own edition.
 
 ## Crate Dependency Order
 
@@ -18,6 +20,11 @@ bacnet-types → bacnet-encoding → bacnet-services → bacnet-transport → ba
                                                                           ↓
                                                                    bacnet-server
 ```
+
+Above them, `bacnet-endpoint` (on `bacnet-endpoint-core`) runs client and
+server roles through one transport ([bacnet-endpoint](#bacnet-endpoint)), and
+`bacnet-ops` and `bacnet-mcp` sit on `bacnet-client`
+([bacnet-ops and bacnet-mcp](#bacnet-ops-and-bacnet-mcp)).
 
 The portable `no_std` crates sit apart, below `bacnet-transport` and
 `bacnet-network`: `bacnet-time`, `bacnet-npdu` and the two codecs depend on
@@ -195,8 +202,9 @@ Core BACnet types, enums, and error definitions.
 `bacnet-types`, `bacnet-encoding` and `bacnet-services` also build without
 the standard library. With `default-features = false, features = ["alloc"]`
 they keep everything but the hosted parts, for firmware that has a global
-allocator: without `std`, `bacnet_types::bip_port` and `Error::Transport`
-don't exist, and `bacnet-encoding` logs nothing. `bytes` has to build for the
+allocator: without `std`, `Error::Transport` doesn't exist and
+`bacnet-encoding` logs nothing, and `bacnet_types::bip_port` needs atomic
+compare-and-swap on the target as well as `alloc` (#1615). `bytes` has to build for the
 target too: on one without atomic compare-and-swap, such as ARMv6-M, that
 takes its `extra-platforms` feature and a `portable-atomic` backend the
 firmware chooses.
@@ -246,6 +254,18 @@ let val = PropertyValue::Boolean(true);
 let val = PropertyValue::CharacterString("hello".into());
 let val = PropertyValue::Null;
 ```
+
+### Device text (`bacnet_types::text`)
+
+`bacnet_types::text` (#2148) is the one table of characters that device text
+must not carry onto a screen or into a document as they are: controls,
+bidirectional overrides and isolates, zero-width and other invisible format
+characters. `HIDDEN` holds the ranges, `is_hidden(ch)` tests one (the MCP
+server's envelopes drop all of them), `is_hidden_on_screen(ch)` spares the
+zero width joiner that fuses emoji sequences (the CLI, TUI and PICS use it),
+and `breaks_line(ch)` flags a control or line/paragraph separator that a
+one-line rendering shows as a space. It is a `const` table and `char`
+predicates, so it builds without `std` or `alloc`.
 
 ### Error
 
@@ -629,13 +649,14 @@ it accepts and refuses exactly the frames the router core does. Its
 
 ## bacnet-services
 
-23 BACnet service modules with request/response encoding and decoding.
+23 BACnet service modules with request/response encoding and decoding, plus
+`common` and `structured_error` for the types they share.
 
 ### ReadProperty / WriteProperty
 
 ```rust
-use bacnet_services::rp::{ReadPropertyRequest, ReadPropertyACK};
-use bacnet_services::wp::WritePropertyRequest;
+use bacnet_services::read_property::{ReadPropertyRequest, ReadPropertyACK};
+use bacnet_services::write_property::WritePropertyRequest;
 ```
 
 `WritePropertyRequest::encode` returns `Result<(), Error>` and validates its
@@ -703,7 +724,7 @@ returns `Error::Decoding` for either failure.
 
 ```rust
 use bacnet_services::cov::{
-    SubscribeCOVRequest, COVNotificationRequest, UnsubscribeCOVRequest,
+    SubscribeCOVRequest, SubscribeCOVPropertyRequest, COVNotificationRequest,
 };
 use bacnet_services::cov_multiple::{
     COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
@@ -763,8 +784,12 @@ use bacnet_services::read_range::{RangeSpec, ReadRangeAck};
 
 ```rust
 use bacnet_services::alarm_event::{
-    AcknowledgeAlarmRequest, GetEventInformationRequest,
-    GetAlarmSummaryRequest, GetEnrollmentSummaryRequest,
+    AcknowledgeAlarmRequest, EventSummary, GetEventInformationAck,
+    GetEventInformationRequest,
+};
+use bacnet_services::alarm_summary::{AlarmSummaryEntry, GetAlarmSummaryAck};
+use bacnet_services::enrollment_summary::{
+    GetEnrollmentSummaryAck, GetEnrollmentSummaryRequest,
 };
 ```
 
@@ -796,17 +821,13 @@ only a class and code still decodes, with no element number.
 ### Private Transfer
 
 ```rust
-use bacnet_services::private_transfer::{
-    ConfirmedPrivateTransferRequest, UnconfirmedPrivateTransferRequest,
-};
+use bacnet_services::private_transfer::{PrivateTransferAck, PrivateTransferRequest};
 ```
 
 ### Text Message
 
 ```rust
-use bacnet_services::text_message::{
-    ConfirmedTextMessageRequest, UnconfirmedTextMessageRequest,
-};
+use bacnet_services::text_message::{MessageClass, TextMessageRequest};
 ```
 
 ### Life Safety
@@ -3190,9 +3211,19 @@ concrete transport names it, as in `RouterPort<BipTransport>`.
 ```rust
 use bacnet_network::router::{BACnetRouter, RouterOptions, StartedRouter};
 
-let StartedRouter { router, apdus, network_control } =
+let StartedRouter { mut router, apdus, network_control } =
     BACnetRouter::start(ports, RouterOptions::new().track_admission()).await?;
+// ...
+router.stop().await?; // Result<(), RouterStopError>
 ```
+
+`BACnetRouter::stop` seals forwarding, joins the router's workers and awaits
+every transport's cleanup, even when one fails (#2002). Only `Ok` guarantees
+the cleanup finished; `Err(RouterStopError)` keeps each transport's original
+error in `failures()`. Calling it again replays the same result without
+retrying. Cancelling the wait leaves the cleanup running, and dropping the
+router starts it without waiting, so neither alone means the ports can be
+bound again.
 
 #### Who may change routes (#518)
 
@@ -3888,6 +3919,13 @@ limit past the slots, is `PortError::HeldLength`.
 
 BACnet object model: trait, database, and object implementations.
 
+`bacnet-objects` also builds without `std` (#1615): with
+`default-features = false, features = ["alloc"]` it needs a global allocator
+and atomic compare-and-swap, and drops the `File*Persistence` backends, the
+save writer's own thread (saves run inline on the caller's thread), the
+wall-clock expiry of staged writes and tracing. Hosted builds that turn
+default features off pick `features = ["std"]`.
+
 ### BACnetObject Trait
 
 ```rust
@@ -4399,7 +4437,7 @@ framing, through the shared `bacnet-encoding` codecs.
 use bacnet_objects::database::ObjectDatabase;
 
 let mut db = ObjectDatabase::new();
-db.add(Box::new(analog_input));
+db.add(Box::new(analog_input))?; // Err on a duplicate name or a protected membership; same OID replaces
 
 let obj = db.get(&oid);                // Option<&dyn BACnetObject>
 let obj = db.get_mut(&oid);            // Option<&mut dyn BACnetObject>
@@ -6370,6 +6408,18 @@ evaluator doesn't judge accompaniment, the credential's status or
 validity window, or the other authorization checks; the documentation of
 `evaluate_access_rights` lists them.
 
+Two more pure helpers in the same module cover those stages, reading the
+database without writing it. `evaluate_accompaniment(db, request)` (#1571)
+judges an `AccompanimentRequest` with explicit timing and a bounded
+companion chain, and `evaluate_authorization(db, request)` (#1572) runs a
+whole `AuthorizationRequest` in the check order it carries, with operational
+evidence and companion prerequisites. Each returns ordered event intents and
+leaves publishing them, and any physical action, to the application. On a
+server, `BACnetServer::authorize_access_local(request, tag)` (#1569) runs
+`evaluate_authorization` and, for a grant or denial, records its events at the
+Access Point under the same database guard and publishes their COV states;
+see [Completed local access authorization](local-access-authorization.md).
+
 #### Transportation (3)
 
 | Type | Constructor |
@@ -6506,8 +6556,9 @@ let client = BACnetClient::sc_builder()
     .await?;
 ```
 
-Use `bip_builder()` for B/IP, `sc_builder()` for BACnet/SC, or
-`generic_builder()` with a prebuilt transport.
+Use `bip_builder()` for B/IP, `bip6_builder()` for B/IPv6 (client `ipv6`
+feature), `sc_builder()` for BACnet/SC, or `generic_builder()` with a
+prebuilt transport.
 
 ### Choosing the client transport at runtime
 
@@ -6984,6 +7035,16 @@ unchanged; the server returns INCONSISTENT_PARAMETERS before object lookup,
 expiry cleanup or subscription changes. Public Rust/Python ordinary subscribe
 methods already supply the mode and retain their optional lifetime signatures.
 Python exposes ordinary COV and PropertyMultiple, not the single-property API.
+
+The managed helpers `manage_cov_subscription` and
+`manage_cov_property_subscription` (called on an `Arc<BACnetClient>`) send a
+finite subscription and renew it before it expires. They take a
+`bacnet_client::client::CovTarget` (#1790): `CovTarget::local(mac)`,
+`CovTarget::routed(router_mac, network, address)` or
+`CovTarget::of_device(&device)`, and match notifications by that source
+network and address. The helpers only renew: after
+`ManagedCOVSubscription::stop`, cancel at the same target with
+`unsubscribe_cov_target` or `unsubscribe_cov_property_target`.
 
 The full server owns the served Device execution profile. Every Device's
 `Protocol_Services_Supported` reports the fixed `EXECUTED_SERVICES`, with the
@@ -8310,17 +8371,22 @@ WriteProperty, WritePropertyMultiple, CreateObject, DeleteObject, AddListElement
 RemoveListElement, AtomicWriteFile, SubscribeCOV, SubscribeCOVProperty, and
 SubscribeCOVPropertyMultiple, plus inbound WriteGroup. **It allows by default**,
 unlike the Audit and LifeSafety methods, which deny by default. False or panic returns
-`SERVICES / SERVICE_REQUEST_DENIED` without the denied mutation. WPM authorizes
-each element in order and retains an authorized prefix on later denial or
-malformed input; other covered services authorize once after service decoding.
-A WPM element that an object saves before serving it (a forwarder or Notification
-Class list, an Access Rights rule array, Enable or Accompaniment, an Audit Log's
-Log_Enable or Buffer_Size) is decided before the server stages its save off the
-database lock (#1321): still once, and in wire order among those elements, so
-ahead of earlier elements no object saves first, and possibly for an element the
-request never reaches because an earlier one fails. Counters and audit records
-cover only the elements the handler reaches.
-Policies must be fast, nonblocking, and side-effect-free. Context addresses and
+`SERVICES / SERVICE_REQUEST_DENIED` without the denied mutation. Other covered
+services authorize once after service decoding. WPM elements are decided ahead,
+with no database guard held (#1321, #2032): the server keeps the elements that
+pass its pre-authorization checks, up to the first that fails them, asks the
+policy about each in wire order up to the first denial, then takes the write
+lock and applies the recorded decisions, retaining an allowed prefix on a later
+denial or failure. The policy can therefore be asked about an element the
+request never reaches because an earlier one fails as it is written; counters
+and audit records cover only the elements the handler reaches. An element whose
+object appeared between the passes, so the policy never saw it, is denied.
+Every decision for a received request, DeviceCommunicationControl,
+LifeSafetyOperation and AuditNotification included, runs on Tokio's blocking
+pool while the request waits (#2032), so a blocking policy delays only its own
+request and `stop()` doesn't wait for it; a call that never returns keeps its
+thread and keeps the process from exiting. Policies should still be fast,
+reentry-free and side-effect-free, and may be called concurrently. Context addresses and
 process IDs are claimed, not authenticated identities. DeviceCommunicationControl
 has its own method, `authorize_device_communication_control` (allow by default),
 asked after the DCC password, static `DccPolicy` and source restriction pass and
@@ -8560,6 +8626,11 @@ network attached to each port (#863).
 `ServerConfig::on_reinitialize`) installs a `ReinitializeHandler`. The server
 calls it with a `ReinitializeContext` and the object database once a request
 has decoded, passed `reinit_password` and named a state Clause 16.4 defines.
+A configured `reinit_password` or `dcc_password` holds 1 to 20 characters
+(`bacnet_services::device_mgmt::MAX_PASSWORD_CHARS`, counted in characters,
+not octets); an empty or longer one fails the build with `Error::Encoding`
+instead of refusing every request (#2060, #2094). Leave it unset for no
+password.
 The context carries the requested `state`, the immediate `source_mac`, the
 routed `source_network` when there is one, the transport `provenance` (with
 `direct_sc_identity()` for a verified direct BACnet/SC peer) and the
@@ -8972,6 +9043,34 @@ fixes them, and the warning logged with each skip gives the finer reason:
   timer (an accepted request and its expiry) changes
 
 ---
+
+## bacnet-ops and bacnet-mcp
+
+`bacnet-ops` (#2065) is the UI-free operations core the `bacnet` CLI, its
+terminal UI and its MCP server share: no terminal or MCP dependency, just a
+`BACnetClient` and plain data. Its modules cover the target grammar
+(`target`, `destination`), object, property and value parsing (`parse`),
+display text (`format`, `label`; `format::alarms` renders alarm and event
+summaries), request limits (`limits`: the global rate cap, the one request
+per device gate and per-caller accounts), frame decoding with no traffic
+(`decode`), B/IP BBMD table reads and checks (`bbmd`), the watch hub
+(`watch`), and the write-safety core the TUI and MCP share (`safety`: tiers,
+previews, the ledger and the audit log, #2068). `engine::Engine::new(client,
+limits)` wraps an `Arc<BACnetClient<T>>` and an `Arc<RequestLimits>`
+(`RequestLimits::new(per_second)`, 0 for no cap); its async reads take a
+device instance: `read`, `read_property`, `list_objects`, `describe_device`,
+`read_trend` (trend, event and audit log pages), `alarms`, `alarm_summary`
+and `enrollment_summary`.
+
+`bacnet-mcp` (#2066, experimental) is a Model Context Protocol server over
+that engine, run by `bacnet mcp serve --stdio` (the CLI's `mcp` feature).
+`McpServer::new(engine, policy, principal)` takes an
+`Option<Arc<Engine<T>>>` (`None` for passive mode, which sends nothing), a
+`Policy` it validates, and the caller's principal; `serve_stdio()` or
+`serve(reader, writer)` run it. Build the engine's limits from
+`Policy::request_limits()` so the policy's rates hold. It is read-only unless a
+profile opts into writes. The [MCP server guide](mcp.md) covers its tools
+and profiles, and [its design](design/mcp.md) the reasoning.
 
 ## Error Handling
 

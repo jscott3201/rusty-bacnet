@@ -3,9 +3,11 @@
 Status: **decided** (maintainer, 2026-10-25): option C in section 4, in two
 PRs, tables first; no BIBBs, no ledger. This settles the project's open
 decision OD-07 ("how to present conformance", #1496, folded into #1989). The
-options stay below for context. The first PR (part B: the catalogue, the
-client-sent list, the generator, `support.json` and `project/conformance`)
-is built; the sample PICS and `integrate/pics` are not yet. Section 2
+options stay below for context. Both PRs are built: the first (part B: the
+catalogue, the client-sent list, the generator, `support.json` and
+`project/conformance`), then the second (#2129): the sample PICS
+(`project/sample-pics`, written by the same `support-tables` example of
+`bacnet-integration-tests`) and the `integrate/pics` task page. Section 2
 describes the sources as they were before it. One finding from that PR: the
 server sends its requests through its own outbound paths, never through
 `bacnet-client`, so the client-sent list can't vouch for the PICS initiator

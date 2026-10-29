@@ -46,7 +46,7 @@ an allocator (#1614), for firmware with no heap.
 | --- | --- | --- |
 | Hosted | `std` (default) | Everything, including `error::Error::Transport`. Enables `alloc`. |
 | `no_std` with a heap | `alloc` | Everything but `Error::Transport`. Firmware must supply a global allocator. `bip_port` needs atomic compare-and-swap too, so ARMv6-M goes without it (#1615). |
-| No allocator | neither | The enums, `ObjectIdentifier`, `Date`, `Time`, `BACnetTimeStamp`, the bit-string flag types and the error type. The owned values (`PropertyValue`, the `constructed` types, `MacAddr`, the `calendar` matching) need `alloc`. |
+| No allocator | neither | The enums, `ObjectIdentifier`, `Date`, `Time`, `BACnetTimeStamp`, the bit-string flag types, the `text` table of hidden characters and the error type. The owned values (`PropertyValue`, the `constructed` types, `MacAddr`, the `calendar` matching) need `alloc`. |
 | | `serde` | Deserialization for `enums::ObjectType` and `enums::PropertyIdentifier`; enables `alloc`, without selecting `std`. |
 
 Without `alloc`, `error::Error` keeps only the variants that own nothing. A
@@ -60,7 +60,7 @@ the owned `Error::Encoding`, `Error::OutOfRange` and `Error::Structured` return.
 
 Enum newtypes support `FromStr` for their named constants in common case styles,
 such as `analog-input` and `ANALOG_INPUT`. The normal runtime dependencies are
-`bitflags` and `thiserror`, plus `smallvec` with `alloc` and `serde` when
+`bacnet-npdu`, `bitflags` and `thiserror`, plus `smallvec` with `alloc` and `serde` when
 selected.
 
 For an alloc-only dependency build, replace the dependency block with:

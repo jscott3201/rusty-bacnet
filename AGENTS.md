@@ -1,6 +1,6 @@
 # Rusty BACnet agent guidance
 
-Rusty BACnet is a BACnet protocol stack (ASHRAE 135-2020) in Rust, with Python (PyO3) bindings, a CLI and a TUI. This file is the entry point for coding agents.
+Rusty BACnet is a BACnet protocol stack (ASHRAE 135-2020) in Rust, with Python (PyO3) bindings, a CLI, a TUI and an MCP server. This file is the entry point for coding agents.
 
 ## Start here
 

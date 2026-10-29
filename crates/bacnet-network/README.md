@@ -18,7 +18,7 @@ by the example is a direct dependency, including the Tokio runtime and macros.
 [dependencies]
 bacnet-network = { path = "../rusty-bacnet/crates/bacnet-network" }
 bacnet-transport = { path = "../rusty-bacnet/crates/bacnet-transport" }
-bacnet-types = { path = "../rusty-bacnet/crates/bacnet-types" }
+bacnet-npdu = { path = "../rusty-bacnet/crates/bacnet-npdu" }
 tokio = { version = "1", features = ["macros", "rt", "time"] }
 ```
 

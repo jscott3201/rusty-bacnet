@@ -12,7 +12,7 @@ composite encoder families still use their `BytesMut` buffers and need
 
 ## Output contract
 
-`bacnet_encoding::sink::EncodeSink` has two operations:
+`bacnet_encoding::sink::EncodeSink` has three operations, the last one provided:
 
 - `remaining_capacity(&self) -> Option<usize>` reports the bytes that can still
   be appended. `Some(n)` is a bounded sink's remaining room; `None` means it

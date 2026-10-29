@@ -339,7 +339,8 @@ impl BipServerBuilder {
     /// the server is the BBMD that serves the group (Annex J.8.3), and its
     /// own BDT row must be two-hop. A registered Network Port serves the
     /// group as `BACnet_IP_Multicast_Address`, writable when the server
-    /// answers ReinitializeDevice and isn't a BBMD (#941).
+    /// answers ReinitializeDevice (#941); on a BBMD a written group is
+    /// activated together with the BDT, both or neither (#1963).
     pub fn multicast(mut self, multicast: Option<BipMulticast>) -> Self {
         self.multicast = multicast;
         self

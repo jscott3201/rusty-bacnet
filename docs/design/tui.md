@@ -65,13 +65,13 @@ and IT/OT engineers, operators, and rusty-bacnet developers.
 | W8 | Capture and decode traffic, filter, export pcap | all | P0 | #971 |
 | W9 | Alarm summary and acknowledgement | all | P1 | follow-up |
 | W10 | Trend log and schedule review | all | P1 | follow-up |
-| W11 | Device admin: time sync, DCC, reinitialize, file read | all | P1 | follow-up |
+| W11 | Device admin: time sync, DCC, reinitialize, file read | all | P1 | DCC and reinitialize done (`:dcc`, `:reinit`, #1799); time sync and file read follow-up |
 | W12 | Lab: local SC hub, simulated devices | all | P1 | follow-up |
 | W13 | Backup and restore, file write, create and delete object, schedule editing | all | P2 | later |
 
-Alarm viewing is P1 because the client still returns GetEventInformation as raw
-bytes even though `GetEventInformationAck::decode` exists; wiring the decoder in
-is a small follow-up.
+Alarm viewing was P1 because the client returned GetEventInformation as raw
+bytes; since #2077 it returns the decoded `GetEventInformationAck`, so an alarm
+screen no longer waits on the stack.
 
 ## 4. UX
 
@@ -647,7 +647,9 @@ table at 120x40 with 4,096 rows must take under 5 ms in a release build.
 
 ### 6.5 How the TUI talks to the stack
 
-The TUI uses only public `bacnet-client` and `bacnet-transport` APIs.
+The TUI uses only public stack APIs, chiefly `bacnet-client` and
+`bacnet-transport`, and since #2065 the shared `bacnet-ops` core (targets,
+parsing, the value formatter).
 
 - **Generics.** The worker is generic over `T: TransportPort` and instantiated
   per transport, as the one-shot commands are. `App` and the views are not
@@ -659,8 +661,8 @@ The TUI uses only public `bacnet-client` and `bacnet-transport` APIs.
   `subscribe_cov`, `manage_cov_subscription` and `cov_notifications()`; the BBMD
   helpers on any `BACnetClient` whose transport is `AsBip` (`BipTransport`, or
   `AnyTransport` with a `Bip` variant); `ScConnectError` and
-  `ScWebSocketErrorKind`; the MS/TP `diagnostics()` handle and
-  `decode_frame_stream`.
+  `ScWebSocketErrorKind`; the MS/TP `diagnostics()` handle and the
+  `MstpMonitor` frame stream.
 - **Transport handles.** `client.transport()` (#956) borrows the transport of
   any built client. Workers take the owned handles once (the SC
   `connection_state_changes()` watch, the MS/TP `diagnostics()` handle, the
@@ -862,17 +864,21 @@ cargo nextest run -p bacnet-cli --release -E 'test(drawing_a_full_device_table)'
 | Issue | Gap | Needed by |
 |---|---|---|
 | #956 | Done: `BACnetClient::transport()` and the `AsBip` BBMD helpers. Was: no access to transport handles from a built `BACnetClient`: the SC state watch, SC drop counts and BIP counters are unreachable after build, and the BBMD helpers exist only on `BACnetClient<BipTransport>`, so `AnyTransport` loses them | #967, #957, #959 |
-| #957 | No link-level frame tap on any transport, so BVLC control traffic, SC control messages and MS/TP Token, PFM and Reply-Postponed frames are invisible | #971 |
-| #958 | No MS/TP passive monitor, per-station statistics or master list; `MstpDiagnostics` not exposed from builders | #970, #971 |
-| #959 | SC reconnect, failover and disconnect causes appear only as tracing lines; no active-hub indication, heartbeat statistics or peer certificate; no failover or reconnect options on `ScClientBuilder` | #967 |
+| #957 | Done: `bacnet_transport::tap::FrameTap`, reached with each transport's `frame_tap()`. Was: no link-level frame tap on any transport, so BVLC control traffic, SC control messages and MS/TP Token, PFM and Reply-Postponed frames are invisible | #971 |
+| #958 | Done: `mstp::monitor::MstpMonitor` and the `diagnostics()` handle. Was: no MS/TP passive monitor, per-station statistics or master list; `MstpDiagnostics` not exposed from builders | #970, #971 |
+| #959 | Done: `ScClientBuilder::failover_hub_url` and `reconnect`, with connection-state changes. Was: SC reconnect, failover and disconnect causes appear only as tracing lines; no active-hub indication, heartbeat statistics or peer certificate; no failover or reconnect options on `ScClientBuilder` | #967 |
 | #960 | Done: `i_have_events`, `who_has_replies`, `network_reports`, `discover_routers`; `find`, `whois-router`, `:find` and the Networks tab. Was: I-Have is dropped; the client can't send Who-Is-Router-To-Network or What-Is-Network-Number or receive I-Am-Router-To-Network (Clause 6.4); the CLI `find` and `whois-router` are stubs | W1 (Who-Has, network map) |
-| #938 | Foreign-device mode on `BipClientBuilder`; surfacing a refused registration (BVLC-Result NAK); a separate re-registration interval; `discover --bbmd` should send Distribute-Broadcast-To-Network (Annex J.5) | #966 |
+| #938 | Done (foreign-device registration and its renewal interval on the B/IP client builder). Was: foreign-device mode on `BipClientBuilder`; surfacing a refused registration (BVLC-Result NAK); a separate re-registration interval; `discover --bbmd` should send Distribute-Broadcast-To-Network (Annex J.5) | #966 |
 
-Later gaps, not filed yet: routed variants for ReadRange, file access, DCC,
-reinitialize, time sync, GetEventInformation, AcknowledgeAlarm and create and
-delete object; GetEventInformation decoded in the client; client wrappers for
-GetAlarmSummary, GetEnrollmentSummary, PrivateTransfer and TextMessage; client
-TSM counters; an opt-in SC hub admin view of connected nodes.
+Later gaps, not filed yet when this was written: routed variants for
+ReadRange, file access, DCC, reinitialize, time sync, GetEventInformation,
+AcknowledgeAlarm and create and delete object; GetEventInformation decoded in
+the client; client wrappers for GetAlarmSummary, GetEnrollmentSummary,
+PrivateTransfer and TextMessage; client TSM counters; an opt-in SC hub admin
+view of connected nodes. Since done: the routed variants (the client's
+`*_from_device` methods, #1786, #1998 to #2001), the decoded
+GetEventInformation (#2077) and the GetAlarmSummary and GetEnrollmentSummary
+wrappers.
 
 ## 11. Risks
 

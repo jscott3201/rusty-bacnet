@@ -48,7 +48,8 @@ pub(crate) struct Profile {
     /// MS/TP settings, present for `transport = "mstp"` (#969).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) mstp: Option<Box<Mstp>>,
-    /// Recorded policy. The current TUI always remains read-only.
+    /// Recorded write policy: the TUI stays read-only until a write session
+    /// is armed, and only on a profile whose policy allows one.
     pub(crate) safety: Safety,
     /// Explicit first-use authorization, persisted before connecting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -151,8 +152,9 @@ pub(crate) enum Writes {
 pub(crate) struct Safety {
     /// Whether a write session may be armed.
     pub(crate) writes: Writes,
-    /// Allow dangerous operations (today, commanding priority 6) inside an
-    /// armed write session.
+    /// Allow dangerous operations inside an armed write session: commanding
+    /// priority 6, and device management (DeviceCommunicationControl and
+    /// ReinitializeDevice).
     pub(crate) dangerous: bool,
 }
 

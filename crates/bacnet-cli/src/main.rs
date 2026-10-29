@@ -106,8 +106,9 @@ fn routed_wait() -> Duration {
         .map_or(ROUTED_DISCOVERY_WAIT, Duration::from_millis)
 }
 
-/// Resolve a target string for a command with a routed client call: read,
-/// readm, write and subscribe also take `dnet:instance` and `dnet:0xMAC`.
+/// Resolve a device command's target string: besides an address or a
+/// discovered instance, it takes `dnet:instance` and `dnet:0xMAC` for a
+/// device behind a router.
 async fn resolve_destination<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     target_str: &str,

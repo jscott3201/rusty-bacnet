@@ -34,7 +34,7 @@ the Python bindings also need `python3-venv` for maturin's venv and
 ```bash
 case "$(uname -s)" in
   Linux)  FEATURES=$(sed -n 's/^  LINUX_FEATURES: //p' .github/workflows/ci.yml) ;;  # every optional feature
-  Darwin) FEATURES=$(sed -n 's/^features=//p' scripts/ci/local-macos.sh) ;;          # all but serial and ethernet
+  Darwin) FEATURES=$(sed -n 's/^features=//p' scripts/ci/local-macos.sh) ;;          # all but serial-gpio and ethernet
   *)      FEATURES=$(sed -n 's/^features=//p' scripts/ci/local-macos.sh | sed 's#,bacnet-cli/pcap##') ;;  # Windows (Git Bash)
 esac
 

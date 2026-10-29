@@ -33,8 +33,9 @@ second set of checks.
 
 **Goals**
 
-- A read-only MCP server over stdio that an agent host launches as a child
-  process, built into `bacnet` behind an opt-in `mcp` feature.
+- An MCP server over stdio that an agent host launches as a child
+  process, built into `bacnet` behind an opt-in `mcp` feature: read-only
+  first, with guarded writes a profile opts into (phase 3, #2068).
 - A small, composable, well-annotated tool surface that works in every
   current agent host, with resources and subscriptions as an enhancement for
   hosts that support them.
@@ -111,8 +112,9 @@ Layer 7:   bacnet-cli    `bacnet mcp serve` (feature `mcp`), later `connect`
 - `bacnet-ops` depends on `bacnet-client`, `bacnet-transport`,
   `bacnet-services`, `bacnet-encoding` and `bacnet-types`, plus Tokio and
   serde. It has no ratatui, crossterm or `rmcp` dependency and needs no `tui`
-  feature. Its one feature, `sc-tls`, lets the address formatter recognise a
-  BACnet/SC link. It is published, because the published `bacnet-cli`
+  feature. Its `sc-tls` feature lets the address formatter recognise a
+  BACnet/SC link (a second, `test-support`, adds frame builders for the
+  CLI's decode tests and is not a stable API). It is published, because the published `bacnet-cli`
   depends on it.
 - `bacnet-mcp` stays out of `default-members`, like `bacnet-cli` and
   `rusty-bacnet`, so `cargo build` stays light. Its default feature is
@@ -153,7 +155,9 @@ a module stay private. The TUI's browser, watch list and write previews use
 `engine::Reader` directly with their own stop flags. The new `Engine`
 facade is not yet used by the CLI: the one-shot `alarms` prints the raw
 acknowledgment, which the facade decodes, so switching it would change the
-output. MCP is the facade's first caller.
+output. MCP is the facade's first caller. (Since phase 2 the TUI's watch
+worker also runs on `Engine`, for the shared watch hub; the one-shot
+commands still don't use it.)
 
 ### 4.3 The engine
 
@@ -204,7 +208,7 @@ lock, and its `prepare`, `execute`, `commit` and `revert` take the
 engine's client and limits. Phase 2 added the watch hub (§6) beside the
 engine, and `device_events`.
 
-### 4.4 One client, many sessions (planned)
+### 4.4 One client, many sessions
 
 - Each profile has one `BACnetClient`, owned by the engine. MCP handlers
   never touch the transport.
@@ -217,12 +221,14 @@ engine, and `device_events`.
   for the multi-user service (phase 5).
 - Object_List results are cached per device for five minutes, so paging
   doesn't read the list again (phase 1). Invalidation on a Database_Revision
-  change, a cached `describe_device`, and `ttlMs` with `cacheScope:
-  private` on results are planned.
+  change, a cached `describe_device` tool, and `ttlMs` with `cacheScope:
+  private` on results are planned (the `bacnet://device/{instance}`
+  resource already caches the summary for five minutes, phase 2).
 - The profile TOML gains an `[mcp]` table (`networks`, `devices`,
   `slow_networks`, `fast_networks`, `broad_discovery`, rate limits and
-  per-call caps; `writes` in phase 3), validated at start: a bad
-  configuration refuses to start.
+  per-call caps; `mcp_writes`, `mcp_arm` and `[mcp.plan]` in phase 3),
+  validated at start: a bad configuration refuses to start. Implemented
+  in phases 1 and 3.
 
 ## 5. The tool surface
 
@@ -266,7 +272,7 @@ openWorldHint: false`.
 | `bacnet_list_objects` | 1 | RO | `device`, `types`, `names`, `cursor` | objects, total, next cursor |
 | `bacnet_describe_device` | 1 | RO, idempotent | `device`, `count_objects` | vendor, model, firmware and software versions, protocol revision, services and object types by name, segmentation, APDU size, database revision, route |
 | `bacnet_read_trend` | 1 | RO | `device`, `object`, `from`, `to`, `max_records` (up to 2,000), `summary`, `cursor` | records and a summary of them (count, flagged, first and last time; per column min, max, mean and state counts), or the summary alone; pages, cut-short answers and gaps; a cursor holding the log's next sequence number |
-| `bacnet_read_log_records` | 1 (#2103) | RO | `device`, `object` (an Event Log or Audit Log), `from`, `to`, `max_records`, `summary`, `cursor`: the trend tool's | records (event or audit notifications decoded, log status changes, clock changes) and a summary (counts by kind; events by state entered, event type and notify type; operations by name and failures), or the summary alone; paging as the trend tool's |
+| `bacnet_read_log_records` | after 2 (#2103) | RO | `device`, `object` (an Event Log or Audit Log), `from`, `to`, `max_records`, `summary`, `cursor`: the trend tool's | records (event or audit notifications decoded, log status changes, clock changes) and a summary (counts by kind; events by state entered, event type and notify type; operations by name and failures), or the summary alone; paging as the trend tool's |
 | `bacnet_alarms` | 1 | RO | `device`, `max`, `summaries`, `cursor` | event summaries: object, event state, acknowledgment, timestamps, notify type, priorities; the alarm and enrollment summaries on request |
 | `bacnet_watch` | 2 | RO, not idempotent | `points` (1 to 32: device, object, property), `cursor` | each point's values and watch state, or `changed: false` without values when unchanged since the cursor's call; a cursor holding the hub's sequence number |
 | `bacnet_decode` | 1 | local, pure | `hex`, `link` (bip, bip6, mstp, sc, npdu, apdu, auto) | decoded layers as a field tree and a one-line summary; no traffic, so it works in passive mode |
@@ -299,12 +305,18 @@ Notes:
   with its own minute.
 - A page budget keeps text under about 24 kB and structured content under
   about 64 kB per call. A larger result returns a page and `next_cursor`.
+  As built, the text rendering is cut at 24,000 characters (the structured
+  content keeps the whole result), and `bacnet_read` and the two log tools
+  page at about 60 kB of structured content.
   Default page sizes: 200 devices, 200 objects, 100 property values, 500
   trend records, 100 alarms.
 - Cursors are opaque, as the spec requires. Ours hold an index into a cached
   result or a log position, plus the principal, the tool and an expiry, and
   are signed with a per-process key, so a forged or replayed cursor fails
   closed.
+
+As built, every read tool except `bacnet_watch` carries `idempotentHint:
+true`, so the RO rows without "idempotent" above are idempotent too.
 
 Not exposed at any phase: CreateObject, DeleteObject, AtomicWriteFile,
 Write-BDT, Delete-FDT-Entry, unbounded (lifetime 0) COV, an MS/TP join,
@@ -396,8 +408,9 @@ As built (#2067), and where it differs from the plan above:
   twice in the acknowledgment; it is watched once. A reservation no stream
   claims is released by a sweep (about 90 s); at most 16 wait at once.
 - `bacnet://device/{instance}` has no subscription meaning and is not
-  honoured. The session and ledger resources are honoured but don't change
-  before phase 3.
+  honoured. The session and ledger resources are honoured but don't send
+  updates: phase 3 (#2068) shows writes, arming and grants in them and
+  left the notifications on arming and settling for later.
 - The per-process cap is the hub's, and counts points still cancelling, so
   the device-side footprint stays bounded.
 - Charging: the hub's requests run under its own account and token bucket
@@ -437,11 +450,11 @@ model that device-reported strings are data and that writes need approval.
 
 | TUI level | MCP |
 |---|---|
-| Passive (no client built) | `--passive`: only `bacnet_decode`, the discovery table without sending, the ledger. No write tools. A test asserts nothing is transmitted. |
+| Passive (no client built) | `--passive`: only `bacnet_decode`, the discovery table without sending, the session and the ledger. No write tools. A test asserts nothing is transmitted. |
 | Read-only (default) | the default for every deployment: the read tools and resources |
 | Armed write session | needed before `bacnet_write`; who may arm is §7.3 |
 | Armed with `dangerous` | local and attached only |
-| Expired | read-only; a write gets `refused: session-expired` |
+| Expired | read-only; as built (#2068) there is no `session-expired` reason: with `mcp_arm = "elicit"` the next confirmed write arms again, with `never` a write is refused `not-armed` unless a plan grant covers it, and a session that runs out between the confirmation and the send is refused there, nothing sent |
 
 | Tier | Changes (from the TUI's planner) | stdio (phase 3) | attached TUI (phase 4) | HTTP (phase 5) |
 |---|---|---|---|---|
@@ -486,7 +499,7 @@ expired state or a missing capability is a refusal reason on the retry
 |---|---|---|
 | `Deny` | n/a (the default) | 3 |
 | `ClientElicitation`: a form through multi round-trip requests | no, so T1 only and opt-in | 3 |
-| `PlanGrant`: a commissioning plan a person approved once, at T3, through a verified channel (device set, property allowlist, priority range, write budget, expiry of 8 h or less) | yes | 3 |
+| `PlanGrant` (`PlanApprover` as built): a commissioning plan a person approved once, at T3, through a verified channel (device set, property allowlist, priority range, write budget, expiry of 8 h or less) | yes | 3 |
 | `TuiApprover`: the attached TUI's own preview dialog, with an "agent request" banner, the 300 ms key debounce and the 120 s auto-decline | yes | 4 |
 | `UrlApprover`: an approval page behind the same identity provider, same subject or a permitted second person | yes | 5 |
 
@@ -754,9 +767,10 @@ that discusses BACnet is checked for overlap with the standard.
 
 So the core value lives in well-annotated tools, and subscriptions,
 elicitation and tasks are enhancements with tool-only fallbacks. On a client
-older than 2026-07-28, a write needing approval uses the older
-server-initiated elicitation when the client supports it, and is refused
-otherwise.
+older than 2026-07-28, a write needing approval was to use the older
+server-initiated elicitation when the client supports it, and be refused
+otherwise. As built (#2068), it is always refused there
+(`elicitation-unsupported`, §7.4); plan grants work for every client.
 
 ## 12. Risks
 
@@ -780,6 +794,8 @@ otherwise.
   Class recipient list is an explicit, audited write, never automatic.
 - A user guide, "Using rusty-bacnet with AI agents", with setup, the safety
   model and threat notes, lands with phase 1 (with its website tests).
+  Done: the website's `guides/ai-agents` page, updated for writes in
+  phase 3.
 
 ## 14. References
 

@@ -2799,9 +2799,10 @@ class Multicast:
     broadcasts to its BDT and foreign devices and theirs to the group, and
     its own BDT row must have the mask 255.255.255.255, or start raises. A
     registered Network Port serves the group as BACnet_IP_Multicast_Address
-    (0.0.0.0 when off), writable when the server answers ReinitializeDevice
-    and isn't a BBMD; a group changed that way lasts until the process
-    exits, and isn't saved. Two ``Multicast`` values with the same settings
+    (0.0.0.0 when off), writable when the server answers ReinitializeDevice;
+    on a BBMD a written group is activated together with the BDT written
+    beside it, both or neither (#1963). A group changed that way lasts until
+    the process exits, and isn't saved. Two ``Multicast`` values with the same settings
     compare and hash equal. Invalid values raise ValueError, or
     OverflowError for an integer out of range. Windows multicast is
     untested.
@@ -6112,7 +6113,10 @@ class BACnetServer:
 
         Accepted values are a finite REAL for Analog Input and for a Loop's
         control output, logical Enumerated 0/1 (INACTIVE/ACTIVE) for Binary Input,
-        and Unsigned 1..=Number_Of_States for Multi-state Input. Binary values are
+        and Unsigned 1..=Number_Of_States for Multi-state Input. A noncommandable
+        Analog, Binary or Multi-state Value takes the same datatype as its Input
+        counterpart; a commandable one raises OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED
+        (use ``write_property_local`` with a priority). Binary values are
         BACnet logical values after Polarity, not raw hardware/interface levels.
         An object with Out_Of_Service set rejects this update to preserve
         network simulation ownership. A Life Safety Point or Zone takes an

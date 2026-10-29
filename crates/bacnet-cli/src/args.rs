@@ -325,7 +325,7 @@ pub(crate) enum Command {
         capture_device: Option<String>,
     },
 
-    /// Serve a read-only MCP server to an AI agent host (needs the `mcp`
+    /// Serve an MCP server to an AI agent host (needs the `mcp`
     /// feature).
     ///
     /// `bacnet mcp serve --stdio --profile NAME` is what an agent host's

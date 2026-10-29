@@ -10,8 +10,9 @@ to interpret. This crate does not perform network requests or operate a device.
 
 Use a checkout named `rusty-bacnet` beside your application directory. These
 blocks describe development-source dependencies, not the contents of a published
-release. The example imports `bacnet-types` and `bytes` directly, so both are
-listed as application dependencies too. Adjust the paths for another layout.
+release. The example imports `bacnet-types` directly, so it is listed too, and
+`bytes` is there for the `BytesMut` encoders mentioned after it. Adjust the
+paths for another layout.
 
 ```toml
 [dependencies]

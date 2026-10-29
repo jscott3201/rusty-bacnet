@@ -538,12 +538,13 @@ impl BACnetServer {
         crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
-    /// Update Present_Value for an application-owned Input, Loop or Life
-    /// Safety object.
+    /// Update Present_Value for an application-owned Input, noncommandable
+    /// Value, Loop or Life Safety object.
     ///
     /// This is the narrow application route for finite Analog Input and Loop
     /// REAL values, logical Binary Input Enumerated 0/1 values, in-range
-    /// Multi-state Input Unsigned values and Life Safety Point and Zone
+    /// Multi-state Input Unsigned values, the same for noncommandable Analog,
+    /// Binary and Multi-state Values, and Life Safety Point and Zone
     /// Enumerated BACnetLifeSafetyState values. The object implementation owns
     /// validation and Out_Of_Service simulation exclusivity.
     #[pyo3(signature = (object_id, value))]

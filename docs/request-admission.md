@@ -78,8 +78,8 @@ limit can still deny ENABLE; availability is not guaranteed.
 
 The server-private classifier first traverses borrowed tag contents and bounds
 optional password content before invoking the existing decoder. A decoded password
-has at most 20 UTF-8 bytes; accepted UTF-8/Latin-1 payloads require at most 20 wire
-bytes and UCS-2 at most 40. The preflight therefore introduces no attacker-sized
+has at most 20 characters (#2060), so an accepted payload needs at most 20 wire
+bytes in Latin-1, 40 in UCS-2 and 80 in UTF-8. The preflight therefore introduces no attacker-sized
 password allocation and excludes no accepted password encoding. Duration handling,
 alternate charset validation, and the decoder's refusal of trailing data
 are retained. There is no arbitrary total-request cutoff, password comparison,
