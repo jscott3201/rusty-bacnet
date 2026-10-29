@@ -176,7 +176,7 @@ fn sanitize(text: &str) -> String {
     let mut out = String::with_capacity(text.len().min(MAX_LINE_CHARS));
     let shown = text
         .chars()
-        .filter(|ch| !bacnet_ops::format::is_hidden_on_screen(*ch));
+        .filter(|ch| !bacnet_types::text::is_hidden_on_screen(*ch));
     for (count, ch) in shown.enumerate() {
         if count == MAX_LINE_CHARS {
             out.push('…');

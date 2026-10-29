@@ -209,7 +209,7 @@ impl Theme {
 /// reorder what follows it.
 pub(super) fn sanitize(text: &str) -> String {
     text.chars()
-        .filter(|ch| !bacnet_ops::format::is_hidden_on_screen(*ch))
+        .filter(|ch| !bacnet_types::text::is_hidden_on_screen(*ch))
         .map(|ch| if ch.is_control() { ' ' } else { ch })
         .collect()
 }

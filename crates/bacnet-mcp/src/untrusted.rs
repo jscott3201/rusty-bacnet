@@ -10,6 +10,7 @@
 //! characters), variation selectors and Hangul fillers are dropped, URLs
 //! are defanged (`hxxp://`), and the result is capped.
 
+use bacnet_types::text::breaks_line;
 use serde_json::{Value, json};
 
 /// A device-supplied string as an envelope: cleaned, capped at `cap`
@@ -29,7 +30,7 @@ pub(crate) fn clean(text: &str, cap: usize) -> (String, bool) {
     let mut cleaned: String = text
         .chars()
         .filter(|ch| !hidden(*ch))
-        .map(|ch| if breaks(ch) { ' ' } else { ch })
+        .map(|ch| if breaks_line(ch) { ' ' } else { ch })
         .collect();
     cleaned = defang(&cleaned);
     match cleaned.char_indices().nth(cap) {
@@ -41,21 +42,15 @@ pub(crate) fn clean(text: &str, cap: usize) -> (String, bool) {
     }
 }
 
-/// Characters that break a line or move the cursor: the controls (C0, DEL
-/// and C1) and the line and paragraph separators. Each becomes a space.
-fn breaks(ch: char) -> bool {
-    ch.is_control() || matches!(ch, '\u{2028}' | '\u{2029}')
-}
-
 /// The table of [`hidden`] characters, for the tests.
 #[cfg(test)]
-pub(crate) use bacnet_ops::format::HIDDEN;
+pub(crate) use bacnet_types::text::HIDDEN;
 
-/// Whether `ch` is dropped: the shared set of format characters and
-/// others that show as nothing ([`bacnet_ops::format::HIDDEN`]), the same
-/// ones the CLI and the TUI drop from device names.
+/// Whether `ch` is dropped: the whole shared set of format characters and
+/// others that show as nothing ([`bacnet_types::text::HIDDEN`]), the
+/// zero width joiner included, which the CLI, the TUI and the PICS keep.
 fn hidden(ch: char) -> bool {
-    bacnet_ops::format::is_hidden(ch)
+    bacnet_types::text::is_hidden(ch)
 }
 
 /// URLs made inert: `http://` and `https://` as `hxxp://` and `hxxps://`,
