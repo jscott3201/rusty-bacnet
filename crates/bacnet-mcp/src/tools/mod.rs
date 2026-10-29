@@ -14,6 +14,9 @@ pub(crate) mod describe;
 pub(crate) mod discover;
 mod find;
 mod list;
+mod log_pages;
+mod log_records;
+mod log_records_data;
 mod netmap;
 pub(crate) mod read;
 pub(crate) mod revert;
@@ -65,6 +68,7 @@ const SPECS: &[Spec] = &[
     list::SPEC,
     describe::SPEC,
     trend::SPEC,
+    log_records::SPEC,
     alarms::SPEC,
     decode::SPEC,
     watch::SPEC,
@@ -134,6 +138,7 @@ enum Request {
     Find(find::Args),
     NetworkMap(netmap::Args),
     Trend(trend::Args),
+    LogRecords(log_pages::Args),
     Alarms(alarms::Args),
     Decode(decode::Args),
     Watch(watch::Args),
@@ -156,6 +161,11 @@ fn request(name: &str, args: &Map<String, Value>) -> Result<Request, ErrorData> 
             let parsed: trend::Args = parse(args)?;
             parsed.check()?;
             Request::Trend(parsed)
+        }
+        log_records::NAME => {
+            let parsed: log_pages::Args = parse(args)?;
+            parsed.check()?;
+            Request::LogRecords(parsed)
         }
         alarms::NAME => Request::Alarms(parse(args)?),
         decode::NAME => Request::Decode(parse(args)?),
@@ -201,6 +211,7 @@ pub(crate) async fn call<T: TransportPort + 'static>(
             Request::Find(a) => find::run(ctx, &call, a, &args).await,
             Request::NetworkMap(a) => netmap::run(ctx, &call, a).await,
             Request::Trend(a) => trend::run(ctx, &call, a, &args).await,
+            Request::LogRecords(a) => log_records::run(ctx, &call, a, &args).await,
             Request::Alarms(a) => alarms::run(ctx, &call, a, &args).await,
             Request::Decode(a) => decode::run(ctx, &call, a).await,
             Request::Watch(a) => watch::run(ctx, &call, a, &args).await,

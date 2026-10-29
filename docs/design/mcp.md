@@ -229,8 +229,8 @@ engine, and `device_events`.
 Rules:
 
 1. **Few, composable tools**, named `bacnet_*` so they can't collide when a
-   host aggregates servers. Ten read tools (nine in phase 1, `bacnet_watch`
-   in phase 2), two write tools (phase 3).
+   host aggregates servers. Eleven read tools (nine in phase 1, `bacnet_watch`
+   in phase 2, `bacnet_read_log_records` after it, #2103), two write tools (phase 3).
 2. **`tools/list` depends on the launch configuration and the caller's
    authorization, never on runtime state.** The 2026-07-28 revision forbids a
    list that varies per connection. Write tools appear only when the profile
@@ -266,6 +266,7 @@ openWorldHint: false`.
 | `bacnet_list_objects` | 1 | RO | `device`, `types`, `names`, `cursor` | objects, total, next cursor |
 | `bacnet_describe_device` | 1 | RO, idempotent | `device`, `count_objects` | vendor, model, firmware and software versions, protocol revision, services and object types by name, segmentation, APDU size, database revision, route |
 | `bacnet_read_trend` | 1 | RO | `device`, `object`, `from`, `to`, `max_records` (up to 2,000), `summary`, `cursor` | records and a summary of them (count, flagged, first and last time; per column min, max, mean and state counts), or the summary alone; pages, cut-short answers and gaps; a cursor holding the log's next sequence number |
+| `bacnet_read_log_records` | 1 (#2103) | RO | `device`, `object` (an Event Log or Audit Log), `from`, `to`, `max_records`, `summary`, `cursor`: the trend tool's | records (event or audit notifications decoded, log status changes, clock changes) and a summary (counts by kind; events by state entered, event type and notify type; operations by name and failures), or the summary alone; paging as the trend tool's |
 | `bacnet_alarms` | 1 | RO | `device`, `max`, `summaries`, `cursor` | event summaries: object, event state, acknowledgment, timestamps, notify type, priorities; the alarm and enrollment summaries on request |
 | `bacnet_watch` | 2 | RO, not idempotent | `points` (1 to 32: device, object, property), `cursor` | each point's values and watch state, or `changed: false` without values when unchanged since the cursor's call; a cursor holding the hub's sequence number |
 | `bacnet_decode` | 1 | local, pure | `hex`, `link` (bip, bip6, mstp, sc, npdu, apdu, auto) | decoded layers as a field tree and a one-line summary; no traffic, so it works in passive mode |

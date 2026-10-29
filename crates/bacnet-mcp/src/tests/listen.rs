@@ -344,3 +344,78 @@ async fn a_reservation_never_claimed_is_released() {
     assert_eq!(session["watches"]["held"], json!(0));
     lab.stop().await;
 }
+
+/// A session runs at most four listen streams (#2150): a fifth is refused
+/// with a `stream-cap` error and takes no watch, and cancelling one makes
+/// room again.
+#[tokio::test(start_paused = true)]
+async fn a_session_runs_at_most_four_listen_streams() {
+    let mut lab = Lab::start(Policy::default()).await;
+    lab.known().await;
+    let mut streams = Vec::new();
+    for _ in 0..crate::listen::MAX_STREAMS {
+        let (id, accepted) = lab.agent.listen(&["bacnet://session"]).await;
+        assert_eq!(accepted, ["bacnet://session"]);
+        streams.push(id);
+    }
+    settle().await;
+    let before = lab.sends().len();
+    let (extra, accepted) = lab.agent.listen(&[AI1]).await;
+    assert!(
+        accepted.is_empty(),
+        "the acknowledgment accepts nothing: {accepted:?}"
+    );
+    let refused = lab.agent.answer(extra).await;
+    assert_eq!(refused["error"]["code"], json!(-32602), "{refused}");
+    assert_eq!(refused["error"]["data"]["error"], json!("refused"));
+    assert_eq!(refused["error"]["data"]["reason"], json!("stream-cap"));
+    settle().await;
+    assert_eq!(lab.sends().len(), before, "a refused stream sends nothing");
+    let session = lab.agent.read("bacnet://session").await.unwrap();
+    assert_eq!(session["watches"]["held"], json!(0), "{session}");
+    assert_eq!(session["watches"]["streams"], json!(4), "{session}");
+
+    lab.agent.cancel(streams.pop().unwrap()).await;
+    settle().await;
+    let (_, accepted) = lab.agent.listen(&[AI1]).await;
+    assert_eq!(accepted, [AI1]);
+    settle().await;
+    assert_eq!(lab.cov_table().await.len(), 1);
+    lab.stop().await;
+}
+
+/// A stream whose watches were set aside under the cap, but which finds
+/// the cap reached when it begins, is refused and lets them go at once:
+/// its point's subscription is cancelled and its alarm URI's room freed,
+/// with no wait for the reservation sweep (#2150).
+#[tokio::test(start_paused = true)]
+async fn a_stream_refused_at_its_start_frees_what_was_set_aside() {
+    use rmcp::ServerHandler;
+    use rmcp::model::SubscriptionFilter;
+    let mut lab = Lab::start_site(Policy::default(), Duration::ZERO).await;
+    lab.known().await;
+    let uris = [AI1.to_string(), "bacnet://device/1201/alarms".to_string()];
+    let filter = SubscriptionFilter::builder()
+        .resource_subscriptions(uris.clone())
+        .build();
+    let accepted = lab.mcp.accepted_subscription_filter(&filter).unwrap();
+    assert_eq!(accepted.resource_subscriptions.as_deref(), Some(&uris[..]));
+    settle().await;
+    let ctx = lab.mcp.ctx();
+    assert_eq!((ctx.subs.held(), ctx.subs.uris()), (1, 1));
+    assert_eq!(lab.cov_table().await.len(), 1);
+    // Four streams begin meanwhile.
+    let running: Vec<_> = (0..crate::listen::MAX_STREAMS)
+        .map(|_| ctx.listening(crate::listen::MAX_STREAMS).unwrap())
+        .collect();
+    let refused = crate::listen::open(ctx, &uris).err().expect("refused");
+    assert_eq!(refused.data.unwrap()["reason"], json!("stream-cap"));
+    assert_eq!((ctx.subs.held(), ctx.subs.uris()), (0, 0), "freed at once");
+    settle().await;
+    assert!(
+        lab.cov_table().await.is_empty(),
+        "cancelled before the sweep"
+    );
+    drop(running);
+    lab.stop().await;
+}

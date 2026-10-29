@@ -171,6 +171,21 @@ impl<T: TransportPort + 'static> McpServer<T> {
         (self.ctx.subs.held(), self.ctx.subs.legacy_count())
     }
 
+    /// The URIs counted against the session's bound, and the devices whose
+    /// alarms are cached, sorted.
+    #[cfg(test)]
+    pub(crate) fn alarm_state(&self) -> (usize, Vec<u32>) {
+        let mut devices: Vec<u32> = self.ctx.alarms.lock().unwrap().keys().copied().collect();
+        devices.sort_unstable();
+        (self.ctx.subs.uris(), devices)
+    }
+
+    /// The server's state, for tests that drive it directly.
+    #[cfg(test)]
+    pub(crate) fn ctx(&self) -> &Ctx<T> {
+        &self.ctx
+    }
+
     /// A legacy subscribe handled at once, outside any session's order.
     #[cfg(test)]
     pub(crate) fn subscribe_now(&self, uri: &str) -> Result<(), ErrorData> {

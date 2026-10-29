@@ -140,7 +140,7 @@ fn transitions(
     format.element_data(property, &value)
 }
 
-fn timestamp(stamp: &BACnetTimeStamp) -> Datum {
+pub(super) fn timestamp(stamp: &BACnetTimeStamp) -> Datum {
     Datum::Constructed {
         element: "time-stamp".into(),
         text: constructed::timestamp_text(stamp),

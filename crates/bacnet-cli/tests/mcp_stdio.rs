@@ -228,7 +228,7 @@ fn an_authorized_profile_serves_live() {
     let tools: Value = serde_json::from_str(lines[1].trim_end_matches('\r')).unwrap();
     assert_eq!(
         tools["result"]["tools"].as_array().unwrap().len(),
-        10,
+        11,
         "{tools}"
     );
     let call: Value = serde_json::from_str(lines[2].trim_end_matches('\r')).unwrap();

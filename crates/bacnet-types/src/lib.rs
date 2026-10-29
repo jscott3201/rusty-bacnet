@@ -26,6 +26,7 @@ pub mod error;
 pub mod map_hash;
 pub mod network_number;
 pub mod primitives;
+pub mod text;
 
 /// BACnet MAC address — stack-allocated for typical sizes (≤6 bytes).
 ///
