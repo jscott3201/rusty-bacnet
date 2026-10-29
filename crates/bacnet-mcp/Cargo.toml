@@ -11,6 +11,13 @@ description = "A Model Context Protocol server for BACnet sites, over the bacnet
 keywords = ["bacnet", "mcp", "building-automation", "hvac"]
 categories = ["network-programming"]
 
+[package.metadata.docs.rs]
+no-default-features = true
+features = ["stdio"]
+default-target = "x86_64-unknown-linux-gnu"
+targets = []
+rustdoc-args = ["--cfg", "docsrs"]
+
 [dependencies]
 bacnet-ops.workspace = true
 bacnet-client = { workspace = true, features = ["ipv6"] }
