@@ -26,6 +26,8 @@ broad_discovery = false       # true allows a global or wide Who-Is, one a minut
 mcp_writes = "never"          # the default; "elicit" offers bacnet_write and bacnet_revert
 ```
 
+The table also sets the rates (`max_rate`, `network_rate`, `slow_rate`, `fast_rate`, `principal_rate`, `principal_burst`) and the per-call caps (`max_values`, `page_devices`, `page_objects`, `max_text`, `call_budget_s`). The [profile key reference](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/docs/mcp.md#profile-keys) lists every key with its meaning, default and limits; a value outside the limits stops the server from starting.
+
 Before an agent host can use the profile, a person consents in a terminal. The command shows what the table lets an agent reach and asks for the profile's name:
 
 ```sh

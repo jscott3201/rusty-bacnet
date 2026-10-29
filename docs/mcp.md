@@ -405,6 +405,43 @@ Nothing that needs traffic is offered.
   show), a digest of the other arguments, an expiry (10 minutes) and the
   position.
 
+## Profile keys
+
+Every key of a profile's `[mcp]` table is optional; an unknown key fails the
+profile's load. The defaults are `DEFAULT_RATES` and `DEFAULT_CAPS` in
+`crates/bacnet-cli/src/tui/profile/mcp.rs`, which a test holds equal to
+`bacnet_mcp::policy::{Rates, Caps}`. The limits are `Policy::validate`'s: a
+value outside them stops the server from starting. Rates are requests a
+second.
+
+| Key | Meaning | Default | Limits |
+|---|---|---|---|
+| `networks` | Networks the tools may reach; 0 is the local one | all | not 65535 |
+| `devices` | Device instances it may reach, each `"low-high"` or `"N"` | all | 0 to 4194303, low no higher than high |
+| `slow_networks` | Networks held to `slow_rate`, such as a slow MS/TP trunk behind a router | none | not also in `fast_networks` |
+| `fast_networks` | Networks held to `fast_rate` | none | not also in `slow_networks` |
+| `broad_discovery` | A global, unbounded or wide Who-Is (and `bacnet_network_map`'s `send`), one a minute | `false` | |
+| `max_rate` | Across all networks | 20 | 1 to 1000 |
+| `network_rate` | To any one network | 20 | 1 to 1000 |
+| `slow_rate` | To a network in `slow_networks` | 2 | 1 to 1000 |
+| `fast_rate` | To a network in `fast_networks` | 5 | 1 to 1000 |
+| `principal_rate` | For the agent | 5 | 1 to 1000 |
+| `principal_burst` | Requests the agent may send at once | 20 | 1 to 1000 |
+| `max_values` | Property values one read returns | 100 | 1 to 1000 |
+| `page_devices` | Devices on a discovery page | 200 | 1 to 2000 |
+| `page_objects` | Objects on an object-list page | 200 | 1 to 2000 |
+| `max_text` | Characters kept of a device-supplied string | 256 | 16 to 4096 |
+| `call_budget_s` | Seconds a call may wait on the limits and the network | 30 | 1 to 600 |
+| `mcp_writes` | `"elicit"` offers `bacnet_write` and `bacnet_revert` ([Writes](#writes)) | `"never"` | `"never"` or `"elicit"`; `"elicit"` needs the profile's workspace |
+| `mcp_arm` | `"elicit"` lets the client's confirmation arm a write session | `"never"` | `"elicit"` needs `mcp_writes = "elicit"` |
+| `[mcp.plan]` | Writes approved in advance ([Writes](#writes)): `devices` and `max_writes` (1 to 10,000) and `hours` (1 to 8) are required; `properties` defaults to `["present-value"]`, `priority_min` to 8 and `priority_max` to 16 (both 1 to 16); `reason` is optional | none | needs `mcp_writes = "elicit"` |
+
+`bacnet mcp authorize` writes `authorized_at_unix`, `[mcp.authorized]` and
+`authorized_transport`; don't edit them by hand ([Operation](#operation)).
+A change that raises a rate or a cap, adds a network or device, enables
+broad discovery, writes or arming, changes a plan in any way, or takes a
+network out of `slow_networks` or `fast_networks` clears that consent.
+
 ## Limits
 
 Every request goes through `RequestLimits`: the caller's token first (5 a

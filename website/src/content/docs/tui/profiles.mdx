@@ -84,7 +84,7 @@ Each profile has a `[safety]` table:
 
 ### The MCP table
 
-A profile may also hold an `[mcp]` table for `bacnet mcp serve`, the [MCP server for AI agent hosts](/rusty-bacnet/guides/ai-agents/), which connects through the same profiles. It limits the networks and devices an agent may reach, how fast it may send, whether it may send a broad Who-Is, and whether it is offered writes. The TUI keeps the table when it saves the profile but doesn't use it, and its `writes` and `dangerous` settings don't apply to the server. The server needs its own first-use authorization, `bacnet mcp authorize --profile NAME`, which is recorded in the table and cleared when the table widens what an agent may reach. [Use rusty-bacnet with AI agents](/rusty-bacnet/guides/ai-agents/#authorize-a-profile) lists its keys.
+A profile may also hold an `[mcp]` table for `bacnet mcp serve`, the [MCP server for AI agent hosts](/rusty-bacnet/guides/ai-agents/), which connects through the same profiles. It limits the networks and devices an agent may reach, how fast it may send, whether it may send a broad Who-Is, and whether it is offered writes. The TUI keeps the table when it saves the profile but doesn't use it, and its `writes` and `dangerous` settings don't apply to the server. The server needs its own first-use authorization, `bacnet mcp authorize --profile NAME`, which is recorded in the table and cleared when the table widens what an agent may reach. [Use rusty-bacnet with AI agents](/rusty-bacnet/guides/ai-agents/#authorize-a-profile) shows an example table and links the reference that lists every key, its default and its limits.
 
 ## Connect, disconnect and reconnect
 
