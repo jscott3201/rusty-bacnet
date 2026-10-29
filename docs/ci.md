@@ -1965,7 +1965,9 @@ one failing doesn't cancel the others.
   it and its name with ReadPropertyMultiple, writes the value's present value
   at priority 8 and reads it back.
 - **CLI.** [`cli_smoke.sh`](../scripts/release/cli_smoke.sh): `--version` must
-  print `bacnet <version>`, `--help` and `mcp --help` run, and the README quickstart `read` and
+  print `bacnet <version>`, `--help` runs, `mcp serve --stdio` without a
+  profile must give the MCP server's own refusal (a build without `mcp`
+  gives the rebuild advice instead; `mcp --help` parses either way), and the README quickstart `read` and
   `--json readm` run against the README server on the cp312 wheel (the website sample tests check that its copy of that server matches the README). On Linux,
   `capture --read` also decodes a one-packet pcap file, through the static
   libpcap and its filter compiler, without needing capture privileges. The
