@@ -12,7 +12,7 @@ import policyManifest from '../../../../examples/rust/sc-operator-policy/Cargo.t
 
 A `BACnetServer` answers every peer that reaches it. Unless you configure it otherwise, any peer on any data link may write properties, create and delete objects, and subscribe. BACnet/SC mutual TLS doesn't change that: it authenticates a connection, not a service. This page shows where to decide who may change your device, which identity each decision can rely on, and what Python exposes.
 
-The page describes **v{release}**. Two additions merged on `dev` after the release have [their own section](#on-dev-after-the-release), with an example program: DeviceCommunicationControl decisions, and rules on certificate names.
+The page describes **v{release}**. Additions merged on `dev` after the release have [their own section](#on-dev-after-the-release), with an example program: DeviceCommunicationControl decisions, rules on certificate names, policy calls off the lock, Python callbacks and certificate names, and local access authorization.
 
 ## One policy makes the server's decisions
 

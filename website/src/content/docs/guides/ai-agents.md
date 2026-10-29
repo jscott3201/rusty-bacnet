@@ -3,7 +3,7 @@ title: "Use rusty-bacnet with AI agents"
 description: "Let an AI agent host such as Claude Code discover and read a BACnet site through an MCP server, and write only with a person's approval."
 ---
 
-`bacnet mcp serve` is a [Model Context Protocol](https://modelcontextprotocol.io) server: an agent host such as Claude Code or Codex starts it as a child process and calls its tools to discover devices, describe them, find and read their objects, read trend logs, event and audit logs and alarms, map the networks, decode frames, and follow points as they change. It is experimental in 0.15, part of the CLI's `mcp` feature, and **read-only by default**: a tool that writes is offered only when the profile opts in, and every write then needs a person's approval (see [Writes](#writes)).
+`bacnet mcp serve` is a [Model Context Protocol](https://modelcontextprotocol.io) server: an agent host such as Claude Code or Codex starts it as a child process and calls its tools to discover devices, describe them, find and read their objects, read trend logs, event and audit logs and alarms, map the networks, decode frames, and follow points as they change. It is experimental in 0.15, part of the CLI's `mcp` feature, and **read-only by default**: a tool that writes is offered only when the profile opts in, and every write then needs a person's approval: in the host's confirmation form for a low-priority (T1) change, or ahead of time in a plan grant the person authorizes with `bacnet mcp authorize`, which covers the others it names (see [Writes](#writes)).
 
 ## Build it
 
@@ -32,7 +32,7 @@ Before an agent host can use the profile, a person consents in a terminal. The c
 bacnet mcp authorize --profile plant-a
 ```
 
-The authorization covers the table and the profile's transport settings. Widening the table later (another network or device, broad discovery, a higher rate or a larger cap, a network no longer marked slow or fast, or turning on writes, arming or a plan) or changing the transport clears it, so the server refuses to start until it is given again. Narrowing the table doesn't.
+The authorization covers the table and the profile's transport settings. Widening the table later (another network or device, broad discovery, a higher rate or a larger cap, a network no longer marked slow or fast, or turning on writes or arming), adding or changing a plan in any way, or changing the transport clears it, so the server refuses to start until it is given again. Narrowing the table's reach doesn't; narrowing a plan does.
 
 A Who-Is is broad when it is global, has no range, or asks more than 1000 instances, and needs `broad_discovery`. A directed Who-Is without a range counts as broad too, unless its address is a device already discovered: an unknown address may be a subnet's broadcast address. When the table names `devices`, a Who-Is must also ask a range inside them, and when it names `networks`, a global Who-Is is refused.
 

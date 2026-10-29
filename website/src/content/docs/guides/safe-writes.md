@@ -23,7 +23,7 @@ A missing or rejected property is information about the target. Resolve it befor
 
 ## Write only at an approved priority
 
-For a lab point whose approved test value is `72.5` and whose approved free slot is priority `8`, the commands below show the shape of the write. As shown, without `--allow-write`, the CLI refuses them and sends nothing; [the write guard](#the-write-guard) gives the commands that send:
+For a lab point whose approved test value is `72.5` and whose approved free slot is priority `8`, the commands below show the shape of the write. As shown, without `--allow-write`, the CLI refuses the write and sends nothing; [the write guard](#the-write-guard) gives the commands that send:
 
 ```sh
 bacnet write 192.168.1.100 av:1 pv 72.5 --priority 8
