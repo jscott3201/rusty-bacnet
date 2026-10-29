@@ -1,4 +1,7 @@
 ---
 section: Added
 ---
-- `bacnet mcp serve` offers resources for devices, points, alarms and the session, with subscriptions sharing one finite COV subscription per point (or polling when a device refuses COV), and a `bacnet_watch` tool for hosts without subscriptions (#2067).
+- `bacnet mcp serve` offers paged resources for devices, points, alarms and
+  the session, with subscriptions (on older protocol revisions too) sharing
+  one finite COV subscription per point, or polling, and a `bacnet_watch` tool
+  for hosts without them (#2067, #2114, #2116).
