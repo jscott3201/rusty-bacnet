@@ -3,11 +3,11 @@ title: "Use rusty-bacnet with AI agents"
 description: "Let an AI agent host such as Claude Code discover and read a BACnet site through an MCP server, and write only with a person's approval."
 ---
 
-`bacnet mcp serve` is a [Model Context Protocol](https://modelcontextprotocol.io) server: an agent host such as Claude Code or Codex starts it as a child process and calls its tools to discover devices, describe them, find and read their objects, read trend logs, event and audit logs and alarms, map the networks, decode frames, and follow points as they change. It is experimental in 0.15, built only with the CLI's `mcp` feature, and **read-only by default**: a tool that writes is offered only when the profile opts in, and every write then needs a person's approval (see [Writes](#writes)).
+`bacnet mcp serve` is a [Model Context Protocol](https://modelcontextprotocol.io) server: an agent host such as Claude Code or Codex starts it as a child process and calls its tools to discover devices, describe them, find and read their objects, read trend logs, event and audit logs and alarms, map the networks, decode frames, and follow points as they change. It is experimental in 0.15, part of the CLI's `mcp` feature, and **read-only by default**: a tool that writes is offered only when the profile opts in, and every write then needs a person's approval (see [Writes](#writes)).
 
 ## Build it
 
-The release executables leave the feature out. Build the CLI from a source checkout with it:
+From 0.15 the prebuilt `bacnet` downloads on the [installation page](/rusty-bacnet/start/installation/) include `bacnet mcp serve`. A source build enables it with the `mcp` feature:
 
 ```sh
 cargo install --path crates/bacnet-cli --locked --features mcp
@@ -32,9 +32,9 @@ Before an agent host can use the profile, a person consents in a terminal. The c
 bacnet mcp authorize --profile plant-a
 ```
 
-The authorization covers the table and the profile's transport settings. Widening the table later (another network or device, broad discovery, a higher rate or a larger cap) or changing the transport clears it, so the server refuses to start until it is given again. Narrowing the table doesn't.
+The authorization covers the table and the profile's transport settings. Widening the table later (another network or device, broad discovery, a higher rate or a larger cap, a network no longer marked slow or fast, or turning on writes, arming or a plan) or changing the transport clears it, so the server refuses to start until it is given again. Narrowing the table doesn't.
 
-A Who-Is is broad when it is global, has no range, or asks more than 1000 instances, and needs `broad_discovery`. A directed Who-Is without a range counts as broad too, unless its address is a device already discovered: an unknown address may be a subnet's broadcast address. When the table names `devices`, a Who-Is must also ask a range inside them.
+A Who-Is is broad when it is global, has no range, or asks more than 1000 instances, and needs `broad_discovery`. A directed Who-Is without a range counts as broad too, unless its address is a device already discovered: an unknown address may be a subnet's broadcast address. When the table names `devices`, a Who-Is must also ask a range inside them, and when it names `networks`, a global Who-Is is refused.
 
 ## Add it to the agent host
 
@@ -66,7 +66,7 @@ bacnet mcp serve --stdio --profile plant-a --passive
 | `bacnet_list_objects` | Lists a device's objects, filtered by type, with their names on request |
 | `bacnet_read` | Reads properties, by ReadPropertyMultiple with a ReadProperty fallback; `preset: "point"` reads what matters about a point |
 | `bacnet_find_object` | Finds objects across the discovered devices by name, description, object or type, and says which devices it couldn't search fully |
-| `bacnet_network_map` | Shows the networks the profile reaches, the routers to each and the devices on them; asking the routers again is a broad request |
+| `bacnet_network_map` | Shows the networks the profile reaches, the routers to each and the devices on them; asking the routers again is a broad request. On B/IP, `bbmd: true` also reads the BBMD tables in reach and checks that they agree (needs `broad_discovery`) |
 | `bacnet_read_trend` | Reads a trend log's records, by count or time window, and summarises them: count, first and last time, minimum, maximum and mean, and counts of states |
 | `bacnet_read_log_records` | Reads an Event Log's or Audit Log's records the same way, with event and audit notifications decoded, and counts them by event state, event type or audited operation |
 | `bacnet_alarms` | Lists a device's objects in alarm or fault or waiting for acknowledgment, with states, times and priorities named, and optionally its alarm and enrollment summaries |
@@ -80,9 +80,24 @@ Two prompts start common jobs: `survey_site` surveys a range of devices, their n
 With `mcp_writes = "elicit"` in the `[mcp]` table the server also offers `bacnet_write` and `bacnet_revert`. They use the TUI's write checks: the same preview tiers, the same [ledger and audit log](/rusty-bacnet/tui/writes/) in the profile's workspace, so the TUI lists an agent's changes (marked `[mcp: user]`) and can revert them.
 
 - **A person approves each write.** The first call reads the target and previews the change; the agent host then shows a confirmation form (the value now and after, who holds the slot), and only a confirmed retry sends it. A confirmation is good once, for that agent, for two minutes, and is refused if the value changed in between.
-- **The host's form approves low-priority writes only.** The server can't check that a person answered the host's form, so it accepts it for priority 9 to 16, or a property that isn't commandable. Priorities 1 to 8, Out_Of_Service, batches and relinquishing another commander's slot are refused (`needs-verified-approver`), and priority 6 always.
+- **The host's form approves low-priority writes only.** The server can't check that a person answered the host's form, so it accepts it for priority 9 to 16, or a property that isn't commandable. Priorities 1 to 8, Out_Of_Service, Relinquish_Default, batches and relinquishing another commander's slot are refused (`needs-verified-approver`), and priority 6 always. The form needs a host on the 2026-07-28 revision of MCP that takes form elicitations; other hosts are refused (`elicitation-unsupported`) and write only through a plan grant. One call carries at most 20 writes.
 - **Arming.** As in the TUI, writes need an armed session. With `mcp_arm = "elicit"` the first confirmation also arms one for 15 minutes; otherwise only a plan grant arms MCP writes.
-- **Plan grants.** An `[mcp.plan]` table names devices, properties, a priority range, a number of writes and how many hours (8 at most) after `bacnet mcp authorize` they may run without a prompt. Authorizing says so in capitals; a write outside the plan is refused.
+- **Plan grants.** An `[mcp.plan]` table names devices, properties, a priority range, a number of writes and how many hours (8 at most) after `bacnet mcp authorize` they may run without a prompt. Authorizing says so in capitals; a write outside the plan is refused. A plan, like `mcp_arm = "elicit"`, needs `mcp_writes = "elicit"`:
+
+  ```toml
+  # A plan grant: writes approved in advance
+  [mcp]
+  mcp_writes = "elicit"
+  mcp_arm = "elicit"            # the first confirmation arms a session
+
+  [mcp.plan]
+  devices = ["1201"]            # required
+  properties = ["present-value"] # the default
+  priority_min = 8              # default 8; priority_max defaults to 16
+  max_writes = 50               # required, 1 to 10,000
+  hours = 4                     # required, 1 to 8
+  reason = "night setback test" # optional
+  ```
 - **Targets are numbers.** The device instance and `type:instance` objects come from the agent, never from a name a device reported.
 - **Not offered:** DeviceCommunicationControl, ReinitializeDevice, or anything that creates or deletes objects.
 

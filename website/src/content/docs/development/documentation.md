@@ -37,6 +37,6 @@ The [engineering docs map](https://github.com/jscott3201/rusty-bacnet/blob/dev/d
 
 ## Validate a content change
 
-From `website/`, use Node 24 and the locked dependencies, then run `DOCS_TEST_PORT=46329 npm run verify`. This checks Astro, unit tests, the static build and Chromium/axe at four widths. Inspect desktop and phone screenshots in both themes; exercise search, local links, code copy and keyboard navigation for the changed flow. See the [site maintenance guide](https://github.com/jscott3201/rusty-bacnet/blob/dev/website/README.md).
+From `website/`, use Node 24 and the locked dependencies, then run `DOCS_TEST_PORT=46329 npm run verify`. This checks Astro, unit tests, the static build and Chromium/axe at five widths (320 to 1440 CSS pixels). Inspect desktop and phone screenshots in both themes; exercise search, local links, code copy and keyboard navigation for the changed flow. See the [site maintenance guide](https://github.com/jscott3201/rusty-bacnet/blob/dev/website/README.md).
 
 A documentation build does not execute Rust/Python snippets or requalify BACnet behavior. Reuse valid runtime evidence only with matching inputs, or run the relevant native check when behavior/examples change. The [merge-evidence policy](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/ci.md) separates required local and hosted checks. Local verification never establishes publication.
