@@ -7,13 +7,14 @@ Each upgrade guide groups the breaking changes between two releases by area. Rea
 
 ## Upgrade guides
 
-- [Upgrade to v0.14.0](/rusty-bacnet/project/upgrading/v0-14/): the current release.
+- [Upgrade to v0.15.0](/rusty-bacnet/project/upgrading/v0-15/): the current release.
+- [Upgrade to v0.14.0](/rusty-bacnet/project/upgrading/v0-14/): read it first if you are still on an earlier release.
 
-The [changelog](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/CHANGELOG.md) lists every change by release, area and issue.
+The [changelog](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/CHANGELOG.md) lists every change by release, area and issue.
 
 ## Sections of the v0.14.0 guide
 
-Saved links to sections of the v0.14.0 guide land here. Each continues to its section.
+Until v0.15.0 this page held the v0.14.0 guide. Saved links to its sections land here. Each continues to its section.
 
 ### Before updating
 
@@ -73,6 +74,6 @@ Saved links to sections of the v0.14.0 guide land here. Each continues to its se
 
 ## Next steps
 
-- [Read the v0.14.0 upgrade guide](/rusty-bacnet/project/upgrading/v0-14/).
+- [Read the v0.15.0 upgrade guide](/rusty-bacnet/project/upgrading/v0-15/).
 - [Review support and conformance](/rusty-bacnet/project/support/).
 - [Troubleshoot by symptom](/rusty-bacnet/help/troubleshooting/).
