@@ -344,3 +344,38 @@ async fn a_reservation_never_claimed_is_released() {
     assert_eq!(session["watches"]["held"], json!(0));
     lab.stop().await;
 }
+
+/// A session runs at most four listen streams (#2150): a fifth is refused
+/// with a `stream-cap` error and takes no watch, and cancelling one makes
+/// room again.
+#[tokio::test(start_paused = true)]
+async fn a_session_runs_at_most_four_listen_streams() {
+    let mut lab = Lab::start(Policy::default()).await;
+    lab.known().await;
+    let mut streams = Vec::new();
+    for _ in 0..crate::listen::MAX_STREAMS {
+        let (id, accepted) = lab.agent.listen(&["bacnet://session"]).await;
+        assert_eq!(accepted, ["bacnet://session"]);
+        streams.push(id);
+    }
+    settle().await;
+    let before = lab.sends().len();
+    let (extra, _) = lab.agent.listen(&[AI1]).await;
+    let refused = lab.agent.answer(extra).await;
+    assert_eq!(refused["error"]["code"], json!(-32602), "{refused}");
+    assert_eq!(refused["error"]["data"]["error"], json!("refused"));
+    assert_eq!(refused["error"]["data"]["reason"], json!("stream-cap"));
+    settle().await;
+    assert_eq!(lab.sends().len(), before, "a refused stream sends nothing");
+    let session = lab.agent.read("bacnet://session").await.unwrap();
+    assert_eq!(session["watches"]["held"], json!(0), "{session}");
+    assert_eq!(session["watches"]["streams"], json!(4), "{session}");
+
+    lab.agent.cancel(streams.pop().unwrap()).await;
+    settle().await;
+    let (_, accepted) = lab.agent.listen(&[AI1]).await;
+    assert_eq!(accepted, [AI1]);
+    settle().await;
+    assert_eq!(lab.cov_table().await.len(), 1);
+    lab.stop().await;
+}

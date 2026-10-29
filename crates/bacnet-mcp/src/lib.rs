@@ -24,6 +24,7 @@
 mod context;
 mod cursor;
 mod errors;
+mod follow;
 mod legacy;
 mod listen;
 pub mod policy;

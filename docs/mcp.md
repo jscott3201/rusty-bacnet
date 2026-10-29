@@ -61,7 +61,7 @@ under its own account and budget, and a cancelled read sends nothing more.
 | `bacnet://device/{instance}/object/{type}:{n}` | the point facts (`bacnet_read`'s `preset: "point"` properties); `source` `read` when read just now, `cov` or `poll` when watched, with `state` (`starting`, `live`, `failed`, `unreachable`, `stopped`), `note` (why it is polled or not live), `seq`, `age_ms` and `updates` (notifications, coalesced, polls, renewals) | a watch on the hub |
 | `.../property/{prop}` | one property (`name` or `name[index]`; `[`, `]` and `:` may be percent-encoded) | a property watch (SubscribeCOVProperty) |
 | `bacnet://alarms` | each device in reach: its first page of GetEventInformation, as far as the read's budget goes (`unread` past it, `errors` per device) | a poll every 60 s; an update when the events change |
-| `bacnet://device/{instance}/alarms` | one device's first page of events | the same, for one device |
+| `bacnet://device/{instance}/alarms` | one device's first page of events | the same, for one device. A session's per-device alarm URIs, on listen streams and legacy subscriptions alike, count against its 64-URI bound (the acknowledgment leaves out the rest), so the poll reads at most that many devices |
 | `bacnet://session` | level, limits, the request meter, the principal's watches and the hub's footprint (points, subscribed, polled, requests, lagged notifications, lifetime) | honoured; no updates until writes arrive (phase 3) |
 | `bacnet://ledger` | this principal's ledger entries in effect: none | honoured; no updates until phase 3 |
 
@@ -104,7 +104,7 @@ advertises `resources.subscribe` for every version.
   `process-cap`, `passive` or `shutting-down` (the session is ending);
   nothing is sent. Subscribing twice to one
   URI is one subscription, and a session holds at most 64 URIs (twice the
-  point cap). `resources/unsubscribe` drops the subscription and its watch
+  point cap), its listen streams' per-device alarm URIs included (#2150). `resources/unsubscribe` drops the subscription and its watch
   at once; the last watch on a point cancels its BACnet subscription. When
   the session ends (the host closes stdin, or a signal) every legacy
   subscription goes with it. The session resource counts them under
@@ -122,7 +122,14 @@ advertises `resources.subscribe` for every version.
 - **Caps.** 32 points per principal (`Caps::watches`; the same point on
   two streams, or a stream and `bacnet_watch`, counts once) and 256 per
   process (`Caps::process_watches`, the hub's cap, which counts points
-  still cancelling).
+  still cancelling). Per-device alarm URIs (`bacnet://device/{n}/alarms`)
+  count, one a stream each, against the session's 64-URI bound shared with
+  legacy subscriptions; past it they're left out of the acknowledgment,
+  and the 60-second alarm poll reads only the devices accepted (#2150).
+  A session runs at most 4 listen streams at once: a fifth's
+  `subscriptions/listen` ends, after its acknowledgment, in a JSON-RPC
+  -32602 whose `data` is `refused` with reason `stream-cap`, and it keeps
+  no watch. Cancelling a stream makes room.
 - **The watch hub** (`bacnet_ops::watch`). One BACnet subscription or poller
   per point however many listeners. SubscribeCOV for an object,
   SubscribeCOVProperty for a property, unconfirmed, with a 300 s lifetime
