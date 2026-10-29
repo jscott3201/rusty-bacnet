@@ -549,6 +549,8 @@ mod tests {
         assert_eq!(wrap("  lead on", 6), ["  lead", "on"]);
         // Control characters become spaces.
         assert_eq!(wrap("a\nb\tc\u{1b}", 10), ["a b c"]);
+        // So do the line and paragraph separators (#2148).
+        assert_eq!(sanitize("a\u{2028}b\u{2029}c"), "a b c");
         // Bidirectional overrides and isolates are dropped (#2122).
         assert_eq!(
             wrap("2 (High\u{202E}) \u{2067}x\u{2069}", 20),

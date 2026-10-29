@@ -170,7 +170,8 @@ impl Args {
     }
 
     /// Where the read starts: the cursor's sequence number, or the window's
-    /// start, or the oldest record.
+    /// start, or the oldest record. It checks `from` and the cursor, so a
+    /// call asks for it before it looks the device up.
     pub(super) fn cursor<T: TransportPort + 'static>(
         &self,
         ctx: &Ctx<T>,

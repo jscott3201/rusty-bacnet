@@ -234,9 +234,9 @@ async fn an_event_log_pages_across_answers_and_calls() {
     lab.add_logs().await;
     lab.agent.initialize().await;
     let (records, calls, more_items) = read_all(&mut lab, "event-log:1", 120).await;
-    // Three calls at least: more when a call's structured content fills up
-    // before its 120 records, as a notification's fields are many.
-    assert!(calls >= 3, "{calls}");
+    // Five calls, not three: each call's structured content fills up before
+    // its 120 records, as a notification's fields are many.
+    assert_eq!(calls, 5);
     assert!(more_items >= 1, "answers cut short by the device");
     let seqs: Vec<u64> = records.iter().map(|r| r["seq"].as_u64().unwrap()).collect();
     assert_eq!(seqs, (1..=u64::from(EVENT_RECORDS)).collect::<Vec<_>>());
@@ -407,5 +407,31 @@ async fn other_objects_are_refused_and_windows_start_at_a_time() {
     assert_eq!(times.len(), 9, "{times:?}");
     assert_eq!(times[0], "2026-10-25 01:01:00.00");
     assert_eq!(body["done"], json!(true));
+    lab.stop().await;
+}
+
+/// A malformed `from` is refused before the device is looked up, by both
+/// log tools: an unknown device is never reached, and nothing is sent.
+#[tokio::test(start_paused = true)]
+async fn a_bad_from_is_refused_before_the_device_is_looked_up() {
+    let mut lab = Lab::start(Policy::default()).await;
+    lab.agent.initialize().await;
+    let before = lab.sends().len();
+    for (tool, object) in [
+        ("bacnet_read_log_records", "event-log:1"),
+        ("bacnet_read_trend", "trend-log:1"),
+    ] {
+        let refused = lab
+            .agent
+            .call(
+                tool,
+                json!({ "device": 4242, "object": object, "from": "2026-13-01T00:00" }),
+            )
+            .await;
+        let error = failed(&refused);
+        assert_eq!(error["error"], json!("invalid-argument"), "{tool}: {error}");
+        assert_eq!(error["field"], json!("from"), "{tool}: {error}");
+    }
+    assert_eq!(lab.sends().len(), before, "nothing sent");
     lab.stop().await;
 }

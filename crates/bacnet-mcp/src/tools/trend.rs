@@ -140,11 +140,13 @@ pub(super) async fn run<T: TransportPort + 'static>(
         &[ObjectType::TREND_LOG, ObjectType::TREND_LOG_MULTIPLE],
         "a trend-log or trend-log-multiple object",
     )?;
+    // Every argument is checked before the device is looked up, so a bad
+    // one costs nothing.
     let to = args.to()?;
     let limit = args.limit()?;
+    let cursor = args.cursor(ctx, NAME, raw)?;
     let device = ctx.device(call, &args.device).await?;
     let engine = ctx.engine()?;
-    let cursor = args.cursor(ctx, NAME, raw)?;
     let object = object_text(log.object_type(), log.instance_number());
     let source = format!("device {} {object} log-buffer", device.instance);
     let cap = ctx.policy.caps.text;

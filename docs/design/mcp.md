@@ -225,8 +225,8 @@ audit. Phase 2 added the watch hub (§6) beside the engine, and
 Rules:
 
 1. **Few, composable tools**, named `bacnet_*` so they can't collide when a
-   host aggregates servers. Ten read tools (nine in phase 1, `bacnet_watch`
-   in phase 2), two write tools (phase 3).
+   host aggregates servers. Eleven read tools (nine in phase 1, `bacnet_watch`
+   in phase 2, `bacnet_read_log_records` after it, #2103), two write tools (phase 3).
 2. **`tools/list` depends on the launch configuration and the caller's
    authorization, never on runtime state.** The 2026-07-28 revision forbids a
    list that varies per connection. Write tools appear only when the profile

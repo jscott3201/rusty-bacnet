@@ -170,6 +170,12 @@ impl<T: TransportPort + 'static> McpServer<T> {
         (self.ctx.subs.uris(), devices)
     }
 
+    /// The server's state, for tests that drive it directly.
+    #[cfg(test)]
+    pub(crate) fn ctx(&self) -> &Ctx<T> {
+        &self.ctx
+    }
+
     /// A legacy subscribe handled at once, outside any session's order.
     #[cfg(test)]
     pub(crate) fn subscribe_now(&self, uri: &str) -> Result<(), ErrorData> {

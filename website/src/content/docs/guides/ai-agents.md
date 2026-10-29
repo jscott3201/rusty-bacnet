@@ -3,7 +3,7 @@ title: "Use rusty-bacnet with AI agents"
 description: "Let an AI agent host such as Claude Code discover and read a BACnet site through a read-only MCP server."
 ---
 
-`bacnet mcp serve` is a [Model Context Protocol](https://modelcontextprotocol.io) server: an agent host such as Claude Code or Codex starts it as a child process and calls its tools to discover devices, describe them, find and read their objects, read trend logs and alarms, map the networks, decode frames, and follow points as they change. It is experimental in 0.15, built only with the CLI's `mcp` feature, and **read-only**: no configuration offers a tool that writes.
+`bacnet mcp serve` is a [Model Context Protocol](https://modelcontextprotocol.io) server: an agent host such as Claude Code or Codex starts it as a child process and calls its tools to discover devices, describe them, find and read their objects, read trend logs, event and audit logs and alarms, map the networks, decode frames, and follow points as they change. It is experimental in 0.15, built only with the CLI's `mcp` feature, and **read-only**: no configuration offers a tool that writes.
 
 ## Build it
 

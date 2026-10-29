@@ -128,8 +128,8 @@ advertises `resources.subscribe` for every version.
   legacy subscriptions; past it they're left out of the acknowledgment,
   and the 60-second alarm poll reads only the devices accepted (#2150).
   A session runs at most 4 listen streams at once: a fifth's
-  `subscriptions/listen` ends, after its acknowledgment, in a JSON-RPC
-  -32602 whose `data` is `refused` with reason `stream-cap`, and it keeps
+  acknowledgment accepts nothing, and its `subscriptions/listen` then ends
+  in a JSON-RPC -32602 whose `data` is `refused` with reason `stream-cap`, and it keeps
   no watch. Cancelling a stream makes room.
 - **The watch hub** (`bacnet_ops::watch`). One BACnet subscription or poller
   per point however many listeners. SubscribeCOV for an object,

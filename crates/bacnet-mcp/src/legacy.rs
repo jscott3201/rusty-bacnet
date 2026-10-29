@@ -107,7 +107,8 @@ fn too_many<T: TransportPort + 'static>(ctx: &Ctx<T>) -> ToolError {
     ToolError::refused(
         "principal-cap",
         format!(
-            "this session subscribes to {} resources, as many as it may; unsubscribe from some first",
+            "this session subscribes to {} resources, its listen streams' device alarms \
+             included, as many as it may; unsubscribe from some first",
             max_uris(ctx)
         ),
     )

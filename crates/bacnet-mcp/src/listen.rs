@@ -39,7 +39,7 @@ use rmcp::service::SubscriptionContext;
 use tokio::sync::watch;
 use tokio::time::Instant;
 
-use crate::context::Ctx;
+use crate::context::{Ctx, Listening};
 use crate::errors::ToolError;
 use crate::follow::{Follow, Wake};
 use crate::resources::uri::{self, Uri};
@@ -152,9 +152,23 @@ pub(crate) struct Claim {
 
 impl Drop for Claim {
     fn drop(&mut self) {
-        self.subs.release(&self.points);
         let mut state = self.subs.lock();
+        state.release(&self.points);
         state.alarm_uris = state.alarm_uris.saturating_sub(self.alarms);
+    }
+}
+
+impl SubsState {
+    /// One holder fewer on each of `points`.
+    fn release(&mut self, points: &[Point]) {
+        for point in points {
+            if let Some(count) = self.held.get_mut(point) {
+                *count -= 1;
+                if *count == 0 {
+                    self.held.remove(point);
+                }
+            }
+        }
     }
 }
 
@@ -169,15 +183,7 @@ impl Subs {
     }
 
     fn release(&self, points: &[Point]) {
-        let mut state = self.lock();
-        for point in points {
-            if let Some(count) = state.held.get_mut(point) {
-                *count -= 1;
-                if *count == 0 {
-                    state.held.remove(point);
-                }
-            }
-        }
+        self.lock().release(points);
     }
 
     /// A lease on `point` for a new holder, if the principal's cap and the
@@ -490,16 +496,16 @@ fn accepted(context: &SubscriptionContext) -> Vec<String> {
         .collect()
 }
 
-/// Serve one stream until the client cancels it or the server closes.
-/// `Ok` on a graceful close, which sends the stream's final result.
-pub(crate) async fn run<T: TransportPort + 'static>(
-    ctx: &Ctx<T>,
-    context: SubscriptionContext,
-) -> Result<(), ErrorData> {
-    let uris = accepted(&context);
-    let Some(_listening) = ctx.listening(MAX_STREAMS) else {
-        // Anything set aside for it goes now, not at the sweep.
-        drop(ctx.subs.claim(&uris));
+/// A stream acknowledged with `uris` beginning: counted among the session's
+/// streams, with what [`Subs::reserve`] set aside for it. Past
+/// [`MAX_STREAMS`] it is refused, and anything set aside for it goes now,
+/// not at the sweep, so its watches and alarm URIs free their room at once.
+pub(crate) fn open<'a, T: TransportPort + 'static>(
+    ctx: &'a Ctx<T>,
+    uris: &[String],
+) -> Result<(Listening<'a>, Option<Claim>), ErrorData> {
+    let Some(listening) = ctx.listening(MAX_STREAMS) else {
+        drop(ctx.subs.claim(uris));
         let error = ToolError::refused(
             "stream-cap",
             format!(
@@ -512,8 +518,19 @@ pub(crate) async fn run<T: TransportPort + 'static>(
             Some(error.json()),
         ));
     };
-    // Held to the end: its leases keep the points watched.
-    let claim = ctx.subs.claim(&uris);
+    Ok((listening, ctx.subs.claim(uris)))
+}
+
+/// Serve one stream until the client cancels it or the server closes.
+/// `Ok` on a graceful close, which sends the stream's final result.
+pub(crate) async fn run<T: TransportPort + 'static>(
+    ctx: &Ctx<T>,
+    context: SubscriptionContext,
+) -> Result<(), ErrorData> {
+    let uris = accepted(&context);
+    // Both held to the end: the stream's count, and the claim, whose
+    // leases keep the points watched.
+    let (_listening, claim) = open(ctx, &uris)?;
     if claim.is_none() && !uris.is_empty() {
         // Only when the reservation was dropped before the stream began.
         tracing::warn!(
