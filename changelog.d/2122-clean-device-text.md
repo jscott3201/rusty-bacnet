@@ -1,6 +1,7 @@
 ---
 section: Security
 ---
-- The CLI and TUI drop bidirectional overrides, isolates and other invisible
-  format characters from device names, values and state texts, so a device
-  string can no longer reorder or hide the rest of a row (#2122).
+- The CLI and TUI drop escape sequences, bidirectional overrides and other
+  invisible format characters from device names, values and messages in table
+  output, so a device string can't reorder, hide or break rows; JSON keeps the
+  exact text (#2122, #2144).

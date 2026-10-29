@@ -1,6 +1,7 @@
 ---
 section: Added
 ---
-- Add documentation pages for BACnet/IP across subnets (BBMDs and foreign
-  devices), a BBMD behind NAT, B/IP multicast and BACnet/IPv6, linked from the
-  data-link overview and the transport reference (#1989).
+- New website guides: BACnet/IP across subnets, a BBMD behind NAT, B/IP
+  multicast and BACnet/IPv6; MS/TP timing on Linux; performance; restricting
+  writes with `ServerPolicy`; and serving objects and routing between
+  networks, with Rust and Python programs CI runs (#1989).
