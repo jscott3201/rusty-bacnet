@@ -8,11 +8,13 @@ test('the PICS task page leads to the sample, which opens with its banner on the
   await expect(page).toHaveURL(base + 'integrate/pics/');
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Generate a PICS for your device');
   const main = page.locator('.sl-markdown-content');
-  // The v0.14.0 program and the dev one (#2125); only the release program
-  // reads the protocol fields from the Device itself.
+  // One program, examples/rust/generate_pics.rs: the PICS takes the product
+  // and protocol details from the Device (#2125, #2137), so the program sets
+  // no protocol property itself.
   const programs = main.locator('pre').filter({ hasText: 'server.generate_pics(&pics_config).await' });
-  await expect(programs).toHaveCount(2);
-  await expect(programs.filter({ hasText: 'PropertyIdentifier::PROTOCOL_REVISION' })).toHaveCount(1);
+  await expect(programs).toHaveCount(1);
+  await expect(programs.filter({ hasText: 'use bacnet_objects::DeviceIdentity;' })).toHaveCount(1);
+  await expect(programs.filter({ hasText: 'PropertyIdentifier::PROTOCOL_REVISION' })).toHaveCount(0);
   await expect(main.getByRole('table').filter({ hasText: 'PicsConfig' })).toHaveCount(1);
 
   await main.getByRole('link', { name: 'sample PICS', exact: true }).first().click();
