@@ -15,7 +15,7 @@ local lab. It targets ASHRAE Standard 135-2020 and isn't BTL certified.
 **[Python API](docs/python-api.md)**
 
 > [!IMPORTANT]
-> The packages, the website and docs.rs describe release **0.14.0**; this README
+> The packages, the website and docs.rs describe release **0.15.0**; this README
 > and [`docs/`](docs/) follow `dev`. It is pre-1.0, so APIs change between minor
 > releases. Use it only on networks you are authorized to access: discovery
 > sends traffic, writes change real equipment, and it makes no physical-safety
@@ -28,7 +28,7 @@ local lab. It targets ASHRAE Standard 135-2020 and isn't BTL certified.
 | Rust client and server | Tokio roles: discovery, segmentation, COV, alarms, and an object database with the standard object types | [Rust guide](https://jscott3201.github.io/rusty-bacnet/start/rust/) |
 | Python (asyncio) | Client, server and SC hub, with typed values and COV streams | [Python guide](https://jscott3201.github.io/rusty-bacnet/start/python/) |
 | `bacnet` CLI and terminal UI | One-shot commands with JSON output; a full-screen browser, watch list and guarded writes | [CLI reference](docs/CLI.md), [terminal UI](https://jscott3201.github.io/rusty-bacnet/tui/overview/) |
-| MCP server (new on `dev`) | Tools for AI agent hosts, live only on a profile a person authorized; read-only unless that profile offers writes | [`docs/mcp.md`](docs/mcp.md) |
+| MCP server (new in 0.15.0) | Tools for AI agent hosts, live only on a profile a person authorized; read-only unless that profile offers writes | [`docs/mcp.md`](docs/mcp.md) |
 | Shared endpoints | One transport that both sends requests and answers a few | [Shared endpoints](https://jscott3201.github.io/rusty-bacnet/development/shared-endpoints/) |
 | Routing and BBMD | A router between networks and transports; BBMDs and foreign devices | [`bacnet-network`](docs/rust-api.md#bacnet-network) |
 | Embedded `no_std` cores | MS/TP, BACnet/IP and routing without an allocator | [Embedded guide](https://jscott3201.github.io/rusty-bacnet/start/embedded/) |
@@ -236,12 +236,12 @@ bacnet tui --interface 127.0.0.1 --port 0 --broadcast 127.0.0.1
 
 ### Let an AI agent read a site (MCP)
 
-New on `dev`: `bacnet mcp serve` is a Model Context Protocol server that an
+New in 0.15.0: `bacnet mcp serve` is a Model Context Protocol server that an
 agent host such as Claude Code starts. It is read-only unless the profile
 offers writes, and then each write needs a person's approval.
-From 0.15.0 the prebuilt release downloads include it. A source build
+The prebuilt release downloads include it. A source build
 enables it with the `mcp` feature, for example
-`cargo install --git https://github.com/jscott3201/rusty-bacnet --branch dev bacnet-cli --locked --features mcp,sc-tls`
+`cargo install bacnet-cli --locked --features mcp,sc-tls`
 (`sc-tls` lets it use BACnet/SC profiles).
 
 Live traffic needs a [TUI profile](https://jscott3201.github.io/rusty-bacnet/tui/profiles/)
@@ -286,15 +286,15 @@ Add only the crates you need. These cover the examples above:
 
 ```toml
 [dependencies]
-bacnet-client = "0.14"
-bacnet-encoding = "0.14"
-bacnet-objects = "0.14"
-bacnet-server = "0.14"
-bacnet-types = "0.14"
+bacnet-client = "0.15"
+bacnet-encoding = "0.15"
+bacnet-objects = "0.15"
+bacnet-server = "0.15"
+bacnet-types = "0.15"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
 ```
 
-The 0.14 release needs Rust 1.93; a `dev` checkout needs Rust 1.95
+The 0.15 release uses edition 2024 and needs Rust 1.95 or newer
 ([building from source](https://jscott3201.github.io/rusty-bacnet/development/overview/#build-a-source-checkout)).
 
 ## Transports
@@ -322,16 +322,16 @@ Depend on the highest layer that covers your task; the
 - **Codecs and cores** (`no_std`, no allocator): `bacnet-time`, `bacnet-npdu`, `bacnet-mstp-codec`, `bacnet-bip-codec`, `bacnet-mstp-core`, `bacnet-bip-core`, `bacnet-router-core`
 - **Protocol** (`no_std`, allocator optional): `bacnet-types`, `bacnet-encoding`, `bacnet-services`
 - **Transports and network:** `bacnet-transport`, `bacnet-network`
-- **Roles:** `bacnet-objects` (on `dev`, also `no_std` with an allocator), `bacnet-client`, `bacnet-server`, `bacnet-endpoint-core`, `bacnet-endpoint`
-- **Tools:** `bacnet-cli`; new on `dev`, `bacnet-ops` (shared by the CLI, TUI and MCP server) and `bacnet-mcp`
+- **Roles:** `bacnet-objects` (also `no_std` with an allocator), `bacnet-client`, `bacnet-server`, `bacnet-endpoint-core`, `bacnet-endpoint`
+- **Tools:** `bacnet-cli`; new in 0.15.0, `bacnet-ops` (shared by the CLI, TUI and MCP server) and `bacnet-mcp`
 - **Python:** [`crates/rusty-bacnet`](crates/rusty-bacnet), built with [maturin](https://www.maturin.rs/)
 
 ## Find it in the docs
 
-The website covers 0.14.0, as do the
-[Python](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/python-api.md)
-and [CLI](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/CLI.md)
-references at the `v0.14.0` tag; [`docs/`](docs/) tracks `dev`.
+The website covers 0.15.0, as do the
+[Python](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/docs/python-api.md)
+and [CLI](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/docs/CLI.md)
+references at the `v0.15.0` tag; [`docs/`](docs/) tracks `dev`.
 
 | Topic | Where to look |
 |---|---|

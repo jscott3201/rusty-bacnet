@@ -9,7 +9,7 @@ phase observation. The server installs no policy defaults.
 
 The returned `LocalAuthorizationResult` contains the full
 `AuthorizationEvaluation` and `committed_events`, the records actually installed
-with their assigned timestamps. These are development-source Rust APIs. This
+with their assigned timestamps. These Rust APIs are new in 0.15.0. This
 route adds no Python method or network service.
 
 | Evaluation outcome | Point mutation and publication |

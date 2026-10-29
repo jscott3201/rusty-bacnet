@@ -286,7 +286,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-bip-codec"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "bytes",
  "heapless",
@@ -295,7 +295,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-bip-core"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "bacnet-bip-codec",
  "bacnet-npdu",
@@ -305,7 +305,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-cli"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "bacnet-bip-core",
  "bacnet-client",
@@ -353,7 +353,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-client"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "bacnet-encoding",
  "bacnet-endpoint-core",
@@ -374,7 +374,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-encoding"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "bacnet-npdu",
  "bacnet-types",
@@ -385,7 +385,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-endpoint"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "bacnet-client",
  "bacnet-encoding",
@@ -410,7 +410,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-endpoint-core"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "bacnet-encoding",
  "bacnet-network",
@@ -423,7 +423,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-integration-tests"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "bacnet-bip-codec",
  "bacnet-client",
@@ -448,7 +448,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-mcp"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "bacnet-client",
  "bacnet-encoding",
@@ -475,7 +475,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-mstp-codec"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "bytes",
  "heapless",
@@ -484,7 +484,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-mstp-core"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "bacnet-mstp-codec",
  "bacnet-npdu",
@@ -494,7 +494,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-mstp-sim"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "bacnet-mstp-codec",
  "bacnet-mstp-core",
@@ -506,7 +506,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-network"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "bacnet-encoding",
  "bacnet-npdu",
@@ -521,14 +521,14 @@ dependencies = [
 
 [[package]]
 name = "bacnet-npdu"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "proptest",
 ]
 
 [[package]]
 name = "bacnet-objects"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "bacnet-encoding",
  "bacnet-types",
@@ -542,7 +542,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-ops"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "bacnet-client",
  "bacnet-encoding",
@@ -563,7 +563,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-router-core"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "bacnet-bip-core",
  "bacnet-encoding",
@@ -578,7 +578,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-server"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "bacnet-client",
  "bacnet-encoding",
@@ -599,7 +599,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-services"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "bacnet-encoding",
  "bacnet-types",
@@ -615,7 +615,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-transport"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "aws-lc-rs",
  "bacnet-bip-codec",
@@ -646,7 +646,7 @@ dependencies = [
 
 [[package]]
 name = "bacnet-types"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "bacnet-npdu",
  "bitflags 2.13.1",
@@ -1525,7 +1525,7 @@ checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
 name = "firmware-link"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "bacnet-bip-codec",
  "bacnet-bip-core",
@@ -2369,7 +2369,7 @@ dependencies = [
 
 [[package]]
 name = "nostd-harness"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "bytes",
  "portable-atomic",
@@ -3294,7 +3294,7 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
 name = "rusty-bacnet"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "bacnet-client",
  "bacnet-encoding",

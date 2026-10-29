@@ -74,7 +74,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.14.0"
+version = "0.15.0"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT"
@@ -94,24 +94,24 @@ categories = ["network-programming", "embedded"]
 # bacnet-time versions on its own (#1768): this is its version, which moves
 # only when its API changes, not the workspace version below it.
 bacnet-time = { version = "0.13.1", path = "crates/bacnet-time" }
-bacnet-npdu = { version = "0.14.0", path = "crates/bacnet-npdu" }
-bacnet-types = { version = "0.14.0", path = "crates/bacnet-types", default-features = false }
-bacnet-encoding = { version = "0.14.0", path = "crates/bacnet-encoding", default-features = false }
-bacnet-services = { version = "0.14.0", path = "crates/bacnet-services", default-features = false }
-bacnet-mstp-codec = { version = "0.14.0", path = "crates/bacnet-mstp-codec", default-features = false }
-bacnet-mstp-core = { version = "0.14.0", path = "crates/bacnet-mstp-core", default-features = false }
-bacnet-bip-codec = { version = "0.14.0", path = "crates/bacnet-bip-codec", default-features = false }
-bacnet-bip-core = { version = "0.14.0", path = "crates/bacnet-bip-core" }
-bacnet-router-core = { version = "0.14.0", path = "crates/bacnet-router-core" }
-bacnet-transport = { version = "0.14.0", path = "crates/bacnet-transport" }
-bacnet-network = { version = "0.14.0", path = "crates/bacnet-network" }
-bacnet-endpoint-core = { version = "0.14.0", path = "crates/bacnet-endpoint-core" }
-bacnet-client = { version = "0.14.0", path = "crates/bacnet-client" }
-bacnet-objects = { version = "0.14.0", path = "crates/bacnet-objects" }
-bacnet-server = { version = "0.14.0", path = "crates/bacnet-server" }
-bacnet-endpoint = { version = "0.14.0", path = "crates/bacnet-endpoint" }
-bacnet-ops = { version = "0.14.0", path = "crates/bacnet-ops" }
-bacnet-mcp = { version = "0.14.0", path = "crates/bacnet-mcp", default-features = false }
+bacnet-npdu = { version = "0.15.0", path = "crates/bacnet-npdu" }
+bacnet-types = { version = "0.15.0", path = "crates/bacnet-types", default-features = false }
+bacnet-encoding = { version = "0.15.0", path = "crates/bacnet-encoding", default-features = false }
+bacnet-services = { version = "0.15.0", path = "crates/bacnet-services", default-features = false }
+bacnet-mstp-codec = { version = "0.15.0", path = "crates/bacnet-mstp-codec", default-features = false }
+bacnet-mstp-core = { version = "0.15.0", path = "crates/bacnet-mstp-core", default-features = false }
+bacnet-bip-codec = { version = "0.15.0", path = "crates/bacnet-bip-codec", default-features = false }
+bacnet-bip-core = { version = "0.15.0", path = "crates/bacnet-bip-core" }
+bacnet-router-core = { version = "0.15.0", path = "crates/bacnet-router-core" }
+bacnet-transport = { version = "0.15.0", path = "crates/bacnet-transport" }
+bacnet-network = { version = "0.15.0", path = "crates/bacnet-network" }
+bacnet-endpoint-core = { version = "0.15.0", path = "crates/bacnet-endpoint-core" }
+bacnet-client = { version = "0.15.0", path = "crates/bacnet-client" }
+bacnet-objects = { version = "0.15.0", path = "crates/bacnet-objects" }
+bacnet-server = { version = "0.15.0", path = "crates/bacnet-server" }
+bacnet-endpoint = { version = "0.15.0", path = "crates/bacnet-endpoint" }
+bacnet-ops = { version = "0.15.0", path = "crates/bacnet-ops" }
+bacnet-mcp = { version = "0.15.0", path = "crates/bacnet-mcp", default-features = false }
 thiserror = { version = "2", default-features = false }
 bitflags = "2"
 bytes = { version = "1", default-features = false }
