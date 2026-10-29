@@ -250,7 +250,8 @@ impl Desk {
         None
     }
 
-    /// Read what `specs` need and plan them. Stops once the caller goes.
+    /// Read what `specs` need and plan them, the slots this ledger holds
+    /// counted as ours. Stops once the caller goes.
     pub async fn prepare<T: TransportPort + 'static>(
         &self,
         client: &BACnetClient<T>,
@@ -260,63 +261,8 @@ impl Desk {
         batch: bool,
         dangerous: bool,
     ) -> Result<Preview, String> {
-        let device = specs.first().ok_or("nothing to write")?.device;
-        if specs.iter().any(|spec| spec.device != device) {
-            return Err("a batch goes to one device".into());
-        }
-        let cancel = AtomicBool::new(false);
-        let mut reader = Reader {
-            client,
-            device,
-            rate,
-            cancel: &cancel,
-            rpm: true,
-        };
-        let mut reads = Vec::with_capacity(specs.len());
-        for spec in specs {
-            let mut wanted = PRE_READ.to_vec();
-            if !wanted.contains(&spec.property) && spec.index.is_none() {
-                wanted.push(spec.property);
-            }
-            let read = tokio::select! {
-                biased;
-                () = caller.going() => return Err("the session ended".into()),
-                read = reader.properties(spec.object, Wanted::List(&wanted)) => read,
-            };
-            let rows = match read {
-                Ok((rows, _)) => rows,
-                Err(Halt::Device(error)) => {
-                    return Err(format!("reading {}: {error}", spec.object));
-                }
-                Err(Halt::Cancelled) => return Err("cancelled".into()),
-            };
-            // An indexed write's pre-image is its element, read alone.
-            // Index 0 (a resize) has no pre-image to read.
-            let element = match spec.index {
-                None | Some(0) => None,
-                Some(index) => {
-                    let read = tokio::select! {
-                        biased;
-                        () = caller.going() => return Err("the session ended".into()),
-                        read = reader.rp(spec.object, spec.property, Some(index)) => read,
-                    };
-                    Some(match read {
-                        Ok(bytes) => Ok(bytes),
-                        Err(Halt::Device(error)) if unreachable(&error) => {
-                            return Err(format!("reading {}: {error}", spec.object));
-                        }
-                        Err(Halt::Device(error)) => Err(error.to_string()),
-                        Err(Halt::Cancelled) => return Err("cancelled".into()),
-                    })
-                }
-            };
-            reads.push(PreRead { rows, element });
-        }
         let ledger = self.ledger.as_ref();
-        let ours = |spec: &WriteSpec, priority, now: &[u8]| {
-            ledger.is_some_and(|l| l.owns(spec, priority, now))
-        };
-        plan::preview(specs, &reads, ours, dangerous, batch)
+        prepare(client, rate, caller, specs, batch, dangerous, ledger).await
     }
 
     /// Record every write of `preview` as not sent, and why.
@@ -373,6 +319,22 @@ impl Desk {
                 })
                 .collect();
         }
+        self.commit(client, rate, caller, preview).await
+    }
+
+    /// Send `preview`, read just now, through the ledger and the audit
+    /// log: check the caller again (the session may have expired during
+    /// the read), record each write as `sending` (nothing goes out that the
+    /// ledger couldn't record first), send, then settle and record each
+    /// outcome. [`execute`](Self::execute) reads the targets again first; a
+    /// front end that has just read them calls this directly.
+    pub async fn commit<T: TransportPort + 'static>(
+        &mut self,
+        client: &BACnetClient<T>,
+        rate: &RequestLimits,
+        caller: &dyn Caller,
+        preview: &Preview,
+    ) -> Vec<Sent> {
         if let Some(why) = caller.refusal() {
             // The session expired or was disarmed during the re-read.
             return self.not_sent(caller, preview, &why).await;
@@ -524,4 +486,74 @@ impl Desk {
         }
         done
     }
+}
+
+/// Read what `specs` need and plan them, the slots `ledger` holds counted
+/// as ours (a front end without the workspace's lock reads the file).
+/// Stops once the caller goes.
+pub async fn prepare<T: TransportPort + 'static>(
+    client: &BACnetClient<T>,
+    rate: &RequestLimits,
+    caller: &dyn Caller,
+    specs: &[WriteSpec],
+    batch: bool,
+    dangerous: bool,
+    ledger: Option<&Ledger>,
+) -> Result<Preview, String> {
+    let device = specs.first().ok_or("nothing to write")?.device;
+    if specs.iter().any(|spec| spec.device != device) {
+        return Err("a batch goes to one device".into());
+    }
+    let cancel = AtomicBool::new(false);
+    let mut reader = Reader {
+        client,
+        device,
+        rate,
+        cancel: &cancel,
+        rpm: true,
+    };
+    let mut reads = Vec::with_capacity(specs.len());
+    for spec in specs {
+        let mut wanted = PRE_READ.to_vec();
+        if !wanted.contains(&spec.property) && spec.index.is_none() {
+            wanted.push(spec.property);
+        }
+        let read = tokio::select! {
+            biased;
+            () = caller.going() => return Err("the session ended".into()),
+            read = reader.properties(spec.object, Wanted::List(&wanted)) => read,
+        };
+        let rows = match read {
+            Ok((rows, _)) => rows,
+            Err(Halt::Device(error)) => {
+                return Err(format!("reading {}: {error}", spec.object));
+            }
+            Err(Halt::Cancelled) => return Err("cancelled".into()),
+        };
+        // An indexed write's pre-image is its element, read alone.
+        // Index 0 (a resize) has no pre-image to read.
+        let element = match spec.index {
+            None | Some(0) => None,
+            Some(index) => {
+                let read = tokio::select! {
+                    biased;
+                    () = caller.going() => return Err("the session ended".into()),
+                    read = reader.rp(spec.object, spec.property, Some(index)) => read,
+                };
+                Some(match read {
+                    Ok(bytes) => Ok(bytes),
+                    Err(Halt::Device(error)) if unreachable(&error) => {
+                        return Err(format!("reading {}: {error}", spec.object));
+                    }
+                    Err(Halt::Device(error)) => Err(error.to_string()),
+                    Err(Halt::Cancelled) => return Err("cancelled".into()),
+                })
+            }
+        };
+        reads.push(PreRead { rows, element });
+    }
+    let ours = |spec: &WriteSpec, priority, now: &[u8]| {
+        ledger.is_some_and(|l| l.owns(spec, priority, now))
+    };
+    plan::preview(specs, &reads, ours, dangerous, batch)
 }

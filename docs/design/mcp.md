@@ -5,7 +5,9 @@ the `bacnet-ops` crate and this document. Phase 1 (#2066) is complete: the
 `bacnet-mcp` crate, `bacnet mcp serve`, the safety layer and the nine read
 tools. Phase 2 (#2067) is complete: the watch hub, the resources,
 `subscriptions/listen` and the `bacnet_watch` fallback, with the deviations
-noted in §6; [`../mcp.md`](../mcp.md) describes what exists. Anything marked
+noted in §6. Phase 3 (#2068) is complete: the shared safety core in
+`bacnet-ops::safety`, `bacnet_write` and `bacnet_revert`, with the
+deviations noted in §7.4; [`../mcp.md`](../mcp.md) describes what exists. Anything marked
 **planned** does not exist yet. BACnet references are clause numbers in ANSI/ASHRAE 135-2020,
 paraphrased. MCP references are to the 2026-07-28 revision of the
 specification, linked in §14.
@@ -98,7 +100,7 @@ Layer 6.5: bacnet-ops    the operations core: no UI, no MCP dependency
              label        object, property and priority names
              limits       RequestLimits: global rate cap, one request per device
              engine       Reader, and the Engine facade over BACnetClient
-             safety       plan, ledger, audit, lock                  (planned, phase 3)
+             safety       plan, ledger, audit, lock, desk            (phase 3)
              watch        ref-counted COV and poll hub               (phase 2)
            bacnet-mcp    the MCP surface over bacnet-ops::engine     (phase 1)
              tools/, resources/, prompts/, untrusted text, approvers,
@@ -196,9 +198,11 @@ neither, so its requests are unchanged. The engine also sends Who-Is under
 the rate cap (`who_is`) and reads the discovery table (`devices`,
 `device`).
 
-Phase 3 adds `plan_write`, `execute` and `revert`, which own the ledger and
-audit. Phase 2 added the watch hub (§6) beside the engine, and
-`device_events`.
+Phase 3 put the write half beside the engine rather than in it: the
+`bacnet_ops::safety::desk::Desk` holds a workspace's ledger, audit log and
+lock, and its `prepare`, `execute`, `commit` and `revert` take the
+engine's client and limits. Phase 2 added the watch hub (§6) beside the
+engine, and `device_events`.
 
 ### 4.4 One client, many sessions (planned)
 
@@ -469,6 +473,14 @@ trait Approver {
 }
 ```
 
+As built (#2068), the trait decides without waiting, because a confirmation
+over multi round-trip requests is two calls rather than one await:
+`approve` answers `Approved(via)`, `Ask { arm }` (return the form and a
+sealed state; the retry confirms) or `Refused { reason }`. A decline, an
+expired state or a missing capability is a refusal reason on the retry
+(`declined`, `confirmation-expired`, `elicitation-unsupported`). Phase 4's
+`TuiApprover` will need the waiting form back, and can add it then.
+
 | Approver | Verified by the server | Phase |
 |---|---|---|
 | `Deny` | n/a (the default) | 3 |
@@ -502,14 +514,46 @@ multi round-trip requests (MRTR):
 **Integrity-protected confirmation state.** The spec makes `requestState`
 attacker controlled: the server must protect its integrity when it affects
 authorization, should bind it to the principal, a short expiry and a digest
-of the request, and must enforce single use itself. Ours is
-integrity-protected with `rmcp`'s request-state codec (an HMAC with key
-rotation) under a per-process key (a shared, rotated key file for
-replicated HTTP). Integrity is the requirement, not secrecy: the state
-holds nothing the client may not see. It carries the principal, the tool, an argument digest, a preview
-digest (pre-images and slot occupancy), a nonce and a 120 s expiry, the TUI's
-preview timeout. A tampered, expired, replayed or cross-principal state is
-refused and nothing is sent.
+of the request, and must enforce single use itself. Ours is sealed with an
+AEAD (XChaCha20-Poly1305, the RustCrypto `chacha20poly1305` crate; the
+maintainer chose an AEAD over `rmcp`'s HMAC request-state codec) under a
+key drawn from the OS for each process. The key never leaves the process
+and is never written down, so no state outlives it, and a restart voids
+every outstanding confirmation; replicated HTTP (phase 5) will need a
+shared, rotated key file instead. The principal and the tool are the
+associated data; the sealed body carries an argument digest, a preview
+digest (each write's target, value, pre-image, slot occupancy,
+commandability and tier), a nonce and a 120 s expiry on the process's own
+clock (the TUI's preview timeout). Integrity is the requirement; that the
+client can't read the digests is a side effect. The server keeps each
+opened nonce until its expiry, so a state opens once, even when the retry
+is then refused. A tampered, expired, replayed or cross-principal state,
+or one presented with other arguments, is refused, audited, and nothing is
+sent.
+
+As built (#2068), and where it differs from the steps above:
+
+- The retry reads the targets again under the workspace's lock and
+  compares the preview digest; the desk's `commit` then sends without a
+  third read. A write confirmed and retried runs on a task of its own, so
+  a cancelled call doesn't leave a write half recorded.
+- Arming: with `mcp_arm = "elicit"`, confirming a write while unarmed also
+  arms a 15-minute session (audited `arm`, `confirmed_via: elicitation`);
+  with `never`, only a plan grant arms MCP writes. There is no separate
+  arm tool, so the tool list stays two write tools.
+- On a client older than 2026-07-28, or one that doesn't declare form
+  elicitation, a write needing confirmation is refused
+  (`elicitation-unsupported`): the older server-initiated elicitation
+  isn't used yet. Plan grants work for every client.
+- A plan grant (`[mcp.plan]`) is approved in a terminal by `bacnet mcp
+  authorize`, which names what it lets through without a prompt; it runs
+  for its `hours` (8 at most) from that authorization, and its write budget
+  counts per process. While one is in force, a write it doesn't cover is
+  refused (`outside-plan`) rather than offered to the client.
+- `bacnet_revert` needs no prompt and no armed session, as in the TUI, and
+  reverts only this principal's MCP entries.
+- `bacnet://ledger` and `bacnet://session` show the writes, but don't yet
+  notify on arming or settling.
 
 A write already sent always completes and is recorded; cancellation never
 interrupts it, as in the TUI's write worker.
@@ -682,7 +726,7 @@ image, and a `.mcpb` bundle for Claude Desktop.
 | 0 | #2065 | `bacnet-ops` read side; this document | CLI and TUI suites pass unchanged (insta snapshots, the in-process lab, the class-table pin test, which moved with the table); `bacnet-ops` passes `check-default-features.sh` and the file-size cap; no snapshot churn |
 | 1 | #2066 | `bacnet-mcp` with `stdio`; `bacnet mcp serve` behind `mcp`; the nine read tools; untrusted envelope; error mapping; signed cursors; per-call caps; per-principal and per-network limits; the `[mcp]` profile table; `survey_site` and `investigate_point`; `mcp` classified `Read` | a stdio integration test drives a site survey against the in-process lab; `tools/list` has no write tool in any configuration; `--passive` builds no client and sends nothing; 500 reads stay within the caps and a slow network is held to 2 a second; an injection fixture comes back sanitised, enveloped and capped; stdout carries only JSON-RPC; trend paging survives three pages and `summary` matches a brute-force computation; a docs page and changelog |
 | 2 (done) | #2067 | the watch hub; resources and templates; `subscriptions/listen` with caps; the alarm, session and ledger resources; `bacnet_watch` | two listeners on one point make one BACnet subscription and the last one leaving cancels it; a device refusing COV falls back to polling with `source: poll`; no lifetime-0 subscription; a notification storm is coalesced and drops counted; shutdown completes each listen stream and cancels every subscription |
-| 3 | #2068 | `tui/safety/*` and the engine half of the write worker move to `bacnet-ops::safety` (the TUI keeps an adapter); `bacnet_write`, `bacnet_revert`; the `Approver` trait with `ClientElicitation`, `PlanGrant` and `Deny`; integrity-protected state; `mcp_writes = "never" \| "elicit"` (default `never`); the new audit fields | with `never` the write tools are absent; with `elicit` a T1 write is previewed, confirmed, sent and ledgered while T2, T3 and priority 6 are refused; tampered, expired, replayed or cross-principal state is refused and nothing sent; a stale pre-image gives `refused: stale`, audited; a timeout leaves an `unknown` entry; revert restores the pre-image; the TUI lists MCP entries marked `front_end: mcp`; plan-grant writes run without prompts and are audited; the TUI's write tests still pass |
+| 3 (done) | #2068 | `tui/safety/*` and the engine half of the write worker move to `bacnet-ops::safety` (the TUI keeps an adapter); `bacnet_write`, `bacnet_revert`; the `Approver` trait with `ClientElicitation`, `PlanGrant` and `Deny`; integrity-protected state; `mcp_writes = "never" \| "elicit"` (default `never`); the new audit fields | with `never` the write tools are absent; with `elicit` a T1 write is previewed, confirmed, sent and ledgered while T2, T3 and priority 6 are refused; tampered, expired, replayed or cross-principal state is refused and nothing sent; a stale pre-image gives `refused: stale`, audited; a timeout leaves an `unknown` entry; revert restores the pre-image; the TUI lists MCP entries marked `front_end: mcp`; plan-grant writes run without prompts and are audited; the TUI's write tests still pass |
 | 4 | after 0.15 | TUI-attached mode | an agent's T2 or T3 write executes only after the TUI confirmation; another uid is refused and audited; agent reads share the rate meter; frame tests cover the banner and queue |
 | 4b | after 0.15, optional | background daemon | survives TUI exit and reattaches with the same ledger; a crash mid-write leaves `sending`, which becomes `unknown` on restart; a protocol mismatch is handled as specified |
 | 5 | after 0.15 | Streamable HTTP and OAuth, multi-user | conformance against an SDK client; wrong audience 401, missing scope 403; cross-user redemption refused; starts only with TLS and OAuth or an explicit loopback bind; interop with a real provider as a manual check |

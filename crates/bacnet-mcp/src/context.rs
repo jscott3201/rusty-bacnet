@@ -73,6 +73,9 @@ pub(crate) struct Ctx<T: TransportPort + 'static> {
     pub(crate) described: Cache,
     /// Alarm pages served to the alarm resources.
     pub(crate) alarms: Cache,
+    /// The write session, the plan grant's budget and the confirmation
+    /// sealer (#2068).
+    pub(crate) writes: crate::writes::Writes,
 }
 
 /// Counts a listen stream while it lives.

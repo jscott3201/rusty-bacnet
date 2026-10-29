@@ -129,8 +129,8 @@ impl<T: TransportPort + 'static> Engine<T> {
         &self.limits
     }
 
-    /// The client, for the watch hub's subscriptions.
-    pub(crate) fn client(&self) -> &Arc<BACnetClient<T>> {
+    /// The client, for the watch hub's subscriptions and the write desk.
+    pub fn client(&self) -> &Arc<BACnetClient<T>> {
         &self.client
     }
 

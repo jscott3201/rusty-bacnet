@@ -1,6 +1,7 @@
-//! `bacnet mcp serve --stdio` and `bacnet mcp authorize` (#2066): the
-//! read-only MCP server of the `bacnet-mcp` crate, on a client built from a
-//! profile or the transport flags.
+//! `bacnet mcp serve --stdio` and `bacnet mcp authorize` (#2066): the MCP
+//! server of the `bacnet-mcp` crate, on a client built from a profile or
+//! the transport flags; read-only unless the profile's `[mcp]` table
+//! offers writes (#2068), which go through the profile's workspace.
 //!
 //! Stdout belongs to the JSON-RPC stream while the server runs, so this
 //! module denies the print lints the rest of the CLI allows, and tracing
@@ -13,7 +14,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bacnet_client::client::BACnetClient;
-use bacnet_mcp::policy::{Caps, Rates};
+use bacnet_mcp::policy::{ArmMode, Caps, PlanGrant, Rates, Workspace, WriteMode, WritePolicy};
 use bacnet_mcp::{McpServer, Policy};
 use bacnet_ops::engine::Engine;
 use bacnet_transport::bip::BipTransport;
@@ -22,6 +23,7 @@ use bacnet_transport::port::TransportPort;
 use crate::args::{Cli, Command, McpAction};
 use crate::core::guard::Confirm;
 use crate::transport::TransportArgs;
+use crate::tui::profile::mcp::McpChoice;
 use crate::tui::profile::mcp::device_range;
 use crate::tui::profile::overrides::has_transport_flags;
 use crate::tui::profile::store::Store;
@@ -117,9 +119,63 @@ pub(crate) fn policy(section: &McpSection, passive: bool) -> Result<Policy, Stri
                 .map_or(caps.budget, Duration::from_secs),
             ..caps
         },
+        // Writes need the profile's workspace: `from_profile` adds them.
+        writes: WritePolicy::default(),
     };
     policy.validate().map_err(|e| format!("[mcp] {e}"))?;
     Ok(policy)
+}
+
+/// What the `[mcp]` table lets the server change, recording to
+/// `workspace` (#2068). A plan grant runs from the authorization for its
+/// hours.
+pub(crate) fn write_policy(
+    section: &McpSection,
+    workspace: Workspace,
+) -> Result<WritePolicy, String> {
+    let choice = |c: McpChoice| c == McpChoice::Elicit;
+    let plan = match &section.plan {
+        None => None,
+        Some(plan) => {
+            let (devices, properties) = plan.parsed()?;
+            let start = section.authorized_at_unix.unwrap_or(0);
+            Some(PlanGrant {
+                devices,
+                properties,
+                priorities: (plan.priority_min, plan.priority_max),
+                max_writes: plan.max_writes,
+                expires_unix: start.saturating_add(plan.hours.saturating_mul(3_600)),
+                reason: plan.reason.clone(),
+            })
+        }
+    };
+    Ok(WritePolicy {
+        mode: if choice(section.mcp_writes) {
+            WriteMode::Elicit
+        } else {
+            WriteMode::Never
+        },
+        arm: if choice(section.mcp_arm) {
+            ArmMode::Elicit
+        } else {
+            ArmMode::Never
+        },
+        plan,
+        workspace: Some(workspace),
+    })
+}
+
+/// The local end of `args`' link, for audit records.
+fn local(args: &TransportArgs) -> (&'static str, String) {
+    if let Some(mstp) = &args.mstp {
+        ("MSTP", mstp.port.clone())
+    } else if args.sc {
+        ("SC", args.sc_url.clone().unwrap_or_default())
+    } else if args.ipv6 {
+        ("BIP6", "ipv6".into())
+    } else {
+        ("BIP", format!("{}:{}", args.interface, args.port))
+    }
 }
 
 /// The one principal of a stdio server: the OS user running it.
@@ -153,12 +209,26 @@ fn from_profile(cli: &Cli, name: &str) -> Result<(TransportArgs, Policy), String
     if has_transport_flags(cli) {
         return Err(FLAGS_WITH_PROFILE.into());
     }
-    let profile = Store::discover()?.load(name)?;
+    let store = Store::discover()?;
+    let profile = store.load(name)?;
     let section = profile.mcp.as_deref().cloned().unwrap_or_default();
     if !section.authorized() {
         return Err(unauthorized(name));
     }
-    Ok((profile.transport_args()?, policy(&section, false)?))
+    let args = profile.transport_args()?;
+    let mut policy = policy(&section, false)?;
+    if section.mcp_writes == McpChoice::Elicit {
+        let (transport, local) = local(&args);
+        let workspace = Workspace {
+            dir: store.workspace(name)?,
+            profile: Some(name.to_string()),
+            transport,
+            local,
+        };
+        policy.writes = write_policy(&section, workspace)?;
+        policy.validate().map_err(|e| format!("[mcp] {e}"))?;
+    }
+    Ok((args, policy))
 }
 
 async fn serve(cli: &Cli, profile: Option<&str>, passive: bool) -> crate::CliResult {
@@ -265,9 +335,27 @@ fn summary(name: &str, section: &McpSection) -> String {
     let list = |items: Option<String>| items.unwrap_or_else(|| "all".into());
     let networks = list(section.networks.as_ref().map(|n| format!("{n:?}")));
     let devices = list(section.devices.as_ref().map(|d| d.join(", ")));
+    let writes = match (section.mcp_writes, &section.plan) {
+        (McpChoice::Never, _) => "no writes".to_string(),
+        (McpChoice::Elicit, None) => {
+            "writes at priority 9-16 (or to properties that aren't commandable) once the user \
+             confirms them in the agent host"
+                .to_string()
+        }
+        (McpChoice::Elicit, Some(plan)) => format!(
+            "writes the user confirms in the agent host, and WITHOUT ANY PROMPT up to {} writes \
+             of {} on devices {} at priority {}-{} for the next {} hour(s)",
+            plan.max_writes,
+            plan.properties.join(", "),
+            plan.devices.join(", "),
+            plan.priority_min,
+            plan.priority_max,
+            plan.hours
+        ),
+    };
     format!(
         "Authorize AI agents to use profile {name} through `bacnet mcp serve`.\n\
-         They can discover devices and read them (no writes), on networks: {networks}; \
+         They can discover devices and read them ({writes}), on networks: {networks}; \
          devices: {devices}; broad discovery: {}.\n\
          Device text and site data will reach the agent and its host.\n\
          Type the profile name to authorize: ",

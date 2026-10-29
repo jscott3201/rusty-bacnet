@@ -236,8 +236,9 @@ bacnet tui --interface 127.0.0.1 --port 0 --broadcast 127.0.0.1
 
 ### Let an AI agent read a site (MCP)
 
-New on `dev`: `bacnet mcp serve` is a read-only Model Context Protocol server
-that an agent host such as Claude Code starts. It offers no tool that writes.
+New on `dev`: `bacnet mcp serve` is a Model Context Protocol server that an
+agent host such as Claude Code starts. It is read-only unless the profile
+offers writes, and then each write needs a person's approval.
 The release executables leave it out; build it with
 `cargo install --git https://github.com/jscott3201/rusty-bacnet --branch dev bacnet-cli --locked --features mcp,sc-tls`
 (`sc-tls` lets it use BACnet/SC profiles).

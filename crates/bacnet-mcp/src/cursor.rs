@@ -115,7 +115,7 @@ fn now() -> u64 {
 
 /// A digest of a call's arguments other than its cursor, the same
 /// whatever order the client sent the keys in.
-fn digest(args: &Map<String, Value>) -> String {
+pub(crate) fn digest(args: &Map<String, Value>) -> String {
     let mut canonical = Value::Object(args.clone());
     if let Value::Object(map) = &mut canonical {
         map.remove("cursor");

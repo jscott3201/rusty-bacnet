@@ -7,12 +7,14 @@ mod legacy;
 mod limits;
 mod listen;
 mod paging;
+mod plan;
 mod protocol;
 mod resources;
 mod safety;
 mod schema;
 mod site;
 mod trends;
+mod writes;
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};

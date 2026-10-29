@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 readme = "README.md"
-description = "A read-only Model Context Protocol server for BACnet sites, over the bacnet-ops engine"
+description = "A Model Context Protocol server for BACnet sites, over the bacnet-ops engine, read-only unless a profile offers guarded writes"
 keywords = ["bacnet", "mcp", "building-automation", "hvac"]
 categories = ["network-programming"]
 
@@ -33,12 +33,16 @@ tokio-util = { version = "0.7.19", default-features = false }
 hmac = "0.13.0"
 sha2 = "0.11.0"
 getrandom = { workspace = true, features = ["std"] }
+# The write confirmation state, sealed under a per-process key (#2068):
+# XChaCha20-Poly1305 binds it to its caller and keeps it from the client.
+chacha20poly1305 = { version = "0.11.0", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
 bacnet-encoding = { workspace = true, features = ["std"] }
 bacnet-objects.workspace = true
 bytes = { workspace = true, features = ["std"] }
 bacnet-server.workspace = true
+tempfile = "3"
 tokio = { workspace = true, features = ["io-util", "macros", "rt-multi-thread", "test-util"] }
 
 [features]

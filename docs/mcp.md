@@ -1,8 +1,9 @@
 # MCP server (`bacnet-mcp`, `bacnet mcp serve`)
 
-A read-only [Model Context Protocol](https://modelcontextprotocol.io) server
-for BACnet sites: phase 1 (#2066, the tools) and phase 2 (#2067, resources
-and subscriptions) of the MCP epic (#2064). The design, with
+A [Model Context Protocol](https://modelcontextprotocol.io) server for
+BACnet sites, read-only unless a profile offers writes: phase 1 (#2066, the
+tools), phase 2 (#2067, resources and subscriptions) and phase 3 (#2068,
+writes) of the MCP epic (#2064). The design, with
 the later phases, is [design/mcp.md](design/mcp.md); the user guide is the
 website's [AI agents](https://jscott3201.github.io/rusty-bacnet/guides/ai-agents/)
 page. Experimental in 0.15.
@@ -16,7 +17,9 @@ page. Experimental in 0.15.
 | Decoder | `bacnet-ops::decode` | The capture screen's frame summary and field tree, moved from the CLI for `bacnet_decode`: any tapped link (B/IP, B/IPv6, BACnet/SC, MS/TP), or a bare NPDU or APDU; a field quoting a character string is marked as device text |
 | Watch hub | `bacnet-ops::watch` | `Hub`: one managed COV subscription or poller per point, shared by every listener, holding the latest values (phase 2); `Engine::device_events` |
 | `bacnet mcp` | `crates/bacnet-cli/src/mcp.rs` | `serve --stdio [--profile NAME] [--passive]` and `authorize --profile NAME`, behind the CLI feature `mcp` (which brings `tui`, for the profiles). Classified `Read` in `bacnet_ops::class`. |
-| `[mcp]` profile table | `crates/bacnet-cli/src/tui/profile/mcp.rs` | networks, devices, slow and fast networks, broad discovery, rates and caps |
+| `[mcp]` profile table | `crates/bacnet-cli/src/tui/profile/mcp.rs` | networks, devices, slow and fast networks, broad discovery, rates and caps; `mcp_writes`, `mcp_arm` and `[mcp.plan]` (#2068) |
+| Write safety core | `bacnet-ops::safety` | The TUI's plan, ledger, audit log and workspace lock, and the engine half of a write (`desk`: pre-image reads, the stale check, the ledger and audit around each send, revert), shared by the TUI and MCP (#2068) |
+| Writes | `crates/bacnet-mcp/src/writes/`, `tools/write.rs`, `tools/revert.rs` | The write session, the approvers (`ClientElicitation`, `PlanApprover`, `Deny`), the sealed confirmation state, and the two write tools |
 
 The SDK is `rmcp` 3.5.1 (pinned, server role, stdio only). It answers both
 the 2026-07-28 request form (`server/discover`, version and capabilities in
@@ -24,8 +27,10 @@ each request's `_meta`) and the older `initialize` handshake.
 
 ## Tools
 
-All are read-only (`readOnlyHint: true`, `destructiveHint: false`), with
-input and output schemas and structured content plus a text rendering.
+The read tools are read-only (`readOnlyHint: true`, `destructiveHint:
+false`); the two [write tools](#writes) are listed only when the profile
+offers writes. All have input and output schemas and structured content
+plus a text rendering.
 
 | Tool | Notes |
 |---|---|
@@ -62,8 +67,8 @@ under its own account and budget, and a cancelled read sends nothing more.
 | `.../property/{prop}` | one property (`name` or `name[index]`; `[`, `]` and `:` may be percent-encoded) | a property watch (SubscribeCOVProperty) |
 | `bacnet://alarms` | each device in reach: its first page of GetEventInformation, as far as the read's budget goes (`unread` past it, `errors` per device) | a poll every 60 s; an update when the events change |
 | `bacnet://device/{instance}/alarms` | one device's first page of events | the same, for one device |
-| `bacnet://session` | level, limits, the request meter, the principal's watches and the hub's footprint (points, subscribed, polled, requests, lagged notifications, lifetime) | honoured; no updates until writes arrive (phase 3) |
-| `bacnet://ledger` | this principal's ledger entries in effect: none | honoured; no updates until phase 3 |
+| `bacnet://session` | level (`read-only`, `write-session` while a session or plan grant is in force, `write-session (expired)`), `writes` (`not offered`, or the mode, arming and what the client may confirm), `expires` (seconds left in an armed session), `grants` (a plan grant: in force, used, budget, expiry), limits, the request meter, the principal's watches and the hub's footprint (points, subscribed, polled, requests, lagged notifications, lifetime) | honoured; no updates yet (#2068 left the notifications on arming and settling for later) |
+| `bacnet://ledger` | this principal's ledger entries in effect (`ledger_id`, target, value written, what undoes it, state, time), read from the profile workspace's `ledger.json`; empty without writes | honoured; no updates yet |
 
 A watched point is read from the hub, which sends nothing. An unwatched one
 is read once. Each device's alarms are read at most once a minute, whoever
@@ -246,6 +251,80 @@ J.2.3 and J.2.7), and returns them under `bbmd` with a verdict.
   rows, the survey and the consistency matrix are `bacnet_ops::bbmd`'s,
   shared with the TUI's Network screen.
 
+## Writes
+
+Phase 3 (#2068). Off by default: with the `[mcp]` table's `mcp_writes =
+"never"` (or none) `tools/list` has no write tool, whatever else the
+profile allows. `mcp_writes = "elicit"` lists `bacnet_write` and
+`bacnet_revert` (`readOnlyHint: false`, `destructiveHint: true`) and needs
+the profile's workspace, which holds the ledger and audit log the TUI uses.
+Writes go through `bacnet_ops::safety`: the TUI's planner, tiers, ledger
+(entries marked `front_end: mcp` with the principal) and audit log.
+
+- **`bacnet_write`**: `device`, `writes` (1 to 20: `object`, `property`
+  with an optional `[index]`, `value`, `priority`), `batch`
+  (WritePropertyMultiple; several writes need it) and `reason`. Targets are
+  numeric (`ao:1`, never a name); a value is a number, a boolean, `null`
+  (relinquish), a typed `{"value": n}` or the CLI value grammar, checked
+  before anything is sent. The result names each write's `outcome` (the
+  TUI's outcome JSON), `applied` (true, false, or null when unknown) and
+  `ledger_id`, with a `revert` hint; when a write isn't acknowledged it is
+  an error result (`error`: `timeout` with `applied: "unknown"`, `bacnet`,
+  `failed` or `refused`) holding the same rows.
+- **Approval.** The first call reads the targets (the TUI's pre-read) and
+  previews the change. A blocked change (priority 6, which MCP never
+  allows) is refused (`priority-6`). A plan grant in force approves the
+  writes it covers at once, under the workspace's lock; one it doesn't
+  cover is refused (`outside-plan`). Otherwise the client may approve T1
+  only (priority 9 to 16, or a property that isn't commandable): T2 and T3
+  are refused (`needs-verified-approver`). A T1 write returns
+  `input_required` (multi round-trip requests, 2026-07-28) with a form
+  elicitation `confirm` (the canonical targets, the value now and after,
+  the Present_Value change and the planner's notes; device text cleaned and
+  labelled) and a sealed `requestState`. A client that didn't declare form
+  elicitation, or an older-revision session, is refused
+  (`elicitation-unsupported`); the older server-initiated elicitation is
+  not used yet.
+- **Arming.** A write needs an armed session or a plan grant in force, as
+  in the TUI. With `mcp_arm = "elicit"` the confirmation of a write while
+  unarmed arms a 15-minute session too (audited `arm`); with `never` (the
+  default) only a plan grant arms MCP writes (`not-armed`). Never
+  `dangerous`.
+- **The retry** carries the form's answer and the state. The state is
+  XChaCha20-Poly1305 under a key drawn per process, with the principal and
+  the tool as associated data, and holds a digest of the arguments, a
+  digest of the preview, a nonce and a 120 s expiry (the process's own
+  clock). A forged or changed state, or another caller's
+  (`confirmation-invalid`), an expired one (`confirmation-expired`), one
+  used before (`confirmation-replayed`; a state opens once even when the
+  retry is then refused) and different arguments (`confirmation-mismatch`)
+  are refused and audited, with nothing sent. A declined or cancelled form
+  is audited `declined`. The confirmed write runs on a task of its own: it
+  takes the workspace's lock (refused `workspace-locked`, naming the
+  holder, when the TUI has it), reads the targets again, refuses a preview
+  that changed (`stale`, audited as a stale decline), records each write as
+  `sending` in the ledger and the audit log, sends, and settles; a timeout
+  leaves the entry `unknown`. The lock is released after.
+- **`bacnet_revert`**: `entries` (ledger ids) or `all`, this principal's
+  MCP entries only (`not-yours` for another's), on devices the policy
+  reaches; no prompt and no armed session, as in the TUI. Latest write
+  first, through the desk; the result names each entry's outcome and how
+  many are `left`.
+- **Plan grants** (`[mcp.plan]`: `devices`, `properties`, `priority_min`
+  and `priority_max` (8 and 16 by default), `max_writes`, `hours` (1 to
+  8), `reason`) run from `bacnet mcp authorize`, which spells out what the
+  plan lets through without a prompt; the budget counts per process.
+  Offering writes, letting the client arm, or any change to a plan clears
+  the authorization.
+- **Audit.** Every MCP record has `front_end: "mcp"`, `principal`,
+  `client` (`claimed_name`, a claim), `tool`, `args_digest` and
+  `request_id`, and a write `confirmed_via` (`elicitation` or `plan`) and
+  `approved_by` (`client` or `plan`, with the plan's reason and count).
+  Refusals and declines are recorded without the lock: the audit log is
+  append-only.
+- Not offered: DeviceCommunicationControl, ReinitializeDevice, and every
+  service the design excludes.
+
 ## Passive mode and resources
 
 `--passive` lists only `bacnet://session` and `bacnet://ledger` and no
@@ -406,4 +485,15 @@ returns `refused: rate-limited` if it sent nothing, else `timeout`.
   charged per request, Who-Is through the engine, and the decoder's tests
   (moved from the CLI).
 - `crates/bacnet-cli`: the `[mcp]` table, authorization and its
-  revocation, and the stdio hygiene test against the real binary.
+  revocation, the write policy and plan grant from the table, and the stdio
+  hygiene test against the real binary. The TUI lists an MCP entry from the
+  shared ledger marked `[mcp: user]` (`tui/tests/writes_app.rs`).
+- `crates/bacnet-mcp/src/tests/writes.rs` and `plan.rs` (#2068): the write
+  tools absent with `never` and listed with `elicit`; a T1 write previewed,
+  confirmed, sent, ledgered, audited and reverted; T2, T3 and priority 6
+  refused; tampered, expired, replayed, mismatched and declined
+  confirmations sending nothing; a stale preview; a timeout leaving an
+  `unknown` entry; no arming, an unsupported client and the TUI's lock
+  refused; 50 plan-grant writes without a prompt, each audited as approved
+  by the plan, and writes outside it refused. `writes/seal.rs`: a state
+  bound to its principal and tool, opened once, within its lifetime.

@@ -1,9 +1,9 @@
 ---
 title: "Use rusty-bacnet with AI agents"
-description: "Let an AI agent host such as Claude Code discover and read a BACnet site through a read-only MCP server."
+description: "Let an AI agent host such as Claude Code discover and read a BACnet site through an MCP server, and write only with a person's approval."
 ---
 
-`bacnet mcp serve` is a [Model Context Protocol](https://modelcontextprotocol.io) server: an agent host such as Claude Code or Codex starts it as a child process and calls its tools to discover devices, describe them, find and read their objects, read trend logs and alarms, map the networks, decode frames, and follow points as they change. It is experimental in 0.15, built only with the CLI's `mcp` feature, and **read-only**: no configuration offers a tool that writes.
+`bacnet mcp serve` is a [Model Context Protocol](https://modelcontextprotocol.io) server: an agent host such as Claude Code or Codex starts it as a child process and calls its tools to discover devices, describe them, find and read their objects, read trend logs and alarms, map the networks, decode frames, and follow points as they change. It is experimental in 0.15, built only with the CLI's `mcp` feature, and **read-only by default**: a tool that writes is offered only when the profile opts in, and every write then needs a person's approval (see [Writes](#writes)).
 
 ## Build it
 
@@ -23,6 +23,7 @@ networks = [0, 2001]          # 0 is the local network
 devices = ["1000-1999", "5"]
 slow_networks = [2001]        # an MS/TP trunk behind a router: 2 requests a second
 broad_discovery = false       # true allows a global or wide Who-Is, one a minute
+mcp_writes = "never"          # the default; "elicit" offers bacnet_write and bacnet_revert
 ```
 
 Before an agent host can use the profile, a person consents in a terminal. The command shows what the table lets an agent reach and asks for the profile's name:
@@ -73,18 +74,31 @@ bacnet mcp serve --stdio --profile plant-a --passive
 
 Two prompts start common jobs: `survey_site` surveys a range of devices, their networks and their alarms, and `investigate_point` explains one point's value, status, priority array, alarms and trend. Every value comes as display text and a typed form with enumeration and bit names. A property a device can't give is an error row with the device's error class and code.
 
+## Writes
+
+With `mcp_writes = "elicit"` in the `[mcp]` table the server also offers `bacnet_write` and `bacnet_revert`. They use the TUI's write checks: the same preview tiers, the same [ledger and audit log](/rusty-bacnet/tui/writes/) in the profile's workspace, so the TUI lists an agent's changes (marked `[mcp: user]`) and can revert them.
+
+- **A person approves each write.** The first call reads the target and previews the change; the agent host then shows a confirmation form (the value now and after, who holds the slot), and only a confirmed retry sends it. A confirmation is good once, for that agent, for two minutes, and is refused if the value changed in between.
+- **The host's form approves low-priority writes only.** The server can't check that a person answered the host's form, so it accepts it for priority 9 to 16, or a property that isn't commandable. Priorities 1 to 8, Out_Of_Service, batches and relinquishing another commander's slot are refused (`needs-verified-approver`), and priority 6 always.
+- **Arming.** As in the TUI, writes need an armed session. With `mcp_arm = "elicit"` the first confirmation also arms one for 15 minutes; otherwise only a plan grant arms MCP writes.
+- **Plan grants.** An `[mcp.plan]` table names devices, properties, a priority range, a number of writes and how many hours (8 at most) after `bacnet mcp authorize` they may run without a prompt. Authorizing says so in capitals; a write outside the plan is refused.
+- **Targets are numbers.** The device instance and `type:instance` objects come from the agent, never from a name a device reported.
+- **Not offered:** DeviceCommunicationControl, ReinitializeDevice, or anything that creates or deletes objects.
+
+`bacnet_revert` puts back what this agent changed: a slot is relinquished (or given back the value another commander had), another property gets its old value. While the TUI has the profile open it holds the ledger, so a write is refused (`workspace-locked`) until it closes; reads go on.
+
 ## Resources and subscriptions
 
 The server also offers resources: `bacnet://devices` (paged: a long list names its next page, `bacnet://devices/after/{instance}`), `bacnet://device/{instance}`, a point as `bacnet://device/{instance}/object/{type}:{n}` (one property with `/property/{prop}`), alarms as `bacnet://alarms` and `bacnet://device/{instance}/alarms`, `bacnet://session` and `bacnet://ledger`. A host can subscribe to them, with `subscriptions/listen` on the 2026-07-28 revision of MCP or `resources/subscribe` on older ones such as 2025-06-18: the server watches each point with one COV subscription however many listeners share it, or polls it every 10 seconds when the device refuses COV, and tells the host when it changes. Reading a watched point sends nothing. Bursts of changes are folded into one update a second.
 
-An agent can watch up to 32 points at once, and the server 256 in all. The subscription acknowledgment lists only the resources the server took on: a device not yet discovered, one the profile doesn't reach, or a point past the limit is left out (an older host's `resources/subscribe` gets an error for it instead). Subscriptions are always finite (five minutes, renewed) and are cancelled when the last listener leaves or the server stops; one the device can't be told about ends on its own. Hosts without subscriptions use `bacnet_watch` instead. In passive mode only the session resource and an empty ledger are offered.
+An agent can watch up to 32 points at once, and the server 256 in all. The subscription acknowledgment lists only the resources the server took on: a device not yet discovered, one the profile doesn't reach, or a point past the limit is left out (an older host's `resources/subscribe` gets an error for it instead). Subscriptions are always finite (five minutes, renewed) and are cancelled when the last listener leaves or the server stops; one the device can't be told about ends on its own. Hosts without subscriptions use `bacnet_watch` instead. `bacnet://ledger` lists this agent's changes still in effect. In passive mode only the session resource and the ledger are offered.
 
 ## Safety
 
-- **Device text is data.** Names, descriptions, vendor strings and character strings in a decoded frame come back in an `untrusted` envelope that says where each came from, with control characters, bidirectional overrides and other invisible format characters removed, links defanged and the length capped. A device can still say anything in them, so a model can still be misled by what it reads; the server's answer is that it can't change anything.
+- **Device text is data.** Names, descriptions, vendor strings and character strings in a decoded frame come back in an `untrusted` envelope that says where each came from, with control characters, bidirectional overrides and other invisible format characters removed, links defanged and the length capped. A device can still say anything in them, so a model can still be misled by what it reads; the server's answer is that nothing changes without a person's approval.
 - **Limits hold on the server.** One request at a time per device, 20 a second in all, 20 a second per network (2 on a network marked slow, 5 on one marked fast), and 5 a second for the agent, with bursts of 20. Each result reports what it cost, including the time spent waiting, so an agent can slow down.
 - **Results are paged.** Large lists, trend logs and alarm lists end with a signed cursor that only resumes the same call. A long object list read element by element goes on where the last call stopped. Each trend log request is charged, and a summary reads at most 20,000 records a call.
 - **Reads are logged as summaries** on stderr, always: a line per call, and the counts per device when the server stops.
 - **Site data reaches the agent's host.** Don't share an agent session that reads a sensitive site with tools that can send data elsewhere.
 
-The design, including the write tools of a later phase, is in [`docs/design/mcp.md`](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/design/mcp.md).
+The design, with the approval channels of later releases, is in [`docs/design/mcp.md`](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/design/mcp.md).

@@ -160,6 +160,72 @@ fn a_bare_consent_time_authorizes_nothing() {
     assert_eq!(stored.authorized_at_unix, None, "cleared on load");
 }
 
+/// `mcp_writes`, `mcp_arm` and `[mcp.plan]` become the write policy, the
+/// plan running from the authorization (#2068); authorizing says plainly
+/// what a plan lets through without a prompt; and offering writes or
+/// changing the plan needs authorizing again.
+#[test]
+fn writes_and_a_plan_become_the_write_policy() {
+    use crate::tui::profile::mcp::{McpChoice, McpPlan};
+    let plan = McpPlan {
+        devices: vec!["1201".into()],
+        properties: vec!["present-value".into()],
+        priority_min: 8,
+        priority_max: 16,
+        max_writes: 50,
+        hours: 2,
+        reason: Some("commissioning".into()),
+    };
+    let section = McpSection {
+        mcp_writes: McpChoice::Elicit,
+        mcp_arm: McpChoice::Elicit,
+        plan: Some(plan.clone()),
+        authorized_at_unix: Some(1_000),
+        ..McpSection::default()
+    };
+    let workspace = Workspace {
+        dir: "/tmp/site".into(),
+        profile: Some("site".into()),
+        transport: "BIP",
+        local: "0.0.0.0:47808".into(),
+    };
+    let writes = write_policy(&section, workspace).unwrap();
+    assert_eq!(writes.mode, WriteMode::Elicit);
+    assert_eq!(writes.arm, ArmMode::Elicit);
+    let grant = writes.plan.unwrap();
+    assert_eq!(grant.devices, [(1201, 1201)]);
+    assert_eq!(grant.priorities, (8, 16));
+    assert_eq!(grant.expires_unix, 1_000 + 2 * 3_600);
+
+    let (_dir, store) = store_with(Some(McpSection {
+        authorized_at_unix: None,
+        ..section.clone()
+    }));
+    let mut person = typed(true, Some("site"));
+    authorize(&store, "site", &mut person).unwrap();
+    assert!(
+        person.asked[0].contains("WITHOUT ANY PROMPT up to 50 writes"),
+        "{}",
+        person.asked[0]
+    );
+    let mut profile = store.load("site").unwrap();
+    let mcp = profile.mcp.as_mut().unwrap();
+    mcp.plan.as_mut().unwrap().max_writes = 51;
+    store.save("site", &profile, false).unwrap();
+    assert!(!authorized(&store), "a changed plan");
+
+    let never = McpSection {
+        plan: Some(plan),
+        ..McpSection::default()
+    };
+    assert!(never.validate().is_err(), "a plan needs mcp_writes");
+    let offered = McpSection {
+        mcp_writes: McpChoice::Elicit,
+        ..McpSection::default()
+    };
+    assert!(offered.raises(&McpSection::default()));
+}
+
 /// The defaults an absent key means agree with the server's.
 #[test]
 fn the_profile_defaults_are_the_servers() {

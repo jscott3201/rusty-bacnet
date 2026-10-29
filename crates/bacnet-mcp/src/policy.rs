@@ -8,6 +8,13 @@ use std::time::Duration;
 
 use bacnet_ops::limits::RequestLimits;
 
+mod writes;
+
+pub use writes::{
+    ArmMode, MAX_PLAN_SECS, MAX_PLAN_WRITES, MAX_WRITES, PlanGrant, Workspace, WriteMode,
+    WritePolicy,
+};
+
 /// The server's launch policy. [`Policy::default`] is the read-only
 /// default every deployment starts from: every network and device, no
 /// broad discovery, the default rates and caps.
@@ -35,6 +42,8 @@ pub struct Policy {
     pub rates: Rates,
     /// The per-call caps.
     pub caps: Caps,
+    /// What the server may change: no write tool by default.
+    pub writes: WritePolicy,
 }
 
 /// Requests a second, at each layer (design §7.6).
@@ -114,6 +123,7 @@ impl Policy {
     /// Check the policy before anything starts: a bad configuration
     /// refuses to start rather than run with a guess.
     pub fn validate(&self) -> Result<(), String> {
+        self.writes.validate()?;
         if let Some(networks) = &self.networks
             && networks.contains(&u16::MAX)
         {
