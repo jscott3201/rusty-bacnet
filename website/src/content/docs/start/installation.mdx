@@ -101,7 +101,7 @@ The guides use `bacnet` for readability. Rename the executable to `bacnet` / `ba
 
 ### Prefer a source build?
 
-With Rust **1.93 or later** and the toolchain's platform prerequisites installed:
+With Rust **1.95 or later** and the toolchain's platform prerequisites installed:
 
 <Code lang="sh" code={`git clone --branch v${release} ${repository}.git rusty-bacnet-v${release}
 cd rusty-bacnet-v${release}
@@ -120,7 +120,7 @@ cargo install --path crates/bacnet-cli --locked --features sc-tls
 
 `pcap` is a separate optional Cargo feature and needs native development dependencies when building. A source build with it links the system's libpcap, so the machine that runs it needs libpcap too. Add it only when packet capture is needed.
 
-From 0.15 the prebuilt executables include the [MCP server for AI agent hosts](/rusty-bacnet/guides/ai-agents/) (`bacnet mcp serve`); a source build enables it with `--features mcp`.
+The prebuilt executables include the [MCP server for AI agent hosts](/rusty-bacnet/guides/ai-agents/) (`bacnet mcp serve`); a source build enables it with `--features mcp`.
 
 <NextStep href="/rusty-bacnet/start/first-read/" label="Read a known device" description="Start with one authorized device and one property." />
 
@@ -200,7 +200,7 @@ The release also publishes a source distribution, <code>rusty_bacnet-{release}.t
 
 ## Add the Rust crates
 
-Rust **1.93 or later** is the reviewed workspace minimum. Use the `bacnet-*` crates; `rusty-bacnet` is the Python package name, not the Rust client crate.
+Rust **1.95 or later** is the workspace minimum, and the crates use Rust edition 2024. Use the `bacnet-*` crates; `rusty-bacnet` is the Python package name, not the Rust client crate.
 
 Start with the exact release baseline while learning:
 

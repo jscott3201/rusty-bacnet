@@ -7,7 +7,7 @@ import { release } from '../../src/lib/site.mjs';
 import { repo, splitDevSection } from './dev-section.mjs';
 
 const root = new URL('../../', import.meta.url);
-test('security page shows the exact policy program and keeps dev additions apart', async () => {
+test('security page shows the exact release-pinned policy program and no dev section', async () => {
   const file = fileURLToPath(new URL('src/content/docs/integrate/security.mdx', root));
   const source = await readFile(file, 'utf8');
   const program = await readFile(new URL('examples/rust/sc-operator-policy/src/main.rs', root), 'utf8');
@@ -29,27 +29,32 @@ test('security page shows the exact policy program and keeps dev additions apart
     'Know who sent the request',
     'Limit what reaches the server on BACnet/SC',
     'What Python exposes',
+    'Record local access decisions',
     'Read the contracts',
-    'On `dev` after the release',
+    'Example: writes and DCC from one certificate name',
     'Next steps',
   ]) assert.ok(body.includes(`\n## ${heading}\n`), heading);
-  // Release-scoped outside the dev section; dev links only inside it.
-  const { released, onDev } = splitDevSection(body, 'integrate/security');
-  assert.ok(onDev);
-  for (const doc of ['mutation-policy', 'dcc-policy', 'time-sync-policy']) {
-    assert.ok(released.includes(`${repo}/blob/v${release}/docs/${doc}.md`), doc);
+  // Everything is release-scoped: no dev section and no dev links.
+  const { onDev } = splitDevSection(body, 'integrate/security');
+  assert.equal(onDev, '', 'everything on the page is in the release');
+  assert.ok(!body.includes('on-dev-after-the-release'));
+  for (const doc of ['mutation-policy', 'dcc-policy', 'time-sync-policy', 'local-access-authorization']) {
+    assert.ok(body.includes(`${repo}/blob/v${release}/docs/${doc}.md`), doc);
   }
-  assert.ok(released.includes(`https://docs.rs/bacnet-server/${release}/bacnet_server/policy/index.html`));
-  assert.ok(released.includes(`https://docs.rs/bacnet-transport/${release}/bacnet_transport/port/struct.TransportProvenance.html`));
-  assert.ok(onDev.includes(`${repo}/blob/dev/docs/local-access-authorization.md`));
-  // The post-release accessors appear only in the dev section.
-  for (const name of ['certificate()', 'subject_alt_names()', 'authorize_device_communication_control']) {
-    assert.ok(!released.includes(name), name);
-    assert.ok(onDev.includes(name), name);
+  assert.ok(body.includes(`https://docs.rs/bacnet-server/${release}/bacnet_server/policy/index.html`));
+  assert.ok(body.includes(`https://docs.rs/bacnet-transport/${release}/bacnet_transport/port/struct.TransportProvenance.html`));
+  // The certificate accessors and the DCC decision are documented in the page body.
+  for (const name of ['certificate()', 'subject_alt_names()', 'authorize_device_communication_control', 'sc_control_rate_limit', 'device_write_policy']) {
+    assert.ok(body.includes(name), name);
   }
-  assert.ok(manifest.includes('branch = "dev"'));
-  assert.ok(onDev.includes('The manifest builds against the `dev` branch'));
-  assert.ok(released.includes('`mutation_policy="permissive"`'));
-  assert.ok(released.includes('issue #1966') && released.includes('issue #2022'));
-  assert.ok(onDev.includes('Don\'t match by suffix.'));
+  // The manifest pins the site release, and the page says so.
+  for (const crate of ['bacnet-transport', 'bacnet-types']) {
+    assert.ok(manifest.includes(`${crate} = "=${release}"`), crate);
+  }
+  assert.ok(manifest.includes(`bacnet-server = { version = "=${release}", features = ["sc-tls"] }`));
+  assert.ok(!manifest.includes('branch = '));
+  assert.ok(body.includes(`The manifest pins **v${release}**, whose minimum Rust version is **1.95**.`));
+  assert.ok(body.includes('`mutation_policy="permissive"`'));
+  assert.ok(body.includes('Don\'t match by suffix.'));
 });
+

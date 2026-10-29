@@ -8,14 +8,13 @@ import { devRef, repo, splitDevSection } from './dev-section.mjs';
 import { checkCliLine, cliDefinitions } from './cli-args.mjs';
 
 const root = new URL('../../', import.meta.url);
-// The networking pages describe the release. A page with post-release
-// additions keeps them, and their dev links, in one section; everything
-// outside that section (later sections included) is release-scoped.
+// The networking pages describe the release, with no dev section. Each lists
+// the names its body must document.
 const pages = {
-  'connect/across-subnets': { dev: ['set_release_previous_bbmd', 'previous_release_refused'] },
-  'connect/nat': { dev: null },
-  'connect/multicast': { dev: ['set_multicast_persist_path', 'multicast_persist_failures', 'BbmdChanges::multicast_group'] },
-  'connect/ipv6': { dev: null },
+  'connect/across-subnets': { names: ['set_release_previous_bbmd', 'previous_release_refused'] },
+  'connect/nat': { names: [] },
+  'connect/multicast': { names: ['set_multicast_persist_path', 'multicast_persist_failures', 'BbmdChanges::multicast_group'] },
+  'connect/ipv6': { names: [] },
 };
 
 async function page(slug) {
@@ -25,25 +24,18 @@ async function page(slug) {
   return { title, description, body: await plainBody(body, file, []) };
 }
 
-test('networking pages are release-scoped, with dev additions in one section', async () => {
-  for (const [slug, { dev }] of Object.entries(pages)) {
+test('networking pages are release-scoped, with no dev section', async () => {
+  for (const [slug, { names }] of Object.entries(pages)) {
     const { title, description, body } = await page(slug);
     assert.ok(title && description, slug);
     assert.ok(body.includes(`The page describes **v${release}**.`), slug);
     assert.ok(body.includes('\n## Next steps\n'), slug);
-    const { released, onDev } = splitDevSection(body, slug);
-    assert.ok(released.includes(`${repo}/blob/v${release}/docs/`), `${slug}: release-pinned docs links`);
-    if (dev === null) {
-      assert.equal(onDev, '', `${slug}: no dev section`);
-      continue;
-    }
-    assert.ok(onDev.includes(`${repo}/blob/dev/docs/`), `${slug}: the dev section links dev docs`);
-    assert.match(onDev, devRef);
-    assert.ok(body.includes('(#on-dev-after-the-release)'), `${slug}: the intro points at the dev section`);
-    for (const name of dev) {
-      assert.ok(onDev.includes(name), `${slug}: ${name} in the dev section`);
-      assert.ok(!released.includes(name), `${slug}: ${name} only in the dev section`);
-    }
+    const { onDev } = splitDevSection(body, slug);
+    assert.equal(onDev, '', `${slug}: no dev section`);
+    assert.doesNotMatch(body, devRef, `${slug}: no dev links`);
+    assert.ok(!body.includes('on-dev-after-the-release'), `${slug}: no pointer to a dev section`);
+    assert.ok(body.includes(`${repo}/blob/v${release}/docs/`), `${slug}: release-pinned docs links`);
+    for (const name of names) assert.ok(body.includes(name), `${slug}: ${name}`);
   }
 });
 

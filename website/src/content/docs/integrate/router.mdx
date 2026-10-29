@@ -11,19 +11,21 @@ import routerPython from '../../../../examples/python/bip_router.py?raw';
 
 [Build and integrate](/rusty-bacnet/integrate/overview/) / Route between networks
 
-A BACnet router joins two or more networks, each with its own network number, and passes messages between them (Clause 6). `BACnetRouter` is that router in Rust: each port is one transport on one network, such as two BACnet/IP subnets, or a BACnet/IP network and an MS/TP trunk. It forwards requests and replies, keeps a routing table, and answers the network-layer messages other nodes use to find it. Clients and servers on the attached networks need nothing special to talk through it.
+A BACnet router joins two or more networks, each with its own network number, and passes messages between them (Clause 6). `BACnetRouter` is that router in Rust: each port is one transport on one network, such as two BACnet/IP subnets, or a BACnet/IP network and an MS/TP trunk. It forwards requests and replies, keeps a routing table, and answers the network-layer messages other nodes use to find it. Clients and servers on the attached networks need nothing special to talk through it. Python has a B/IP router too.
 
-The page describes **v{release}**. The Python router, a complete example program and several router changes merged on `dev` after the release have [their own section](#on-dev-after-the-release).
+The page describes **v{release}**.
 
 ## Give each port a network number
 
 `BACnetRouter::start(ports, options)` takes a list of `RouterPort { transport, network_number }` and starts every transport:
 
 - A network number is 1 to 65534, and each port needs a different one. Every router on a network must use the same number for it.
-- All ports share one transport type. To mix link types, wrap each transport in `AnyTransport`.
+- All ports share one transport type. `RouterPort`'s transport type defaults to `AnyTransport`, so a router that mixes link types wraps each transport in `AnyTransport` and writes `RouterPort` alone.
 - `RouterOptions::new()` is the plain router. The options below turn on more.
 
-`start` returns a `StartedRouter` with the router and a receiver, `apdus`, for messages addressed to the router itself, which an application on the router may answer. `router.table()` borrows the routing table: read or change what you need, then drop it before the next `.await`. `router.counters()` reports what the router dropped or refused.
+`start` returns a `StartedRouter` with the router and a receiver, `apdus`, for messages addressed to the router itself, which an application on the router may answer. `router.table()` borrows the routing table: read or change what you need, then drop it before the next `.await`. `router.counters()` reports what the router dropped or refused, and `router.ports()` lists each port's network number and actual MAC.
+
+The router's own application can be a client or a server too. `StartedRouter::into_application_port()` makes it a transport for a `BACnetClient`, and `into_application_ports()` splits it between a `BACnetServer` and a client. `BACnetRouter::originate` sends a global broadcast from the router's own application, such as a Who-Is for every network, on every port.
 
 ## Find routers and the devices behind them
 
@@ -42,7 +44,7 @@ bacnet discover --dnet 5 --wait 3
 bacnet read 5:1005 ai:1 pv
 ```
 
-A routed target is `NETWORK:INSTANCE`, as `5:1005` above, or `NETWORK:0xMAC` for a station by its address on that network, such as `2:0x05` for MS/TP station 5 on network 2. The CLI asks that network for the device and sends the request through the router that answers. In v{release}, `read`, `readm`, `write`, `writem` and `subscribe` take routed targets; other one-shot commands refuse them.
+A routed target is `NETWORK:INSTANCE`, as `5:1005` above, or `NETWORK:0xMAC` for a station by its address on that network, such as `2:0x05` for MS/TP station 5 on network 2. The CLI asks that network for the device and sends the request through the router that answers. `read`, `readm`, `read-range`, `write`, `writem`, `subscribe`, `alarms`, `alarm-summary`, `enrollment-summary`, `ack-alarm`, `create-object`, `delete-object`, `control`, `reinit`, `time-sync`, `file-read` and `file-write` take routed targets, with the same write guards as a local target. The B/IP management commands `bdt`, `fdt`, `register` and `unregister` address local peers and refuse them.
 
 ## Router options worth knowing
 
@@ -50,7 +52,7 @@ Each option is a `RouterOptions` method:
 
 - `control_policy(ControlPolicy::Hardened)` with `control_authorizer(..)` decides which peers may change routes with network-layer messages. Without them, any peer's routing messages are applied. See <a href={`${repository}/blob/v${release}/docs/rust-api.md#who-may-change-routes-518`}>who may change routes</a>.
 - `congestion(Congestion::DEFAULT)` tells the other networks, with Router-Busy-To-Network, when a port's send queue stays full, and with Router-Available-To-Network when it drains.
-- `duplicates(Duplicates::DEFAULT)` drops a global broadcast the router saw within the last second. It is meant for a site whose routers form a loop, which the standard doesn't allow but a misconfigured site can have. The standard defines no such suppression, and a sender's own identical retry within that second is dropped too.
+- `duplicates(Duplicates::DEFAULT)` drops a global broadcast the router saw within the last second. It is meant for a site whose routers form a loop, which the standard doesn't allow but a misconfigured site can have. The standard defines no such suppression, and a sender's own identical retry within that second is dropped too. It also covers three messages the router passes on without a hop count, so that nothing else stops them around a loop: I-Am-Router-To-Network, and Router-Busy-To-Network or Router-Available-To-Network from one sender.
 - `next_hop_rejects()` lets a Reject-Message-To-Network change a learned route only when it comes from that route's next router.
 - `track_admission()` gives the local receiver queue counters and a per-source quota.
 
@@ -66,39 +68,17 @@ At the route limit, the router stops learning new routes. See <a href={`${reposi
 
 ## Stop the router
 
-In v{release}, `router.stop().await` stops the router's tasks and returns nothing; it doesn't wait for each transport to close or report a failure. Queued local messages stay readable from `apdus`.
+`router.stop().await` returns `Result<(), RouterStopError>`. It waits for every transport to stop, and only `Ok` means every port's socket is closed; `failures()` lists what failed. Calling it again returns the same result. Queued local messages stay readable from `apdus`.
 
-## Read the contracts
+## A router in Python
 
-- <a href={`${repository}/blob/v${release}/docs/rust-api.md#bacnet-network`}>Rust network layer and router API</a>.
-- <a href={`${repository}/blob/v${release}/docs/CLI.md`}>CLI reference</a>: target syntax, `whois-router` and routed commands.
-- <a href={`https://docs.rs/bacnet-network/${release}/bacnet_network/router/index.html`}>bacnet_network::router</a> on docs.rs, for v{release}.
-
-## On `dev` after the release
-
-These additions were merged on `dev` after v{release}. Until a release carries them, read the <a href={`${repository}/blob/dev/docs/python-api.md#bip-router`}>dev Python router reference</a> and the <a href={`${repository}/blob/dev/crates/bacnet-network/src/router/mod.rs`}>dev router source</a>.
-
-### A router in Python
-
-`BACnetRouter([BipRouterPort(network, interface=..., port=..., broadcast_address=...), ...])` owns a B/IP router with 1 to 255 ports (#1858). The `bbmd=Bbmd(...)` and `foreign_device=ForeignDevice(...)` options the client and server take work on a port too. Start it with `async with` or `await router.start()`; `await router.ports()` gives each port's actual address, and `await router.routes()` copies the routing table. A successful `await router.close()`, or leaving the context, waits until every port's socket is closed.
+`BACnetRouter([BipRouterPort(network, interface=..., port=..., broadcast_address=...), ...])` owns a B/IP router with 1 to 255 ports. The `bbmd=Bbmd(...)` and `foreign_device=ForeignDevice(...)` options the client and server take work on a port too. Start it with `async with` or `await router.start()`; `await router.ports()` gives each port's actual address, and `await router.routes()` copies the routing table. A successful `await router.close()`, or leaving the context, waits until every port's socket is closed.
 
 It routes between B/IP networks only. It uses the native defaults, including the permissive policy for routing messages, and exposes none of the options above.
 
-The router's own application entity can host Python stacks too (#2071). Build the router with `application="client"` for one `BACnetClient`, or `application="client_and_server"` for a `BACnetClient` and a `BACnetServer`, and build each stack with `transport="router", router=router`. Each takes its share when it starts, once per router start. The client reaches every device through the router's table, so it names each one by its network: find devices with a Who-Is, then use the `_from_device` methods. The server answers at the router's address on each network. Closing the router ends both shares, and their requests then fail at once.
+The router's own application entity can host Python stacks too. Build the router with `application="client"` for one `BACnetClient`, or `application="client_and_server"` for a `BACnetClient` and a `BACnetServer`, and build each stack with `transport="router", router=router`. Each takes its share when it starts, once per router start. The client reaches every device through the router's table, so it names each one by its network: find devices with a Who-Is, then use the `_from_device` methods. The server answers at the router's address on each network. Closing the router ends both shares, and their requests then fail at once.
 
-### Stopping reports failures
-
-`router.stop().await` returns `Result<(), RouterStopError>` (#2002). It waits for every transport to stop, and only `Ok` means every port's socket is closed; `failures()` lists what failed. Calling it again returns the same result. `router.ports()` lists each port's network number and actual MAC.
-
-### More routed CLI commands and router changes
-
-- `alarms`, `alarm-summary`, `enrollment-summary`, `read-range`, `create-object`, `delete-object`, `ack-alarm`, `control`, `reinit`, `time-sync`, `file-read` and `file-write` also take routed targets (#1786, and the two summaries #2077), with the same write guards.
-- The duplicate suppression also covers three messages the router passes on without a hop count, so that nothing else stops them around a loop (#1810): I-Am-Router-To-Network, and Router-Busy-To-Network or Router-Available-To-Network from one sender.
-- `BACnetRouter::originate` sends a global broadcast from the router's own application, such as a Who-Is for every network, on every port (#1809).
-- `RouterPort`'s transport type defaults to `AnyTransport` (#2043), so a router that mixes link types can write `RouterPort` alone.
-- `StartedRouter::into_application_port()` makes the router's own application a transport for a `BACnetClient`, and `into_application_ports()` splits it between a `BACnetServer` and a client (#1808, #2069).
-
-### Example: two B/IP networks on one host
+## Example: two B/IP networks on one host
 
 These programs start a router with ports on networks 1 and 5, both on 127.0.0.1, a device (instance 1005) on network 5 and a client on network 1. The client finds the router, finds the device with a global Who-Is, and reads its Analog Input through the router. Then everything stops.
 
@@ -108,7 +88,7 @@ All three share 127.0.0.1, so a B/IP broadcast from one would reach none of the 
 
 <TabItem label="Rust">
 
-The Rust manifest builds against the `dev` branch, whose minimum Rust version is **1.95**, because the program uses `router.ports()` and the `Result` from `stop()`. A release that includes them will be pinned here instead. Put [Cargo.toml](/rusty-bacnet/examples/rust/bip-router/Cargo.toml) in a new directory and [main.rs](/rusty-bacnet/examples/rust/bip-router/src/main.rs) in its `src` subdirectory, then run `cargo run` there.
+The Rust manifest pins **v{release}**, whose minimum Rust version is **1.95**. Put [Cargo.toml](/rusty-bacnet/examples/rust/bip-router/Cargo.toml) in a new directory and [main.rs](/rusty-bacnet/examples/rust/bip-router/src/main.rs) in its `src` subdirectory, then run `cargo run` there.
 
 <Code code={routerManifest} lang="toml" title="Cargo.toml" />
 
@@ -117,7 +97,7 @@ The Rust manifest builds against the `dev` branch, whose minimum Rust version is
 </TabItem>
 <TabItem label="Python">
 
-The Python program needs a `dev` build of the bindings ([build from source](/rusty-bacnet/development/build-from-source/)). Save [bip_router.py](/rusty-bacnet/examples/bip_router.py) and run it with that environment's interpreter.
+The Python program runs with the v{release} `rusty-bacnet` package; [install it in a virtual environment](/rusty-bacnet/start/python/) first. Save [bip_router.py](/rusty-bacnet/examples/bip_router.py) and run it with that environment's interpreter.
 
 <Code code={routerPython} lang="python" title="bip_router.py" />
 
@@ -135,6 +115,13 @@ Stopped
 ```
 
 CI runs the Rust file in the `bip_router_guide` integration test and the Python file in `test_website_router.py`, and checks every line.
+
+## Read the contracts
+
+- <a href={`${repository}/blob/v${release}/docs/rust-api.md#bacnet-network`}>Rust network layer and router API</a>.
+- <a href={`${repository}/blob/v${release}/docs/python-api.md#bip-router`}>Python router reference</a>.
+- <a href={`${repository}/blob/v${release}/docs/CLI.md`}>CLI reference</a>: target syntax, `whois-router` and routed commands.
+- <a href={`https://docs.rs/bacnet-network/${release}/bacnet_network/router/index.html`}>bacnet_network::router</a> on docs.rs, for v{release}.
 
 ## Next steps
 

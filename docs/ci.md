@@ -1021,8 +1021,8 @@ The Lint job's "Check the pins" step fails when:
   that section's table.
 - **MSRV:** `Cargo.toml`'s `rust-version`, `RUST_MSRV` and
   `scripts/ci/check-msrv.sh` together. The minimum increases only in minor
-  releases, to a stable Rust release at least about six months old. The 0.15
-  development workspace uses edition 2024 and requires Rust 1.95, released
+  releases, to a stable Rust release at least about six months old. From 0.15.0
+  the workspace uses edition 2024 and requires Rust 1.95, released
   on [2026-04-16](https://blog.rust-lang.org/2026/04/16/Rust-1.95.0/). The
   pinned development toolchain remains separate from this minimum.
 - **Fuzz nightly:** `RUST_FUZZ_NIGHTLY`, normally to a nightly of the
@@ -1740,10 +1740,10 @@ To release:
    ```bash
    bash scripts/ci/fuzz.sh lock                # the fuzz crates' Cargo.lock files
    python3 scripts/changelog.py preview        # what the section will hold
-   python3 scripts/changelog.py assemble --version 0.14.0 [--date 2026-10-21]
+   python3 scripts/changelog.py assemble --version 0.15.0 [--date 2026-10-29]
    ```
 
-   `assemble` adds `## [0.14.0] - <date>` below `[Unreleased]`, with the
+   `assemble` adds `## [0.15.0] - <date>` below `[Unreleased]`, with the
    entries grouped by heading and ordered by issue number, and deletes the
    fragments it used. Each entry ends with a link to the GitHub commit that
    brought its fragment into dev, found along the first-parent history, so run
@@ -1823,8 +1823,8 @@ To release:
    not one inside a merged branch), once its CI has passed:
 
    ```bash
-   git tag -a v0.14.0 -m "Rusty BACnet 0.14.0"
-   git push origin v0.14.0
+   git tag -a v0.15.0 -m "Rusty BACnet 0.15.0"
+   git push origin v0.15.0
    ```
 
 The tag push also starts CI's heavy jobs on the tagged commit, and the release
@@ -1965,7 +1965,9 @@ one failing doesn't cancel the others.
   it and its name with ReadPropertyMultiple, writes the value's present value
   at priority 8 and reads it back.
 - **CLI.** [`cli_smoke.sh`](../scripts/release/cli_smoke.sh): `--version` must
-  print `bacnet <version>`, `--help` runs, and the README quickstart `read` and
+  print `bacnet <version>`, `--help` runs, `mcp serve --stdio` without a
+  profile must give the MCP server's own refusal (a build without `mcp`
+  gives the rebuild advice instead; `mcp --help` parses either way), and the README quickstart `read` and
   `--json readm` run against the README server on the cp312 wheel (the website sample tests check that its copy of that server matches the README). On Linux,
   `capture --read` also decodes a one-packet pcap file, through the static
   libpcap and its filter compiler, without needing capture privileges. The
@@ -2125,9 +2127,9 @@ mounted. In the image it:
   `--compatibility manylinux2014` tags them `manylinux_2_17`, and
   `--auditwheel check` fails the build on a symbol or library outside that
   policy instead of copying a library into the wheel;
-- builds the CLI with `--features sc-tls,pcap,serial`. MS/TP (`serial`) is in
-  the Linux CLI only, until a USB RS-485 adapter has been tested on macOS and
-  Windows (#969).
+- builds the CLI with `--features sc-tls,pcap,serial,mcp`. MS/TP (`serial`) is
+  in the Linux CLI only, until a USB RS-485 adapter has been tested on macOS and
+  Windows (#969). `mcp` (the MCP server) is in every release CLI from 0.15.0.
 
 AWS-LC (`aws-lc-sys`, for BACnet/SC) builds with the image's GCC 10 through
 its default builder, which needs no CMake. Its build checks the compiler for
@@ -2136,7 +2138,7 @@ GCC's `memcmp` bug, which GCC 10.2 doesn't have.
 **macOS and Windows** ([`build_native.sh`](../scripts/release/build_native.sh)).
 The job installs the pinned toolchain and the four CPythons, and the script
 builds the wheels with the pinned maturin, in a venv, then the CLI with
-`--features sc-tls`.
+`--features sc-tls,mcp`.
 
 Both scripts install maturin with `pip install --require-hashes --only-binary
 :all: -r` [`maturin-requirements.txt`](../scripts/release/maturin-requirements.txt),
@@ -2241,8 +2243,8 @@ BACnet's own licence, then every third-party component in the release
 binaries with the licence files it ships, identical texts printed once.
 
 - The crates come from `cargo tree --locked --offline -e normal,no-proc-macro`
-  for the CLI (`-p bacnet-cli --features sc-tls,pcap,serial` on Linux, `--features
-  sc-tls` on macOS and Windows) and the Python extension (`-p rusty-bacnet`) on
+  for the CLI (`-p bacnet-cli --features sc-tls,pcap,serial,mcp` on Linux, `--features
+  sc-tls,mcp` on macOS and Windows) and the Python extension (`-p rusty-bacnet`) on
   each of the five release targets, so build scripts, proc-macros,
   dev-dependencies and crates for other platforms, which no release binary
   contains, are left out. Platform crates such as `windows-sys` and

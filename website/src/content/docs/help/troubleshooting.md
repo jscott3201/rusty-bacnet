@@ -6,7 +6,7 @@ description: "Start with the layer that failed, not with a larger scan or a long
 Capture the exact program version, command or API call, transport, host platform, and failure symptom. Keep a sanitized record of the local address/port, target address, object/property, and whether a smaller operation works.
 
 :::caution[Check the version before applying a fix]
-These guides describe **v0.14.0**. Commands and APIs from earlier releases differ in places, notably the CLI's interactive front end and write guard, server authorization policy and BACnet/SC admission. If you are moving an existing setup, read the [upgrade guide](/rusty-bacnet/project/upgrading/) rather than combining commands from different versions.
+These guides describe **v0.15.0**. Commands and APIs from earlier releases differ in places, notably how a peer's refusal is reported, the CLI's decoded output and JSON, its interactive front end and write guard, server authorization policy and BACnet/SC admission. If you are moving an existing setup, read the [upgrade guide](/rusty-bacnet/project/upgrading/) rather than combining commands from different versions.
 :::
 
 ## The executable or module does not start
@@ -25,7 +25,7 @@ An empty discovery result does not prove that a building has no devices. A succe
 
 The terminal UI can retain discovered devices in its session. A separate process does not inherit that session's cache. Use an explicit target address for a one-shot operation, or keep discovery and device-instance lookup within the same supported session.
 
-Only the one-shot `read`, `readm`, `write`, `writem` and `subscribe` commands take a `DNET:instance` target; the other one-shot commands refuse it. A routed network requires more than finding a router's IP address.
+The one-shot device commands take a `DNET:instance` target: `read`, `readm`, `read-range`, `alarms`, `alarm-summary`, `enrollment-summary`, `file-read`, `file-write`, `write`, `writem`, `subscribe`, `control`, `reinit`, `time-sync`, `create-object`, `delete-object` and `ack-alarm`. The BVLC commands `bdt`, `fdt`, `register` and `unregister` address local B/IP peers and refuse it. A routed network requires more than finding a router's IP address.
 
 ## The socket is already in use
 
@@ -63,6 +63,6 @@ Describe the task, version/build features, platform and transport, minimal repro
 
 ## Sources and release scope
 
-These instructions target **v0.14.0**. Source review is not a claim of hardware qualification.
+These instructions target **v0.15.0**. Source review is not a claim of hardware qualification.
 
-[CLI behavior](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/crates/bacnet-cli/src/main.rs) · [SC error and trust implementation](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/crates/bacnet-cli/src/transport.rs) · [Versioned API](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/python-api.md) · [MS/TP timing work](https://github.com/jscott3201/rusty-bacnet/issues/502).
+[CLI behavior](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/crates/bacnet-cli/src/main.rs) · [SC error and trust implementation](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/crates/bacnet-cli/src/transport.rs) · [Versioned API](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/docs/python-api.md) · [MS/TP timing work](https://github.com/jscott3201/rusty-bacnet/issues/502).

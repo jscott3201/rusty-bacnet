@@ -4,7 +4,7 @@ description: "BACnetServer, its policies and counters, and ScHub, generated from
 ---
 
 :::note[On `dev` after the release]
-This page is generated from the type stub on the `dev` branch and tracks the next release, so it can list classes, methods and keywords merged after v0.14.0 that the released wheel doesn't have. The [v0.14.0 release notes](https://github.com/jscott3201/rusty-bacnet/releases/tag/v0.14.0) and the [changes waiting for the next release](https://github.com/jscott3201/rusty-bacnet/tree/dev/changelog.d) say what changed.
+This page is generated from the type stub on the `dev` branch and tracks the next release, so it can list classes, methods and keywords merged after v0.15.0 that the released wheel doesn't have. The [v0.15.0 release notes](https://github.com/jscott3201/rusty-bacnet/releases/tag/v0.15.0) and the [changes waiting for the next release](https://github.com/jscott3201/rusty-bacnet/tree/dev/changelog.d) say what changed.
 :::
 
 The server, its policies and counters, and the BACnet/SC hub. The [Python reference](/rusty-bacnet/reference/python/) lists every group. Each page opens with its main classes, then the other classes, the dictionaries (`TypedDict`) and the type aliases, in stub order.
@@ -1909,7 +1909,10 @@ Update Present\_Value through the narrow, non-generic application Input authorit
 
 Accepted values are a finite REAL for Analog Input and for a Loop's
 control output, logical Enumerated 0/1 (INACTIVE/ACTIVE) for Binary Input,
-and Unsigned 1..=Number\_Of\_States for Multi-state Input. Binary values are
+and Unsigned 1..=Number\_Of\_States for Multi-state Input. A noncommandable
+Analog, Binary or Multi-state Value takes the same datatype as its Input
+counterpart; a commandable one raises OPTIONAL\_FUNCTIONALITY\_NOT\_SUPPORTED
+(use `write_property_local` with a priority). Binary values are
 BACnet logical values after Polarity, not raw hardware/interface levels.
 An object with Out\_Of\_Service set rejects this update to preserve
 network simulation ownership. A Life Safety Point or Zone takes an

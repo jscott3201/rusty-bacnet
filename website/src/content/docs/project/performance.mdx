@@ -9,18 +9,18 @@ import { release, repository } from '../../../lib/site.mjs';
 
 This page summarizes what the stack costs per request on each transport, how far one server scales, and how close MS/TP gets to the serial line's limit. It quotes a few headline figures; the full tables, with every step and its method, are in <a href={`${repository}/blob/v${release}/Benchmarks.md`}>Benchmarks.md</a>. Each figure below names the section it comes from.
 
-The page describes **v{release}**, using Benchmarks.md as tagged for that release. A later analysis of one result, merged on `dev`, has [its own section](#on-dev-after-the-release).
+The page describes **v{release}**, using Benchmarks.md as tagged for that release. Its main tables were measured before this release and not re-run for it; a later repeated comparison of a few results has [its own section](#a-later-repeated-comparison).
 
 **These are measurements of the stack on one machine, not capacity guarantees.** Nearly every figure was taken over the loopback interface, which has no wire delay and almost no loss. On a building network, the network's round trip and the remote device's own processing time will usually dominate.
 
 ## How the figures were measured
 
-The <a href={`${repository}/blob/v${release}/Benchmarks.md#2-test-environment`}>test environment</a> was one Apple M5 laptop (10 cores, 16 gigabytes of memory) running macOS, with Rust 1.99.0 and rustls with aws-lc-rs for TLS. The stress scenarios ran as release builds and the Criterion suites under Cargo's `bench` profile. The measurements were taken on 2026-10-21 from the development branch that became v{release}.
+The <a href={`${repository}/blob/v${release}/Benchmarks.md#2-test-environment`}>test environment</a> was one Apple M5 laptop (10 cores, 16 gigabytes of memory) running macOS, with Rust 1.99.0 and rustls with aws-lc-rs for TLS. The stress scenarios ran as release builds and the Criterion suites under Cargo's `bench` profile. The main tables were measured on 2026-10-21, on the development branch of the previous release after its performance pass.
 
 - Client and server ran in one process and talked over loopback (127.0.0.1 or ::1). The figures show the stack's own cost, not a network's.
 - Criterion figures are medians over 100 samples. Stress figures are a single run of each step, usually 10 seconds long, and vary by a few percent between runs.
 - Each suite ran alone on an idle machine. A laptop changes its clock speed with temperature, so a server-class machine should give steadier numbers, not necessarily faster ones.
-- macOS has a slow datagram path. In the release's Docker comparison, the same binaries in a Linux container on Docker Desktop, given 4 of the laptop's processors, answered 20% to 70% more requests than on macOS (<a href={`${repository}/blob/v${release}/Benchmarks.md#72-stress-scenarios-inside-a-container`}>section 7.2</a>). Treat a Linux host as the better guide to production. That Docker run was carried over from the previous release's report, not repeated for v{release}.
+- macOS has a slow datagram path. In the report's Docker comparison, the same binaries in a Linux container on Docker Desktop, given 4 of the laptop's processors, answered 20% to 70% more requests than on macOS (<a href={`${repository}/blob/v${release}/Benchmarks.md#72-stress-scenarios-inside-a-container`}>section 7.2</a>). Treat a Linux host as the better guide to production. That Docker run is from an earlier edition of the report and was not repeated since.
 
 ## Latency and throughput on the IP transports
 
@@ -32,7 +32,7 @@ A ReadPropertyMultiple of 10 values cost only 2 to 8 microseconds more than one 
 
 With concurrent clients, one BACnet/IP server answered about 82,000 ReadProperty requests per second from 10 clients (section 1). Throughput peaks at 5 to 10 clients on BACnet/IP and BACnet/IPv6; beyond that, more clients only lengthen the queue and the latency of each request. BACnet/SC peaks later, at 50 clients, and passes BACnet/IP from 25 clients on (<a href={`${repository}/blob/v${release}/Benchmarks.md#61-concurrent-clients`}>section 6.1</a>).
 
-No request failed up to 50 clients. At 100 clients some did: 0.5% on BACnet/IP, 0.3% on BACnet/IPv6 and 0.03% on BACnet/SC (the previous release's report counted 0.06% on BACnet/IP at that step). Peak resident memory over the BACnet/IP run was 49 megabytes.
+No request failed up to 50 clients. At 100 clients some did: 0.5% on BACnet/IP, 0.3% on BACnet/IPv6 and 0.03% on BACnet/SC (an earlier edition of the report counted 0.06% on BACnet/IP at that step). Peak resident memory over the BACnet/IP run was 49 megabytes.
 
 A weighted mix of reads, writes, ReadPropertyMultiple, COV subscriptions and Who-Is from 10 clients reached 85,400 operations per second with no errors (<a href={`${repository}/blob/v${release}/Benchmarks.md#65-mixed-workload`}>section 6.5</a>).
 
@@ -68,7 +68,7 @@ The figures above are stack costs. The arithmetic below applies them to common j
 - **Real RS-485 hardware.** MS/TP figures come from a simulated line. No adapter or host is qualified for on-wire timing; the <a href={`${repository}/blob/v${release}/docs/mstp-qualification.md`}>qualification method</a> describes how to measure it.
 - **Linux and Windows hosts directly.** The figures are from macOS, apart from the earlier comparison in a Linux container on Docker Desktop. Windows was not measured.
 - **Ethernet.** The BACnet Ethernet transport has no benchmark.
-- **BBMD capacity and Who-Is discovery.** The release's BBMD table is from an older, paced form of the scenario, so it shows that forwarding and its limits work, not how much a BBMD carries; the capacity scenario and the Docker discovery scenario are still to be run (<a href={`${repository}/blob/v${release}/Benchmarks.md#10-guidance-for-future-work`}>section 10</a>).
+- **BBMD capacity and Who-Is discovery.** The report's BBMD table is from an older, paced form of the scenario, so it shows that forwarding and its limits work, not how much a BBMD carries; the capacity scenario and the Docker discovery scenario are still to be run (<a href={`${repository}/blob/v${release}/Benchmarks.md#10-guidance-for-future-work`}>section 10</a>).
 - **Long runs.** The steps last seconds, not days; there is no soak test of memory or latency over time.
 
 ## Reproduce the figures
@@ -85,9 +85,9 @@ cargo build --release -p bacnet-benchmarks --bins
 
 There are nine Criterion suites (encoding, the portable codecs, ReadRange, and latency and throughput for BACnet/IP, BACnet/IPv6 and BACnet/SC) and a `stress-test` binary with scenarios for concurrent clients, database size, COV, segmentation, a mixed workload, routing, MS/TP, BBMD and device scans. <a href={`${repository}/blob/v${release}/Benchmarks.md#11-how-to-reproduce`}>Section 11</a> lists the exact command for every figure; the Docker and Python runs have their own sections.
 
-## On `dev` after the release
+## A later repeated comparison
 
-After v{release}, a repeated comparison on the same machine looked again at the 100-client step and at two encoding differences, NPDU decoding and building a whole request ([#1979](https://github.com/jscott3201/rusty-bacnet/issues/1979)). With failures now classified, every failed request was the server refusing it for lack of capacity (an Abort from its request admission control), not a request that timed out. Both encoding differences held up, a few nanoseconds each against a round trip of microseconds, and part of the decode difference was traced to an earlier change in how the owned NPDU decoder is built. The release's report had called them timeouts; the cause of the higher refusal rate is still open. An experiment to copy fewer MAC addresses per request ([#1978](https://github.com/jscott3201/rusty-bacnet/issues/1978)) cut instruction counts but missed its latency target and was not adopted. The headline figures above are unchanged. The <a href={`${repository}/blob/dev/Benchmarks.md#101-repeated-comparison-for-1979`}>development Benchmarks.md</a> has the data.
+Later the same day, a repeated comparison on the same machine, against the development stack of the time, looked again at the 100-client step and at two encoding differences, NPDU decoding and building a whole request ([#1979](https://github.com/jscott3201/rusty-bacnet/issues/1979)). With failures now classified, every failed request was the server refusing it for lack of capacity (an Abort from its request admission control), not a request that timed out. Both encoding differences held up, a few nanoseconds each against a round trip of microseconds, and part of the decode difference was traced to an earlier change in how the owned NPDU decoder is built. The main tables had called them timeouts; the cause of the higher refusal rate is still open. An experiment to copy fewer MAC addresses per request ([#1978](https://github.com/jscott3201/rusty-bacnet/issues/1978)) cut instruction counts but missed its latency target and was not adopted. The headline figures above are unchanged. <a href={`${repository}/blob/v${release}/Benchmarks.md#101-repeated-comparison-for-1979`}>Section 10.1</a> has the data.
 
 ## Next steps
 

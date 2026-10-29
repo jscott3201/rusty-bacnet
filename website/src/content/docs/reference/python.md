@@ -6,10 +6,10 @@ description: "Every class, method, signature, keyword default and docstring of t
 The Python reference lists the `rusty_bacnet` module as its type stub, `rusty_bacnet.pyi`, describes it: classes, methods, signatures with their keyword defaults, and docstrings. The stub ships in the wheel, so an editor shows the same signatures. Async methods return native awaitables; await them on a running asyncio loop. Each group below has its own page.
 
 :::note[On `dev` after the release]
-These pages are generated from the type stub on the `dev` branch and track the next release, so they can list classes, methods and keywords merged after v0.14.0 that the released wheel doesn't have. The [v0.14.0 release notes](https://github.com/jscott3201/rusty-bacnet/releases/tag/v0.14.0) and the [changes waiting for the next release](https://github.com/jscott3201/rusty-bacnet/tree/dev/changelog.d) say what changed.
+These pages are generated from the type stub on the `dev` branch and track the next release, so they can list classes, methods and keywords merged after v0.15.0 that the released wheel doesn't have. The [v0.15.0 release notes](https://github.com/jscott3201/rusty-bacnet/releases/tag/v0.15.0) and the [changes waiting for the next release](https://github.com/jscott3201/rusty-bacnet/tree/dev/changelog.d) say what changed.
 :::
 
-Signatures and short contracts are here. Lifecycle, cancellation and error contracts that are too long for a docstring are in the [Python API guide](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/python-api.md). For tasks, start with [Read with Python](/rusty-bacnet/start/python/) or the [local lab](/rusty-bacnet/start/local-lab/).
+Signatures and short contracts are here. Lifecycle, cancellation and error contracts that are too long for a docstring are in the [Python API guide](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/docs/python-api.md). For tasks, start with [Read with Python](/rusty-bacnet/start/python/) or the [local lab](/rusty-bacnet/start/local-lab/).
 
 `website/scripts/reference-python.py` writes the group pages and the list below from the stub; edit the stub, not the pages.
 

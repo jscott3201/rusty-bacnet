@@ -10,7 +10,7 @@ import { release, repository } from '../../../lib/site.mjs';
 
 BACnet/IP discovery runs on broadcasts, and IP routers don't forward them. A read sent to a device's known address crosses routers like any other UDP datagram; a Who-Is doesn't. Annex J offers two ways to carry broadcasts further: a broadcast management device (BBMD) on each subnet, which forwards them to the BBMDs listed in its Broadcast Distribution Table (BDT), and foreign-device registration, where a node on a subnet with no BBMD registers with a remote BBMD and is listed in its Foreign Device Table (FDT).
 
-The page describes **v{release}**. One addition merged on `dev` after the release has [its own section](#on-dev-after-the-release).
+The page describes **v{release}**.
 
 ## Decide whether you need one
 
@@ -133,15 +133,13 @@ A BBMD answers anyone who can send it a datagram, and B/IP has no authentication
 
 The <a href={`${repository}/blob/v${release}/docs/rust-api.md#bbmd`}>BBMD</a> section covers forwarding and the budgets in detail.
 
+## Release the old BBMD's entry after a move
+
+A foreign device moved to another BBMD through its Network Port (FD_BBMD_Address, then ReinitializeDevice) can also ask the old BBMD to delete its entry, so it goes before its TTL and grace period run out. Turn it on with `BipTransport::set_release_previous_bbmd(true)`, after `register_as_foreign_device`; it is off by default. A NAK or silence never fails the move and is counted in the snapshot's `previous_release_refused` and `previous_release_unanswered`. The request names the device's own local address, so behind a NAT router, or on a host whose registration left from another address, the old BBMD knows the device by another address and will usually refuse. This stack's BBMD refuses unless its management access list names the device. Python doesn't expose it. See <a href={`${repository}/blob/v${release}/docs/rust-api.md#registered-bip-network-port`}>Registered B/IP Network Port</a>.
+
 ## What is tested
 
 CLI tests run `--foreign-bbmd` discovery through a BBMD, a refused and a silent registration, and `register` and `unregister` against an accepting and a refusing BBMD. Python tests cover a foreign client discovering a server through its BBMD, a refused registration, and the BDT and FDT round trip with its NAKs. All run on one host's loopback interface; none qualifies a routed site network.
-
-## On `dev` after the release
-
-This change is merged on `dev` and will ship in the next release.
-
-**Release the old BBMD's entry after a move** (#1852). A foreign device moved to another BBMD through its Network Port (FD_BBMD_Address, then ReinitializeDevice) can also ask the old BBMD to delete its entry, so it goes before its TTL and grace period run out. Turn it on with `BipTransport::set_release_previous_bbmd(true)`, after `register_as_foreign_device`; it is off by default. A NAK or silence never fails the move and is counted in the snapshot's `previous_release_refused` and `previous_release_unanswered`. The request names the device's own local address, so behind a NAT router, or on a host whose registration left from another address, the old BBMD knows the device by another address and will usually refuse. This stack's BBMD refuses unless its management access list names the device. Python doesn't expose it. See <a href={`${repository}/blob/dev/docs/rust-api.md#registered-bip-network-port`}>Registered B/IP Network Port</a> on `dev`.
 
 ## Next steps
 

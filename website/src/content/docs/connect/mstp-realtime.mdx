@@ -9,7 +9,7 @@ import { release, repository } from '../../../lib/site.mjs';
 
 An MS/TP station has to answer a token, a poll or a request within fixed times, on a host that also runs everything else. When it answers late, the trunk loses tokens, retries and drops replies, even though every frame decodes. This page explains what the timing asks for, which settings the stack gives you on Linux, and how to measure the result. Commission the trunk first with [MS/TP and RS-485](/rusty-bacnet/connect/mstp/).
 
-The page describes **v{release}**. The receive-only baud scan, merged on `dev` after the release, has [its own section](#on-dev-after-the-release).
+The page describes **v{release}**.
 
 **No adapter or host is qualified for on-wire timing yet.** The settings below lower delay on the host; they don't prove the timing on the wire. Measure on your own hardware, under your own load.
 
@@ -104,6 +104,8 @@ bacnet tui --mstp-monitor /dev/ttyUSB1 --mstp-baud 38400
 
 On a second adapter it is an independent observer of a station you are tuning: it doesn't open that station's port or take part in token passing. Its timestamps come from the host, so they are only as fine as the adapter's latency (16 ms by default). [Monitor and join MS/TP](/rusty-bacnet/tui/mstp/) walks through each view. In Rust, `MstpMonitor` over a `ReceiveOnlyPort` gives the same statistics.
 
+When you don't know a trunk's baud rate, the monitor can find it without transmitting. From a live monitor, `:mstp scan SECS` listens at each standard rate in turn for that many seconds, then returns to the configured rate. It scores each rate by its share of valid frames, suggests the best one when one is clearly best, and never changes the baud rate, joins or transmits by itself. It finds the rate of a trunk you don't know; it doesn't qualify the adapter. The <a href={`${repository}/blob/v${release}/docs/CLI.md#mstp-monitor-and-safe-join`}>CLI reference</a> describes it.
+
 ## Test without hardware
 
 A source checkout holds three ways to run MS/TP with no serial port. None of them says anything about an adapter, a driver or the wire.
@@ -129,10 +131,6 @@ The <a href={`${repository}/blob/v${release}/Benchmarks.md#44-mstp`}>MS/TP bench
 | The monitor and a participant work with a USB RS-485 adapter | Used with hardware on Linux only |
 | Timing on the wire meets Clause 9 with any adapter or host | Not established: [#502](https://github.com/jscott3201/rusty-bacnet/issues/502) and [#707](https://github.com/jscott3201/rusty-bacnet/issues/707) are open |
 | Real-time scheduling lowers lateness on RS-485 hardware | Not yet checked on hardware: [#501](https://github.com/jscott3201/rusty-bacnet/issues/501) is open |
-
-## On `dev` after the release
-
-The terminal UI's monitor gained a receive-only baud scan after v{release} ([#1873](https://github.com/jscott3201/rusty-bacnet/issues/1873)). From a live monitor, `:mstp scan SECS` listens at each standard rate in turn for that many seconds, then returns to the configured rate. It scores each rate by its share of valid frames, suggests the best one when one is clearly best, and never changes the baud rate, joins or transmits by itself. It finds the rate of a trunk you don't know; it doesn't qualify the adapter. The <a href={`${repository}/blob/dev/docs/CLI.md#mstp-monitor-and-safe-join`}>development CLI reference</a> describes it.
 
 ## Next steps
 

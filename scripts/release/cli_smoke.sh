@@ -6,6 +6,9 @@
 # - --version and --help run, and with --expect-version, --version names V;
 # - plain `bacnet` without a terminal prints the usage and exits 2, and says
 #   why the terminal UI didn't open, which shows the build has one (#974);
+# - `mcp serve --stdio` without a profile exits 1 with the MCP server's own
+#   refusal, not the missing-feature advice: every release CLI has the MCP
+#   server (#2068);
 # - the README quickstart on loopback: a Python server with one analog input,
 #   then `read` and `--json readm` from the CLI;
 # - capture --read decodes a one-packet pcap file, which exercises the
@@ -49,6 +52,16 @@ status=0
 plain=$(bacnet </dev/null 2>&1 >/dev/null) || status=$?
 if [ "$status" != 2 ] || ! grep -q 'must both be a terminal' <<<"$plain"; then
   echo "plain bacnet exited $status, expected 2 and the TUI's terminal check: $plain"
+  exit 1
+fi
+# `mcp --help` parses in any build, so ask the MCP server itself: with no
+# profile and no --passive it refuses before it reads a profile or stdin.
+# A build without `mcp` prints the rebuild advice instead (#2068).
+status=0
+mcp=$(bacnet mcp serve --stdio </dev/null 2>&1 >/dev/null) || status=$?
+if [ "$status" != 1 ] || grep -q "requires the 'mcp' feature" <<<"$mcp" \
+  || ! grep -q 'needs an authorized profile' <<<"$mcp"; then
+  echo "mcp serve without a profile exited $status, expected 1 and the MCP server's profile check: $mcp"
   exit 1
 fi
 

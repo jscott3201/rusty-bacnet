@@ -4,7 +4,7 @@ description: "Object identifiers, property values, structured values and B/IP mo
 ---
 
 :::note[On `dev` after the release]
-This page is generated from the type stub on the `dev` branch and tracks the next release, so it can list classes, methods and keywords merged after v0.14.0 that the released wheel doesn't have. The [v0.14.0 release notes](https://github.com/jscott3201/rusty-bacnet/releases/tag/v0.14.0) and the [changes waiting for the next release](https://github.com/jscott3201/rusty-bacnet/tree/dev/changelog.d) say what changed.
+This page is generated from the type stub on the `dev` branch and tracks the next release, so it can list classes, methods and keywords merged after v0.15.0 that the released wheel doesn't have. The [v0.15.0 release notes](https://github.com/jscott3201/rusty-bacnet/releases/tag/v0.15.0) and the [changes waiting for the next release](https://github.com/jscott3201/rusty-bacnet/tree/dev/changelog.d) say what changed.
 :::
 
 Identifiers, property values, structured values and B/IP modes. The [Python reference](/rusty-bacnet/reference/python/) lists every group. Each page opens with its main classes, then the other classes, the dictionaries (`TypedDict`) and the type aliases, in stub order.
@@ -646,9 +646,10 @@ the BBMD that serves the group (Annex J.8.3): it forwards the group's
 broadcasts to its BDT and foreign devices and theirs to the group, and
 its own BDT row must have the mask 255.255.255.255, or start raises. A
 registered Network Port serves the group as BACnet\_IP\_Multicast\_Address
-(0.0.0.0 when off), writable when the server answers ReinitializeDevice
-and isn't a BBMD; a group changed that way lasts until the process
-exits, and isn't saved. Two `Multicast` values with the same settings
+(0.0.0.0 when off), writable when the server answers ReinitializeDevice;
+on a BBMD a written group is activated together with the BDT written
+beside it, both or neither (#1963). A group changed that way lasts until
+the process exits, and isn't saved. Two `Multicast` values with the same settings
 compare and hash equal. Invalid values raise ValueError, or
 OverflowError for an integer out of range. Windows multicast is
 untested.

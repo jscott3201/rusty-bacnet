@@ -39,7 +39,7 @@ bacnet --foreign-bbmd 192.168.1.1 --ttl 300 discover --wait 3
 
 Use a BBMD designated by the site owner. Registration changes BBMD foreign-device state. It is not a generic VPN or NAT workaround, and it is not part of BACnet/SC or IPv6 setup.
 
-`discover --dnet 2` requests discovery for a remote BACnet network. It does **not** establish that every other command supports `2:1234` as a routed target. The one-shot `read`, `readm`, `write`, `writem` and `subscribe` commands take it, and the other one-shot commands refuse it. A direct router IP is not automatically equivalent to the downstream device's BACnet address.
+`discover --dnet 2` requests discovery for a remote BACnet network. It does **not** establish that every other command supports `2:1234` as a routed target. The one-shot device commands take it: `read`, `readm`, `read-range`, `alarms`, `alarm-summary`, `enrollment-summary`, `file-read`, `file-write`, `write`, `writem`, `subscribe`, `control`, `reinit`, `time-sync`, `create-object`, `delete-object` and `ack-alarm`. The BVLC commands `bdt`, `fdt`, `register` and `unregister` address local B/IP peers and refuse it. A direct router IP is not automatically equivalent to the downstream device's BACnet address.
 
 ## Keep discovery and device-instance lookup in one session
 

@@ -29,7 +29,7 @@ class ParseTests(unittest.TestCase):
         def cargo(*args):
             calls.append(args)
             target = args[args.index("--target") + 1]
-            crate = "pcap" if "sc-tls,pcap,serial" in args else "rusty" if "rusty-bacnet" in args else "cli"
+            crate = "pcap" if "sc-tls,pcap,serial,mcp" in args else "rusty" if "rusty-bacnet" in args else "cli"
             return f"{crate} v1.0.0\n{target.split('-')[0]}-only v1.0.0\nshared v2.0.0\n"
 
         with mock.patch.object(tpn, "cargo", cargo):
@@ -37,8 +37,8 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(len(calls), 2 * len(tpn.TARGETS))
         cli_features = {c[c.index("--target") + 1]: c[c.index("--features") + 1] for c in calls if "bacnet-cli" in c}
         self.assertEqual(cli_features, tpn.TARGETS)
-        self.assertEqual(cli_features["x86_64-pc-windows-msvc"], "sc-tls")
-        self.assertEqual(cli_features["aarch64-unknown-linux-gnu"], "sc-tls,pcap,serial")
+        self.assertEqual(cli_features["x86_64-pc-windows-msvc"], "sc-tls,mcp")
+        self.assertEqual(cli_features["aarch64-unknown-linux-gnu"], "sc-tls,pcap,serial,mcp")
         self.assertEqual(used[("pcap", "1.0.0")], {"CLI"})
         self.assertEqual(used[("shared", "2.0.0")], {"CLI", "Python"})
         self.assertIn(("aarch64-only", "1.0.0"), used)

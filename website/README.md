@@ -173,8 +173,8 @@ in one of its scenarios, and a page that uses it.
 
 **Known gap (#2110):** the scenarios match `dev`'s TUI again, and a full run
 takes every shot in the manifest. The committed images still date from before
-many TUI changes; they are retaken from the 0.15.0 release build, so the site
-shows what users install. When a wait times out, the script names the
+many TUI changes; they are to be retaken from the published 0.15.0 release
+build, so the site shows what users install. When a wait times out, the script names the
 scenario, the text it waited for and the last shot taken, then prints the
 pane.
 
@@ -300,7 +300,7 @@ artifact or fetch a mutable branch in the deployment job.
   and the llms index read. To move to another release, change it and run
   `npm test`: `tests/unit/release.test.mjs` names every page, the lab script,
   the sidebar label and the home banner that still carry another version
-  (the upgrade guide from it, `project/upgrading/v0-14.md`, and the lab's
+  (the upgrade guide from it, `project/upgrading/v0-15.md`, and the lab's
   recorded evidence may name the previous one). It also checks the installation page's asset list against
   `.github/workflows/release.yml`.
 - `tui/`: the terminal UI as it is on `dev`. It shipped in the release in

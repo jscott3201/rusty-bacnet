@@ -60,11 +60,13 @@ test('performance page is release-scoped and links Benchmarks.md at the release'
   const { title, description, body } = await page();
   assert.ok(title && description);
   assert.ok(body.includes(`The page describes **v${release}**`));
-  assert.ok(body.includes('(#on-dev-after-the-release)'));
+  assert.ok(body.includes('(#a-later-repeated-comparison)'));
+  assert.ok(body.includes('\n## A later repeated comparison\n'));
   assert.ok(body.includes('\n## Next steps\n'));
   const { released, onDev } = splitDevSection(body, 'project/performance');
-  assert.ok(onDev.includes(`${repo}/blob/dev/Benchmarks.md#101-repeated-comparison-for-1979`));
-  for (const issue of [1978, 1979]) assert.ok(onDev.includes(`${repo}/issues/${issue}`), `#${issue}`);
+  assert.equal(onDev, '', 'no dev section');
+  assert.ok(released.includes(`${repo}/blob/v${release}/Benchmarks.md#101-repeated-comparison-for-1979`));
+  for (const issue of [1978, 1979]) assert.ok(released.includes(`${repo}/issues/${issue}`), `#${issue}`);
   // The release-scoped text makes no capacity claim.
   assert.ok(released.includes('not capacity guarantees'));
   assert.ok(released.includes(`${repo}/blob/v${release}/Benchmarks.md#11-how-to-reproduce`));

@@ -3,7 +3,7 @@ title: "Build and integrate"
 description: "Choose an application owner and find release API contracts and evidence boundaries."
 ---
 
-**Integration guides for v0.14.0.** These pages cover the parts of the release that go beyond a first read: serving objects, routing, shared endpoints, Network Port and Number controls, transports and BACnet/SC. Install the release from [v0.14 installation](/rusty-bacnet/start/installation/), or try the [local lab](/rusty-bacnet/start/local-lab/) first.
+**Integration guides for v0.15.0.** These pages cover the parts of the release that go beyond a first read: serving objects, routing, shared endpoints, Network Port and Number controls, transports and BACnet/SC. Install the release from [v0.15 installation](/rusty-bacnet/start/installation/), or try the [local lab](/rusty-bacnet/start/local-lab/) first.
 
 ## Choose the owner for your application
 
@@ -27,7 +27,7 @@ For an unreleased change or a different feature set, [build from source](/rusty-
 
 ## Use the reference for exact signatures
 
-The [engineering documentation map](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/README.md) links the canonical [Rust API](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/rust-api.md), [Python API](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/python-api.md) and [CLI reference](https://github.com/jscott3201/rusty-bacnet/blob/v0.14.0/docs/CLI.md). These task guides summarize those contracts rather than duplicate every method.
+The [engineering documentation map](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/docs/README.md) links the canonical [Rust API](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/docs/rust-api.md), [Python API](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/docs/python-api.md) and [CLI reference](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/docs/CLI.md). These task guides summarize those contracts rather than duplicate every method.
 
 Before 1.0, APIs may be removed or changed directly. Keep the source revision, feature selection and installed native artifact together in your integration record. Review [upgrade guidance](/rusty-bacnet/project/upgrading/) when moving an existing application.
 

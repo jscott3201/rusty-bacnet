@@ -69,9 +69,9 @@ fn dependencies(source: &[u8]) -> Result<(), String> {
     let expected: toml::Value = toml::from_str(
         r#"
 [dependencies]
-bacnet-client = "=0.14.0"
-bacnet-types = "=0.14.0"
-bacnet-encoding = "=0.14.0"
+bacnet-client = "=0.15.0"
+bacnet-types = "=0.15.0"
+bacnet-encoding = "=0.15.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 "#,
     )
@@ -94,18 +94,18 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 fn dependency_contract_matches_the_documented_release() {
     dependencies(sample_source::extract(GUIDE, "toml").unwrap()).unwrap();
     let prose = std::str::from_utf8(GUIDE).unwrap();
-    assert!(prose.contains("These instructions target **v0.14.0**"));
-    assert!(prose.contains("minimum Rust version of **1.93**"));
+    assert!(prose.contains("These instructions target **v0.15.0**"));
+    assert!(prose.contains("minimum Rust version of **1.95**"));
 }
 
 #[test]
 fn dependency_drift_is_detected_semantically() {
     let source = std::str::from_utf8(sample_source::extract(GUIDE, "toml").unwrap()).unwrap();
     for bad in [
-        source.replace("=0.14.0", "0.14"),
+        source.replace("=0.15.0", "0.15"),
         source.replace("rt-multi-thread", "rt"),
         format!("{source}unexpected = \"1\"\n"),
-        source.replace("bacnet-encoding = \"=0.14.0\"\n", ""),
+        source.replace("bacnet-encoding = \"=0.15.0\"\n", ""),
     ] {
         assert!(dependencies(bad.as_bytes()).is_err(), "{bad}");
     }

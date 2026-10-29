@@ -168,7 +168,7 @@ fn name_of(name: Option<&str>, raw: impl std::fmt::Display) -> Result<&str> {
     name.ok_or_else(|| format!("value {raw} has no name"))
 }
 
-/// `export const release = '0.14.0';` in site.mjs. The sample PICS
+/// `export const release = '0.15.0';` in site.mjs. The sample PICS
 /// (`sample_pics.rs`) takes its version fields from it too.
 pub fn site_release(site: &str) -> Result<String> {
     site.lines()

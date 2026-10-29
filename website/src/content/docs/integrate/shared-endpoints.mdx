@@ -22,7 +22,7 @@ The announced interface and configured broadcast destination are `127.0.0.1`. Th
 
 ### Save the program and manifest
 
-These files target **v{release}**, whose minimum Rust version is **1.93**. Put [Cargo.toml](/rusty-bacnet/examples/rust/shared-endpoint/Cargo.toml) in a new directory and [main.rs](/rusty-bacnet/examples/rust/shared-endpoint/src/main.rs) in its `src` subdirectory. The exact direct BACnet version is pinned; the empty workspace table makes this a standalone Cargo project.
+These files target **v{release}**, whose minimum Rust version is **1.95**. Put [Cargo.toml](/rusty-bacnet/examples/rust/shared-endpoint/Cargo.toml) in a new directory and [main.rs](/rusty-bacnet/examples/rust/shared-endpoint/src/main.rs) in its `src` subdirectory. The exact direct BACnet version is pinned; the empty workspace table makes this a standalone Cargo project.
 
 ```text
 shared-endpoint-guide/
@@ -59,7 +59,9 @@ The exact source and manifest displayed here are checked with the development in
 
 The declared Network Port in the program is not automatically registered. Explicit registration is a separate [receiving-port contract](/rusty-bacnet/integrate/network-ports/). A successful start exposes the actual B/IP address, including the ephemeral port; after stop it is unavailable.
 
-For SC, `ScEndpointBuilder` composes a caller-dialed `TlsWebSocket` with `build_hub_session` under the `sc-tls` feature. For MS/TP, `MstpEndpointBuilder` owns one serial link. Python exposes `BipEndpoint`, `ScEndpoint` and `MstpEndpoint`, with `async with endpoint`, `await endpoint.client()` and `await endpoint.server()`. B/IPv6 and Ethernet have no shared endpoint builder; use their standalone owners.
+For SC, `ScEndpointBuilder` composes a caller-dialed `TlsWebSocket` with `build_hub_session` under the `sc-tls` feature. For MS/TP, `MstpEndpointBuilder` owns one serial link. Python exposes `BipEndpoint`, `ScEndpoint` and `MstpEndpoint`, with `async with endpoint`, `await endpoint.client()` and `await endpoint.server()`; each takes `device_write_policy`, a callable that decides writes to the local Device under the same fail-closed rules as a server's `mutation_policy` callable.
+
+B/IPv6 has no endpoint builder, as it has no server builder. In Rust, compose an `EndpointSession` over a `Bip6Transport` (the `bacnet-transport/ipv6` feature) and declare its Network Port with `DeviceIdentity::with_bip6_port`. Build the transport with `Some(instance)` of the Device the session serves: that instance is the port's VMAC, and a registered B/IPv6 port refuses to start with another instance or a random VMAC. Python has no B/IPv6 endpoint, and Ethernet has none in either language; use their standalone owners.
 
 ## Check requester and responder scope separately
 

@@ -1,15 +1,11 @@
 //! Contract for the router guide's Rust program (#1989): the page shows the
-//! file the integration bin compiles, with a manifest that follows `dev`.
+//! file the integration bin compiles, with a release-pinned manifest.
 #![forbid(unsafe_code)]
 
 const MANIFEST: &str = include_str!("../../../website/examples/rust/bip-router/Cargo.toml");
 const SOURCE: &str = include_str!("../../../website/examples/rust/bip-router/src/main.rs");
 const GUIDE: &str = include_str!("../../../website/src/content/docs/integrate/router.mdx");
-const REPOSITORY: &str = "https://github.com/jscott3201/rusty-bacnet";
 
-/// `router.ports()` and the `Result` from `router.stop()` are on `dev`
-/// after the release, so the manifest follows `dev` until a release carries
-/// them; the release PR pins it.
 fn manifest_contract(source: &str) -> Result<(), String> {
     let actual: toml::Value = toml::from_str(source).map_err(|e| e.to_string())?;
     let mut expected = String::from(
@@ -35,22 +31,25 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
         "bacnet-transport",
         "bacnet-types",
     ] {
-        expected.push_str(&format!(
-            "{krate} = {{ git = \"{REPOSITORY}\", branch = \"dev\" }}\n"
-        ));
+        expected.push_str(&format!("{krate} = \"=0.15.0\"\n"));
     }
     let expected: toml::Value = toml::from_str(&expected).unwrap();
     if actual != expected {
-        return Err(format!("standalone manifest drifted: {actual}"));
+        return Err(format!("standalone release manifest drifted: {actual}"));
     }
     Ok(())
 }
 
 #[test]
-fn manifest_is_complete_and_follows_dev() {
+fn manifest_is_complete_and_release_pinned() {
     manifest_contract(MANIFEST).unwrap();
+    assert!(
+        include_str!("../../../website/src/lib/site.mjs")
+            .contains("export const release = '0.15.0';")
+    );
     for invalid in [
-        MANIFEST.replace("branch = \"dev\"", "branch = \"main\""),
+        MANIFEST.replace("bacnet-network = \"=0.15.0\"", "bacnet-network = \"0.15\""),
+        MANIFEST.replace("bacnet-types = \"=0.15.0\"\n", ""),
         MANIFEST.replace("[workspace]\n", ""),
         MANIFEST.replace("rust-version = \"1.95\"", "rust-version = \"1.93\""),
         MANIFEST.replace(", \"time\"", ""),
@@ -62,7 +61,7 @@ fn manifest_is_complete_and_follows_dev() {
         );
     }
     assert!(GUIDE.contains(
-        "The Rust manifest builds against the `dev` branch, whose minimum Rust version is **1.95**"
+        "The Rust manifest pins **v{release}**, whose minimum Rust version is **1.95**."
     ));
 }
 

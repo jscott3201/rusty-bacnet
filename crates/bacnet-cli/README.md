@@ -81,7 +81,7 @@ status 4.
 The [CLI reference](https://github.com/jscott3201/rusty-bacnet/blob/main/docs/CLI.md)
 lists every command and option.
 
-With `sc-tls`, `bacnet sc-check --sc-cert node.pem` (new in 0.14.0) takes
+With `sc-tls`, `bacnet sc-check --sc-cert node.pem` (since 0.14.0) takes
 optional `--sc-ca` and `--sc-key` files. It reports local certificate observations without a network connection;
 exit 0 can include warnings and does not predict TLS acceptance. See the
 [SC check guide](https://github.com/jscott3201/rusty-bacnet/blob/main/docs/sc-check.md)

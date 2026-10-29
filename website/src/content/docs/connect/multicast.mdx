@@ -10,7 +10,7 @@ import { release, repository } from '../../../lib/site.mjs';
 
 A BACnet/IP node can send its broadcasts to an IPv4 multicast group instead of its subnet's broadcast address (B/IP-M, Annex J.8). It then takes broadcasts only from the group, never a subnet broadcast, and directed messages stay unicast. A group can span IP routers that forward multicast, which a subnet broadcast can't.
 
-The page describes **v{release}**. Two additions merged on `dev` after the release have [their own section](#on-dev-after-the-release).
+The page describes **v{release}**.
 
 ## Plan the group
 
@@ -96,25 +96,21 @@ In Rust, pass `BipMode::Bbmd(..)` and `.multicast(..)` to the same builder.
 
 ## Change the group through the Network Port
 
-A registered [Network Port](/rusty-bacnet/integrate/network-ports/) serves the group as BACnet_IP_Multicast_Address, or 0.0.0.0 while multicast is off. On a normal (non-BBMD) node with a ReinitializeDevice handler it is writable: the written value waits with Changes_Pending, and activation moves the running node to the new group, or off it with 0.0.0.0. A listener that can't be bound or joined fails the activation and leaves the old group in use.
+A registered [Network Port](/rusty-bacnet/integrate/network-ports/) serves the group as BACnet_IP_Multicast_Address, or 0.0.0.0 while multicast is off. With a ReinitializeDevice handler it is writable: the written value waits with Changes_Pending, and activation moves the running node to the new group, or off it with 0.0.0.0. A listener that can't be bound or joined fails the activation and leaves the old group in use.
 
-In this release, a group changed that way lasts until the process exits: it isn't saved, so the next process starts with the group it is configured with. A BBMD's group is read-only, since its own BDT row depends on it; change it by restarting with another group.
+A group BBMD's group is writable the same way, in Rust and Python. A written group waits with the BBMD rows and goes in with them in one ReinitializeDevice activation, both or neither (in Rust, through `BbmdChanges::multicast_group`). A set that doesn't fit, such as a new group with an own row whose mask isn't all ones, answers INVALID_CONFIGURATION_DATA and stays pending; leaving the group (0.0.0.0) lifts the all-ones rule.
+
+### Keep an activated group across restarts
+
+Without a file to save it in, a group changed that way lasts until the process exits, and the next process starts with the group it is configured with. `BipTransport::set_multicast_persist_path` names a small file where each activation of BACnet_IP_Multicast_Address saves the group, its TTL and its port, or that multicast was turned off. A new process given the same path starts in the saved group ahead of its configured one, with a warning when they differ. A failed save is logged, counted in `multicast_persist_failures()`, and the group stays in use; a file that can't be read is logged and the configured group is used. The Python bindings don't set this file.
+
+On a group BBMD with a persisted BDT too, the two files are saved separately after the same activation, so a crash between the writes can leave the new group beside the old BDT. If that BDT's own row doesn't have the all-ones mask, the next start falls back to the configured BDT, and fails if that doesn't fit the group either. To recover, give the configured BDT an all-ones own row, write a fitting BDT to the persisted file, or delete the persisted-group file to start in the configured group.
+
+See <a href={`${repository}/blob/v${release}/docs/rust-api.md#bip-multicast-bip-m`}>B/IP multicast</a> for the Rust contract.
 
 ## What is tested
 
 Loopback tests on Linux and macOS cover members discovering each other through a group, and a group BBMD exchanging broadcasts with members, a plain peer BBMD and a foreign device. Windows multicast is untested: there the group's port must equal the node's port, so two members can't share one Windows host. None of this qualifies a routed multicast deployment; test yours with its routers.
-
-## On `dev` after the release
-
-These changes are merged on `dev` and will ship in the next release.
-
-**Keep an activated group across restarts** (#1954). `BipTransport::set_multicast_persist_path` names a small file where each activation of BACnet_IP_Multicast_Address saves the group, its TTL and its port, or that multicast was turned off. A new process given the same path starts in the saved group ahead of its configured one, with a warning when they differ. A failed save is logged, counted in `multicast_persist_failures()`, and the group stays in use; a file that can't be read is logged and the configured group is used. The Python bindings don't set this file.
-
-On a group BBMD with a persisted BDT too, the two files are saved separately after the same activation, so a crash between the writes can leave the new group beside the old BDT. If that BDT's own row doesn't have the all-ones mask, the next start falls back to the configured BDT, and fails if that doesn't fit the group either. To recover, give the configured BDT an all-ones own row, write a fitting BDT to the persisted file, or delete the persisted-group file to start in the configured group.
-
-**Change a BBMD's group** (#1963). A group BBMD's BACnet_IP_Multicast_Address becomes writable like a normal node's, in Rust and Python. A written group waits with the BBMD rows and goes in with them in one ReinitializeDevice activation, both or neither (in Rust, through `BbmdChanges::multicast_group`). A set that doesn't fit, such as a new group with an own row whose mask isn't all ones, answers INVALID_CONFIGURATION_DATA and stays pending; leaving the group (0.0.0.0) lifts the all-ones rule.
-
-See <a href={`${repository}/blob/dev/docs/rust-api.md#bip-multicast-bip-m`}>B/IP multicast</a> on `dev`.
 
 ## Next steps
 

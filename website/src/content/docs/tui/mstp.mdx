@@ -18,7 +18,7 @@ bacnet tui --mstp-monitor /dev/ttyUSB0 --mstp-baud 38400
 
 The monitor opens the port to listen only. It builds no client and drops the port's write side as it opens, so it can't transmit. The status bar reads `listen only` and the level is `PASSIVE`. It takes `--mstp-baud` and `--mstp-max-info-frames`, and refuses `--mstp`, `--mstp-mac`, `--mstp-max-master`, another transport's flags and `--profile`. On Linux it also takes `--mstp-rt-priority` and `--mstp-cpus`, but the monitor itself runs normally: only a station you join from it gets them (see [Real-time scheduling](#real-time-scheduling-linux)).
 
-The MS/TP screen opens first. Tab moves between four views. `z` counts from now, Space pauses or follows, and `x` stops the monitor.
+The MS/TP screen opens first. Tab moves between five views: Stations, Token ring, Findings, Errors and Scan. `z` counts from now, Space pauses or follows, and `x` stops the monitor.
 
 ### Stations
 
@@ -61,46 +61,21 @@ Each comes with a suggestion. The two 8s are rules of thumb, not values from the
 
 Header and data CRC errors, malformed or oversize frames, partial frames, noise, lost tokens with when and who started the ring again, and extended (COBS) frames, which are decoded but not interpreted (Clause 9.10). Timestamps are only as good as the adapter: the screen shows the 16 ms a USB adapter can add.
 
-## Development: receive-only baud scan
+### Scan: find the baud rate
 
-The scan commands in this section are on the development branch and are **not
-part of v{release}**. Refreshed development screenshots may also show the Scan
-tab beside the four released monitor views.
-
-From a live monitor, enter `:mstp scan SECS`, using 1 to 3600 whole seconds for
-each of 9600, 19200, 38400, 57600, 76800 and 115200 baud (Clause 9.2.3).
-The worker closes each input before opening the next, with fresh receive-only
-configuration, purged input and separate decoder counters. No participant is
-constructed. The Scan tab shows progress, actual measured duration, valid frames,
-decoder errors and noise. Up/Down selects a row's error components on a narrow
-screen; a wide screen shows them together.
+When you don't know a trunk's baud rate, `:mstp scan SECS` listens at each of 9600, 19200, 38400, 57600, 76800 and 115200 baud in turn (Clause 9.2.3), for 1 to 3600 whole seconds each. It stays receive-only throughout: it closes the port before reopening it at the next rate, starts each rate with fresh counters and an emptied input buffer, and never builds a participant. The Scan view shows the progress and, for each rate, the time actually measured, the valid frames, the decoder errors and the noise. On a narrow screen Up and Down pick the row whose errors are broken down; a wide screen shows them all.
 
 ![A receive-only scan measuring the first of six baud rates, with cancellation available.](../../../assets/tui/mstp-scan-progress.webp)
 
-The score is `valid / (valid + header CRC + data CRC + malformed + aborted)`.
-Noise octets remain separate. At least one valid frame is needed for a suggestion;
-equal best ratios remain ambiguous regardless of frame count. No valid frames
-means insufficient traffic. Partial scans and saturated counters withhold a global
-best. Counts remain visible because a sparse sample does not establish confidence
-in a physical baud rate or qualify UART, USB-adapter or electrical behavior.
+Each rate scores `valid / (valid + header CRC + data CRC + malformed + aborted)`; noise octets are counted apart. The scan suggests the best-scoring rate only when it heard at least one valid frame there. Two rates with the same best score are reported as ambiguous, however many frames they saw, and no valid frames at all as insufficient traffic. A scan that was cut short, or whose counters saturated, suggests nothing. The counts stay on screen because a short sample is weak evidence: it doesn't prove the trunk's baud rate, and it doesn't qualify the adapter or the wiring.
 
 ![The scan suggests 38400 baud from scripted traffic and restores the original 19200 baud monitor.](../../../assets/tui/mstp-scan-result.webp)
 
-Completion and `:mstp scan cancel` restore the **original configured baud rate**
-with fresh ordinary monitor counters. The suggestion is retained for inspection;
-it never applies itself, joins a trunk or writes a profile. Disconnect and quit
-close without reopening. A restoration failure leaves Stopped visible, and failed
-or unproven release prevents any replacement input.
+When the scan finishes, or `:mstp scan cancel` stops it, the monitor goes back to the **baud rate it was started with**, with fresh counters. The suggestion stays on the Scan view to read; it is never applied, never joins a trunk and never changes a profile. Disconnecting or quitting during a scan closes the port without reopening it. If the port can't be reopened at the original rate, the monitor shows Stopped and keeps the scan's results, and it opens no other port while the old one may still be held.
 
-Scanning clears safe-join proposals, refuses joins, and ends the ordinary capture
-subscription with final accounting. Existing captured rows remain historical;
-candidate frames are kept out of that ring. Reopen Capture after restoration to
-start capturing explicitly.
+While a scan runs, the safe-join proposal is cleared and `J` is refused. The scan also ends the Capture screen's subscription: rows captured before it stay, frames heard during the scan are not added, and you reopen Capture once the monitor is back to start capturing again.
 
-The following examples come from actual operator-path tests with encoded scripted
-traffic. Rate-dependent fixtures qualify the selection logic; pseudo-terminal
-observations exercise native access and release without simulating a physical
-baud mismatch. These examples do not add hardware qualification.
+The shots below come from tests that drive the TUI with scripted traffic. They show how the suggestion is chosen, not how a real adapter behaves at a wrong baud rate.
 
 ![Two rates have equal best ratios, so the scan reports ambiguity.](../../../assets/tui/mstp-scan-ambiguous.webp)
 
@@ -176,7 +151,7 @@ The monitor and the participant have hardware evidence only on Linux. On macOS a
 
 ## Sources and release scope
 
-Except for the explicitly marked development scan section, these pages describe **v{release}**. Source review is not a claim of hardware qualification. MS/TP is ASHRAE 135 Clause 9.
+These pages describe **v{release}**. Source review is not a claim of hardware qualification. MS/TP is ASHRAE 135 Clause 9.
 
 <a href={`${repository}/blob/v${release}/docs/CLI.md#mstp-monitor-and-safe-join`}>MS/TP monitor and safe join reference</a> · <a href={`${repository}/blob/v${release}/docs/CLI.md#mstp`}>MS/TP flags and adapters</a> · [On-wire qualification work](https://github.com/jscott3201/rusty-bacnet/issues/502).
 

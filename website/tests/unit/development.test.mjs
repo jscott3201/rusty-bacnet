@@ -34,7 +34,7 @@ test('integration navigation resolves task guides with release-pinned source lin
   assert.deepEqual(navigation.find(group => group.label === 'Contribute').items.map(item => item.slug),
     ['development/build-from-source', 'development/documentation']);
   assert.deepEqual(navigation.find(group => group.label === 'Evaluate and get help').items.map(item => item.slug),
-    ['help/troubleshooting', 'project/support', 'project/conformance', 'project/sample-pics', 'project/performance', 'project/upgrading', 'project/upgrading/v0-14']);
+    ['help/troubleshooting', 'project/support', 'project/conformance', 'project/sample-pics', 'project/performance', 'project/upgrading', 'project/upgrading/v0-15', 'project/upgrading/v0-14']);
   const pages = navigation.flatMap(group => group.items.flatMap(item => item.items ?? [item]));
   assert.equal(new Set(pages.map(item => item.slug)).size, pages.length);
   for (const slug of [...slugs, 'connect/overview', 'connect/bacnet-sc', 'reference/transports', 'project/performance']) {
@@ -44,9 +44,9 @@ test('integration navigation resolves task guides with release-pinned source lin
     assert.ok(page.title && page.description, slug);
     const body = await plainBody(page.body, path, []);
     assert.ok(body.includes(`https://github.com/jscott3201/rusty-bacnet/blob/v${release}/docs/`), slug);
-    // Post-release additions and their dev links stay in one section.
+    // dev is the release: no page keeps a dev section.
     const { onDev } = splitDevSection(body, slug);
-    assert.equal(onDev !== '', ['integrate/security', 'integrate/router', 'integrate/pics', 'project/performance'].includes(slug), `${slug}: dev section`);
+    assert.equal(onDev, '', `${slug}: no dev section`);
     assert.ok(body.includes(slug === 'reference/transports' ? '## Which guide next?' : '## Next steps'), slug);
     assert.ok(!body.includes('cargo install bacnet-cli --version'), slug);
   }
@@ -70,7 +70,7 @@ test('source builds preserve release and development requirements separately', a
   assert.match(build, /git clone --branch dev/);
   assert.match(build, /git rev-parse HEAD/);
   assert.match(build, /edition 2024 and requires Rust 1\.95/);
-  assert.match(build, /released v0\.14\.0 workspace requires Rust 1\.93/);
+  assert.ok(build.includes(`clone with \`--branch v${release}\` instead`));
   assert.match(build, /maturin develop --manifest-path crates\/rusty-bacnet\/Cargo.toml --locked/);
   assert.match(build, /Native compilation alone does not exercise the Python API/);
 });

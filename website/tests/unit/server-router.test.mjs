@@ -46,7 +46,7 @@ test('server page shows the exact release-pinned programs and no dev section', a
   for (const crate of ['bacnet-objects', 'bacnet-server', 'bacnet-transport', 'bacnet-types']) {
     assert.ok(manifest.includes(`${crate} = "=${release}"`), `${crate} follows the site release`);
   }
-  assert.ok(manifest.includes('rust-version = "1.93"') && body.includes('minimum Rust version is **1.93**'));
+  assert.ok(manifest.includes('rust-version = "1.95"') && body.includes('minimum Rust version is **1.95**'));
   assert.ok(body.includes(`This page builds one on BACnet/IP in Rust and in Python and describes **v${release}**.`));
   assert.ok(body.includes(`These files target **v${release}**`));
   assert.ok(body.includes(`with the v${release} \`rusty-bacnet\` package`));
@@ -101,11 +101,11 @@ test('the server page states the limits the source defines', async () => {
   ]) assert.ok(body.includes(row), row);
 });
 
-test('router page keeps the Python router, the dev-built example and later changes in the dev section', async () => {
+test('router page shows the release-pinned programs, the Python router and no dev section', async () => {
   const { source, title, description, body } = await page('integrate/router');
   assert.ok(title && description);
   assert.ok(body.includes(`The page describes **v${release}**.`));
-  assert.ok(body.includes('(#on-dev-after-the-release)'));
+  assert.ok(!body.includes('on-dev-after-the-release'));
   assertImports(source, [
     ['routerSource', 'rust/bip-router/src/main.rs'],
     ['routerManifest', 'rust/bip-router/Cargo.toml'],
@@ -114,22 +114,25 @@ test('router page keeps the Python router, the dev-built example and later chang
   const program = await read('examples/rust/bip-router/src/main.rs');
   const manifest = await read('examples/rust/bip-router/Cargo.toml');
   const python = await read('examples/python/bip_router.py');
-  const { released, onDev } = splitDevSection(body, 'integrate/router');
-  assert.deepEqual(fences(onDev, 'rust'), [program]);
-  assert.deepEqual(fences(onDev, 'toml'), [manifest]);
-  assert.deepEqual(fences(onDev, 'python'), [python]);
-  for (const lang of ['rust', 'toml', 'python']) assert.deepEqual(fences(released, lang), [], lang);
-  // The manifest follows dev, and the page says so, until a release has
-  // router.ports() and the Result from stop().
-  assert.ok(manifest.includes('branch = "dev"') && !manifest.includes(`"=${release}"`));
+  const { onDev } = splitDevSection(body, 'integrate/router');
+  assert.equal(onDev, '', 'everything on the page is in the release');
+  assert.deepEqual(fences(body, 'rust'), [program]);
+  assert.deepEqual(fences(body, 'toml'), [manifest]);
+  assert.deepEqual(fences(body, 'python'), [python]);
+  // The manifest pins the site release, and the page says so.
+  for (const crate of ['bacnet-client', 'bacnet-network', 'bacnet-server', 'bacnet-transport', 'bacnet-types']) {
+    assert.ok(manifest.includes(`${crate} = "=${release}"`), `${crate} follows the site release`);
+  }
+  assert.ok(!manifest.includes('branch = '));
   assert.ok(manifest.includes('rust-version = "1.95"'));
-  assert.ok(onDev.includes('The Rust manifest builds against the `dev` branch, whose minimum Rust version is **1.95**'));
+  assert.ok(body.includes(`The Rust manifest pins **v${release}**, whose minimum Rust version is **1.95**.`));
+  assert.ok(body.includes(`The Python program runs with the v${release} \`rusty-bacnet\` package`));
   assert.ok(program.includes('.ports()') && program.includes('stopped?;'));
   for (const path of ['examples/rust/bip-router/Cargo.toml', 'examples/rust/bip-router/src/main.rs', 'examples/bip_router.py']) {
-    assert.ok(onDev.includes(`${site}${path}`), path);
+    assert.ok(body.includes(`${site}${path}`), path);
   }
   // The output block is what the programs print, as their tests check.
-  const output = fences(onDev, 'text');
+  const output = fences(body, 'text');
   assert.equal(output.length, 1);
   const expected = 'Router started: networks 1 and 5\nRouter to network 5 found, reaching networks [5]\n'
     + 'Device 1005 found on network 5\nRead through the router: 8.5\nStopped\n';
@@ -139,17 +142,17 @@ test('router page keeps the Python router, the dev-built example and later chang
   for (const line of expected.trimEnd().split('\n')) {
     assert.ok(rustTest.includes(line) && pythonTest.includes(`"${line}"`), line);
   }
-  // Dev-only names stay in the dev section.
-  for (const name of ['BipRouterPort', 'RouterStopError', 'router.ports()', 'originate', '#1858', '#2002', '#1786', '#1809', '#1810', 'file-read']) {
-    assert.ok(onDev.includes(name), name);
-    assert.ok(!released.includes(name), `${name} only in the dev section`);
+  // Names that came with the router changes are in the page body.
+  for (const name of ['BipRouterPort', 'RouterStopError', 'router.ports()', 'originate', 'into_application_ports()', 'application="client_and_server"', 'file-read', 'alarm-summary', 'enrollment-summary']) {
+    assert.ok(body.includes(name), name);
   }
-  assert.ok(onDev.includes(`${repo}/blob/dev/docs/python-api.md#bip-router`));
-  for (const path of ['docs/rust-api.md#bacnet-network', 'docs/rust-api.md#who-may-change-routes-518', 'docs/CLI.md']) {
-    assert.ok(released.includes(`${repo}/blob/v${release}/${path}`), path);
+  for (const heading of ['A router in Python', 'Stop the router', 'Example: two B/IP networks on one host', 'Read the contracts']) {
+    assert.ok(body.includes(`\n## ${heading}\n`), heading);
   }
-  assert.ok(released.includes('In v' + release + ', `read`, `readm`, `write`, `writem` and `subscribe` take routed targets'));
-  assert.ok(released.includes(`In v${release}, \`router.stop().await\` stops the router's tasks and returns nothing`));
+  for (const path of ['docs/rust-api.md#bacnet-network', 'docs/rust-api.md#who-may-change-routes-518', 'docs/CLI.md', 'docs/python-api.md#bip-router']) {
+    assert.ok(body.includes(`${repo}/blob/v${release}/${path}`), path);
+  }
+  assert.ok(body.includes('`router.stop().await` returns `Result<(), RouterStopError>`'));
 });
 
 test('every CLI sample on the router page is defined by the CLI', async () => {

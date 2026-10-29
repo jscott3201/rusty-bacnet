@@ -122,7 +122,7 @@ Do not solve a failed local lab by replacing `127.0.0.1` with `0.0.0.0` or a bui
 
 This exercises **one directed BACnet/IP property read** through the native extension, with application-owned sample data and bounded lifecycle handling. It does not establish discovery, routed operation, MS/TP timing, BACnet/SC security, or full conformance.
 
-With v{release}, **all eight tutorial tests and the standalone lab passed on macOS arm64 with CPython 3.14**, using the release's wheel from PyPI. The **v{release} macOS arm64 CLI** also read the served value (`72.5`) and units (`64`) through a separate ephemeral socket. CI also runs these tests on every change, on Linux x86-64 with development builds of the wheel and the CLI, and runs the guides' CLI samples against this lab. The results cover these local tutorial flows, not a general wheel/platform matrix or physical-network interoperability.
+With v0.14.0, **all eight tutorial tests and the standalone lab passed on macOS arm64 with CPython 3.14**, using that release's wheel from PyPI. The **v0.14.0 macOS arm64 CLI** also read the served value (`72.5`) and units (`64`) through a separate ephemeral socket. That run has not been repeated with the v{release} wheel and CLI. CI runs these tests on every change, on Linux x86-64 with development builds of the wheel and the CLI, and runs the guides' CLI samples against this lab. The results cover these local tutorial flows, not a general wheel/platform matrix or physical-network interoperability.
 
 An **earlier release**, whose build is linked under Sources, also passed a Python-only round trip on **Linux x86-64 with CPython 3.13**. That Linux run has not been repeated with v{release}.
 

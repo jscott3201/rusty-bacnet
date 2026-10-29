@@ -2,9 +2,9 @@ import { test, expect } from '@playwright/test';
 const base = '/rusty-bacnet/';
 
 const pages = [
-  ['Reach devices on other subnets', 'connect/across-subnets/', true],
+  ['Reach devices on other subnets', 'connect/across-subnets/', false],
   ['BACnet/IP across NAT', 'connect/nat/', false],
-  ['Join a B/IP multicast group', 'connect/multicast/', true],
+  ['Join a B/IP multicast group', 'connect/multicast/', false],
   ['Connect over BACnet/IPv6', 'connect/ipv6/', false],
 ] as const;
 

@@ -71,7 +71,7 @@ A profile's workspace also holds `audit.jsonl`, the record of every write sessio
 |---|---|
 | A red error in the footer after connecting | The connection failed. `p` opens the profile to fix it, `c` retries |
 | `drop` counts up | The UI fell behind a burst of traffic. The tables are refreshed from the client afterwards; lower `--fps` or narrow the Who-Is |
-| `W` says another process holds the profile | Another `bacnet tui` has that profile open. Only one may change its ledger at a time |
+| `W` says another process holds the profile | Another `bacnet tui` has that profile open, or `bacnet mcp serve` is writing through it. Only one process may change its ledger at a time |
 | A profile edited by hand doesn't change | Press `r` in the profile dialog to reload it |
 | No profiles where you expect | Check the config directory the dialog shows, and `BACNET_CONFIG_DIR` |
 | A screen reader can't follow the TUI | The TUI redraws a whole screen at a time. Use the one-shot commands with `--json` or `--format table` |

@@ -11,6 +11,13 @@ description = "UI-free BACnet operations core shared by the bacnet CLI, its TUI 
 keywords = ["bacnet", "building-automation", "hvac"]
 categories = ["network-programming"]
 
+[package.metadata.docs.rs]
+no-default-features = true
+features = ["sc-tls"]
+default-target = "x86_64-unknown-linux-gnu"
+targets = []
+rustdoc-args = ["--cfg", "docsrs"]
+
 [dependencies]
 bacnet-types = { workspace = true, features = ["std"] }
 bacnet-encoding = { workspace = true, features = ["std"] }

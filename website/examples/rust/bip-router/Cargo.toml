@@ -8,12 +8,12 @@ publish = false
 [workspace]
 
 [dependencies]
-bacnet-client = { git = "https://github.com/jscott3201/rusty-bacnet", branch = "dev" }
-bacnet-encoding = { git = "https://github.com/jscott3201/rusty-bacnet", branch = "dev" }
-bacnet-network = { git = "https://github.com/jscott3201/rusty-bacnet", branch = "dev" }
-bacnet-objects = { git = "https://github.com/jscott3201/rusty-bacnet", branch = "dev" }
-bacnet-server = { git = "https://github.com/jscott3201/rusty-bacnet", branch = "dev" }
-bacnet-services = { git = "https://github.com/jscott3201/rusty-bacnet", branch = "dev" }
-bacnet-transport = { git = "https://github.com/jscott3201/rusty-bacnet", branch = "dev" }
-bacnet-types = { git = "https://github.com/jscott3201/rusty-bacnet", branch = "dev" }
+bacnet-client = "=0.15.0"
+bacnet-encoding = "=0.15.0"
+bacnet-network = "=0.15.0"
+bacnet-objects = "=0.15.0"
+bacnet-server = "=0.15.0"
+bacnet-services = "=0.15.0"
+bacnet-transport = "=0.15.0"
+bacnet-types = "=0.15.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }

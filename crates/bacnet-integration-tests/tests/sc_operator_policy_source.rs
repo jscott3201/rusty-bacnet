@@ -1,17 +1,13 @@
 //! Contract for the security guide's policy program (#1989): the page shows
-//! the file the integration bin compiles, with a manifest that resolves.
+//! the file the integration bin compiles, with a release-pinned manifest.
 #![forbid(unsafe_code)]
 
 const MANIFEST: &str = include_str!("../../../website/examples/rust/sc-operator-policy/Cargo.toml");
 const SOURCE: &str = include_str!("../../../website/examples/rust/sc-operator-policy/src/main.rs");
 const GUIDE: &str = include_str!("../../../website/src/content/docs/integrate/security.mdx");
-const REPOSITORY: &str = "https://github.com/jscott3201/rusty-bacnet";
-
-/// The certificate accessors are on `dev` after the release, so the manifest
-/// follows `dev` until a release carries them; the release PR pins it.
 fn manifest_contract(source: &str) -> Result<(), String> {
     let actual: toml::Value = toml::from_str(source).map_err(|e| e.to_string())?;
-    let expected: toml::Value = toml::from_str(&format!(
+    let expected: toml::Value = toml::from_str(
         r#"
 [package]
 name = "sc-operator-policy"
@@ -21,24 +17,28 @@ rust-version = "1.95"
 publish = false
 [workspace]
 [dependencies]
-bacnet-server = {{ git = "{REPOSITORY}", branch = "dev", features = ["sc-tls"] }}
-bacnet-transport = {{ git = "{REPOSITORY}", branch = "dev" }}
-bacnet-types = {{ git = "{REPOSITORY}", branch = "dev" }}
-"#
-    ))
+bacnet-server = { version = "=0.15.0", features = ["sc-tls"] }
+bacnet-transport = "=0.15.0"
+bacnet-types = "=0.15.0"
+"#,
+    )
     .unwrap();
     if actual != expected {
-        return Err(format!("standalone manifest drifted: {actual}"));
+        return Err(format!("standalone release manifest drifted: {actual}"));
     }
     Ok(())
 }
 
 #[test]
-fn manifest_is_complete_and_follows_dev() {
+fn manifest_is_complete_and_release_pinned() {
     manifest_contract(MANIFEST).unwrap();
+    assert!(
+        include_str!("../../../website/src/lib/site.mjs")
+            .contains("export const release = '0.15.0';")
+    );
     for invalid in [
         MANIFEST.replace(", features = [\"sc-tls\"]", ""),
-        MANIFEST.replace("branch = \"dev\"", "branch = \"main\""),
+        MANIFEST.replace("bacnet-types = \"=0.15.0\"", "bacnet-types = \"0.15\""),
         MANIFEST.replace("[workspace]\n", ""),
         MANIFEST.replace("rust-version = \"1.95\"", "rust-version = \"1.93\""),
         format!("{MANIFEST}tokio = \"1\"\n"),
@@ -48,9 +48,10 @@ fn manifest_is_complete_and_follows_dev() {
             "accepted drift: {invalid}"
         );
     }
-    // The page says where the manifest points and why.
-    assert!(GUIDE.contains("The manifest builds against the `dev` branch"));
-    assert!(GUIDE.contains("minimum Rust version is **1.95**"));
+    // The page says which release the manifest pins.
+    assert!(
+        GUIDE.contains("The manifest pins **v{release}**, whose minimum Rust version is **1.95**.")
+    );
 }
 
 #[test]

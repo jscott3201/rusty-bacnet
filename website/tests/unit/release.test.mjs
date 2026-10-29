@@ -14,15 +14,22 @@ const docs = new URL('src/content/docs/', root);
 const read = path => readFile(new URL(path, root), 'utf8');
 const readRepo = path => readFile(new URL(path, repo), 'utf8');
 const series = release.split('.').slice(0, 2).join('.');
-// The release project/upgrading/v0-14.md moves from. That upgrade guide and the
-// lab's recorded evidence may name it; nothing else may. The upgrade hub,
-// project/upgrading.md, names only the release.
-const previous = '0.13.0';
-const upgradeGuide = 'project/upgrading/v0-14.md';
+// The release the current upgrade guide moves from. That guide and the lab's
+// recorded evidence may name it; nothing else may.
+const previous = '0.14.0';
+const upgradeGuide = 'project/upgrading/v0-15.md';
 const history = new Set([upgradeGuide, 'start/local-lab.mdx']);
-// Other versions the upgrade guide names: bacnet-time's, which moves on its own
-// (#1768), and the minimum Rustls for BACnet/SC (#1737).
-const upgradeOnly = ['0.13.1', '0.23.46'];
+// Each upgrade guide under project/upgrading/ names the two releases in its
+// title, plus the other versions listed here: bacnet-time's, which moves on its
+// own (#1768), and the minimum Rustls for BACnet/SC (#1737). Older guides stay
+// as they were written. The hub, project/upgrading.md, names the release and
+// the release each guide moves to.
+const guideExtras = {
+  'project/upgrading/v0-14.md': ['0.13.1', '0.23.46'],
+  'project/upgrading/v0-15.md': ['0.13.1'],
+};
+const hub = 'project/upgrading.md';
+const guideTitle = text => text.match(/^title: "Upgrade from v(0\.\d+\.\d+) to v(0\.\d+\.\d+)"$/m)?.slice(1) ?? [];
 // A 0.x.y version, alone or as v0.x.y, but not part of an address such as 0.0.0.0.
 const versions = text => [...new Set([...text.matchAll(/(?<![\w.])v?(0\.\d+\.\d+)(?!\.?\d)/g)].map(match => match[1]))];
 // A v0.x series such as "v0.12", not followed by a patch number.
@@ -34,14 +41,20 @@ test('every copy of the release version matches site.mjs', async () => {
   const expect = (where, ok) => { if (!ok) stale.push(where); };
   const pages = (await readdir(docs, { recursive: true })).filter(name => /\.mdx?$/.test(name)).map(name => name.replaceAll('\\', '/'));
   assert.ok(pages.length > 20);
+  const guides = pages.filter(name => name.startsWith('project/upgrading/'));
+  assert.deepEqual(guides.sort(), Object.keys(guideExtras).sort(), 'every upgrade guide is listed in guideExtras');
+  const titles = Object.fromEntries(await Promise.all(guides.map(async name => [name, guideTitle(await read(`src/content/docs/${name}`))])));
+  for (const name of guides) expect(`${name}: title "Upgrade from v0.x.y to v0.x.y"`, titles[name].length === 2);
+  const hubAllowed = [release, ...guides.map(name => titles[name][1]).filter(Boolean)];
   for (const name of pages) {
     const text = await read(`src/content/docs/${name}`);
-    const allowed = name === upgradeGuide ? [release, previous, ...upgradeOnly]
-      : history.has(name) ? [release, previous] : [release];
+    const allowed = name in guideExtras ? [release, ...titles[name], ...guideExtras[name]]
+      : name === hub ? hubAllowed
+        : history.has(name) ? [release, previous] : [release];
     // MDX takes the release from site.mjs ({release}), so it names none itself.
     const found = versions(text).filter(version => name.endsWith('.mdx') ? version !== previous || !history.has(name) : !allowed.includes(version));
     expect(`${name} names ${found.join(', ')}${name.endsWith('.mdx') ? '; use {release}' : ''}`, found.length === 0);
-    const series_ = serieses(text).filter(found => found !== series && !(history.has(name) && previous.startsWith(`${found}.`)));
+    const series_ = serieses(text).filter(found => found !== series && !allowed.some(version => version.startsWith(`${found}.`)));
     expect(`${name} names v${series_.join(', v')}`, series_.length === 0);
   }
   expect('start/local-lab.mdx: rusty-bacnet=={release}', /rusty-bacnet==\{release\}/.test(await read('src/content/docs/start/local-lab.mdx')));

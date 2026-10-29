@@ -16,9 +16,9 @@ git rev-parse HEAD
 cargo build --locked
 ```
 
-To build the release itself, clone with `--branch v0.14.0` instead. A `dev` checkout may already hold changes past the release while its version still reads 0.14.0, so record the commit.
+To build the release itself, clone with `--branch v0.15.0` instead. A `dev` checkout may already hold changes past the release while its version still reads 0.15.0, so record the commit.
 
-The checked-in development toolchain is Rust 1.99.0. The 0.15 development workspace uses edition 2024 and requires Rust 1.95; the released v0.14.0 workspace requires Rust 1.93. The minimum increases only in minor releases, to a stable Rust release at least about six months old. `cargo build` uses workspace default members, so select the CLI or Python binding explicitly when needed. Native prerequisites depend on the selected features and platform.
+The checked-in development toolchain is Rust 1.99.0. The workspace uses edition 2024 and requires Rust 1.95, as the v0.15.0 release does. The minimum increases only in minor releases, to a stable Rust release at least about six months old. `cargo build` uses workspace default members, so select the CLI or Python binding explicitly when needed. Native prerequisites depend on the selected features and platform.
 
 For the CLI, from this checkout:
 
@@ -30,7 +30,7 @@ bacnet --version
 bacnet --help
 ```
 
-The executable is `bacnet`. IPv6 is enabled through CLI dependencies; `pcap` is a separate optional feature requiring native capture dependencies. The terminal UI (`tui`) is a default feature (`--no-default-features` leaves it out), and MS/TP needs `--features serial`. On `dev`, the MCP server (`bacnet mcp serve`) needs `--features mcp`, which includes the terminal UI. A CLI version string alone cannot distinguish a source build from the release.
+The executable is `bacnet`. IPv6 is enabled through CLI dependencies; `pcap` is a separate optional feature requiring native capture dependencies. The terminal UI (`tui`) is a default feature (`--no-default-features` leaves it out), and MS/TP needs `--features serial`. The MCP server (`bacnet mcp serve`) needs `--features mcp`, which includes the terminal UI. A CLI version string alone cannot distinguish a source build from the release.
 
 A Rust project can depend on the `dev` branch instead of a release, for example `bacnet-client = { git = "https://github.com/jscott3201/rusty-bacnet", branch = "dev" }`. Its `Cargo.lock` records the commit.
 
